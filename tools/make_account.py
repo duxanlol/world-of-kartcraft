@@ -63,6 +63,9 @@ def main():
         f"INSERT INTO account (username, s, v, joindate) VALUES ('{user}', '{s_hex}', '{v_hex}', NOW()) "
         f"ON DUPLICATE KEY UPDATE s=VALUES(s), v=VALUES(v);"
         f"UPDATE account SET gmlevel={int(a.gm)} WHERE username='{user}';"
+        # vmangos reads the GM level from account_access (RealmID -1: every realm).
+        f"REPLACE INTO account_access (id, gmlevel, RealmID) SELECT id, {int(a.gm)}, -1 "
+        f"FROM account WHERE username='{user}';"
         "REPLACE INTO realmcharacters (realmid, acctid, numchars) SELECT realmlist.id, account.id, 0 "
         "FROM realmlist, account LEFT JOIN realmcharacters ON acctid=account.id WHERE acctid IS NULL;")
     print(f'account {user} ready (GM level {a.gm})')
