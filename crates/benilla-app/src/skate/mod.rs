@@ -9,6 +9,7 @@ mod export;
 mod profession;
 mod rails;
 mod rig;
+mod score;
 mod sound;
 
 use std::path::{Path, PathBuf};
@@ -19,6 +20,8 @@ use benilla_world::schedule::WorldStage;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use skate_host::bridge::{ControllerTransport, InputFrame, PreparedCollision, Session};
+
+use crate::net::NetHandlerApp;
 
 /// The engine's unit is the meter; ours is the yard.
 const METERS_PER_YARD: f32 = 0.9144;
@@ -143,6 +146,9 @@ struct Frame {
     landed_lines: u32,
     landed_points: f64,
     landed_trick: String,
+    /// The line in progress: running score and latest trick.
+    line_points: f32,
+    line_trick: String,
 }
 
 fn frame(p: skate_host::bridge::Pose) -> Frame {
@@ -163,6 +169,8 @@ fn frame(p: skate_host::bridge::Pose) -> Frame {
         landed_lines: p.landed_lines,
         landed_points: p.landed_points,
         landed_trick: p.landed_trick,
+        line_points: p.line_points,
+        line_trick: p.line_trick,
     }
 }
 
@@ -478,6 +486,7 @@ fn update(
     mut pose: ResMut<SkatePose>,
     mut audio: ResMut<sound::SkateAudio>,
     profession: profession::Profession,
+    mut score: ResMut<score::SkateScore>,
 ) {
     let aspect = windows
         .single()
@@ -603,14 +612,18 @@ fn update(
                         );
                     }
                 }
+                let mut landed = None;
                 if let Some((lines, points)) = host.landed {
                     if f.landed_lines != lines {
+                        let line = f.landed_points - points;
                         if server_board {
-                            profession.landed(f.landed_points - points, &f.landed_trick);
+                            profession.landed(line, &f.landed_trick);
                         }
+                        landed = Some(line as f32);
                         host.landed = Some((f.landed_lines, f.landed_points));
                     }
                 }
+                score.observe(time.elapsed_secs(), f.line_points, &f.line_trick, landed);
                 audio.observe(&f.state, f.velocity);
                 present(f, host.origin, &mut drive, &mut pose);
             }
@@ -625,6 +638,7 @@ fn update(
         }
     }
     if !drive.active {
+        score.clear_live();
         return;
     }
 
@@ -726,10 +740,15 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<SkatePose>()
         .init_resource::<board::Board>()
         .init_resource::<sound::SkateAudio>()
-        .add_systems(Startup, preload)
+        .init_resource::<score::SkateScore>()
+        .net_handler(
+            benilla_protocol::SessionEventKind::XpGain,
+            score::on_xp_gain,
+        )
+        .add_systems(Startup, (preload, score::spawn))
         .add_systems(
             Update,
-            (update, board::update, sound::update)
+            (update, board::update, sound::update, score::draw)
                 .chain()
                 .in_set(WorldStage::Input)
                 .before(crate::player::PlayerControlSet)

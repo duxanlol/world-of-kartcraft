@@ -82,7 +82,7 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Skatecraft.cpp b/src/game/Skatecraft.cpp
 new file mode 100644
-index 0000000..3d23c78
+index 0000000..b34bca5
 --- /dev/null
 +++ b/src/game/Skatecraft.cpp
 @@ -0,0 +1,191 @@
@@ -208,7 +208,7 @@ index 0000000..3d23c78
 +    // Points a line needs to raise the skill at `skill`.
 +    static float PointsNeeded(uint32 skill)
 +    {
-+        return 100.f + 10.f * skill;
++        return 50.f + 5.f * skill;
 +    }
 +
 +    static void LandLine(Player* player, float points)
@@ -226,17 +226,17 @@ index 0000000..3d23c78
 +        uint32 skill = player->GetSkillValueBase(SKILL_SKATEBOARDING);
 +        float ratio = points / PointsNeeded(skill);
 +
-+        // A line worth the skill raises it by one, a bigger one by up to three.
-+        uint32 gain = ratio >= 4.f ? 3 : ratio >= 2.f ? 2 : ratio >= 1.f ? 1 : 0;
++        // A line worth the skill raises it by one, a bigger one by up to five.
++        uint32 gain = ratio >= 8.f ? 5 : ratio >= 4.f ? 3 : ratio >= 2.f ? 2 : ratio >= 1.f ? 1 : 0;
 +        if (gain && skill < SKILL_MAX)
 +        {
 +            player->SetSkill(SKILL_SKATEBOARDING, std::min(skill + gain, SKILL_MAX), SKILL_MAX);
 +            LearnUnlocked(player);
 +        }
 +
-+        // Character XP: up to about one and a half same-level kills per line.
++        // Character XP: a same-level kill for a line worth the skill, up to four for a big one.
 +        uint32 kill = 45 + 5 * player->GetLevel();
-+        uint32 xp = uint32(kill * std::min(ratio, 3.f) / 2.f);
++        uint32 xp = uint32(kill * std::min(ratio, 4.f));
 +        if (xp)
 +            player->GiveXP(xp, nullptr);
 +    }

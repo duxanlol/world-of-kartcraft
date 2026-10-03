@@ -75,7 +75,8 @@ Log in with the account you made during setup and create a character.
 Every character knows **Summon Skateboard** (spellbook, General tab): it casts like a mount and
 puts you on the board until you cancel the buff or press **J** again. Skateboarding is a
 secondary skill, 1 to 300, in your Skills tab. Each line of tricks you land raises it (bigger
-lines raise it faster) and gives your character experience. As the skill grows you learn skate
+lines raise it faster) and gives your character experience; the line's score, the experience and
+the skill it earned show at the top of the screen, Skate 3 style. As the skill grows you learn skate
 abilities, buffs to drag onto your action bar; they work only while you are on the board:
 
 | Skill | Ability | Effect | Lasts | Cooldown |
