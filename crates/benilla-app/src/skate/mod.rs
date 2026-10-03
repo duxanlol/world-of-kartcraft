@@ -276,7 +276,10 @@ fn run_worker(
                         s
                     }
                     None => {
-                        let s = Session::new(root, triangles, rails, spawn.to_array(), heading)?;
+                        let mut s =
+                            Session::new(root, triangles, rails, spawn.to_array(), heading)?;
+                        // A bail gets up where it fell, not back at the top of a drop.
+                        s.set_respawn_in_place(true);
                         let builder = s.collision_builder();
                         let (tx, rx) = mpsc::channel::<(u64, Vec<Tri>)>();
                         let built_send = built_send.clone();
