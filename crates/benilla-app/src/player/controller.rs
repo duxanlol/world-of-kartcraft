@@ -374,6 +374,16 @@ pub(super) fn control(
             match pointer.6.camera.filter(|_| pointer.6.engine_camera) {
                 Some(camera) => *cam_t = camera,
                 None => {
+                    // The WoW camera swings in behind the direction of travel while the board
+                    // rolls; a held mouse button owns it, to look around.
+                    let looking = rig.world_mouse.held(LookButton::Left)
+                        || rig.world_mouse.held(LookButton::Right);
+                    if pointer.6.moving() && !looking {
+                        let behind = (player.face_yaw - cam.yaw + std::f32::consts::PI)
+                            .rem_euclid(std::f32::consts::TAU)
+                            - std::f32::consts::PI;
+                        cam.yaw += behind * (1.0 - (-SKATE_CAMERA_FOLLOW * dt).exp());
+                    }
                     let head = player.pos + Vec3::Y * (CAPSULE_HEIGHT - CAPSULE_RADIUS);
                     camera::seat_on_subject(
                         dt,
@@ -836,6 +846,9 @@ pub(super) fn control(
         camera::fly_free(dt, &keys, typing, &mut rig, &mut cam, &mut cam_t);
     }
 }
+
+/// How fast (1/s) the WoW camera swings in behind a rolling skateboard.
+const SKATE_CAMERA_FOLLOW: f32 = 2.5;
 
 /// A riding frame: the skater's pose is the body's, and the wire carries it as a
 /// run, FORWARD while the board rolls, with heartbeats every 500 ms. No FALLING is ever sent, so
