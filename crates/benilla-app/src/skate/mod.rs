@@ -618,15 +618,15 @@ fn update(
                 let mut landed = None;
                 if let Some((lines, points)) = host.landed {
                     if f.landed_lines != lines {
-                        let line = f.landed_points - points;
-                        if server_board {
-                            profession.landed(line, &f.landed_trick);
-                        }
-                        landed = Some(line as f32);
+                        landed = Some((f.landed_points - points) as f32);
                         host.landed = Some((f.landed_lines, f.landed_points));
                     }
                 }
-                score.observe(time.elapsed_secs(), f.line_points, &f.line_trick, landed);
+                let banked =
+                    score.observe(time.elapsed_secs(), f.line_points, &f.line_trick, landed);
+                if let Some(line) = banked.filter(|_| server_board) {
+                    profession.landed(f64::from(line), &score::trick_label(&f.landed_trick));
+                }
                 audio.observe(&f.state, f.velocity);
                 present(f, host.origin, &mut drive, &mut pose);
             }

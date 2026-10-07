@@ -29,7 +29,7 @@ const SKILL_COLOR: Color = Color::srgb(0.4, 0.8, 1.0);
 /// The score feed, written by the skate update and the experience handler.
 #[derive(Resource, Default)]
 pub(super) struct SkateScore {
-    /// The line in progress: running points and latest trick.
+    /// The line in progress: its highest points so far and latest trick.
     live: (f32, String),
     landed: Option<Landed>,
     /// When the last line was lost, and its points.
@@ -48,9 +48,18 @@ struct Landed {
 
 impl SkateScore {
     /// One engine pose's line state at `now`; `landed` is a line landed since the last pose.
-    pub(super) fn observe(&mut self, now: f32, points: f32, trick: &str, landed: Option<f32>) {
+    /// Returns the landed line's points: the most the line showed in progress, since the engine
+    /// banks only finished tricks, and its running score sags in the ticks before it banks.
+    pub(super) fn observe(
+        &mut self,
+        now: f32,
+        points: f32,
+        trick: &str,
+        landed: Option<f32>,
+    ) -> Option<f32> {
         let (was, _) = self.live;
-        if let Some(landed_points) = landed {
+        let banked = landed.map(|p| p.max(was));
+        if let Some(landed_points) = banked {
             self.landed = Some(Landed {
                 at: now,
                 points: landed_points,
@@ -62,7 +71,14 @@ impl SkateScore {
         } else if was > 0.0 && points <= 0.0 {
             self.bailed = Some((now, was));
         }
-        self.live = (points, trick.to_string());
+        // The peak carries on only within a line: a landing or a lost line starts over.
+        let peak = if banked.is_none() && points > 0.0 {
+            points.max(was)
+        } else {
+            points
+        };
+        self.live = (peak, trick_label(trick));
+        banked
     }
 
     /// Off the board: nothing in progress.
@@ -261,6 +277,26 @@ fn fade(age: f32, hold: f32, fade: f32) -> f32 {
     (1.0 - (age - hold).max(0.0) / fade).clamp(0.0, 1.0)
 }
 
+/// An engine trick label for the screen: `ID_TRICK_KICKFLIP` reads "Kickflip".
+pub(super) fn trick_label(raw: &str) -> String {
+    let words: Vec<&str> = raw.split(['_', ' ']).filter(|w| !w.is_empty()).collect();
+    let skip = words
+        .iter()
+        .take_while(|w| w.eq_ignore_ascii_case("id") || w.eq_ignore_ascii_case("trick"))
+        .count();
+    words[skip..]
+        .iter()
+        .map(|w| {
+            let lower = w.to_lowercase();
+            let mut c = lower.chars();
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
 /// `points` rounded, with thousands separators: 12,345.
 fn grouped(points: f32) -> String {
     let digits = (points.max(0.0).round() as u64).to_string();
@@ -277,6 +313,13 @@ fn grouped(points: f32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trick_labels_drop_the_id_prefix() {
+        assert_eq!(trick_label("ID_TRICK_KICKFLIP"), "Kickflip");
+        assert_eq!(trick_label("id_trick_fs_50_50"), "Fs 50 50");
+        assert_eq!(trick_label("Kickflip"), "Kickflip");
+    }
 
     #[test]
     fn points_group_by_thousands() {
@@ -300,5 +343,10 @@ mod tests {
         score.observe(10.0, 120.0, "Ollie", None);
         score.observe(10.5, 0.0, "", None);
         assert_eq!(shown(&score, 10.6, None).expect("bail").trick.0, "BAIL");
+        assert_eq!(score.observe(20.0, 2000.0, "ID_TRICK_DARKSLIDE", None), None);
+        assert_eq!(score.observe(20.05, 300.0, "ID_TRICK_DARKSLIDE", None), None);
+        assert_eq!(shown(&score, 20.05, None).expect("live").points.0, "2,000");
+        assert_eq!(score.observe(20.1, 0.0, "", Some(120.0)), Some(2000.0));
+        assert_eq!(shown(&score, 20.2, None).expect("landed").trick.0, "Darkslide");
     }
 }
