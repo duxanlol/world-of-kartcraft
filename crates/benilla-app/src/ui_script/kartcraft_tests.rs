@@ -269,3 +269,95 @@ fn forty_courses_scroll_and_a_tick_follows_its_course() {
     s.run("BenillaKartFinderFrameQueue:Click()").unwrap();
     assert_eq!(sent(&mut s), [format!("KARTCRAFT\tR\tQ+\t{key}")]);
 }
+
+#[test]
+fn the_search_narrows_the_list() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 40);
+    s.run("BenillaKartFinderFrame:Show()").unwrap();
+    s.tick(0.0);
+    let visible = |s: &UiScript| -> Vec<String> {
+        s.eval(
+            "local out = {} for i = 1, BENILLA_KART_ROWS do \
+             local row = getglobal('BenillaKartFinderFrameRow' .. i) \
+             if row:IsVisible() then table.insert(out, getglobal(row:GetName() .. 'Text'):GetText()) end \
+             end return out",
+        )
+        .unwrap()
+    };
+
+    // Any case, anywhere in the name.
+    s.run("BenillaKartFinderFrameSearch:SetText('COURSE 4')")
+        .unwrap();
+    s.tick(0.0);
+    assert_eq!(visible(&s), ["Course 4", "Course 40"]);
+    s.run("BenillaKartFinderFrameSearch:SetText('elwyn')")
+        .unwrap();
+    s.tick(0.0);
+    assert_eq!(visible(&s), ["Elwynn Loop"]);
+
+    // A tick made under a search queues; clearing it brings the whole list back.
+    s.run("BenillaKartFinderFrameRow1:Click()").unwrap();
+    s.run("BenillaKartFinderFrameSearch:SetText('')").unwrap();
+    s.tick(0.0);
+    assert_eq!(visible(&s).len(), 8);
+    s.run("BenillaKartFinderFrameQueue:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tQ+\telwynn"]);
+}
+
+#[test]
+fn closing_while_queued_minimizes_to_the_queue_button() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 3);
+    s.run("BenillaKartFinderFrame:Show()").unwrap();
+    s.tick(0.0);
+    let shown = |s: &UiScript, frame: &str| -> bool {
+        s.eval(&format!("return {frame}:IsVisible() == 1")).unwrap()
+    };
+
+    // Not queued: Close closes, and nothing stays on screen.
+    assert_eq!(
+        s.eval::<String>("return BenillaKartFinderFrameClose:GetText()")
+            .unwrap(),
+        "Close"
+    );
+    s.run("BenillaKartFinderFrameClose:Click()").unwrap();
+    s.tick(0.0);
+    assert!(!shown(&s, "BenillaKartFinderFrame") && !shown(&s, "BenillaKartQueueButton"));
+
+    // Queued: Close reads Minimize, and the queue button shows the server's status.
+    s.run("BenillaKartFinderFrame:Show() BenillaKartFinderFrameQueue:Click()")
+        .unwrap();
+    from_server(&mut s, "R\tQs\t3\t65");
+    assert_eq!(
+        s.eval::<String>("return BenillaKartFinderFrameClose:GetText()")
+            .unwrap(),
+        "Minimize"
+    );
+    s.run("BenillaKartFinderFrameClose:Click()").unwrap();
+    s.tick(0.0);
+    assert!(!shown(&s, "BenillaKartFinderFrame"));
+    assert!(shown(&s, "BenillaKartQueueButton"));
+    assert_eq!(
+        s.eval::<String>("return BenillaKartQueueButtonText:GetText()")
+            .unwrap(),
+        "Race Finder: 1:05, 3 waiting"
+    );
+
+    // A click opens the window again; leaving the queue retires the button.
+    s.run("BenillaKartQueueButton:Click()").unwrap();
+    s.tick(0.0);
+    assert!(shown(&s, "BenillaKartFinderFrame") && !shown(&s, "BenillaKartQueueButton"));
+    s.run("BenillaKartFinderFrameQueue:Click() BenillaKartFinderFrame:Hide()")
+        .unwrap();
+    s.tick(0.0);
+    assert!(!shown(&s, "BenillaKartQueueButton"));
+}
