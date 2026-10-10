@@ -639,8 +639,11 @@ pub(crate) mod schedule_tests {
     }
 
     /// `PostUpdate`'s undeclared-order pairs on the declared graph; `GlobalTransform` and the
-    /// particle `EffectQuads` are most of it.
-    const POST_UPDATE_CEILING: usize = 371;
+    /// particle `EffectQuads` are most of it. Accepted with a reason: the kart weapons' look
+    /// (`kartcraft::weapons::look::draw`, in the kart chain) against the other writers of
+    /// `Transform`, `Visibility` and the mesh and material handles: it spawns and moves only the
+    /// crates, fruit and shots it owns.
+    const POST_UPDATE_CEILING: usize = 411;
     const POST_UPDATE_SLACK: usize = 20;
     /// The actionable pairs in `Update`: conflicting access, no declared order, and nothing
     /// [`Classes`] explains, so the executor orders them however the graph falls. The count may
@@ -684,12 +687,17 @@ pub(crate) mod schedule_tests {
     ///   kart's own handles; `kart::update` and `kart::sound::update` against the writers of
     ///   `Player`, `Window` and the mover exclusions, of which they read the pose gates once a
     ///   frame (a gate seen a frame late starts or ends a ride a frame late), and against the
-    ///   sheath requests' other writers, which the driver applies in any order.
+    ///   sheath requests' other writers, which the driver applies in any order. Its overlays
+    ///   (`kart::finder`'s window, `kart::race`'s banner, results, beams and guide arrow,
+    ///   `kart::score::draw`, `kart::weapons::update`) against the glue, login, character and
+    ///   portrait screens and the world streamers over `Text`, `Node`, `Visibility`,
+    ///   `Transform` and the material handles: each writes only its own marker entities, which
+    ///   none of those touch, and the screens never run in the world.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 4_893;
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_027;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
