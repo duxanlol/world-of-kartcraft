@@ -74,3 +74,9 @@ UPDATES
 "Play Kartcraft.bat" checks the server for a newer version every time it starts and downloads only
 the files that changed. If the server can't be reached, the game starts as it is. To get updates
 from a different address, add a line UPDATE_URL=http://... to kartcraft.cfg.
+
+
+LINUX AND STEAM DECK
+--------------------
+Run "bash play-proton.sh" instead of the .bat (it needs curl and jq). It uses your Steam's Proton or
+GE-Proton, or the one PROTON=/path/to/proton names, and asks the same questions on the first run.

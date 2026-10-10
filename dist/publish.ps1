@@ -81,6 +81,9 @@ foreach ($name in 'Play Kartcraft.bat', 'Demo.bat', 'README.txt', 'update.ps1') 
     $text = [IO.File]::ReadAllText((Join-Path $template $name)) -replace "`r?`n", "`r`n"
     [IO.File]::WriteAllText((Join-Path $client $name), $text, (New-Object Text.UTF8Encoding $false))
 }
+# The Linux and Steam Deck launcher with Unix line endings, which bash needs.
+$text = [IO.File]::ReadAllText((Join-Path $template 'play-proton.sh')) -replace "`r`n", "`n"
+[IO.File]::WriteAllText((Join-Path $client 'play-proton.sh'), $text, (New-Object Text.UTF8Encoding $false))
 # The launcher's presets; a player's own kartcraft.cfg overrides them.
 $defaults = (@('SERVER', 'UPDATE_URL', 'REGISTER_URL') | Where-Object { $settings[$_] } | ForEach-Object { "$_=$($settings[$_])" }) -join "`r`n"
 [IO.File]::WriteAllText((Join-Path $client 'defaults.cfg'), "$defaults`r`n")
@@ -114,7 +117,7 @@ Write-Host '== dist\updates =='
 $version = Get-Date -Format 'yyyy.MM.dd-HHmm'
 $objects = Join-Path $updates 'files'
 New-Item -ItemType Directory -Force -Path $objects | Out-Null
-$names = @($shipped.Keys) + 'Play Kartcraft.bat', 'Demo.bat', 'README.txt', 'update.ps1', 'defaults.cfg', 'source.zip'
+$names = @($shipped.Keys) + 'Play Kartcraft.bat', 'Demo.bat', 'play-proton.sh', 'README.txt', 'update.ps1', 'defaults.cfg', 'source.zip'
 $entries = foreach ($name in $names) {
     $path = Join-Path $client $name
     $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLower()
