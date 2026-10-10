@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 
-use super::race::{finder_banner, Races, COURSES};
+use super::race::{finder_banner, Races, COURSES, RACING_NOTICE};
 
 const GOLD: Color = Color::srgb(1.0, 0.82, 0.0);
 const ROW: Color = Color::srgba(1.0, 1.0, 1.0, 0.06);
@@ -126,6 +126,7 @@ pub(crate) fn spawn(mut commands: Commands) {
 
 /// `I` opens and closes the window; its buttons tick courses and queue or leave.
 pub(crate) fn update(
+    time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     ui: Res<crate::ui_script::UiKeyboardCapture>,
     mut state: ResMut<FinderUi>,
@@ -159,7 +160,7 @@ pub(crate) fn update(
                     races.finder.status = None;
                     profession.send("KARTCRAFT\tR\tQ-".into());
                 } else {
-                    queue(&state, &mut races, &profession);
+                    queue(&state, &mut races, &profession, time.elapsed_secs());
                 }
                 false
             }
@@ -170,12 +171,26 @@ pub(crate) fn update(
         };
         // Changing the courses while queued keeps our place with the new choice.
         if picks_changed && races.finder.queued.is_some() {
-            queue(&state, &mut races, &profession);
+            queue(&state, &mut races, &profession, time.elapsed_secs());
         }
     }
 }
 
-fn queue(state: &FinderUi, races: &mut Races, profession: &super::profession::Profession) {
+fn queue(
+    state: &FinderUi,
+    races: &mut Races,
+    profession: &super::profession::Profession,
+    now: f32,
+) {
+    // A race waiting to start is left for the queue; one under way keeps us.
+    match races.take_lobby() {
+        Err(()) => {
+            races.finder.notice = Some((RACING_NOTICE, now + 6.0));
+            return;
+        }
+        Ok(Some(id)) => profession.send(format!("KARTCRAFT\tR\tQ\t{id}")),
+        Ok(None) => {}
+    }
     let keys = state.keys();
     profession.send(format!("KARTCRAFT\tR\tQ+\t{keys}"));
     races.finder.queued = Some(keys);

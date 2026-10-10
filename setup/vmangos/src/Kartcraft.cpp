@@ -706,6 +706,19 @@ namespace Kartcraft
             s = uint32(s->first >> 16) == guidLow ? race.shots.erase(s) : std::next(s);
     }
 
+    // A racer leaves: their item, Wumpa, mask and shots go with them. If they hosted, the next
+    // in the roster starts the race instead, as the clients already show (the first is the host).
+    static void RemoveRacer(Race& race, std::vector<Racer>::iterator racer)
+    {
+        uint32 low = racer->guid.GetCounter();
+        race.racers.erase(racer);
+        DropShots(race, low);
+        bool hostLeft = std::none_of(race.racers.begin(), race.racers.end(),
+            [&race](Racer const& r) { return r.guid == race.host; });
+        if (hostLeft && !race.racers.empty())
+            race.host = race.racers.front().guid;
+    }
+
     // Crates due back come up; old shots are forgotten. Run on every Kartcraft line: a racer's
     // kart sends its state ten times a second, so a respawn is late by at most about 100 ms.
     static void TickWeapons(uint32 now)
@@ -1105,13 +1118,34 @@ namespace Kartcraft
             // Not from a dungeon, a raid or a battleground: a pop would teleport them out of it.
             if (player->InBattleGround() || player->GetMap()->Instanceable())
                 mask = 0;
-            // Not while racing: a pop would teleport them off the course.
-            for (auto const& r : s_races)
-                for (Racer const& x : r.second.racers)
-                    if (x.guid == guid && !x.finished)
-                        mask = 0;
             if (!mask)
                 return true;
+            // A race still waiting to start is left for the queue; one under way is not: a pop
+            // would teleport them off the course, so they are told why instead.
+            for (auto it = s_races.begin(); it != s_races.end();)
+            {
+                Race& r = it->second;
+                auto x = std::find_if(r.racers.begin(), r.racers.end(), [guid](Racer const& m) { return m.guid == guid; });
+                if (x == r.racers.end() || x->finished)
+                {
+                    it = std::next(it);
+                    continue;
+                }
+                if (r.start)
+                {
+                    SendLine(player, "KARTCRAFT\tR\tQx\tracing");
+                    return true;
+                }
+                RemoveRacer(r, x);
+                SendLine(player, "KARTCRAFT\tR\tL\t" + std::to_string(it->first) + "\t");
+                if (r.racers.empty())
+                    it = s_races.erase(it);
+                else
+                {
+                    SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(it->first) + "\t" + Roster(r));
+                    it = std::next(it);
+                }
+            }
             if (mine != s_queue.end())
                 mine->courses = mask;
             else
@@ -1202,6 +1236,22 @@ namespace Kartcraft
             Course const* course = FindCourse(f[2]);
             if (!course || player->GetMapId() != course->map || DistanceTo(player, course->points[0]) > START_RADIUS)
                 return;
+            // A race already waiting on this course takes them in: who arrives after the offer
+            // (sent once, to those near) still races with the host rather than alone.
+            for (auto& entry : s_races)
+            {
+                uint32 openId = entry.first;
+                Race& open = entry.second;
+                bool in = std::any_of(open.racers.begin(), open.racers.end(),
+                    [player](Racer const& x) { return x.guid == player->GetObjectGuid(); });
+                if (open.course == course && !open.start && (in || open.racers.size() < MAX_RACERS))
+                {
+                    if (!in)
+                        open.racers.push_back({ player->GetObjectGuid(), player->GetName() });
+                    SendRace(open, "KARTCRAFT\tR\tL\t" + std::to_string(openId) + "\t" + Roster(open));
+                    return;
+                }
+            }
             uint32 raceId = s_nextRace++;
             Race& r = s_races[raceId];
             r.course = course;
@@ -1276,14 +1326,10 @@ namespace Kartcraft
         {
             // Leaving: out of the roster before the start, a retirement after.
             Race& r = race->second;
-            for (auto x = r.racers.begin(); x != r.racers.end(); ++x)
-                if (x->guid == player->GetObjectGuid())
-                {
-                    // Their item, Wumpa and mask go with the racer; their shots go too.
-                    r.racers.erase(x);
-                    DropShots(r, player->GetGUIDLow());
-                    break;
-                }
+            auto x = std::find_if(r.racers.begin(), r.racers.end(),
+                [player](Racer const& m) { return m.guid == player->GetObjectGuid(); });
+            if (x != r.racers.end())
+                RemoveRacer(r, x);
             if (r.racers.empty())
                 s_races.erase(race);
             else
