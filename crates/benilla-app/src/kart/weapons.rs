@@ -62,7 +62,13 @@ pub(crate) fn update(
         if weapons.live() {
             info!("kart weapons: race over, weapons cleared");
         }
-        weapons.clear();
+        // A new race keeps the lines already waiting: a Race Finder race's layout comes in the
+        // frame its roster binds it. A race's end drops them with the rest.
+        if race.is_some() {
+            weapons.rebind();
+        } else {
+            weapons.clear();
+        }
         link.pacer.clear();
         link.race = race;
     }

@@ -265,3 +265,26 @@ fn ctr_hit_kinds_carry_over_to_the_kart() {
         assert_eq!(kart_hit(kind), kart);
     }
 }
+
+#[test]
+fn a_new_race_keeps_the_layout_that_came_with_its_roster() {
+    let (mut w, world, mut kart) = setup();
+    let layout = || Down::Layout {
+        first: 0,
+        crates: vec![CrateSpot {
+            kind: CrateKind::Weapon,
+            at: bevy_to_wow(ORIGIN + Vec3::Z * 50.0),
+        }],
+    };
+    // The roster binds the race in the frame its layout arrives: a rebind keeps it.
+    w.receive(layout());
+    w.rebind();
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(w.crates().len(), 1, "the layout that came with the roster");
+
+    // A race's end drops everything, waiting lines too.
+    w.receive(layout());
+    w.clear();
+    tick(&mut w, &world, &mut kart, 1);
+    assert!(w.crates().is_empty());
+}

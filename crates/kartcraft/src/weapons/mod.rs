@@ -275,6 +275,14 @@ impl Weapons {
         };
     }
 
+    /// A new race: everything of the last one goes, but not the lines still waiting, which are
+    /// the new race's own. A Race Finder race's layout lands in the frame its roster binds it.
+    pub fn rebind(&mut self) {
+        let waiting = std::mem::take(&mut self.inbox);
+        self.clear();
+        self.inbox = waiting;
+    }
+
     /// Whether there is anything of a race: crates laid out or an item.
     pub fn live(&self) -> bool {
         !self.crates.is_empty() || self.held.view() != HeldView::Empty || !self.field.is_empty()
