@@ -759,4 +759,32 @@ mod teleport_tests {
         assert_eq!((player.face_yaw, cam_yaw), (1.25, 1.25));
         assert!(player.settling && player.ride_abort && player.world_stale);
     }
+
+    /// A Race Finder teleport to the grid lands while we drive: the kart's old pose must not
+    /// overwrite the snap, or it starts again where it was.
+    #[test]
+    fn a_near_teleport_takes_the_pose_from_a_driving_kart() {
+        let mut player = Player {
+            active: true,
+            ..Default::default()
+        };
+        let drive = crate::kart::KartDrive {
+            active: true,
+            pos: Vec3::new(5.0, 0.0, 5.0),
+            ..Default::default()
+        };
+        assert!(super::super::controller::kart_writes_pose(&drive, &player));
+        let t = TeleportMessage {
+            guid: 0x45,
+            counter: 2,
+            position: [-9_436.0, 59.0, 56.0],
+            orientation: 0.5,
+        };
+        snap_near_teleport(&mut player, &mut 0.0, &t, 10.0);
+        assert!(
+            !super::super::controller::kart_writes_pose(&drive, &player),
+            "the snap's frame: the kart keeps its old pose to itself"
+        );
+        assert_eq!(player.pos, wow_to_bevy(t.position));
+    }
 }

@@ -1001,7 +1001,7 @@ namespace Kartcraft
     constexpr uint32 QUEUE_STALE = 10 * IN_MILLISECONDS;
     constexpr uint32 POP_ANSWER = 20 * IN_MILLISECONDS;
     // Countdown plus time for a teleport to settle before it.
-    constexpr uint32 FINDER_COUNTDOWN = COUNTDOWN + 4 * IN_MILLISECONDS;
+    constexpr uint32 GRID_COUNTDOWN = COUNTDOWN + 4 * IN_MILLISECONDS;
     constexpr float GRID_SPACING = 4.f;
 
     struct Queued
@@ -1148,7 +1148,7 @@ namespace Kartcraft
                 TeleportToGrid(p, *pop.course, slot++);
             }
         SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(raceId) + "\t" + Roster(r));
-        StartRace(raceId, r, now, FINDER_COUNTDOWN);
+        StartRace(raceId, r, now, GRID_COUNTDOWN);
     }
 
     // Drops the stale, fails late ready checks and pops the courses that are ready.
@@ -1428,7 +1428,13 @@ namespace Kartcraft
             Race& r = race->second;
             if (r.start || r.host != player->GetObjectGuid())
                 return;
-            StartRace(id, r, now, COUNTDOWN);
+            // Everyone to a grid slot behind the start, as a Race Finder race lines up, whether
+            // they joined on foot or drove up in the kart; the countdown waits for the settle.
+            size_t slot = 0;
+            for (Racer const& x : r.racers)
+                if (Player* p = ObjectAccessor::FindPlayer(x.guid))
+                    TeleportToGrid(p, *r.course, slot++);
+            StartRace(id, r, now, GRID_COUNTDOWN);
         }
         else if (verb == "K" && race != s_races.end() && f.size() > 3)
         {

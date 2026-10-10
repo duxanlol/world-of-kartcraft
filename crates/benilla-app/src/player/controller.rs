@@ -361,7 +361,7 @@ pub(super) fn control(
             movement_net::ack_speeds_undriven(&net.0 .0, &player, &speed_acks);
             return;
         }
-        if pointer.6.active {
+        if kart_writes_pose(&pointer.6, &player) {
             drive_kart(
                 &pointer.6,
                 &time,
@@ -845,6 +845,14 @@ pub(super) fn control(
         movement_net::park_mover(&net.0 .0, &mut player);
         camera::fly_free(dt, &keys, typing, &mut rig, &mut cam, &mut cam_t);
     }
+}
+
+/// Whether the kart writes the body's pose this frame: while it drives and the body may be
+/// driven. A same-map teleport snaps the body here after the kart's update (`apply_server_moves`)
+/// and holds it settling; the kart stops next frame and starts again where the snap put us, so
+/// this frame its old pose must not overwrite the snap.
+pub(super) fn kart_writes_pose(drive: &crate::kart::KartDrive, player: &Player) -> bool {
+    drive.active && player.may_drive()
 }
 
 /// How fast (1/s) the WoW camera swings in behind a moving kart.
