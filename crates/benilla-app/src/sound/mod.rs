@@ -54,6 +54,7 @@ pub(crate) use greeting::NpcGreetingRequest;
 #[cfg(test)]
 pub(crate) use kit::SoundKits;
 pub(crate) use message::MessageSounds;
+pub(crate) use mixer::set_track_position;
 pub(crate) use mixer::Mixer;
 pub(crate) use ui::{AutoEquipSound, LootPickupSound};
 pub(crate) use zone::ExplorationSounds;
@@ -206,7 +207,8 @@ fn apply_focus_gate(
     }
 }
 
-/// Copy the cinematic's music stop into [`SoundConfig::music_suppressed`].
+/// Copy the cinematic's music stop into [`SoundConfig::music_suppressed`]; the kart's CTR music
+/// takes the zone music's place the same way.
 ///
 /// Runs in `WorldStage::Stream`, not `PreUpdate`: the cinematic starts in `Input`, and
 /// [`zone::zone_audio`] in `Present` must see the flag that same frame, or it starts a track (and
@@ -214,10 +216,12 @@ fn apply_focus_gate(
 fn feed_music_suppression(
     mut config: ResMut<SoundConfig>,
     cinematic: Option<Res<crate::cinematic::Cinematic>>,
+    kart: Option<Res<crate::kart::KartDrive>>,
 ) {
     let playing = cinematic
         .as_deref()
-        .is_some_and(crate::cinematic::Cinematic::is_playing);
+        .is_some_and(crate::cinematic::Cinematic::is_playing)
+        || kart.is_some_and(|k| k.active && kartcraft::sound::music_on());
     if config.music_suppressed != playing {
         config.music_suppressed = playing;
     }

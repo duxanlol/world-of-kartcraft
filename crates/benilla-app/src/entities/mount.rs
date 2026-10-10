@@ -257,7 +257,7 @@ pub(super) fn reseat_mounts(
         if !matches!(net.kind, EntityKind::Unit | EntityKind::Player) {
             continue;
         }
-        let live = store.0.unit_mount_display_id();
+        let live = crate::kart::mount_model_display(store);
         let applied = applied.map_or(0, |a| a.0);
         // Settled: seated on what the field says, and holding no mount model when it says none.
         // A mount-up whose field zeroes before the model loads leaves an unseated child (`applied`

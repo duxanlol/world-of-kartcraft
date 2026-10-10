@@ -42,12 +42,16 @@ __pycache__/
 # beside `WoW`, or `BENILLA_ADDON_CORPUS`.
 /wow-addons-vanilla
 
-# --- World of Skatecraft: generated from the player's own copies, NEVER commit ---
-# Skate 3 data converted from the player's extracted Skate 3 (tools/skate_audio.py, the engine's converter).
-/skate-data/
-/skate-audio/
+# --- World of Kartcraft: generated from the player's own copies, NEVER commit ---
 # The local vmangos server (vmangos-deploy checkout, its configs, extracted map data, database).
 /server/
 # Setup's log and scratch.
 /setup.log
 /.setup/
+/kart-data
+/target-*
+
+# The friends' client package and its update folder, built by dist/publish.ps1.
+/dist/WorldOfKartcraft/
+/dist/WorldOfKartcraft.zip
+/dist/updates/

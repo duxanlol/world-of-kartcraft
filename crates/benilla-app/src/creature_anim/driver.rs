@@ -277,13 +277,16 @@ pub(super) fn drive_animations(
         // Read for `DO_NOT_PLAY_WOUND_ANIM`; a missing cache reads as an unreceived template.
         Option<Res<crate::names::NameCache>>,
         MessageReader<BaseAnimRecompute>,
+        // World of Kartcraft: our own unit sits in the kart, held in the saddle pose.
+        Option<Res<crate::kart::KartDrive>>,
     ),
     // The variation roll's LCG, the reference's single CRT `_rand` stream shared by every play.
     mut rng: ResMut<benilla_assets::AnimRng>,
     // The last anim trace line per traced unit; the trace writes only on change.
     mut anim_trace_last: Local<std::collections::HashMap<Entity, String>>,
 ) {
-    let (emote_sounds, loot_kneel, time, names, mut recomputes) = aux;
+    let (emote_sounds, loot_kneel, time, names, mut recomputes, kart) = aux;
+    let in_kart = kart.is_some_and(|k| k.active);
     let dt = time.delta_secs();
     // This frame's one-shot plays per unit, replayed in the reference's call order (`PlaySeq`
     // stamps): a later call overwrites an earlier, and the combat fast path keys on what is playing
@@ -423,7 +426,11 @@ pub(super) fn drive_animations(
         let dead = store.is_some_and(|s| s.0.unit_reads_dead());
         // `UNIT_FIELD_MOUNTDISPLAYID` is the one mounted signal; a mount child has no store, so it
         // never reads as mounted.
-        let mount_display = store.map_or(0, |s| s.0.unit_mount_display_id());
+        // The kart seats us as a mount would, with no mount model: a display id no mount has.
+        let mount_display = match store.map_or(0, |s| s.0.unit_mount_display_id()) {
+            0 if is_self && in_kart => u32::MAX,
+            id => id,
+        };
         let mounted = mount_display != 0;
         // Latched before the death override so an early return still consumes the edge: a unit
         // that mounts and dies in one frame must not arm Mount over Death later.

@@ -1,4 +1,4 @@
-> benilla's own README, kept as it was upstream. World of Skatecraft is built on benilla:
+> benilla's own README, kept as it was upstream. World of Kartcraft (via World of Skatecraft) is built on benilla:
 > https://github.com/samwhosung/benilla. Report benilla bugs there only if they also happen in
 > upstream benilla.
 

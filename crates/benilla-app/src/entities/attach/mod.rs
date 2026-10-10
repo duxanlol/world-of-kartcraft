@@ -395,7 +395,7 @@ pub(super) fn attach_entity_visuals(
             let mount_display = match net.kind {
                 EntityKind::Unit | EntityKind::Player => stores
                     .get(entity)
-                    .map_or(0, |s| s.0.unit_mount_display_id()),
+                    .map_or(0, crate::kart::mount_model_display),
                 _ => 0,
             };
             // The rider's rig root: the unit, or the seat anchor.

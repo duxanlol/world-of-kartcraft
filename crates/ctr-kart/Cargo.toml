@@ -1,0 +1,14 @@
+[package]
+name = "ctr-kart"
+version.workspace = true
+edition.workspace = true
+# Ported from the CTR decompilation (CTR-tools/ctr-native, GPL-3.0), so this crate is GPL-3.0.
+license = "GPL-3.0-or-later"
+description = "Crash Team Racing's kart driving model, ported from the decompilation, over any triangle soup"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Bevy 0.18's own glam, so poses cross into the client without conversion.
+glam = "0.30"

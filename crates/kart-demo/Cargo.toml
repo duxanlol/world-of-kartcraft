@@ -1,0 +1,25 @@
+[package]
+name = "kart-demo"
+version.workspace = true
+edition.workspace = true
+license = "GPL-3.0-or-later"
+description = "World of Kartcraft's offline demo: CTR's kart over the streamed WoW world, no server"
+
+[lints]
+workspace = true
+
+[dependencies]
+benilla-world = { path = "../benilla-world" }
+benilla-assets = { path = "../benilla-assets", default-features = false }
+bevy.workspace = true
+kartcraft = { path = "../kartcraft" }
+# The demo has no client mixer: kira plays through cpal 0.17, the client's (src/audio.rs).
+kira = { version = "0.12", default-features = false, features = ["wav", "pcm"] }
+cpal = "0.17"
+
+[build-dependencies]
+benilla-buildstamp = { path = "../benilla-buildstamp" }
+
+[[bin]]
+name = "kartcraft-demo"
+path = "src/main.rs"

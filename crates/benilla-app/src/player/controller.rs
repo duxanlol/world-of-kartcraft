@@ -21,8 +21,8 @@ pub(super) fn control(
         Res<camera_dynamics::CameraOptions>,
         // Only `nearclip` is read here, for the self-avatar fade.
         Res<benilla_world::view::ViewDistance>,
-        // While riding, the skate mode's pose drives the body, the camera and the wire.
-        Res<crate::skate::SkateDrive>,
+        // While driving, the kart mode's pose drives the body, the camera and the wire.
+        Res<crate::kart::KartDrive>,
     ),
     mut net: (
         Res<NetCommands>,
@@ -362,7 +362,7 @@ pub(super) fn control(
             return;
         }
         if pointer.6.active {
-            drive_skating(
+            drive_kart(
                 &pointer.6,
                 &time,
                 &mut player,
@@ -382,7 +382,7 @@ pub(super) fn control(
                         let behind = (player.face_yaw - cam.yaw + std::f32::consts::PI)
                             .rem_euclid(std::f32::consts::TAU)
                             - std::f32::consts::PI;
-                        cam.yaw += behind * (1.0 - (-SKATE_CAMERA_FOLLOW * dt).exp());
+                        cam.yaw += behind * (1.0 - (-KART_CAMERA_FOLLOW * dt).exp());
                     }
                     let head = player.pos + Vec3::Y * (CAPSULE_HEIGHT - CAPSULE_RADIUS);
                     camera::seat_on_subject(
@@ -847,15 +847,18 @@ pub(super) fn control(
     }
 }
 
-/// How fast (1/s) the WoW camera swings in behind a rolling skateboard.
-const SKATE_CAMERA_FOLLOW: f32 = 2.5;
+/// How fast (1/s) the WoW camera swings in behind a moving kart.
+const KART_CAMERA_FOLLOW: f32 = 2.5;
 
-/// A riding frame: the skater's pose is the body's, and the wire carries it as a
-/// run, FORWARD while the board rolls, with heartbeats every 500 ms. No FALLING is ever sent, so
+/// The heartbeat period (s) while the kart moves, against WoW's 0.5.
+const KART_HEARTBEAT: f32 = 1.0 / 15.0;
+
+/// A riding frame: the kart's pose is the body's, and the wire carries it as a
+/// run, FORWARD while the kart moves, with heartbeats every 500 ms. No FALLING is ever sent, so
 /// a drop off a ledge takes no fall damage.
 #[allow(clippy::too_many_arguments)]
-fn drive_skating(
-    drive: &crate::skate::SkateDrive,
+fn drive_kart(
+    drive: &crate::kart::KartDrive,
     time: &Time,
     player: &mut Player,
     body: &mut BodyQuery,
@@ -863,6 +866,12 @@ fn drive_skating(
     speed_acks: &[crate::net::SpeedChangeMessage],
     self_guid: Option<u64>,
 ) {
+    // A kart covers yards between WoW's 500 ms heartbeats, so other players' clients would see it
+    // jump: while it moves, a heartbeat is due every 1/15 s.
+    let now = time.elapsed_secs();
+    if drive.moving() && now - player.last_heartbeat >= KART_HEARTBEAT {
+        player.last_heartbeat = now - 1.0;
+    }
     player.pos = drive.pos;
     player.face_yaw = drive.yaw;
     player.model_yaw = drive.yaw;

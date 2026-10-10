@@ -1,0 +1,1510 @@
+//! One kart, ticked at CTR's 30 Hz in CTR's own units: positions in level units (lu), speeds in
+//! 1/256 lu per frame, angles in 4096ths of a turn, timers in CTR-milliseconds (32 a frame). The
+//! stages run in the game's order (`docs/ctr-physics-spec.md` section 2): UPDATE (drift entry and
+//! boosts), PHYS_LINEAR (throttle and steer command), PHYS_ANGULAR (yaw), APPLY_FORCES (gravity,
+//! friction), the collision sweep, the ground probe, JUMP_FRICTION (engine and hop), then the
+//! visual frame and the hang-time meter. Section numbers below are the spec's.
+
+use glam::{Mat3, Vec3};
+
+use crate::collision::{Collision, GROUND_NORMAL_Y};
+use crate::stats::*;
+
+/// One frame's CTR-milliseconds at 30 fps.
+pub const MS: i32 = 32;
+/// The tick, seconds.
+pub const TICK: f32 = 1.0 / 30.0;
+
+/// One frame of controls.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Input {
+    /// −1 full left to 1 full right.
+    pub steer: f32,
+    /// ✕: gas.
+    pub gas: bool,
+    /// □: brake (with gas, a power-brake; with `down`, reverse).
+    pub brake: bool,
+    /// Down on the stick: reverse.
+    pub down: bool,
+    /// The shoulders: hop, powerslide, boost.
+    pub r1: bool,
+    pub l1: bool,
+}
+
+/// What the abilities change this tick.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Modifiers {
+    /// Wumpa fruit held, 0 to 10; 10 is juiced.
+    pub wumpa: u8,
+    /// Aku Aku's mask: its speed, and walls do not stop us.
+    pub mask: bool,
+    /// Super Engine: reserves kept topped up while the gas is held.
+    pub super_engine: bool,
+}
+
+/// Something that happened this tick, for sounds, the score and the profession.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Event {
+    Hop,
+    /// Back on the ground after `air_ms` CTR-ms, landing at `fall` speed units downward.
+    Land {
+        air_ms: i32,
+        fall: i32,
+    },
+    DriftStart {
+        left: bool,
+    },
+    DriftEnd,
+    /// A powerslide boost: which of the drift's (1–3) and the reserves it gave.
+    Boost {
+        stage: u8,
+        reserves: i32,
+    },
+    /// A boost pressed before the red zone: the exhaust puff.
+    BoostEarly,
+    /// The meter ran full with no press: the chain is over.
+    MeterFull,
+    /// A hang-time boost, level 1–3.
+    HangTime {
+        level: u8,
+    },
+    /// A turbo item (the Turbo Boost ability).
+    Turbo,
+    WallRub,
+    /// A head-on wall impact at `speed`.
+    Slam {
+        speed: i32,
+    },
+    SpinOut,
+    /// Bumped by another kart, this hard (speed units into us).
+    Bump {
+        strength: i32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum State {
+    #[default]
+    Normal,
+    Drifting,
+    /// The wall-slam lockout, CTR-ms left.
+    Crashing(i32),
+    /// The spin-out, CTR-ms left.
+    Spinning(i32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Button {
+    R1,
+    L1,
+}
+
+/// How `VehFire_Increment` adds reserves (7.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FireKind {
+    /// Pads and the turbo item: topped up to the amount, not stacked.
+    Freeze,
+    SuperEngine,
+    /// Powerslide, hang time, start boost: stacked.
+    Stack,
+}
+
+/// The terrain multipliers under the kart (8.2), all 256 = 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Terrain {
+    pub speed: i32,
+    pub accel: i32,
+    pub counter_steer: i32,
+    pub lean: i32,
+    pub ground_friction: i32,
+    pub turn_angle: i32,
+    pub turn_response: i32,
+}
+
+impl Terrain {
+    pub const ASPHALT: Terrain = Terrain {
+        speed: 256,
+        accel: 256,
+        counter_steer: 256,
+        lean: 256,
+        ground_friction: 256,
+        turn_angle: 256,
+        turn_response: 256,
+    };
+    pub const ICE: Terrain = Terrain {
+        speed: 256,
+        accel: 100,
+        counter_steer: 0,
+        lean: 0,
+        ground_friction: 32,
+        turn_angle: 128,
+        turn_response: 32,
+    };
+    /// In the air.
+    pub const NONE: Terrain = Terrain {
+        counter_steer: 0,
+        ..Terrain::ASPHALT
+    };
+}
+
+// `actionsFlagSet` bits that matter here.
+const TOUCH_GROUND: u32 = 0x1;
+const STARTED_TOUCH_GROUND: u32 = 0x2;
+const JUMP_BUTTON_HELD: u32 = 0x4;
+const ACCEL_PREVENTION: u32 = 0x8;
+const STEER_LEFT: u32 = 0x10;
+const BRAKE_WITH_ACCEL: u32 = 0x20;
+const DRIVING_AGAINST_WALL: u32 = 0x2000;
+const REVERSING: u32 = 0x20000;
+const AIRBORNE: u32 = 0x80000;
+/// What survives from one frame to the next; the rest is rebuilt each frame.
+const CARRY: u32 = TOUCH_GROUND | STEER_LEFT | REVERSING | AIRBORNE;
+
+/// `VehCalc_MapToRange`: clamps test the old bounds literally, so a reversed range saturates.
+fn map(v: i32, omin: i32, omax: i32, nmin: i32, nmax: i32) -> i32 {
+    if v <= omin {
+        nmin
+    } else if v >= omax {
+        nmax
+    } else {
+        nmin + ((i64::from(v - omin) * i64::from(nmax - nmin)) / i64::from(omax - omin)) as i32
+    }
+}
+
+/// `VehCalc_InterpBySpeed`: `v` toward `target` by `step`, no overshoot.
+fn approach(v: f32, step: f32, target: f32) -> f32 {
+    if v < target {
+        (v + step).min(target)
+    } else {
+        (v - step).max(target)
+    }
+}
+
+fn approach_i(v: i32, step: i32, target: i32) -> i32 {
+    if v < target {
+        (v + step).min(target)
+    } else {
+        (v - step).max(target)
+    }
+}
+
+fn rad(angle: i32) -> f32 {
+    angle as f32 * std::f32::consts::TAU / 4096.0
+}
+
+fn wrap(angle: i32) -> i32 {
+    angle & 0xFFF
+}
+
+/// The signed shortest difference `a − b`, in [−2048, 2048).
+fn diff(a: i32, b: i32) -> i32 {
+    ((a - b + 2048) & 0xFFF) - 2048
+}
+
+fn atan2_units(y: f32, x: f32) -> i32 {
+    wrap((y.atan2(x) * 4096.0 / std::f32::consts::TAU).round() as i32)
+}
+
+/// `VehPhysForce_RotAxisAngle`: the frame with Y on `n` and Z the heading `angle` carried onto
+/// the plane by the minimal rotation from up to `n`; X = Y × Z (the kart's left).
+pub fn rot_axis_angle(n: Vec3, angle: i32) -> Mat3 {
+    let a = rad(angle);
+    let f = Vec3::new(a.sin(), 0.0, a.cos());
+    let k = Vec3::Y.cross(n);
+    let s = k.length();
+    let z = if s < 1e-6 {
+        f
+    } else {
+        let k = k / s;
+        let c = n.y;
+        f * c + k.cross(f) * s + k * k.dot(f) * (1.0 - c)
+    };
+    let x = n.cross(z);
+    Mat3::from_cols(x, n, z)
+}
+
+/// `VehCalc_SteerAccel`: 0 → max over the first frames, held, then back to 0.
+fn steer_accel(frames: i32) -> i32 {
+    let s2 = STEER_ACCEL_STAGE2_FIRST;
+    let s3 = s2 + STEER_ACCEL_STAGE2_LEN;
+    let s4 = STEER_ACCEL_STAGE4_FIRST;
+    if frames < s2 {
+        map(frames, 0, s2, 0, STEER_ACCEL_MAX)
+    } else if frames < s3 {
+        STEER_ACCEL_MAX
+    } else if frames < s4 {
+        map(frames, s3, s4, STEER_ACCEL_MAX, 0)
+    } else {
+        0
+    }
+}
+
+/// `VehPhysJoystick_GetStrength` over a stick's distance from centre (0 to 127), retail's
+/// defaults: dead zone 48, full at 127, a two-segment curve between.
+fn stick_strength(distance: i32, max: i32) -> i32 {
+    const DEAD: i32 = 0x30;
+    const RANGE: i32 = 0x7f;
+    const DIST: i32 = 0x5e;
+    if distance < DEAD {
+        return 0;
+    }
+    if distance >= RANGE {
+        return max;
+    }
+    let v = distance - DEAD;
+    let half = DIST / 2;
+    let fifth = max / 5;
+    if v < half {
+        v * fifth * 2 / DIST
+    } else {
+        (v - half) * (max - fifth) * 2 / DIST + fifth
+    }
+}
+
+/// Another kart this one can bump into.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OtherKart {
+    /// Its origin, lu, in this kart's space.
+    pub position: Vec3,
+    /// Its velocity, speed units (1/256 lu per frame).
+    pub velocity: Vec3,
+    /// Its class's CollisionWeight.
+    pub weight: i32,
+}
+
+/// What the chase camera reads from a kart (`docs/ctr-camera-spec.md` section 6).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CameraInput {
+    /// The kart's origin, lu.
+    pub position: Vec3,
+    /// The physics heading and the drawn turn off it, 4096ths.
+    pub heading: i32,
+    pub turn_angle: i32,
+    /// `rotCurr.w`, the powerslide's camera swing, 4096ths.
+    pub spin: i32,
+    /// The ground's lean under the kart, + to its right, 4096ths.
+    pub roll: i32,
+    pub speed_approx: i32,
+    pub spinning: bool,
+    /// A turbo was granted since the camera last looked.
+    pub turbo: bool,
+    pub fire_speed_cap: i32,
+}
+
+/// The world view of a kart, for drawing and the camera.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pose {
+    /// The kart's origin (the bottom centre), lu.
+    pub position: Vec3,
+    /// The drawn frame: columns X (left), Y (up), Z (forward).
+    pub basis: Mat3,
+    /// World velocity, lu per second.
+    pub velocity: Vec3,
+    /// The physics heading, 4096ths of a turn.
+    pub heading: i32,
+    /// The drawn front-wheel steer, −1 (right) to 1 (left).
+    pub steer: f32,
+    pub grounded: bool,
+    pub state: State,
+}
+
+pub struct Kart {
+    stats: Stats,
+    pub state: State,
+    pub terrain: Terrain,
+
+    pos: Vec3,
+    vel: Vec3,
+    speed: i32,
+    speed_approx: i32,
+    vel_yaw: i32,
+    vel_pitch: i32,
+
+    angle: i32,
+    turn_angle: i32,
+    turn_angle_prev: i32,
+    turn_angle_vel: i32,
+    simp_turn: i32,
+    spin_rate: i32,
+    amp_turn: i32,
+    frames_steering: i32,
+
+    base_speed: i32,
+    fire_speed: i32,
+    fwd_accel_impulse: i32,
+    forward_dir: i32,
+
+    reserves: i32,
+    fire_speed_cap: i32,
+    turbo_outside: i32,
+    turbo_meter: i32,
+
+    mult_drift: i32,
+    prev_mult_drift: i32,
+    drift_assist_ms: i32,
+    drift_frames: i32,
+    drift_boost_ms: i32,
+    drift_total_ms: i32,
+    boosts_attempted: i32,
+    boosts_success: i32,
+    drift_button: Button,
+    drift_entered_this_frame: bool,
+
+    jump_buffer: i32,
+    jump_cooldown: i32,
+    coyote: i32,
+    jump_forced: i32,
+    airtime: i32,
+    jump_meter: i32,
+    fall: i32,
+
+    wall_rub: i32,
+    grip_timer: i32,
+
+    /// The ground normal touched this frame, the smoothed one, and last frame's.
+    n1: Vec3,
+    n2: Vec3,
+    n4: Vec3,
+    moving: Mat3,
+    facing: Mat3,
+    nudge: Vec3,
+
+    flags: u32,
+    flags_prev: u32,
+    buttons_prev: (bool, bool),
+    spin_visual: i32,
+    /// `EngineSound_Player`'s smoothed pitch and volume states and the drift's rising whine.
+    engine_pitch: i32,
+    engine_volume: i32,
+    engine_whine: i32,
+    engine_sound: (u8, u8),
+    failed_boost: i32,
+    /// `rotCurr.w`: the camera's swing out of a powerslide's turn, and its rate (`rotPrev.w`).
+    camera_spin: i32,
+    camera_spin_rate: i32,
+    /// A turbo was granted since the camera last looked (`VehFire.c`'s camera flag 0x80).
+    camera_kick: bool,
+
+    pub events: Vec<Event>,
+}
+
+impl Kart {
+    /// A kart of `class` standing at `position` (lu) facing `heading` (4096ths, CTR's convention:
+    /// forward is `(sin h, 0, cos h)`).
+    pub fn new(class: Class, position: Vec3, heading: i32) -> Self {
+        let heading = wrap(heading);
+        Self {
+            stats: class.stats(),
+            state: State::Normal,
+            terrain: Terrain::ASPHALT,
+            pos: position,
+            vel: Vec3::ZERO,
+            speed: 0,
+            speed_approx: 0,
+            vel_yaw: heading,
+            vel_pitch: 0,
+            angle: heading,
+            turn_angle: 0,
+            turn_angle_prev: 0,
+            turn_angle_vel: 0,
+            simp_turn: 0,
+            spin_rate: 0,
+            amp_turn: 0,
+            frames_steering: 10000,
+            base_speed: 0,
+            fire_speed: 0,
+            fwd_accel_impulse: 0,
+            forward_dir: 1,
+            reserves: 0,
+            fire_speed_cap: 0,
+            turbo_outside: 0,
+            turbo_meter: 0,
+            mult_drift: 0,
+            prev_mult_drift: 0,
+            drift_assist_ms: 0,
+            drift_frames: 0,
+            drift_boost_ms: 0,
+            drift_total_ms: 0,
+            boosts_attempted: 0,
+            boosts_success: 0,
+            drift_button: Button::R1,
+            drift_entered_this_frame: false,
+            jump_buffer: 0,
+            jump_cooldown: 0,
+            coyote: 0,
+            jump_forced: 0,
+            airtime: 0,
+            jump_meter: 0,
+            fall: 0,
+            wall_rub: 0,
+            grip_timer: 0,
+            n1: Vec3::Y,
+            n2: Vec3::Y,
+            n4: Vec3::Y,
+            moving: rot_axis_angle(Vec3::Y, heading),
+            facing: rot_axis_angle(Vec3::Y, heading),
+            nudge: Vec3::ZERO,
+            flags: 0,
+            flags_prev: 0,
+            buttons_prev: (false, false),
+            spin_visual: 0,
+            engine_pitch: 0,
+            engine_volume: 0,
+            engine_whine: 0,
+            engine_sound: (0x3c, 0x82),
+            failed_boost: 0,
+            camera_spin: 0,
+            camera_spin_rate: 0,
+            camera_kick: false,
+            events: Vec::new(),
+        }
+    }
+
+    pub fn stats(&self) -> Stats {
+        self.stats
+    }
+
+    pub fn set_class(&mut self, class: Class) {
+        self.stats = class.stats();
+    }
+
+    /// Speed, 1/256 lu per frame.
+    pub fn speed(&self) -> i32 {
+        self.speed
+    }
+
+    /// Signed speed along the kart, 1/256 lu per frame.
+    pub fn forward_speed(&self) -> i32 {
+        self.speed_approx
+    }
+
+    /// Turbo time left, CTR-ms.
+    pub fn reserves(&self) -> i32 {
+        self.reserves
+    }
+
+    /// The powerslide meter: 0 empty to 1 full, and whether it is in the red zone; `None` when
+    /// not drifting or between attempts.
+    pub fn turbo_meter(&self) -> Option<(f32, bool)> {
+        (self.state == State::Drifting && self.turbo_meter > 0).then(|| {
+            let filled = 1.0 - self.turbo_meter as f32 / TURBO_MAX_ROOM_MS as f32;
+            (filled, self.turbo_meter < TURBO_LOW_ROOM_MS)
+        })
+    }
+
+    /// The hang-time meter (`jumpMeter`, CTR-ms of airtime, up to 2400) while a hop's airtime
+    /// counts for it, else `None`.
+    pub fn jump_meter(&self) -> Option<i32> {
+        (self.flags & AIRBORNE != 0 && !self.grounded()).then_some(self.jump_meter)
+    }
+
+    /// How far the drawn kart is turned off its heading (the powerslide look, a spin-out's whirl),
+    /// radians, + to the left.
+    pub fn drawn_yaw_offset(&self) -> f32 {
+        rad(self.turn_angle + self.spin_visual)
+    }
+
+    /// The turbo flame's size while reserves burn, else 0: `clamp(5 + (fireLevel >> 6), 4, 8)`
+    /// (`VehFire.c`), the fire level read back from the speed cap it granted (`2048 + 8·level`),
+    /// so a slide's boosts burn at 5, 6 and 7, and sacred fire, pads and the turbo item at 8.
+    pub fn fire_size(&self) -> u8 {
+        if self.reserves == 0 {
+            return 0;
+        }
+        let level = ((self.fire_speed_cap - SINGLE_TURBO_SPEED) / 8).max(0);
+        (5 + (level >> 6)).clamp(4, 8) as u8
+    }
+
+    /// The exhaust puffs on through a lit flame: CTR's 8 frames after a boost pressed too early
+    /// (`failedBoostExhaustTimer`).
+    pub fn failed_boost(&self) -> bool {
+        self.failed_boost > 0
+    }
+
+    /// What the chase camera reads this frame (`CAM_FollowDriver_Normal`); takes the turbo kick.
+    pub fn camera_input(&mut self) -> CameraInput {
+        // The roll the camera banks by: the drawn normal's lean toward the kart's right
+        // (`COLL.c:1580-1585`); X is the kart's left.
+        let right = -self.facing.x_axis;
+        let roll = atan2_units(self.n2.dot(right), self.n2.y);
+        CameraInput {
+            position: self.pos,
+            heading: self.angle,
+            turn_angle: self.turn_angle,
+            spin: self.camera_spin,
+            roll: if roll >= 2048 { roll - 4096 } else { roll },
+            speed_approx: self.speed_approx,
+            spinning: matches!(self.state, State::Spinning(_)),
+            turbo: std::mem::take(&mut self.camera_kick),
+            fire_speed_cap: self.fire_speed_cap,
+        }
+    }
+
+    /// `rotCurr.w` (`VehPhysProc.c:1953-2007`, `VehPhysGeneral.c:86-167`): through a powerslide
+    /// the camera swings ±384 out of the turn, easing in at up to 16 a frame; out of one it
+    /// eases back, and in a spin or a slam it snaps back at 32 a frame.
+    fn camera_spin_tick(&mut self) {
+        match self.state {
+            State::Spinning(_) | State::Crashing(_) => {
+                self.camera_spin = approach_i(self.camera_spin, 32, 0);
+                self.camera_spin_rate = 0;
+            }
+            _ => {
+                let target = match self.state {
+                    State::Drifting if self.mult_drift >= 0 => 384,
+                    State::Drifting => -384,
+                    _ => 0,
+                };
+                let cap = ((self.camera_spin - target).abs() >> 3).clamp(1, 16);
+                self.camera_spin_rate = approach_i(self.camera_spin_rate, 8, cap);
+                self.camera_spin = approach_i(self.camera_spin, self.camera_spin_rate, target);
+            }
+        }
+    }
+
+    /// The engine's sound this frame, as CTR mixes it: the distortion (0 to 255; the sample
+    /// plays at `2^((d − 128) / 64)` times its own rate) and the volume (0 to 255).
+    pub fn engine_sound(&self) -> (u8, u8) {
+        self.engine_sound
+    }
+
+    /// `VehPhysCrash_AnyTwoCars` for a player against each kart in reach: overlapping hit
+    /// spheres push apart by the overlap, and both velocities bounce off the weighted mean
+    /// (`VehPhysCrash_BounceSelf`, which takes 4/3 of the closing speed: a third bounces back).
+    /// Only this kart's velocity is ours to change; the other's owner bumps it on their side.
+    fn collide_karts(&mut self, others: &[OtherKart]) {
+        let weight = self.stats.collision_weight as f32;
+        for other in others {
+            let d = self.pos - other.position;
+            let distance = d.length();
+            let strength = 2.0 * KART_HIT_RADIUS - distance;
+            if strength <= 0.0 {
+                continue;
+            }
+            let dir = if distance > 1e-3 {
+                d / distance
+            } else {
+                Vec3::Z
+            };
+            let w = other.weight as f32;
+            let mean = (self.vel * weight + other.velocity * w) / (weight + w);
+            let closing = (self.vel - mean).dot(dir);
+            if closing < 0.0 {
+                let rel = self.vel - mean - dir * (closing * 4.0 / 3.0);
+                self.vel = rel + mean;
+                self.vel.y = self.vel.y.min(BOUNCE_Y_CLAMP);
+            }
+            self.vel += dir * (strength * 4096.0 / 256.0);
+            self.events.push(Event::Bump {
+                strength: (-closing).max(0.0) as i32,
+            });
+        }
+    }
+
+    /// `EngineSound_Player` (`HOWL_Engine.c`), the player's steady-state branch: the pitch chases
+    /// the mean of the throttle's target and the speed (the target plus 0xF00 in the air and in a
+    /// powerslide, so the engine revs), the volume swells while the revs change and settles when
+    /// they hold, and through a powerslide the pitch climbs with the turbo meter.
+    fn engine_sound_tick(&mut self) {
+        let mut target = self.fire_speed.abs();
+        let drifting = self.state == State::Drifting;
+        if self.flags_prev & TOUCH_GROUND == 0 || drifting {
+            target += 0xF00;
+        } else {
+            target = (target + self.speed_approx.abs()) >> 1;
+        }
+        if (target - self.engine_pitch).abs() < 0x601 {
+            self.engine_volume -= 500;
+            self.engine_volume = self.engine_volume.max(if drifting { 2000 } else { 0 });
+        } else {
+            self.engine_volume = (self.engine_volume + 2000).min(14000);
+        }
+        self.engine_pitch = (target * 0x89 + self.engine_pitch * 0x177) >> 9;
+        let accel_speed = self.stats.accel_speed;
+        let volume = map(self.engine_volume, 0, accel_speed, 0x82, 0xE6);
+        let pitch = map(
+            self.engine_pitch,
+            0,
+            accel_speed + SACRED_FIRE_SPEED + 0xF00,
+            0x3C,
+            200,
+        );
+        if drifting {
+            if self.turbo_meter == 0 {
+                self.engine_whine = (self.engine_whine - 1).max(0);
+            } else {
+                self.engine_whine = ((TURBO_MAX_ROOM_MS >> 5) >> 1) - (self.turbo_meter >> 6);
+            }
+        }
+        let distortion = (pitch + self.engine_whine).clamp(0, 0xFF);
+        self.engine_sound = (distortion as u8, volume.clamp(0, 0xFF) as u8);
+    }
+
+    pub fn grounded(&self) -> bool {
+        self.flags & TOUCH_GROUND != 0
+    }
+
+    /// Moves the kart without changing its motion (a respawn or a teleport).
+    pub fn place(&mut self, position: Vec3, heading: i32) {
+        let heading = wrap(heading);
+        self.pos = position;
+        self.angle = heading;
+        self.vel_yaw = heading;
+        self.vel = Vec3::ZERO;
+        self.speed = 0;
+        self.speed_approx = 0;
+        self.reserves = 0;
+        self.state = State::Normal;
+        self.turbo_meter = 0;
+        self.moving = rot_axis_angle(Vec3::Y, heading);
+        self.facing = self.moving;
+    }
+
+    pub fn pose(&self) -> Pose {
+        let steer = (self.simp_turn as f32 / self.stats.turn_rate.max(1) as f32).clamp(-1.0, 1.0);
+        Pose {
+            position: self.pos,
+            basis: self.facing,
+            velocity: self.vel * (30.0 / 256.0),
+            heading: self.angle,
+            steer,
+            grounded: self.grounded(),
+            state: self.state,
+        }
+    }
+
+    /// CTR's start-line boost (`VehStuckProc.c`): a second of turbo as the race starts, with a
+    /// big flame for an engine revved at the right moment, a small one for a fair try.
+    pub fn start_boost(&mut self, big: bool) {
+        let fire = if big { 0x80 } else { 0x20 };
+        if self.fire_increment(960, FireKind::Stack, fire) {
+            self.events.push(Event::Turbo);
+        }
+    }
+
+    /// The Turbo Boost ability: CTR's turbo item, stronger juiced.
+    pub fn fire_turbo(&mut self, juiced: bool) {
+        let fire = if juiced { 256 } else { 128 };
+        if self.fire_increment(TURBO_ITEM_RESERVES, FireKind::Freeze, fire) {
+            self.events.push(Event::Turbo);
+        }
+    }
+
+    /// `VehFire_Increment` (7.1); false when the state refuses it.
+    fn fire_increment(&mut self, reserves: i32, kind: FireKind, fire: i32) -> bool {
+        if matches!(self.state, State::Spinning(_) | State::Crashing(_)) {
+            return false;
+        }
+        let cap = SINGLE_TURBO_SPEED + ((fire * (SACRED_FIRE_SPEED - SINGLE_TURBO_SPEED)) >> 8);
+        if self.reserves == 0 || cap > self.fire_speed_cap || self.fire_speed_cap > 4096 {
+            self.fire_speed_cap = cap;
+        }
+        match kind {
+            FireKind::Freeze => {
+                if self.turbo_outside < reserves {
+                    self.reserves += reserves - self.turbo_outside;
+                    self.turbo_outside = reserves;
+                }
+            }
+            FireKind::SuperEngine => self.reserves = self.reserves.max(reserves),
+            FireKind::Stack => self.reserves += reserves,
+        }
+        self.reserves = self.reserves.min(i32::from(i16::MAX));
+        self.camera_kick = true;
+        true
+    }
+
+    /// One 30 Hz frame.
+    pub fn tick(&mut self, world: &Collision, input: &Input, mods: &Modifiers) {
+        self.tick_among(world, input, mods, &[]);
+    }
+
+    /// One 30 Hz frame among other karts, which bump this one (`VehPhysCrash_AnyTwoCars`).
+    pub fn tick_among(
+        &mut self,
+        world: &Collision,
+        input: &Input,
+        mods: &Modifiers,
+        others: &[OtherKart],
+    ) {
+        let tapped_r1 = input.r1 && !self.buttons_prev.0;
+        let tapped_l1 = input.l1 && !self.buttons_prev.1;
+        self.buttons_prev = (input.r1, input.l1);
+
+        self.update_stage(input, tapped_r1 || tapped_l1);
+        self.phys_linear(input, mods, tapped_r1, tapped_l1);
+        match self.state {
+            State::Drifting => self.powerslide_angular(),
+            State::Spinning(_) => self.spin_angular(),
+            _ => self.phys_angular(),
+        }
+        self.apply_forces();
+        self.n4 = self.n1;
+        self.n1 = Vec3::Y;
+        self.sweep(world, mods);
+        self.vel -= self.nudge;
+        self.collide_karts(others);
+        self.ground_probe(world);
+        self.jump_and_friction(mods);
+        // TRANSLATE_MATRIX: the visual frame.
+        let w = if self.grounded() { 6.0 } else { 7.0 };
+        let target = if self.grounded() { self.n1 } else { Vec3::Y };
+        self.n2 = ((self.n2 * w + target * (8.0 - w)) / 8.0)
+            .try_normalize()
+            .unwrap_or(Vec3::Y);
+        let yaw = wrap(self.angle + self.turn_angle + self.spin_visual);
+        self.facing = rot_axis_angle(self.n2, yaw);
+        self.hang_time();
+        self.engine_sound_tick();
+        self.camera_spin_tick();
+    }
+
+    /// UPDATE (2.3): drift entry, the powerslide's meter and boosts, the lockouts' ends.
+    fn update_stage(&mut self, input: &Input, tapped: bool) {
+        self.drift_entered_this_frame = false;
+        match self.state {
+            State::Normal => {
+                let held = match self.drift_button {
+                    Button::R1 => input.r1,
+                    Button::L1 => input.l1,
+                };
+                if self.flags & STARTED_TOUCH_GROUND != 0
+                    && self.simp_turn.abs() > self.stats.turn_rate / 2
+                    && held
+                    && self.flags & ACCEL_PREVENTION == 0
+                    && self.speed_approx >= self.stats.speed / 2
+                {
+                    self.powerslide_init();
+                }
+            }
+            State::Drifting => self.powerslide_update(input, tapped),
+            State::Crashing(left) | State::Spinning(left) if left <= 0 => {
+                self.state = State::Normal;
+                self.turbo_meter = 0;
+                self.spin_visual = 0;
+            }
+            _ => {}
+        }
+    }
+
+    /// `VehPhysProc_PowerSlide_Init` (5.1).
+    fn powerslide_init(&mut self) {
+        self.state = State::Drifting;
+        self.drift_entered_this_frame = true;
+        let base = self.stats.drift_turn_base << 8;
+        self.mult_drift = if self.simp_turn < 0 { -base } else { base };
+        self.drift_frames = 0;
+        self.drift_total_ms = 0;
+        self.drift_boost_ms = 0;
+        self.boosts_attempted = 0;
+        self.boosts_success = 0;
+        self.spin_rate = 0;
+        self.turn_angle_vel = 0;
+        self.drift_assist_ms = 0;
+        self.turbo_meter = TURBO_MAX_ROOM_MS;
+        self.events.push(Event::DriftStart {
+            left: self.mult_drift > 0,
+        });
+    }
+
+    /// `VehPhysProc_PowerSlide_Update` (5.3, 5.4).
+    fn powerslide_update(&mut self, input: &Input, tapped: bool) {
+        if tapped {
+            self.drift_frames = 0;
+            let m = self.turbo_meter;
+            if m != 0 {
+                if m < TURBO_LOW_ROOM_MS {
+                    let gain = map(m, 0, TURBO_LOW_ROOM_MS, TURBO_FULL_BAR_GAIN_MS, 0);
+                    let fire = self.boosts_success << 6;
+                    self.fire_increment(gain, FireKind::Stack, fire);
+                    self.boosts_success += 1;
+                    self.drift_boost_ms = DRIFT_BOOST_MS;
+                    self.events.push(Event::Boost {
+                        stage: self.boosts_success as u8,
+                        reserves: gain,
+                    });
+                } else {
+                    self.failed_boost = 8;
+                    self.events.push(Event::BoostEarly);
+                }
+                self.turbo_meter = 0;
+                self.boosts_attempted += 1;
+            }
+        } else if self.turbo_meter != 0 {
+            self.turbo_meter = (self.turbo_meter - MS).max(0);
+            if self.turbo_meter == 0 {
+                self.boosts_attempted += 3;
+                self.events.push(Event::MeterFull);
+            }
+        } else if self.boosts_attempted < 3 {
+            self.turbo_meter = TURBO_MAX_ROOM_MS;
+        }
+
+        let held = match self.drift_button {
+            Button::R1 => input.r1,
+            Button::L1 => input.l1,
+        };
+        let lim = DRIFT_FRAMES_TILL_SPINOUT;
+        if self.drift_frames > lim || self.speed_approx < 0 {
+            self.spin_out();
+        } else if self.drift_frames < -lim
+            || self.speed < self.stats.speed / 2
+            || self.flags & (DRIVING_AGAINST_WALL | ACCEL_PREVENTION | BRAKE_WITH_ACCEL) != 0
+            || !held
+        {
+            self.prev_mult_drift = self.mult_drift;
+            self.drift_assist_ms = DRIFT_RELEASE_ASSIST_MS;
+            self.end_drift();
+        }
+    }
+
+    fn end_drift(&mut self) {
+        self.state = State::Normal;
+        self.turbo_meter = 0;
+        self.events.push(Event::DriftEnd);
+    }
+
+    fn spin_out(&mut self) {
+        if self.state == State::Drifting {
+            self.events.push(Event::DriftEnd);
+        }
+        self.state = State::Spinning(SPIN_MS);
+        self.turbo_meter = 0;
+        self.reserves = 0;
+        self.events.push(Event::SpinOut);
+    }
+
+    /// PHYS_LINEAR (3.1, 3.2, 4.1): timers, the jump button, throttle, the steer command.
+    fn phys_linear(&mut self, input: &Input, mods: &Modifiers, tapped_r1: bool, tapped_l1: bool) {
+        self.flags_prev = self.flags;
+        self.turn_angle_prev = self.turn_angle;
+        let tick = |t: &mut i32| *t = (*t - MS).max(0);
+        tick(&mut self.reserves);
+        tick(&mut self.turbo_outside);
+        tick(&mut self.wall_rub);
+        tick(&mut self.jump_forced);
+        tick(&mut self.jump_cooldown);
+        self.jump_buffer = (self.jump_buffer - 1).max(0);
+        self.failed_boost = (self.failed_boost - 1).max(0);
+        if let State::Crashing(t) | State::Spinning(t) = &mut self.state {
+            *t -= MS;
+        }
+        self.flags &= CARRY;
+
+        // The jump button (5.1): a tap buffers a hop and names the drift's button.
+        if (tapped_r1 || tapped_l1) && self.state != State::Drifting {
+            self.drift_button = if tapped_r1 { Button::R1 } else { Button::L1 };
+            self.jump_buffer = JUMP_BUFFER_FRAMES;
+        }
+        if input.r1 || input.l1 {
+            self.flags |= JUMP_BUTTON_HELD;
+        }
+
+        if input.brake {
+            self.reserves = 0;
+        }
+        if mods.super_engine && input.gas {
+            let fire = if mods.wumpa >= 10 { 256 } else { 128 };
+            self.fire_increment(SUPER_ENGINE_RESERVES, FireKind::SuperEngine, fire);
+        }
+        let cross = input.gas || self.reserves != 0;
+        let b = self.target_speed(mods);
+        let (gas, flags) = match (input.brake, cross, input.down) {
+            (false, true, _) => (b, 0),
+            (false, false, false) => (0, 0),
+            (false, false, true) => (-BACKWARD_SPEED, REVERSING),
+            (true, true, false) => (b >> 1, BRAKE_WITH_ACCEL),
+            (true, _, true) => (-(3 * BACKWARD_SPEED) >> 2, REVERSING | BRAKE_WITH_ACCEL),
+            (true, false, false) => (0, ACCEL_PREVENTION),
+        };
+        self.flags = (self.flags & !REVERSING) | flags;
+        self.fire_speed = gas;
+        let m = self.terrain.speed;
+        self.base_speed = if self.flags & BRAKE_WITH_ACCEL == 0 && !mods.mask && m != 256 {
+            (gas * m) >> 8
+        } else {
+            gas
+        };
+        let mut lockout = false;
+        if let State::Crashing(_) | State::Spinning(_) = self.state {
+            self.base_speed = 0;
+            self.fire_speed = 0;
+            self.flags |= ACCEL_PREVENTION;
+            lockout = true;
+        }
+
+        // The steer command (4.1); + is left.
+        let mut strength = self.stats.turn_rate;
+        if self.wall_rub != 0 {
+            strength = 48;
+        } else if self.flags & (ACCEL_PREVENTION | BRAKE_WITH_ACCEL) != 0 && !lockout {
+            strength = if input.gas {
+                map(self.speed.abs(), 0x300, self.stats.speed / 2, 64, strength)
+            } else {
+                64
+            };
+        }
+        let distance = (input.steer.abs().min(1.0) * 127.0).round() as i32;
+        let s = stick_strength(distance, strength);
+        let simp = if input.steer < 0.0 { s } else { -s };
+        if simp == 0 {
+            self.frames_steering = 10000;
+        } else if self.simp_turn == 0 || simp.signum() != self.simp_turn.signum() {
+            self.frames_steering = 0;
+            if simp > 0 {
+                self.flags |= STEER_LEFT;
+            } else {
+                self.flags &= !STEER_LEFT;
+            }
+        }
+        self.simp_turn = simp;
+    }
+
+    /// `VehPhysGeneral_GetBaseSpeed` (3.2): the top speed this frame.
+    fn target_speed(&self, mods: &Modifiers) -> i32 {
+        let wumpa = i64::from(mods.wumpa.min(9));
+        let mut bonus = ((wumpa * WUMPA_NET_STAT / 10) >> 12) as i32;
+        if mods.mask {
+            bonus += MASK_SPEED;
+        }
+        let mut b = self.stats.speed;
+        if self.reserves != 0 {
+            b += self.fire_speed_cap;
+            let cap = SINGLE_TURBO_SPEED + 2 * (SACRED_FIRE_SPEED - SINGLE_TURBO_SPEED)
+                - self.fire_speed_cap;
+            bonus = bonus.min(cap.max(0));
+        }
+        (b + bonus).min(MAX_BASE_SPEED)
+    }
+
+    /// PHYS_ANGULAR in normal driving (4.2 to 4.6).
+    fn phys_angular(&mut self) {
+        let grounded = self.grounded();
+        // 4.2: the turn rate's response.
+        let mut target = self.simp_turn << 8;
+        if self.forward_dir < 0 {
+            target = -target;
+            self.flags ^= STEER_LEFT;
+        }
+        if grounded {
+            target = map(self.speed_approx.abs(), 16, 0x300, 0, target);
+        }
+        let step = (self.stats.turn_input_delay * self.terrain.turn_response) >> 8;
+        self.spin_rate = approach_i(self.spin_rate, step, target);
+        let mut rot = self.spin_rate;
+        // 4.3: the drift's residue.
+        if self.drift_assist_ms != 0 {
+            rot += map(self.drift_assist_ms, 0, 320, 0, self.prev_mult_drift);
+            self.drift_assist_ms = (self.drift_assist_ms - MS).max(0);
+        }
+        self.visual_turn(rot);
+        // 4.4: a fresh steer turns at about half rate at first.
+        if self.speed_approx.abs() >= 0x300 && grounded {
+            let mut sa = steer_accel(self.frames_steering);
+            self.frames_steering = (self.frames_steering + 1).min(10000);
+            sa = sa.min((STEER_ACCEL_TURN_VEL_SCALE * rot.abs()) >> 8);
+            if self.flags & STEER_LEFT != 0 {
+                sa = -sa;
+            }
+            rot = if rot > 0 {
+                (rot + sa).max(0)
+            } else {
+                (rot + sa).min(0)
+            };
+        }
+        // 4.5: yaw, and the velocity's heading turned with it (the grip).
+        self.amp_turn = rot;
+        self.angle = wrap(self.angle + ((rot * MS) >> 13));
+        let lean = if self.flags & ACCEL_PREVENTION != 0 {
+            (rot * 10) >> 8
+        } else {
+            (rot * self.terrain.lean) >> 8
+        };
+        self.vel_yaw = wrap(self.vel_yaw + ((lean * MS) >> 13));
+        self.moving = rot_axis_angle(self.n1, self.angle);
+        self.counter_steer();
+    }
+
+    /// 4.6: the model's yaw offset, which leans into turns and feeds the counter-steer nudge.
+    fn visual_turn(&mut self, rot: i32) {
+        let class_speed = self.stats.speed;
+        let mut resist_min = (TURN_RESIST_MIN * class_speed) >> 8;
+        let mut resist_max = (TURN_RESIST_MAX * class_speed) >> 8;
+        let mut model_rot_vel = MODEL_ROT_VEL_MAX;
+        if self.flags & BRAKE_WITH_ACCEL != 0 {
+            resist_min >>= 1;
+            resist_max >>= 1;
+            model_rot_vel = map(
+                self.speed.abs(),
+                0x300,
+                class_speed / 2,
+                MODEL_ROT_VEL_MIN,
+                MODEL_ROT_VEL_MAX,
+            );
+        }
+        let full = self.stats.turn_rate << 8;
+        let resistance = map(self.speed.abs(), resist_min, resist_max, full, 0);
+        let mut lerp_target = 0;
+        if self.speed_approx.abs() >= resist_min && rot.abs() > resistance {
+            let lt = map(
+                self.fire_speed.abs(),
+                resist_min,
+                resist_max,
+                0,
+                model_rot_vel,
+            );
+            lerp_target = rot.signum() * map(rot.abs(), resistance, full, 0, lt);
+        }
+        self.turn_angle_vel = self.lerp_to_forwards(lerp_target);
+        self.turn_angle_vel = (self.turn_angle_vel * self.terrain.turn_angle) >> 8;
+        self.turn_angle += self.turn_angle_vel;
+        let low = map(self.speed_approx.abs(), 0, 0x600, self.turn_angle_vel, 0);
+        if low.abs() > 1 {
+            self.angle = wrap(self.angle - low);
+            self.turn_angle -= low;
+        }
+    }
+
+    fn lerp_to_forwards(&self, target: i32) -> i32 {
+        let s = if target < 0 { -1 } else { 1 };
+        let (cur, vel, target) = (self.turn_angle * s, self.turn_angle_vel * s, target * s);
+        let desired = if self.wall_rub == WALL_RUB_MS {
+            0
+        } else if target < cur {
+            let cap = if cur > 350 { 20 * 15 } else { 20 };
+            -cap.min(((cur - target) >> 2).max(1))
+        } else if cur < target {
+            let cap = if cur < 0 { 60 } else { 30 };
+            cap.min(((target - cur) >> 2).max(1))
+        } else {
+            0
+        };
+        approach_i(vel, 10, desired) * s
+    }
+
+    /// `VehPhysForce_CounterSteer` (4.6): a one-frame sideways nudge from the model's yaw change.
+    fn counter_steer(&mut self) {
+        self.nudge = Vec3::ZERO;
+        let ratio = self.terrain.counter_steer;
+        if self.speed_approx.abs() > 768
+            && !matches!(self.state, State::Crashing(_))
+            && self.wall_rub == 0
+            && self.grounded()
+            && ratio != 0
+        {
+            let v = (-8000 * ratio) >> 8;
+            let da = (self.turn_angle - self.turn_angle_prev)
+                .clamp(-MODEL_TURN_COUNTER_STEER, MODEL_TURN_COUNTER_STEER);
+            self.nudge = self.moving * Vec3::new(v as f32 * rad(da).sin(), 0.0, 0.0);
+        }
+    }
+
+    /// `VehPhysProc_PowerSlide_PhysAngular` (5.2).
+    fn powerslide_angular(&mut self) {
+        // (a) the velocity's heading and the kart's converge.
+        let delta = diff(self.vel_yaw, self.angle);
+        if delta != 0 {
+            let mut step = delta >> 3;
+            if step == 0 {
+                step = 1;
+            }
+            step = step.clamp(-MS * 2, MS * 2);
+            self.angle = wrap(self.angle + step);
+            self.vel_yaw = wrap(self.vel_yaw - step);
+        }
+        // (c) the steering's share of the spin.
+        let range = self.stats.turn_rate << 8;
+        let s = self.simp_turn << 8;
+        let m = if self.mult_drift >= 0 { 1 } else { -1 };
+        let into = s * m;
+        let desired = if into >= 0 {
+            m * map(into, 0, range, 0, DRIFT_STANDARD << 8)
+        } else {
+            m * map(-into, 0, range, 0, DRIFT_SWITCH_WAY << 8)
+        };
+        let (d, mut c) = (desired * m, self.spin_rate * m);
+        c = if d < c {
+            (c - DRIFT_SPIN_RATE_DECEL).max(d)
+        } else {
+            (c + DRIFT_SPIN_RATE_ACCEL).min(d)
+        };
+        let mut current = c * m;
+        // (d) the spin-out counter.
+        if desired == 0 {
+            self.drift_frames = approach_i(self.drift_frames, 1, 0);
+        } else if desired * m > 0 {
+            self.drift_frames = (self.drift_frames + 1).max(0);
+        } else {
+            self.drift_frames = (self.drift_frames - 1).min(0);
+        }
+        // (e) the drift's own turn ramps in; (f) the spin may not reverse it.
+        let dti = map(
+            self.drift_total_ms,
+            0,
+            DRIFT_TURN_RAMP_MS,
+            (DRIFT_TURN_STARTUP_SCALE * self.mult_drift) >> 8,
+            self.mult_drift,
+        );
+        current = if dti >= 0 {
+            current.max(-dti)
+        } else {
+            current.min(-dti)
+        };
+        self.spin_rate = current;
+        // (g) the drawn drift angle.
+        let side = if self.mult_drift >= 0 { 1 } else { -1 };
+        let extra = if current * side >= 0 {
+            side * map(
+                current.abs(),
+                0,
+                DRIFT_STANDARD << 8,
+                0,
+                DRIFT_SAME_DIR_ANGLE,
+            )
+        } else {
+            side * DRIFT_OPPOSITE_DIR_ANGLE
+        };
+        let target = side * DRIFT_TURN_ANGLE_SCALE + extra;
+        let mut step = (target - self.turn_angle) >> 3;
+        if step == 0 && target != self.turn_angle {
+            step = (target - self.turn_angle).signum();
+        }
+        self.turn_angle += step;
+        // (h) yaw.
+        self.amp_turn = current + dti;
+        self.angle = wrap(self.angle + ((self.amp_turn * MS) >> 13));
+        // (i) a successful boost kicks the velocity into the drift.
+        if self.drift_boost_ms > 0 {
+            self.drift_boost_ms -= MS;
+            self.vel_yaw = wrap(self.vel_yaw + self.turn_angle.signum() * DRIFT_BOOST_AXIS_KICK);
+        }
+        self.drift_total_ms = (self.drift_total_ms + MS).min(DRIFT_TURN_RAMP_MS);
+        self.moving = rot_axis_angle(self.n1, self.angle);
+        self.counter_steer();
+    }
+
+    /// The spin-out: the model whirls while the kart slides to a stop.
+    fn spin_angular(&mut self) {
+        self.spin_visual = wrap(self.spin_visual + 256);
+        self.turn_angle = approach_i(self.turn_angle, 64, 0);
+        self.moving = rot_axis_angle(self.n1, self.angle);
+        self.nudge = Vec3::ZERO;
+    }
+
+    /// APPLY_FORCES (6.4, 3.6): speed to velocity, gravity and friction in the kart's frame.
+    fn apply_forces(&mut self) {
+        self.speed = self.speed.min(MAX_SPEED);
+        let (yaw, pitch) = (rad(self.vel_yaw), rad(self.vel_pitch));
+        let speed = self.speed as f32;
+        self.vel = Vec3::new(
+            speed * pitch.cos() * yaw.sin(),
+            speed * pitch.sin(),
+            speed * pitch.cos() * yaw.cos(),
+        );
+        let to_local = self.moving.transpose();
+        let mut l = to_local * self.vel;
+        let l0 = l;
+        let mut g = to_local * Vec3::new(0.0, -(GRAVITY as f32), 0.0);
+        if (g.z < 0.0 && self.fwd_accel_impulse > 0) || (g.z > 0.0 && self.fwd_accel_impulse < 0) {
+            g.z = 0.0;
+        }
+        let opposite = (self.base_speed > 0 && self.speed_approx < 0)
+            || (self.base_speed < 0 && self.speed_approx > 0);
+        if self.flags & ACCEL_PREVENTION != 0 || opposite {
+            g.x = 0.0;
+            g.z = 0.0;
+        }
+        l += g;
+        // Gravity may push only so far past these; it never takes back what was already there.
+        let fire = self.fire_speed as f32;
+        if g.z > 0.0 {
+            l.z = l.z.min(l0.z.max(fire + SLOPE_FORWARD_SPEED_BONUS as f32));
+        } else if g.z < 0.0 {
+            l.z = l.z.max(l0.z.min(fire - 2560.0));
+        }
+        let side = SIDE_SPEED_CLAMP as f32;
+        l.x = l.x.clamp(l0.x.min(-side), l0.x.max(side));
+        l.y = l.y.max(l0.y.min(-(TERMINAL_VELOCITY as f32)));
+        if self.flags_prev & TOUCH_GROUND != 0 {
+            self.friction(&mut l);
+        }
+        if l.z.abs() > 64.0 {
+            self.forward_dir = if l.z >= 0.0 { 1 } else { -1 };
+        }
+        self.vel = self.moving * l + self.nudge;
+    }
+
+    /// Ground friction (3.6), in the kart's frame.
+    fn friction(&self, l: &mut Vec3) {
+        let opposing = self.speed_approx.abs() > 0x300
+            && ((self.base_speed > 0 && self.speed_approx < 0)
+                || (self.base_speed < 0 && self.speed_approx > 0));
+        let (mut perp, mut fwd) = if self.flags & ACCEL_PREVENTION != 0 {
+            let f = if matches!(self.state, State::Spinning(_)) {
+                BRAKE_FRICTION / 2
+            } else {
+                BRAKE_FRICTION
+            };
+            (f, f)
+        } else if self.base_speed != 0 {
+            if opposing {
+                (PEDAL_FRICTION_PERP, BRAKE_FRICTION)
+            } else if self.state == State::Drifting {
+                (DRIFT_CURVE, DRIFT_FRICTION)
+            } else {
+                (PEDAL_FRICTION_PERP, PEDAL_FRICTION_FWD)
+            }
+        } else {
+            (NO_PEDAL_FRICTION_PERP, NO_PEDAL_FRICTION_FWD)
+        };
+        let gfs = self.terrain.ground_friction;
+        if gfs != 256 {
+            perp = (perp * gfs) >> 8;
+            fwd = (fwd * gfs) >> 8;
+        }
+        if self.grip_timer > 0 {
+            perp += perp;
+        }
+        l.x = approach(l.x, perp as f32, 0.0);
+        l.z = approach(l.z, fwd as f32, 0.0);
+    }
+
+    /// COLL_MOVED (9.1, 9.2): the kart's sphere moved by its velocity in sub-steps, pushed out of
+    /// what it overlaps, with CTR's scrub on each impact: the ground takes the into-surface speed
+    /// and becomes the kart's normal; a wall rubs, ends turbos and drifts, and head-on, slams.
+    fn sweep(&mut self, world: &Collision, mods: &Modifiers) {
+        // Ground contact is rebuilt each frame: by this sweep, then by the probe.
+        self.flags &= !TOUCH_GROUND;
+        let r = SPHERE_RADIUS;
+        let lift = self.facing.y_axis * r;
+        let mut centre = self.pos + lift;
+        let delta = self.vel / 256.0 * (MS as f32 / 32.0);
+        let steps = (delta.length() / (r * 0.4)).ceil().clamp(1.0, 32.0) as usize;
+        let step = delta / steps as f32;
+        let mut slammed = false;
+        'outer: for _ in 0..steps {
+            centre += step;
+            for _ in 0..4 {
+                let Some(contact) = world.deepest(centre, r) else {
+                    break;
+                };
+                centre += contact.normal * (contact.depth + 0.01);
+                let ground = contact.normal.y >= GROUND_NORMAL_Y;
+                let dot = self.vel.dot(contact.normal);
+                if ground {
+                    self.n1 = contact.normal;
+                    self.flags |= TOUCH_GROUND;
+                    if dot < 0.0 {
+                        self.vel -= contact.normal * dot;
+                    }
+                    continue;
+                }
+                if dot >= 0.0 {
+                    continue;
+                }
+                if mods.mask {
+                    // Aku Aku: the wall is a guide rail, never a stop.
+                    self.vel -= contact.normal * dot;
+                    continue;
+                }
+                self.flags |= DRIVING_AGAINST_WALL;
+                self.reserves = 0;
+                self.turbo_outside = 0;
+                if self.wall_rub == 0 {
+                    self.events.push(Event::WallRub);
+                }
+                self.wall_rub = WALL_RUB_MS;
+                let horizontal = Vec3::new(self.vel.x, 0.0, self.vel.z).length();
+                let head_on = -dot / self.vel.length().max(1.0);
+                if dot < -5119.0 && horizontal > 5120.0 && head_on > 0.879 {
+                    slammed = true;
+                    break 'outer;
+                }
+                self.vel -= contact.normal * dot;
+            }
+        }
+        self.pos = centre - lift;
+        if slammed {
+            if self.state == State::Drifting {
+                self.camera_spin -= self.turn_angle;
+                self.angle = wrap(self.angle + self.turn_angle);
+                self.turn_angle = 0;
+                self.events.push(Event::DriftEnd);
+            }
+            self.events.push(Event::Slam {
+                speed: self.speed.abs(),
+            });
+            self.state = State::Crashing(SLAM_MS);
+            self.vel = Vec3::ZERO;
+            self.speed = 0;
+            self.reserves = 0;
+            self.turbo_meter = 0;
+        }
+    }
+
+    /// COLL_FIXED (9.3, 6.1, 6.5): the ground under the kart, landings, coyote time and airtime.
+    fn ground_probe(&mut self, world: &Collision) {
+        let was = self.flags_prev & TOUCH_GROUND != 0;
+        let hit = world.ground(self.pos + Vec3::Y * 128.0, 384.0);
+        let mut grounded = self.flags & TOUCH_GROUND != 0;
+        if let Some(hit) = hit {
+            if self.pos.y <= hit.point.y + 16.0 {
+                grounded = true;
+                if self.n1 == Vec3::Y {
+                    self.n1 = hit.normal;
+                }
+            }
+        }
+        if grounded {
+            self.flags |= TOUCH_GROUND;
+            self.terrain = Terrain::ASPHALT;
+            if !was {
+                self.flags |= STARTED_TOUCH_GROUND;
+                self.grip_timer = LANDING_GRIP_MS;
+                self.events.push(Event::Land {
+                    air_ms: self.airtime,
+                    fall: self.fall,
+                });
+            }
+            self.coyote = COYOTE_MS;
+            self.airtime = 0;
+            self.fall = 0;
+        } else {
+            self.flags &= !TOUCH_GROUND;
+            self.terrain = Terrain::NONE;
+            self.coyote = (self.coyote - MS).max(0);
+            if self.coyote == 0 {
+                self.jump_cooldown = 0;
+            }
+            self.airtime += MS;
+            self.fall = self.fall.max((-self.vel.y) as i32);
+            if self.jump_cooldown != 0 {
+                self.flags |= AIRBORNE;
+            }
+        }
+        if self.grip_timer > 0 {
+            self.grip_timer = (self.grip_timer - MS).max(0);
+        }
+    }
+
+    /// JUMP_FRICTION (3.3 to 3.5, 6.2, 6.3): turn penalty, the engine, the hop, velocity to speed.
+    fn jump_and_friction(&mut self, mods: &Modifiers) {
+        if self.state != State::Drifting && !mods.mask && self.reserves == 0 {
+            let t = (self.amp_turn >> 8).abs();
+            let dec = map(t, 0, BACKWARD_TURN_RATE, 0, self.stats.turn_decrease)
+                .min(self.base_speed.abs());
+            self.base_speed -= self.base_speed.signum() * dec;
+        }
+        if self.wall_rub != 0 {
+            self.base_speed = self
+                .base_speed
+                .clamp(-WALL_RUB_SPEED_LIMIT, WALL_RUB_SPEED_LIMIT);
+        }
+        let mut mv = self.vel;
+        let mut loss = 0.0;
+        if self.grounded() {
+            let acc = self.engine_accel(mods);
+            let f = self.moving * Vec3::new(0.0, 0.0, acc as f32);
+            if self.base_speed >= 0 {
+                mv += f;
+                self.fwd_accel_impulse = acc;
+            } else {
+                mv -= f;
+                self.fwd_accel_impulse = -acc;
+            }
+            loss = (mv.length() - self.base_speed.abs() as f32).clamp(0.0, acc as f32);
+        } else {
+            self.fwd_accel_impulse = 0;
+        }
+        let lockout = matches!(self.state, State::Crashing(_) | State::Spinning(_));
+        if self.grounded() && self.jump_forced != 0 {
+            self.process_jump(&mut mv);
+        } else if !lockout && self.coyote != 0 && self.jump_buffer != 0 && self.jump_cooldown == 0 {
+            self.jump_forced = JUMP_FORCED_MS;
+            self.process_jump(&mut mv);
+            self.events.push(Event::Hop);
+        }
+        // `VehPhysCrash_ConvertVecToSpeed`.
+        let speed = mv.length();
+        let flat = Vec3::new(mv.x, 0.0, mv.z).length();
+        if speed > 1e-3 {
+            self.vel_yaw = atan2_units(mv.x, mv.z);
+            self.vel_pitch = atan2_units(mv.y, flat);
+        }
+        let up = self.moving.y_axis;
+        let planar = mv - up * mv.dot(up);
+        let along = planar.dot(self.moving.z_axis);
+        self.speed_approx = (planar.length() * along.signum()) as i32;
+        self.speed = ((speed - loss).max(0.0)) as i32;
+        self.vel = mv;
+    }
+
+    /// The engine's push (3.4).
+    fn engine_accel(&self, mods: &Modifiers) -> i32 {
+        let base = self.base_speed;
+        let sa = self.speed_approx;
+        if base == 0 {
+            return 0;
+        }
+        let wrong_way = sa.abs() > 0x2FF && (base <= 0 || sa <= 0) && (base >= 0 || sa >= 0);
+        if wrong_way {
+            return 0;
+        }
+        let mut acc = self.stats.accel;
+        if self.reserves != 0 && base > 0 {
+            acc = ACCEL_RESERVES;
+        }
+        if self.terrain.accel != 256 && !mods.mask {
+            acc = (acc * self.terrain.accel) >> 8;
+        }
+        acc
+    }
+
+    /// PROCESS_JUMP (6.3): the hop's vertical speed, plus the slope's.
+    fn process_jump(&mut self, mv: &mut Vec3) {
+        self.jump_cooldown = JUMP_COOLDOWN_MS;
+        self.jump_buffer = 0;
+        let slope = |n: Vec3| {
+            if (n.y * 4096.0).abs() < 21.0 {
+                0.0
+            } else {
+                (mv.x * n.x + mv.z * n.z) / n.y
+            }
+        };
+        let a = slope(self.n4);
+        let b = slope(if self.grounded() { self.n1 } else { self.n2 });
+        let best = if a.abs() >= b.abs() { a } else { b };
+        let j = JUMP_FORCE as f32;
+        let vy = (best * best + j * j).sqrt() - best;
+        mv.y = mv.y.max(vy.min(JUMP_VERTICAL_CAP as f32));
+    }
+
+    /// `UI_JumpMeter_Update` (6.6): a long enough hop pays out on landing.
+    fn hang_time(&mut self) {
+        let airborne = self.flags & AIRBORNE != 0;
+        if airborne && !self.grounded() {
+            self.jump_meter = self.airtime.min(HANG_TIME_METER_MAX);
+            return;
+        }
+        if airborne {
+            self.flags &= !AIRBORNE;
+            let m = self.jump_meter;
+            self.jump_meter = 0;
+            if m >= HANG_TIME_MIN_MS {
+                let (fire, level) = if m >= HANG_TIME_HIGH_MS {
+                    (0x100, 3)
+                } else if m >= HANG_TIME_MID_MS {
+                    (0x80, 2)
+                } else {
+                    (0, 1)
+                };
+                if self.fire_increment(HANG_TIME_RESERVES, FireKind::Stack, fire) {
+                    self.events.push(Event::HangTime { level });
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

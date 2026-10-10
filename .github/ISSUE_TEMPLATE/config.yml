@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Questions and help (Discussions)
-    url: https://github.com/Kimmo3223/world-of-skatecraft/discussions
-    about: Best-effort help. Attach setup.log and the output of setup/setup.sh --doctor.
+    url: https://github.com/duxanlol/world-of-kartcraft/discussions
+    about: Best-effort help. Attach setup.log and the output of the doctor (setup\setup.ps1 -Doctor or setup/setup.sh --doctor).

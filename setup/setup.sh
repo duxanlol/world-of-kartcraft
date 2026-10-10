@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# World of Skatecraft setup (Linux). Run from anywhere:
+# World of Kartcraft setup (Linux). Run from anywhere:
 #
-#   setup/setup.sh                       # everything, asking for the two game folders
-#   setup/setup.sh --wow DIR --skate DIR # same, without asking
+#   setup/setup.sh                       # everything, asking for the WoW folder and the CTR disc
+#   setup/setup.sh --wow DIR --ctr DISC  # same, without asking
 #   setup/setup.sh --doctor              # only check this machine
 #
 # Every step is skipped when its result is already there, so after a failure fix the reported
@@ -23,10 +23,6 @@ export PATH="$STATE/bin:$PATH"
 exec > >(tee -a "$ROOT/setup.log") 2>&1
 
 # Pinned upstreams.
-ENGINE_URL=https://github.com/SK8-ENGINE/skate-3-rust-engine
-ENGINE_REV=cb79689
-CONVERTER_URL=https://raw.githubusercontent.com/Kimmo3223/2010-rust-rewrite-mashup/adb684e78ec07654f00e2a9da88d32ae02cc68bd/skate/converter/iw4l_skate_convert.py
-VGMSTREAM_URL=https://github.com/vgmstream/vgmstream/releases/download/r2117/vgmstream-linux.zip
 SERVER_URL=https://github.com/mserajnik/vmangos-deploy
 SERVER_REV=f0692574b7955e78d68fea39372e0045360ce5ee
 SERVER_IMAGE=ghcr.io/mserajnik/vmangos-server:5875
@@ -39,11 +35,11 @@ die() {
     exit 1
 }
 
-WOW_DIR="" SKATE_DIR="" DOCTOR_ONLY=0
+WOW_DIR="" CTR_DISC="" DOCTOR_ONLY=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --wow) WOW_DIR=$2; shift 2 ;;
-        --skate) SKATE_DIR=$2; shift 2 ;;
+        --ctr) CTR_DISC=$2; shift 2 ;;
         --doctor) DOCTOR_ONLY=1; shift ;;
         -h|--help) sed -n 2,10p "$0"; exit 0 ;;
         *) die "unknown option $1" "see setup/setup.sh --help" ;;
@@ -125,56 +121,28 @@ if [ ! -e "$ROOT/WoW/Data" ]; then
     echo "  linked WoW -> $WOW_DIR"
 fi
 
-# ── Skate 3 data ───────────────────────────────────────────────────────────────────────────────
-SKATE_DIR_FILE="$STATE/skate3-path"
-[ -z "$SKATE_DIR" ] && [ -f "$SKATE_DIR_FILE" ] && SKATE_DIR=$(cat "$SKATE_DIR_FILE")
-need_skate() {
-    ask_dir SKATE_DIR "Path to your extracted Skate 3 (Xbox 360) folder, the one with default.xex and data/"
-    [ -f "$SKATE_DIR/default.xex" ] && [ -d "$SKATE_DIR/data" ] ||
-        die "$SKATE_DIR has no default.xex with a data folder beside it" \
-            "extract your Skate 3 disc (for example with extract-xiso) and point setup at that folder; ISO files do not work"
-    echo "$SKATE_DIR" > "$SKATE_DIR_FILE"
-}
-
-if [ ! -f "$ROOT/skate-data/assets/private/skater.glb" ]; then
-    step "Converting Skate 3 data (skater, animations, physics)"
-    need_skate
-    ENGINE="$STATE/skate-engine"
-    if [ ! -d "$ENGINE/.git" ]; then git clone --quiet "$ENGINE_URL" "$ENGINE"; fi
-    git -C "$ENGINE" fetch --quiet origin || true
-    git -C "$ENGINE" checkout --quiet "$ENGINE_REV"
-    [ -x "$STATE/venv/bin/python" ] || python3 -m venv "$STATE/venv" ||
-        die "could not create a Python venv" "$(packages_hint)"
-    "$STATE/venv/bin/python" -m pip install --quiet --upgrade pip
-    "$STATE/venv/bin/python" -m pip install --quiet 'numpy>=2.2,<3' 'Pillow>=11.3'
-    # The converters look for this file name; ctypes loads the ELF despite the extension.
-    mkdir -p "$ENGINE/target/native"
-    rustc --edition 2024 --crate-type cdylib -C opt-level=3 -C panic=abort \
-        "$ENGINE/tools/asset_pipeline/refpack_native.rs" -o "$ENGINE/target/native/refpack.dll"
-    curl -fsSL "$CONVERTER_URL" -o "$ENGINE/iw4l_skate_convert.py"
-    "$STATE/venv/bin/python" "$ENGINE/iw4l_skate_convert.py" --xex "$SKATE_DIR/default.xex" --out "$ROOT/skate-data" ||
-        die "the Skate 3 conversion failed (see the lines above)" "check that the Skate 3 folder is a complete extraction"
-    [ -f "$ROOT/skate-data/assets/private/skater.glb" ] || die "the conversion finished without skater.glb"
-fi
-
-# ── Skate 3 sounds ─────────────────────────────────────────────────────────────────────────────
-if [ ! -f "$ROOT/skate-audio/pop_1.wav" ]; then
-    step "Converting Skate 3 sounds"
-    need_skate
-    if ! command -v vgmstream-cli >/dev/null; then
-        curl -fsSL "$VGMSTREAM_URL" -o "$STATE/vgmstream.zip"
-        python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$STATE/vgmstream.zip" "$STATE/bin"
-        chmod +x "$STATE/bin/vgmstream-cli"
-    fi
-    "$STATE/venv/bin/python" "$ROOT/tools/skate_audio.py" "$SKATE_DIR/data" "$ROOT/skate-audio" ||
-        echo "  (sounds failed; skating still works, just silent)"
+# ── The kart, from the player's CTR disc ───────────────────────────────────────────────────────
+CTR_FILE="$STATE/ctr-path"
+[ -z "$CTR_DISC" ] && [ -f "$CTR_FILE" ] && CTR_DISC=$(cat "$CTR_FILE")
+if [ ! -f "$ROOT/kart-data/kart.json" ]; then
+    step "Converting the kart from your Crash Team Racing disc"
+    while [ -z "$CTR_DISC" ]; do
+        read -r -p "Path to your Crash Team Racing (PS1, USA, SCUS-94426) disc image, the .bin file: " CTR_DISC </dev/tty
+    done
+    CTR_DISC=${CTR_DISC%.cue}
+    CTR_DISC=${CTR_DISC%.bin}.bin
+    [ -f "$CTR_DISC" ] || die "$CTR_DISC does not exist" "point setup at the .bin of a raw (2352-byte sector) CTR NTSC-U image"
+    echo "$CTR_DISC" > "$CTR_FILE"
+    cargo run --release --quiet -p ctr-assets --bin ctr-extract -- "$CTR_DISC" "$ROOT/kart-data" --all ||
+        die "the kart conversion failed (see the lines above)" "check that the image is the NTSC-U disc"
+    [ -f "$ROOT/kart-data/kart.json" ] || die "the conversion finished without kart.json"
 fi
 
 # ── Local server ───────────────────────────────────────────────────────────────────────────────
 SERVER="$ROOT/server"
 # One fixed project name, so the server is the same Docker project whatever the folder is called.
-export SKATECRAFT_SERVER_PROJECT=${SKATECRAFT_SERVER_PROJECT:-world-of-skatecraft}
-compose() { docker compose -p "$SKATECRAFT_SERVER_PROJECT" --project-directory "$SERVER" -f "$SERVER/compose.yaml" "$@"; }
+export KARTCRAFT_SERVER_PROJECT=${KARTCRAFT_SERVER_PROJECT:-world-of-kartcraft}
+compose() { docker compose -p "$KARTCRAFT_SERVER_PROJECT" --project-directory "$SERVER" -f "$SERVER/compose.yaml" "$@"; }
 if [ ! -f "$SERVER/compose.yaml" ]; then
     step "Setting up the local vmangos server"
     [ -d "$SERVER/.git" ] || git clone --quiet "$SERVER_URL" "$SERVER"
@@ -194,7 +162,7 @@ if [ ! -d "$SERVER/storage/mangosd/extracted-data/maps" ]; then
         "$SERVER_IMAGE" extract-client-data </dev/null ||
         die "map extraction failed (see the lines above)"
 fi
-step "Building the server with the Skateboarding profession (a few minutes)"
+step "Building the server with the Karting profession (a few minutes)"
 "$ROOT/setup/build-server.sh" "$SERVER" || die "the server build failed (see the lines above)"
 step "Starting the server"
 compose up -d
@@ -205,7 +173,7 @@ for _ in $(seq 120); do
 done
 echo
 [ "$(docker inspect -f '{{.State.Health.Status}}' "$(compose ps -q mangosd)" 2>/dev/null)" = healthy ] ||
-    die "the world server did not come up within 10 minutes" "look at: docker compose -p world-of-skatecraft -f server/compose.yaml logs mangosd"
+    die "the world server did not come up within 10 minutes" "look at: docker compose -p world-of-kartcraft -f server/compose.yaml logs mangosd"
 
 # ── Account ────────────────────────────────────────────────────────────────────────────────────
 if [ ! -f "$STATE/account" ]; then
@@ -219,8 +187,8 @@ fi
 
 # ── Build ──────────────────────────────────────────────────────────────────────────────────────
 step "Building the game (first time: several minutes)"
-cargo build --release -p benilla || die "the build failed (see the lines above)" "$(packages_hint)"
+cargo build --release -p benilla -p kart-demo || die "the build failed (see the lines above)" "$(packages_hint)"
 
 step "Done"
-echo "  Start the game with:  ./play.sh"
-echo "  Log in as $(cat "$STATE/account"), create a character, press J to skate (Xbox controller)."
+echo "  Start the game with:  ./play.sh      (the offline kart demo, no server: ./target/release/kartcraft-demo)"
+echo "  Log in as $(cat "$STATE/account"), create a character, press J to drive (PS5, PS4 or Xbox pad, or keyboard)."

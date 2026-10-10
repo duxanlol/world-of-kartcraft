@@ -1,15 +1,21 @@
-# World of Skatecraft setup (Windows, experimental). Double-click setup.bat, or from PowerShell:
+# World of Kartcraft setup (Windows). Double-click setup.bat, or from PowerShell:
 #
 #   powershell -ExecutionPolicy Bypass -File setup\setup.ps1                 # everything
-#   powershell -ExecutionPolicy Bypass -File setup\setup.ps1 -Wow DIR -Skate DIR
+#   powershell -ExecutionPolicy Bypass -File setup\setup.ps1 -Wow DIR -Ctr DISC.bin
 #   powershell -ExecutionPolicy Bypass -File setup\setup.ps1 -Doctor         # only check this PC
+#   powershell -ExecutionPolicy Bypass -File setup\setup.ps1 -ClientOnly     # play on a friend's server
+#   powershell -ExecutionPolicy Bypass -File setup\setup.ps1 -NewAccount     # an account for a friend
 #
 # Every step is skipped when its result is already there, so after a failure fix the reported
-# problem and run it again. Everything is logged to setup.log. Mirrors setup/setup.sh.
+# problem and run it again. Everything is logged to setup.log.
 param(
     [string]$Wow = "",
-    [string]$Skate = "",
-    [switch]$Doctor
+    [string]$Ctr = "",
+    [switch]$Doctor,
+    # Only the game: for joining someone else's Kartcraft server (no Docker, no local server).
+    [switch]$ClientOnly,
+    # Make another game account (for a friend) even though setup already made yours.
+    [switch]$NewAccount
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -21,14 +27,13 @@ New-Item -ItemType Directory -Force -Path $State | Out-Null
 Start-Transcript -Path (Join-Path $Root 'setup.log') -Append | Out-Null
 
 # Pinned upstreams, the same as setup/setup.sh.
-$EngineUrl = 'https://github.com/SK8-ENGINE/skate-3-rust-engine'
-$EngineRev = 'cb79689'
-$ConverterUrl = 'https://raw.githubusercontent.com/Kimmo3223/2010-rust-rewrite-mashup/adb684e78ec07654f00e2a9da88d32ae02cc68bd/skate/converter/iw4l_skate_convert.py'
-$VgmstreamUrl = 'https://github.com/vgmstream/vgmstream/releases/download/r2117/vgmstream-win64.zip'
 $ServerUrl = 'https://github.com/mserajnik/vmangos-deploy'
 $ServerRev = 'f0692574b7955e78d68fea39372e0045360ce5ee'
-$ServerImage = 'ghcr.io/mserajnik/vmangos-server:5875'
-if (-not $env:SKATECRAFT_SERVER_PROJECT) { $env:SKATECRAFT_SERVER_PROJECT = 'world-of-skatecraft' }
+$StockImage = 'ghcr.io/mserajnik/vmangos-server:5875'
+# The vmangos commit the Kartcraft patch is made against.
+$VmangosRev = '0e3ff01e76d4758e8a7c3108b2717cc785ed56fa'
+if (-not $env:KARTCRAFT_SERVER_PROJECT) { $env:KARTCRAFT_SERVER_PROJECT = 'world-of-kartcraft' }
+if (-not $env:KARTCRAFT_BUILD_JOBS) { $env:KARTCRAFT_BUILD_JOBS = '4' }
 
 function Step($text) { Write-Host ''; Write-Host "==> $text" -ForegroundColor Cyan }
 function Stop-Setup($message, $fix = '') {
@@ -45,6 +50,9 @@ function Invoke-Native($what, [scriptblock]$command) {
     if ($LASTEXITCODE -ne 0) { Stop-Setup "$what failed (see the lines above)" }
 }
 function Test-Native([scriptblock]$command) {
+    # PowerShell 5 under `Stop` turns any redirected stderr line (docker's warnings) into an
+    # exception; only the exit code decides here.
+    $ErrorActionPreference = 'Continue'
     try { & $command *> $null; return $LASTEXITCODE -eq 0 } catch { return $false }
 }
 
@@ -64,17 +72,17 @@ function Test-Machine {
     Check 'Visual Studio C++ build tools' $msvc `
         'winget install -e --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"'
     Check 'git' ([bool](Get-Command git -ErrorAction SilentlyContinue)) 'winget install -e --id Git.Git'
-    Check 'Python 3 with venv' (Test-Native { python -c 'import venv, ensurepip' }) `
-        'winget install -e --id Python.Python.3.12   (if "python" opens the Microsoft Store, turn off its App execution alias in Settings)'
-    Check 'Docker Desktop' ([bool](Get-Command docker -ErrorAction SilentlyContinue)) 'winget install -e --id Docker.DockerDesktop   (then restart Windows)'
-    Check 'Docker compose' (Test-Native { docker compose version }) 'update Docker Desktop'
-    Check 'Docker Desktop running' (Test-Native { docker info }) 'start Docker Desktop and wait until it says it is running'
+    if (-not $ClientOnly) {
+        Check 'Docker Desktop' ([bool](Get-Command docker -ErrorAction SilentlyContinue)) 'winget install -e --id Docker.DockerDesktop   (then restart Windows)'
+        Check 'Docker compose' (Test-Native { docker compose version }) 'update Docker Desktop'
+        Check 'Docker Desktop running' (Test-Native { docker info }) 'start Docker Desktop and wait until it says it is running'
+    }
     $drive = (Split-Path -Qualifier $Root).TrimEnd(':')
     $free = [math]::Floor((Get-PSDrive $drive).Free / 1GB)
     Check "20 GB free disk ($free GB)" ($free -ge 20) 'free up disk space'
     $long = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -ErrorAction SilentlyContinue).LongPathsEnabled
     if ($long -ne 1 -and $Root.Length -gt 40) {
-        Write-Host "  note     the repo path is long and Windows long paths are off; if the build fails with 'path too long', move the repo to something short like C:\skatecraft"
+        Write-Host "  note     the repo path is long and Windows long paths are off; if the build fails with 'path too long', move the repo to something short like C:\kartcraft"
     }
     return -not $script:bad
 }
@@ -86,7 +94,7 @@ if ($Doctor) {
 }
 if (-not (Test-Machine)) { Stop-Setup 'this PC is missing the tools listed above' 'install them, open a new terminal, run setup again' }
 
-function Read-Folder($value, $prompt) {
+function Read-Path($value, $prompt) {
     while (-not $value) { $value = Read-Host $prompt }
     $value = $value.Trim().Trim('"')
     return [System.IO.Path]::GetFullPath($value)
@@ -96,7 +104,7 @@ function Read-Folder($value, $prompt) {
 $WowLink = Join-Path $Root 'WoW'
 if (-not (Test-Path (Join-Path $WowLink 'Data'))) {
     Step 'WoW 1.12.1 client'
-    $Wow = Read-Folder $Wow 'Path to your WoW 1.12.1 (English, build 5875) folder, the one with Data in it'
+    $Wow = Read-Path $Wow 'Path to your WoW 1.12.1 (English, build 5875) folder, the one with Data in it'
     if ((Split-Path -Leaf $Wow) -eq 'Data') { $Wow = Split-Path -Parent $Wow }
     foreach ($mpq in 'dbc.MPQ', 'patch.MPQ', 'model.MPQ', 'terrain.MPQ') {
         if (-not (Test-Path (Join-Path $Wow "Data\$mpq"))) {
@@ -109,83 +117,94 @@ if (-not (Test-Path (Join-Path $WowLink 'Data'))) {
     Write-Host "  linked WoW -> $Wow"
 }
 
-# ── Skate 3 data ───────────────────────────────────────────────────────────────────────────────
-$SkateFile = Join-Path $State 'skate3-path'
-if (-not $Skate -and (Test-Path $SkateFile)) { $Skate = (Get-Content $SkateFile -Raw).Trim() }
-function Get-Skate3 {
-    $script:Skate = Read-Folder $script:Skate 'Path to your extracted Skate 3 (Xbox 360) folder, the one with default.xex and data'
-    if (-not ((Test-Path (Join-Path $script:Skate 'default.xex')) -and (Test-Path (Join-Path $script:Skate 'data')))) {
-        Stop-Setup "$script:Skate has no default.xex with a data folder beside it" `
-            'extract your Skate 3 disc (for example with extract-xiso) and point setup at that folder; ISO files do not work'
+# ── The kart, from the player's CTR disc ───────────────────────────────────────────────────────
+$KartData = Join-Path $Root 'kart-data'
+if (-not (Test-Path (Join-Path $KartData 'kart.json'))) {
+    Step 'Converting the kart from your Crash Team Racing disc'
+    $CtrFile = Join-Path $State 'ctr-path'
+    if (-not $Ctr -and (Test-Path $CtrFile)) { $Ctr = (Get-Content $CtrFile -Raw).Trim() }
+    $Ctr = Read-Path $Ctr 'Path to your Crash Team Racing (PS1, USA, SCUS-94426) disc image, the .bin file'
+    if ($Ctr.EndsWith('.cue')) { $Ctr = [System.IO.Path]::ChangeExtension($Ctr, '.bin') }
+    if (-not (Test-Path $Ctr)) { Stop-Setup "$Ctr does not exist" 'point setup at the .bin of a raw (2352-byte sector) CTR NTSC-U image' }
+    Set-Content $CtrFile $Ctr
+    Invoke-Native 'the kart conversion' {
+        cargo run --release --quiet -p ctr-assets --bin ctr-extract -- $Ctr $KartData --all
     }
-    Set-Content $SkateFile $script:Skate
-}
-$Venv = Join-Path $State 'venv\Scripts\python.exe'
-function Initialize-Venv {
-    if (-not (Test-Path $Venv)) { Invoke-Native 'creating a Python venv' { python -m venv (Join-Path $State 'venv') } }
-    Invoke-Native 'pip' { & $Venv -m pip install --quiet --upgrade pip }
-    Invoke-Native 'installing numpy and Pillow' { & $Venv -m pip install --quiet 'numpy>=2.2,<3' 'Pillow>=11.3' }
+    if (-not (Test-Path (Join-Path $KartData 'kart.json'))) { Stop-Setup 'the conversion finished without kart.json' }
 }
 
-if (-not (Test-Path (Join-Path $Root 'skate-data\assets\private\skater.glb'))) {
-    Step 'Converting Skate 3 data (skater, animations, physics)'
-    Get-Skate3
-    $Engine = Join-Path $State 'skate-engine'
-    if (-not (Test-Path (Join-Path $Engine '.git'))) { Invoke-Native 'cloning the skate engine' { git clone --quiet $EngineUrl $Engine } }
-    & git -C $Engine fetch --quiet origin
-    Invoke-Native 'checking out the skate engine' { git -C $Engine checkout --quiet $EngineRev }
-    Initialize-Venv
-    # The converters look for this exact file name.
-    New-Item -ItemType Directory -Force -Path (Join-Path $Engine 'target\native') | Out-Null
-    Invoke-Native 'building the RefPack decoder' {
-        rustc --edition 2024 --crate-type cdylib -C opt-level=3 -C panic=abort `
-            (Join-Path $Engine 'tools\asset_pipeline\refpack_native.rs') -o (Join-Path $Engine 'target\native\refpack.dll')
-    }
-    Invoke-WebRequest -UseBasicParsing $ConverterUrl -OutFile (Join-Path $Engine 'iw4l_skate_convert.py')
-    Invoke-Native 'the Skate 3 conversion' {
-        & $Venv (Join-Path $Engine 'iw4l_skate_convert.py') --xex (Join-Path $Skate 'default.xex') --out (Join-Path $Root 'skate-data')
-    }
-    if (-not (Test-Path (Join-Path $Root 'skate-data\assets\private\skater.glb'))) { Stop-Setup 'the conversion finished without skater.glb' }
-}
-
-# ── Skate 3 sounds ─────────────────────────────────────────────────────────────────────────────
-if (-not (Test-Path (Join-Path $Root 'skate-audio\pop_1.wav'))) {
-    Step 'Converting Skate 3 sounds'
-    Get-Skate3
-    Initialize-Venv
-    $Vgm = Join-Path $State 'vgmstream'
-    if (-not (Test-Path (Join-Path $Vgm 'vgmstream-cli.exe'))) {
-        $zip = Join-Path $State 'vgmstream.zip'
-        Invoke-WebRequest -UseBasicParsing $VgmstreamUrl -OutFile $zip
-        Expand-Archive -Force $zip $Vgm
-    }
-    $env:Path = "$Vgm;$env:Path"
-    & $Venv (Join-Path $Root 'tools\skate_audio.py') (Join-Path $Skate 'data') (Join-Path $Root 'skate-audio')
-    if ($LASTEXITCODE -ne 0) { Write-Host '  (sounds failed; skating still works, just silent)' }
-}
-
+if (-not $ClientOnly) {
 # ── Local server ───────────────────────────────────────────────────────────────────────────────
 $Server = Join-Path $Root 'server'
 $Compose = Join-Path $Server 'compose.yaml'
-function Invoke-Compose { & docker compose -p $env:SKATECRAFT_SERVER_PROJECT --project-directory $Server -f $Compose @args }
+function Invoke-Compose { & docker compose -p $env:KARTCRAFT_SERVER_PROJECT --project-directory $Server -f $Compose @args }
 if (-not (Test-Path $Compose)) {
     Step 'Setting up the local vmangos server'
-    if (-not (Test-Path (Join-Path $Server '.git'))) { Invoke-Native 'cloning vmangos-deploy' { git clone --quiet $ServerUrl $Server } }
+    if (-not (Test-Path (Join-Path $Server '.git'))) { Invoke-Native 'cloning vmangos-deploy' { git clone --quiet -c core.autocrlf=false $ServerUrl $Server } }
     Invoke-Native 'checking out vmangos-deploy' { git -C $Server checkout --quiet $ServerRev }
     Copy-Item (Join-Path $Server 'config\mangosd.conf.example') (Join-Path $Server 'config\mangosd.conf')
     Copy-Item (Join-Path $Server 'config\realmd.conf.example') (Join-Path $Server 'config\realmd.conf')
     # The example's `user:` lines only matter on Linux hosts; its time zone stays UTC.
     Copy-Item (Join-Path $Server 'compose.yaml.example') $Compose
 }
+
+# Everything in server\ runs inside Linux containers (patches, shell scripts), so its checkout keeps
+# LF whatever git's autocrlf says; a clone made with CRLF is converted once.
+if ((& git -C $Server config core.autocrlf) -ne 'false') {
+    Step 'Converting the server checkout to LF line endings'
+    Invoke-Native 'setting autocrlf' { git -C $Server config core.autocrlf false }
+    Invoke-Native 'refreshing the index' { git -C $Server rm --cached -r -q . }
+    Invoke-Native 'checking out with LF' { git -C $Server reset --hard -q }
+}
+
+# The server with the Karting profession: vmangos built with setup\vmangos\kartcraft.patch,
+# tagged by the patch's contents so a changed patch builds a new image (as build-server.sh).
+$Patch = Join-Path $Root 'setup\vmangos\kartcraft.patch'
+$Tag = (Get-FileHash -Algorithm SHA256 $Patch).Hash.Substring(0, 12).ToLower()
+$Image = "world-of-kartcraft/vmangos-server:5875-$Tag"
+if (-not (Test-Native { docker image inspect $Image })) {
+    Step "Building the server with the Karting profession ($env:KARTCRAFT_BUILD_JOBS jobs, several minutes)"
+    $Context = Join-Path $State 'server-build'
+    if (Test-Path $Context) { Remove-Item -Recurse -Force $Context }
+    New-Item -ItemType Directory -Force -Path $Context | Out-Null
+    Copy-Item -Recurse (Join-Path $Server 'docker') $Context
+    # LF as committed: the build applies it with git inside Linux.
+    $bytes = [System.IO.File]::ReadAllBytes($Patch)
+    $text = [System.Text.Encoding]::UTF8.GetString($bytes).Replace("`r`n", "`n")
+    [System.IO.File]::WriteAllText((Join-Path $Context 'docker\patches\zz-kartcraft.patch'), $text, (New-Object System.Text.UTF8Encoding $false))
+    # The frontend named first: older Docker Desktops build without `COPY --exclude` otherwise.
+    $dockerfile = "# syntax=docker/dockerfile:1.7-labs`n" + (Get-Content -Raw (Join-Path $Context 'docker\server\Dockerfile')).Replace('make -j"$(nproc)"', "make -j$env:KARTCRAFT_BUILD_JOBS")
+    [System.IO.File]::WriteAllText((Join-Path $Context 'Dockerfile.kartcraft'), $dockerfile.Replace("`r`n", "`n"), (New-Object System.Text.UTF8Encoding $false))
+    Invoke-Native 'building the server image' {
+        docker build -t $Image -f (Join-Path $Context 'Dockerfile.kartcraft') `
+            --build-arg VMANGOS_REVISION=$VmangosRev `
+            --build-arg VMANGOS_CLIENT_VERSION=5875 `
+            --build-arg VMANGOS_FAIL_ON_PATCH_ERROR=1 `
+            $Context
+    }
+}
+$composeText = Get-Content -Raw $Compose
+$pointed = [regex]::Replace($composeText, 'image: (ghcr\.io/mserajnik/vmangos-server:5875|world-of-(skate|kart)craft/vmangos-server:\S+)', "image: $Image")
+# The database image floats on `latest`, which moved on to vmangos-deploy's version 1 (2026-10-04):
+# pin it to the build for our vmangos revision and give it the version it checks for.
+$pointed = [regex]::Replace($pointed, 'image: ghcr\.io/mserajnik/vmangos-database(:\S+)?', "image: ghcr.io/mserajnik/vmangos-database:$VmangosRev")
+if ($pointed -notmatch 'VMANGOS_DEPLOY_VERSION') {
+    # The top-level service only (`^  database:`), and once: other services name it too.
+    $pointed = ([regex]'(?ms)(^  database:.*?^    environment:\r?\n)').Replace($pointed, "`$1      - VMANGOS_DEPLOY_VERSION=1`n", 1)
+}
+if ($pointed -ne $composeText) {
+    [System.IO.File]::WriteAllText($Compose, $pointed, (New-Object System.Text.UTF8Encoding $false))
+    Write-Host "  server image: $Image"
+}
+
 if (-not (Test-Path (Join-Path $Server 'storage\mangosd\extracted-data\maps'))) {
     Step 'Extracting server maps from your WoW client (this takes HOURS; leave it running)'
-    Invoke-Native 'pulling the server images' { Invoke-Compose pull --quiet }
     $WowDir = (Get-Item $WowLink).Target | Select-Object -First 1
     if (-not $WowDir) { $WowDir = (Get-Content (Join-Path $State 'wow-path') -Raw).Trim() }
     $Extracted = Join-Path $Server 'storage\mangosd\extracted-data'
     Invoke-Native 'map extraction' {
         docker run --rm -v "${WowDir}:/opt/vmangos/storage/client-data" `
-            -v "${Extracted}:/opt/vmangos/storage/extracted-data" $ServerImage extract-client-data
+            -v "${Extracted}:/opt/vmangos/storage/extracted-data" $Image extract-client-data
     }
 }
 Step 'Starting the server'
@@ -195,25 +214,31 @@ function Get-Health { $id = Invoke-Compose ps -q mangosd; if ($id) { docker insp
 for ($i = 0; $i -lt 120 -and (Get-Health) -ne 'healthy'; $i++) { Write-Host -NoNewline '.'; Start-Sleep 5 }
 Write-Host ''
 if ((Get-Health) -ne 'healthy') {
-    Stop-Setup 'the world server did not come up within 10 minutes' 'look at: docker compose -p world-of-skatecraft -f server\compose.yaml logs mangosd'
+    Stop-Setup 'the world server did not come up within 10 minutes' "look at: docker compose -p $env:KARTCRAFT_SERVER_PROJECT -f server\compose.yaml logs mangosd"
 }
 
 # ── Account ────────────────────────────────────────────────────────────────────────────────────
+# The first account is yours and a GM; -NewAccount makes a friend's, an ordinary player.
 $AccountFile = Join-Path $State 'account'
-if (-not (Test-Path $AccountFile)) {
+if ($NewAccount -or -not (Test-Path $AccountFile)) {
     Step 'Game account'
-    $account = Read-Host 'Account name (letters and digits)'
-    $secret = Read-Host 'Password' -AsSecureString
-    $password = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret))
-    Invoke-Native 'creating the account' { python (Join-Path $Root 'tools\make_account.py') $account $password --server $Server }
-    Set-Content $AccountFile $account
+    $first = -not (Test-Path $AccountFile)
+    $account = (Read-Host 'Account name (letters and digits, up to 16)').Trim()
+    & (Join-Path $PSScriptRoot 'account.ps1') -Account $account -Gm:$first -Local
+    if ($first) { Set-Content $AccountFile $account.ToUpper() }
+}
 }
 
 # ── Build ──────────────────────────────────────────────────────────────────────────────────────
 Step 'Building the game (first time: several minutes)'
-Invoke-Native 'the build' { cargo build --release -p benilla }
+Invoke-Native 'the build' { cargo build --release -p benilla -p kart-demo }
 
 Step 'Done'
-Write-Host '  Start the game with:  play.bat'
-Write-Host "  Log in as $((Get-Content $AccountFile -Raw).Trim()), create a character, press J to skate (Xbox controller)."
+if ($ClientOnly) {
+    Write-Host '  Start the game on your friend''s server with:  set WOW_HOST=<their address> & play.bat'
+    Write-Host '  Log in with the account they made you, create a character, press J to drive.'
+} else {
+    Write-Host '  Start the game with:  play.bat      (the offline kart demo, no server: demo.bat)'
+    Write-Host "  Log in as $((Get-Content $AccountFile -Raw).Trim()), create a character, press J to drive (PS5, PS4 or Xbox pad, or keyboard)."
+}
 Stop-Transcript | Out-Null

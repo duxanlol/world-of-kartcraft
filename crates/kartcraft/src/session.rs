@@ -1,0 +1,352 @@
+//! A driving session: one [`Kart`] ticked at CTR's 30 Hz over the world's collision gathered
+//! around it, rebuilt on a worker thread as it drives, with the pose between ticks interpolated
+//! and a chase camera behind it. The client and the offline demo both drive through this.
+
+use std::sync::{mpsc, Arc, Mutex};
+
+use benilla_world::collision::WorldCollision;
+use bevy::prelude::*;
+use ctr_kart::{Class, Collision, Event, Input, Kart, Modifiers, Pose, State};
+
+use crate::{from_lu, heading_of, lu_per_yard, to_lu, yaw_of};
+
+/// Half extents (yards) of the collision box gathered around the kart.
+const GATHER_HALF: Vec3 = Vec3::new(120.0, 60.0, 120.0);
+/// How far (yards) the kart drives from the box centre before it is rebuilt around it.
+const RECENTRE: f32 = 50.0;
+/// Seconds between rebuilds while driving, so terrain streamed in since becomes solid.
+const REFRESH_SECS: f32 = 3.0;
+/// The collision grid's cell, lu.
+const CELL_LU: f32 = 160.0;
+/// Seconds off the ground before a falling kart is put back where it last stood.
+const RESCUE_AFTER: f32 = 3.0;
+/// CTR's wheel radius, lu, for the wheels' roll.
+const WHEEL_RADIUS_LU: f32 = 10.0;
+
+type Tri = [[f32; 3]; 3];
+/// A grid the builder thread made, for the session epoch it was asked for.
+type Built = (u64, Arc<Collision>);
+
+/// The kart as drawn this frame: written by whoever runs the session, read by the model.
+#[derive(Resource, Default, Clone)]
+pub struct KartView {
+    pub active: bool,
+    /// The kart's origin (its bottom centre) and frame (model +Z forward, +Y up), Bevy world,
+    /// yards; the scale converts the model's meters.
+    pub transform: Transform,
+    /// Facing, Bevy yaw.
+    pub yaw: f32,
+    /// Horizontal speed, yd/s.
+    pub speed: f32,
+    /// The chase camera, Bevy world.
+    pub camera: Option<Transform>,
+    /// Front-wheel steer, −1 (right) to 1 (left).
+    pub steer: f32,
+    /// The wheels' roll, radians.
+    pub wheel_spin: f32,
+    pub grounded: bool,
+    pub state: State,
+    /// Turbo time left, seconds.
+    pub reserves: f32,
+    /// The powerslide meter: filled 0..1 and in the red zone.
+    pub meter: Option<(f32, bool)>,
+    /// The drawn kart's turn off its heading (the powerslide look), radians, + left.
+    pub drift_yaw: f32,
+    /// The hang-time meter's airtime (CTR-ms) while a hop counts for it.
+    pub jump: Option<i32>,
+    /// Speed in CTR's units (1/256 lu per frame), the class's top speed, for the speedometer.
+    pub ctr_speed: i32,
+    pub class_speed: i32,
+    /// The turbo flame's size, 0 none, else 4 to 8.
+    pub fire: u8,
+    /// A boost pressed too early is puffing exhaust.
+    pub failed_boost: bool,
+    /// The engine's distortion and volume, as CTR mixes it.
+    pub engine: (u8, u8),
+}
+
+#[derive(Default)]
+pub struct Session {
+    kart: Option<Kart>,
+    world: Option<Arc<Collision>>,
+    /// Asks the builder thread for a grid over these faces; the newest wins.
+    build: Option<mpsc::Sender<(u64, Vec<Tri>)>>,
+    built: Option<Mutex<mpsc::Receiver<Built>>>,
+    /// Bumped at every start and stop, so a grid built for an old session is dropped.
+    epoch: u64,
+    /// The session's lu origin, Bevy world.
+    origin: Vec3,
+    /// Where the collision was last gathered around, and when.
+    centre: Vec3,
+    gathered_at: f32,
+    /// Simulation time owed, seconds, and the last two ticks' poses to draw between.
+    owed: f32,
+    previous: Option<Pose>,
+    current: Option<Pose>,
+    /// CTR's chase camera and its last two shots, to draw between.
+    camera: crate::camera::ChaseCamera,
+    shots: Option<(crate::camera::Shot, crate::camera::Shot)>,
+    wheel_spin: f32,
+    /// Where the kart last stood on the ground, its heading, and how long it has been off it
+    /// since (s): a kart lost in a fall is put back, as Aku Aku lifts a fallen racer.
+    last_ground: Option<(Vec3, i32)>,
+    falling: f32,
+}
+
+/// Every collision triangle in the box around `centre`, in lu from `origin`; zero-area and
+/// non-finite faces are left out.
+fn gather(collide: &WorldCollision, centre: Vec3, origin: Vec3) -> Vec<Tri> {
+    collide
+        .faces_near_body(centre, GATHER_HALF, usize::MAX)
+        .into_iter()
+        .filter_map(|face| {
+            let t = face.verts().map(|v| to_lu(v, origin));
+            let solid = t.iter().all(|v| v.is_finite())
+                && (t[1] - t[0]).cross(t[2] - t[0]).length_squared() > 1e-4;
+            solid.then(|| t.map(|v| v.to_array()))
+        })
+        .collect()
+}
+
+type Builder = (
+    mpsc::Sender<(u64, Vec<Tri>)>,
+    mpsc::Receiver<(u64, Arc<Collision>)>,
+);
+
+/// The builder thread: the newest face set asked for, bucketed into a grid.
+fn spawn_builder() -> std::io::Result<Builder> {
+    let (send, jobs) = mpsc::channel::<(u64, Vec<Tri>)>();
+    let (publish, built) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("kart-collision".into())
+        .spawn(move || {
+            while let Ok(mut job) = jobs.recv() {
+                while let Ok(newer) = jobs.try_recv() {
+                    job = newer;
+                }
+                let (epoch, tris) = job;
+                let grid = Arc::new(Collision::new(tris, CELL_LU));
+                if publish.send((epoch, grid)).is_err() {
+                    break;
+                }
+            }
+        })?;
+    Ok((send, built))
+}
+
+/// The pose to draw: the last two ticks blended by how far into the next one we are.
+fn blend(a: &Pose, b: &Pose, t: f32) -> (Vec3, Quat) {
+    let at = a.position.lerp(b.position, t);
+    let qa = Quat::from_mat3(&a.basis).normalize();
+    let qb = Quat::from_mat3(&b.basis).normalize();
+    (at, qa.slerp(qb, t))
+}
+
+impl Session {
+    pub fn active(&self) -> bool {
+        self.kart.is_some()
+    }
+
+    pub fn kart(&self) -> Option<&Kart> {
+        self.kart.as_ref()
+    }
+
+    pub fn kart_mut(&mut self) -> Option<&mut Kart> {
+        self.kart.as_mut()
+    }
+
+    /// Puts a kart of `class` at `at` (Bevy world, the feet) facing `yaw`, over the collision
+    /// around it, gathered now. Returns how many faces it found; with no ground under `at` yet (the
+    /// world still streaming in) it starts nothing and returns 0, to be asked again.
+    pub fn start(
+        &mut self,
+        collide: &WorldCollision,
+        at: Vec3,
+        yaw: f32,
+        class: Class,
+        now: f32,
+    ) -> std::io::Result<usize> {
+        if self.build.is_none() {
+            let (send, built) = spawn_builder()?;
+            self.build = Some(send);
+            self.built = Some(Mutex::new(built));
+        }
+        self.epoch = self.epoch.wrapping_add(1);
+        self.origin = at;
+        self.centre = at;
+        self.gathered_at = now;
+        let world = Collision::new(gather(collide, at, at), CELL_LU);
+        let faces = world.len();
+        // The ground under us, from a little above the feet: a body the server put a little under
+        // the terrain (its positions are not exact) must not start the kart beneath it.
+        let Some(ground) = world.ground(Vec3::Y * 200.0, 800.0) else {
+            return Ok(0);
+        };
+        // A little above the ground: the first ticks settle the kart onto it.
+        let kart = Kart::new(class, ground.point + Vec3::Y * 4.0, heading_of(yaw));
+        self.current = Some(kart.pose());
+        self.previous = self.current;
+        self.kart = Some(kart);
+        self.world = Some(Arc::new(world));
+        self.owed = 0.0;
+        self.camera = Default::default();
+        self.last_ground = None;
+        self.falling = 0.0;
+        self.shots = None;
+        Ok(faces)
+    }
+
+    pub fn stop(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+        self.kart = None;
+        self.world = None;
+        self.previous = None;
+        self.current = None;
+        self.camera = Default::default();
+        self.last_ground = None;
+        self.falling = 0.0;
+        self.shots = None;
+    }
+
+    /// Runs the ticks `dt` owes and returns what happened in them. `at` is where the kart was
+    /// last drawn (Bevy world), for the collision's recentring.
+    pub fn step(
+        &mut self,
+        collide: &WorldCollision,
+        now: f32,
+        dt: f32,
+        input: &Input,
+        mods: &Modifiers,
+        nearby: &[NearbyKart],
+    ) -> Vec<Event> {
+        // A grid built around where we are now.
+        if let Some(built) = &self.built {
+            let built = built.lock().unwrap();
+            while let Ok((epoch, grid)) = built.try_recv() {
+                if epoch == self.epoch {
+                    self.world = Some(grid);
+                }
+            }
+        }
+        let Some(current) = self.current else {
+            return Vec::new();
+        };
+        let at = from_lu(current.position, self.origin);
+        let rolled = at - self.centre;
+        if Vec3::new(rolled.x, 0.0, rolled.z).length() > RECENTRE
+            || rolled.y.abs() > GATHER_HALF.y * 0.5
+            || now - self.gathered_at > REFRESH_SECS
+        {
+            let triangles = gather(collide, at, self.origin);
+            self.centre = at;
+            self.gathered_at = now;
+            if let Some(send) = &self.build {
+                let _ = send.send((self.epoch, triangles));
+            }
+        }
+        let origin = self.origin;
+        let (Some(world), Some(kart)) = (self.world.clone(), self.kart.as_mut()) else {
+            return Vec::new();
+        };
+        let to_speed = lu_per_yard() * 256.0 / 30.0;
+        let others: Vec<ctr_kart::OtherKart> = nearby
+            .iter()
+            .map(|n| ctr_kart::OtherKart {
+                position: to_lu(n.position, origin),
+                velocity: n.velocity * to_speed,
+                weight: n.weight,
+            })
+            .collect();
+        self.owed = (self.owed + dt.min(0.1)).min(0.25);
+        let mut events = std::mem::take(&mut kart.events);
+        while self.owed >= ctr_kart::TICK {
+            self.owed -= ctr_kart::TICK;
+            kart.tick_among(&world, input, mods, &others);
+            if kart.grounded() {
+                let pose = kart.pose();
+                self.last_ground = Some((pose.position, pose.heading));
+                self.falling = 0.0;
+            } else {
+                self.falling += ctr_kart::TICK;
+                if self.falling > RESCUE_AFTER {
+                    if let Some((at, heading)) = self.last_ground {
+                        kart.place(at + Vec3::Y * 40.0, heading);
+                    }
+                    self.falling = 0.0;
+                }
+            }
+            let shot = self.camera.tick(&kart.camera_input(), &world);
+            self.shots = Some(match self.shots {
+                Some((_, last)) => (last, shot),
+                None => (shot, shot),
+            });
+            events.append(&mut kart.events);
+            self.previous = self.current.take();
+            self.current = Some(kart.pose());
+        }
+        events
+    }
+
+    /// The kart as drawn this frame, `dt` after the last.
+    pub fn view(&mut self, dt: f32) -> KartView {
+        let (Some(current), Some(kart)) = (self.current, self.kart.as_ref()) else {
+            return KartView::default();
+        };
+        let previous = self.previous.unwrap_or(current);
+        let t = (self.owed / ctr_kart::TICK).clamp(0.0, 1.0);
+        let (at_lu, rotation) = blend(&previous, &current, t);
+        let origin = self.origin;
+        let at = from_lu(at_lu, origin);
+        let velocity = current.velocity / lu_per_yard();
+
+        // CTR's chase camera, between its last two shots.
+        let chase = self.shots.map(|(a, b)| {
+            let eye = from_lu(a.eye.lerp(b.eye, t), origin);
+            let look = from_lu(
+                a.look.lerp(b.look, t) - Vec3::Y * crate::framing().look_drop,
+                origin,
+            );
+            let roll = a.roll + (b.roll - a.roll) * t;
+            let mut cam = Transform::from_translation(eye).looking_at(look, Vec3::Y);
+            cam.rotate_local_z(-roll);
+            cam
+        });
+
+        let forward_speed = kart.forward_speed() as f32 * 30.0 / 256.0;
+        self.wheel_spin = (self.wheel_spin + forward_speed / WHEEL_RADIUS_LU * dt)
+            .rem_euclid(std::f32::consts::TAU);
+        KartView {
+            active: true,
+            transform: Transform {
+                translation: at,
+                rotation,
+                scale: Vec3::splat(crate::model_scale()),
+            },
+            yaw: yaw_of(current.heading),
+            speed: Vec3::new(velocity.x, 0.0, velocity.z).length(),
+            camera: chase,
+            steer: current.steer,
+            wheel_spin: self.wheel_spin,
+            grounded: current.grounded,
+            state: current.state,
+            reserves: kart.reserves() as f32 / 960.0,
+            meter: kart.turbo_meter(),
+            drift_yaw: kart.drawn_yaw_offset(),
+            jump: kart.jump_meter(),
+            ctr_speed: kart.speed(),
+            class_speed: kart.stats().accel_speed,
+            fire: kart.fire_size(),
+            failed_boost: kart.failed_boost(),
+            engine: kart.engine_sound(),
+        }
+    }
+}
+
+/// Another driver's kart near ours, for bumping: its origin (Bevy world, yards), velocity (yd/s)
+/// and CollisionWeight (256 if unknown).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NearbyKart {
+    pub position: Vec3,
+    pub velocity: Vec3,
+    pub weight: i32,
+}

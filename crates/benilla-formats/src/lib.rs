@@ -13,8 +13,8 @@ pub use benilla_blp::BlpTexels;
 
 mod chain;
 pub use chain::{Chain, ChainEntry};
-/// World of Skatecraft's skill line and spells, appended to the tables that hold them.
-pub mod skatecraft;
+/// World of Kartcraft's skill line and spells, appended to the tables that hold them.
+pub mod kartcraft;
 /// Loose `.tga` art, as addon folders ship it.
 mod tga;
 pub use tga::tga_to_rgba;

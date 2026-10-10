@@ -1,130 +1,188 @@
-# World of Skatecraft
+# World of Kartcraft
 
-Skate 3 skateboarding in World of Warcraft 1.12.1. Summon your skateboard like a mount and your
-character drops onto it, with Skate 3's own physics: flick-it tricks, grinds on any ledge,
-powerslides and bails, anywhere in Azeroth. Your own character does the tricks, in your own gear.
-Skateboarding is a profession: land tricks to level it, earn experience and unlock skate abilities
-such as Rocket Boost and Moon Jump.
+Crash Team Racing karting in World of Warcraft 1.12.1. Summon your kart like a mount and your
+character climbs in, with CTR's own driving model: hop into powerslides, fire boosts when the
+meter goes red, chain triple turbos and catch hang time off Azeroth's hills, anywhere in the
+world. Your own character drives, in your own gear. Karting is a profession: bank turbo chains to
+level it, earn experience and unlock kart abilities such as Turbo Boost and Aku Aku.
 
-[![Summoning the skateboard in Goldshire](docs/media/skateboarding.webp)](docs/media/skateboarding.mp4)
-
-*Click for the video with sound.*
-
-Built on [benilla](https://github.com/samwhosung/benilla), a from-scratch WoW 1.12.1 client in
-Rust, and the [Skate 3 Rust Engine](https://github.com/SK8-ENGINE/skate-3-rust-engine). It runs
-fully offline against a local server.
-
-> **Unofficial fan project.** Not affiliated with Blizzard Entertainment or Electronic Arts.
-> **No game files are included.** You need your own copies of both games.
+> **Unofficial fan project.** Not affiliated with Blizzard Entertainment, Sony Interactive
+> Entertainment, Activision or Naughty Dog. **No game files are included.** You need your own
+> copies of both games.
 
 > **Vibe coded, just for laughs.** This whole thing was put together with an AI coding assistant
-> (Claude Code) for fun, on top of other people's serious work (see Credits). Expect rough edges,
-> weird bugs and a skater who doesn't always know where his sword goes. Don't take it seriously.
+> (Claude Code) for fun, on top of other people's serious work (see Credits). Expect rough edges.
+> Don't take it seriously.
+
+It is a fork of [World of Skatecraft](https://github.com/Kimmo3223/world-of-skatecraft), which
+does the same with Skate 3, built on [benilla](https://github.com/samwhosung/benilla), a
+from-scratch WoW 1.12.1 client in Rust. The kart drives on a Rust port of CTR's driving model,
+read out of the [CTR decompilation](https://github.com/CTR-tools/ctr-native)
+([`docs/ctr-physics-spec.md`](docs/ctr-physics-spec.md)), and looks like CTR's kart because setup
+pulls it off your own disc ([`docs/ctr-assets.md`](docs/ctr-assets.md)).
 
 ## What you need
 
-- **Linux**, or **Windows (experimental, testers wanted)**: the Windows setup is new and untested
-  on real machines; please report how it goes (see Help).
+- **Windows** or **Linux**.
 - **World of Warcraft 1.12.1**, English client (build 5875).
-- **Skate 3 for Xbox 360, extracted**: the folder with `default.xex` and `data/` (an ISO file
-  doesn't work; extract it first).
-- **An Xbox-style controller.**
-- **Docker**, about **20 GB** free disk, and a few hours once for the server's map extraction
-  (plus a few minutes to build the server with the Skateboarding profession).
+- **Crash Team Racing for the PlayStation**, the US release (SCUS-94426), as a raw `.bin`/`.cue`
+  disc image.
+- A **PS5 or PS4 controller** (it works natively, no Xbox emulation), an Xbox controller, or the
+  keyboard.
+- **Docker**, about **20 GB** free disk, and a few hours once for the server's map extraction.
 
 ## Install
+
+Windows: install [Git](https://git-scm.com), then in a terminal:
+
+```bat
+git clone <this repository> C:\kartcraft
+cd C:\kartcraft
+setup.bat
+```
 
 Linux:
 
 ```sh
-git clone https://github.com/Kimmo3223/world-of-skatecraft.git
-cd world-of-skatecraft
+git clone <this repository> kartcraft
+cd kartcraft
 setup/setup.sh
 ```
 
-Windows (experimental): install [Git](https://git-scm.com), then in a terminal:
-
-```bat
-git clone https://github.com/Kimmo3223/world-of-skatecraft.git C:\skatecraft
-cd C:\skatecraft
-setup.bat
-```
-
-Setup checks your machine and tells you exactly what to install if something is missing, asks
-for your WoW and Skate 3 folders, converts what it needs from them, sets up the local server,
-creates your game account and builds the game. Step-by-step details: [INSTALL.md](INSTALL.md).
+Setup checks your machine and tells you exactly what to install if something is missing, asks for
+your WoW folder and your CTR disc image, pulls the kart off the disc, builds the local server with
+the Karting profession, creates your game account and builds the game. Step-by-step details:
+[INSTALL.md](INSTALL.md).
 
 ## Play
 
 ```sh
-./play.sh        # Linux
 play.bat         # Windows
+./play.sh        # Linux
 ```
 
-Log in with the account you made during setup and create a character.
+Log in with the account you made during setup and create a character, then press **J**.
 
-| Key | |
-|---|---|
-| **J** | summon / dismiss your skateboard |
-| **K** | switch between the WoW camera and the Skate 3 camera |
-| controller | skate (Skate 3 controls) |
-| D-pad | skate abilities: ↑ Ollie Boost, → Rocket Boost, ← Speed Demon, ↓ Moon Jump |
+**No server yet?** `demo.bat` (or `target/release/kartcraft-demo`) drops the kart into
+Northshire straight from your WoW install, no server, login or character, to feel the driving.
 
-### Skateboarding, the profession
+| | PlayStation | Xbox | Keyboard |
+|---|---|---|---|
+| Gas | ✕ | A | W / ↑ |
+| Brake; hold to reverse | □ | X | S / ↓ |
+| Steer | left stick | left stick | A / D |
+| Hop; hold through a turn to **powerslide** | R1 | RB | Space |
+| **Boost** while sliding, when the meter goes red | L1 | LB | Shift |
+| Abilities: Wumpa Juice, Turbo Boost, Super Engine, Aku Aku | D-pad ↑ → ↓ ← | D-pad | 1–4 |
+| Climb in / out | | | **J** |
+| Chase camera / your WoW camera | | | **K** |
+| Races: host / join / start · leave | | | **F5** · **F6** |
 
-Every character knows **Summon Skateboard** (spellbook, General tab): it casts like a mount and
-puts you on the board until you cancel the buff or press **J** again. Skateboarding is a
-secondary skill, 1 to 300, in your Skills tab. Each line of tricks you land raises it (bigger
-lines raise it faster) and gives your character experience; the line's score, the experience and
-the skill it earned show at the top of the screen, Skate 3 style. As the skill grows you learn skate
-abilities, buffs to drag onto your action bar; they work only while you are on the board:
+### How it drives
+
+It is CTR's model, constants and all (the Balanced class by default; `WOW_KART_CLASS=accel`,
+`speed` or `turn` for the others):
+
+- **Powerslide:** hop and hold the shoulder while you steer into the turn. The turbo meter under
+  the kart fills; press the other shoulder in the **red** part for a boost. Up to three per slide,
+  each faster than the last. Too early and the engine puffs; wait too long and the chain is over.
+  Hold the steer in too long without boosting and you spin out.
+- **Hang time:** a hop that keeps you in the air long enough pays a turbo when you land.
+- **Walls:** hills too steep to drive are walls. A scrape slows you; a head-on hit at speed
+  crashes you. Fall off the world and you are put back where you last drove, as Aku Aku would.
+
+It looks and sounds like CTR too, all of it from your disc: the kart in your racer's colours,
+the turbo flames (bigger with each boost of a slide), exhaust that **smokes dark in the boost
+window** (CTR's "press now" cue), skid marks, CTR's chase camera, its HUD (speedometer, turbo
+meter, hang-time meter, Wumpa count, lap and place), the engine and every kart sound, and the
+16 race tracks' music, a different one each time you climb in (`WOW_KART_MUSIC=crash_cove` for
+one, `off` for none).
+
+### Karting, the profession
+
+Every character knows **Summon Kart** (spellbook, General tab): it casts like a mount and seats
+you in the kart until you cancel the buff or press **J** again. Karting is a secondary skill, 1 to
+300, in your Skills tab. Boosts in a row make a **turbo chain**: each one is worth more than the
+last, and the chain banks once you stop boosting for two seconds (a crash loses it). Each banked
+chain raises the skill (bigger chains raise it faster) and gives your character experience; the
+chain, its points, the experience and the skill show at the top of the screen. As the skill grows
+you learn kart abilities, buffs to drag onto your action bar; they work only in the kart:
 
 | Skill | Ability | Effect | Lasts | Cooldown |
 |---|---|---|---|---|
-| 1 | Summon Skateboard | ride | until cancelled | none |
-| 75 | Ollie Boost | pop much higher | 30 s | 2 min |
-| 150 | Rocket Boost | a burst forward | instant | 30 s |
-| 225 | Speed Demon | push harder, roll faster | 30 s | 3 min |
-| 300 | Moon Jump | lighter gravity in the air | 20 s | 5 min |
+| 1 | Summon Kart | drive | until cancelled | none |
+| 75 | Wumpa Juice | juiced: every turbo burns hotter | 30 s | 2 min |
+| 150 | Turbo Boost | CTR's turbo item | instant | 30 s |
+| 225 | Super Engine | turbo whenever you hold the gas | 30 s | 3 min |
+| 300 | Aku Aku | the mask's speed, and walls cannot stop you | 20 s | 5 min |
 
-The profession needs the patched server that the Linux setup builds (the Windows setup still runs
-the stock server). On another server **J** just hops on and off the board.
+On a server without the profession **J** just climbs in and out. Your account is a GM, so chat
+commands like `.tele stormwind`, `.levelup 59` and `.additem <id>` work.
 
-Your account is a GM, so chat commands like `.tele stormwind`, `.levelup 59` and
-`.additem <id>` work.
+### Driving together
+
+Other drivers on your server are drawn in their own karts, in their racer's colours, with their
+character in the seat, their powerslides, flames, smoke and engine. Karts bump each other as in
+CTR. Each driver's kart state reaches the players within 150 yards through the server.
+
+**Races.** Drive to a course's start and press **F5** to host a race there; drivers near you see
+it and press **F5** to join; the host's **F5** starts it. CTR's countdown follows: rev the engine
+(hold gas) just before GO for the start boost, too early and it bogs. Beams of light mark the
+checkpoints, the next one bright; the server checks each one against where you really are. Lap
+and place show on CTR's HUD, the music speeds up on the final lap, and a finish pays experience
+and Karting skill by place. **F6** leaves. The courses, laid along Elwynn's roads (the guards'
+own patrol routes):
+
+| Course | Start | Laps |
+|---|---|---|
+| Northshire Sprint | in front of Northshire Abbey | sprint to Goldshire |
+| Elwynn Loop | Goldshire, by the inn | 3 |
+| Road to Stormwind | Goldshire, by the inn | sprint to the city gate |
+
+**Friends over the internet.** On your PC (the server): forward TCP ports 3724 and 8085 to it,
+set `VMANGOS_REALMLIST_ADDRESS` in `server/compose.yaml` to your public address and restart the
+server (`play.bat` does), and make each friend an account (`setup.bat -NewAccount`, or
+`tools/make_account.py` on Linux). Each friend needs their own WoW 1.12.1 and CTR disc, and only the game:
+`setup.bat -ClientOnly` (no Docker), then `set WOW_HOST=<your address>` and `play.bat`.
+
+### Tuning
+
+| Variable | |
+|---|---|
+| `WOW_KART_CLASS` | `balanced` (default), `accel`, `speed`, `turn` |
+| `WOW_KART` | which racer's kart: `crash` (default), `cortex`, `coco`, `tiny`, `polar`, `pura`, `pinstripe`, `roo`, `joe`, `pen`, `fake` |
+| `WOW_KART_SCALE` | kart size against CTR's own, model and physics together (default 1) |
+| `WOW_KART_SIZE` | the model alone against its physics (default 1.25 in the game, for a WoW driver) |
+| `WOW_KART_MUSIC` | a race track's name (`crash_cove`, `roo_tubes`, ...) or `off` |
+| `WOW_KART_SEAT` | `x,y,z` meters to move the driver off CTR's seat |
+| `WOW_KART_CAM=wow` | start on your WoW camera instead of the chase camera |
 
 ## Help
 
-This is a hobby project with **best-effort help only**. If something breaks:
-
-1. Run the doctor (`setup/setup.sh --doctor`, or on Windows
-   `powershell -ExecutionPolicy Bypass -File setup\setup.ps1 -Doctor`) and read
-   [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
-2. Still stuck? Ask in [Discussions](../../discussions) (Q&A) and attach your `setup.log` and the
-   doctor output. Questions without them may go unanswered.
-
-**Windows testers:** whether it works or not, a post in Discussions with your Windows version,
-GPU, controller and `setup.log` helps a lot.
+This is a hobby project with **best-effort help only**. If something breaks, run the doctor
+(`setup/setup.sh --doctor`, or on Windows `powershell -ExecutionPolicy Bypass -File
+setup\setup.ps1 -Doctor`) and read [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ## Credits
 
+- **[World of Skatecraft](https://github.com/Kimmo3223/world-of-skatecraft)** by Kimmo3223: the
+  project this one is a fork of, and its whole idea.
 - **[benilla](https://github.com/samwhosung/benilla)** by samwhosung and contributors: the WoW
   1.12.1 client this is built on. Its own README is in [docs/BENILLA.md](docs/BENILLA.md).
-- **[Skate 3 Rust Engine](https://github.com/SK8-ENGINE/skate-3-rust-engine)** by SK8-ENGINE /
-  Chasm: the skateboarding, built on **dumbad**'s years of Skate 3 reverse engineering
-  ([DumbadsSkate3ModdingTools](https://github.com/Ethanw05/DumbadsSkate3ModdingTools)).
-- **[2010 Rust Rewrite Mashup](https://github.com/chasmlol/2010-rust-rewrite-mashup)** by chasmlol,
-  on [IW4L](https://github.com/vladtrc/iw4L) by vladtrc: the Skate 3 mode for MW2 this one
+- **[CTR-tools](https://github.com/CTR-tools)**: the CTR decompilation
+  ([ctr-native](https://github.com/CTR-tools/ctr-native),
+  [CTR-ModSDK](https://github.com/CTR-tools/CTR-ModSDK)) the driving model is ported from, and
+  DCxDemo's [CTR-tools](https://github.com/CTR-tools/CTR-tools) format work the kart extractor
   follows.
 - **[vmangos](https://github.com/vmangos/core)** and
   **[vmangos-deploy](https://github.com/mserajnik/vmangos-deploy)** (mserajnik): the local server.
-  **[vgmstream](https://vgmstream.org)**: decodes the Skate 3 sounds during setup.
 
 ## Legal
 
-The code here is benilla's licence, MIT or Apache 2.0 at your option, except where a file says
-otherwise; see [NOTICE](NOTICE). The skate engine is downloaded from its authors' repository at
-build time and is not part of this repository. No World of Warcraft or Skate 3 content is
-included or distributed: the game reads your WoW install, and setup converts your own Skate 3
-files on your machine. World of Warcraft is a trademark of Blizzard Entertainment, Inc.; Skate is
-a trademark of Electronic Arts Inc.
+benilla's code is MIT or Apache 2.0 at your option. The parts ported from the CTR decompilation
+(`crates/ctr-kart`, `crates/ctr-assets`, `crates/kartcraft`, `crates/kart-demo`) are GPL-3.0, as
+the decompilation is, and so a build of the whole is GPL-3.0; see [NOTICE](NOTICE). No World of
+Warcraft or Crash Team Racing content is included or distributed: the game reads your WoW install,
+and setup converts your own CTR disc on your machine. World of Warcraft is a trademark of Blizzard
+Entertainment, Inc.; Crash Team Racing and Crash Bandicoot are trademarks of Sony Interactive
+Entertainment / Activision.

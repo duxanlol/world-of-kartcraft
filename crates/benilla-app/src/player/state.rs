@@ -486,14 +486,28 @@ pub(super) struct PendingKnockback {
 }
 
 impl Player {
-    /// The facing (Bevy yaw), the skate mode's starting heading.
+    /// The facing (Bevy yaw), the kart mode's starting heading.
     pub(crate) fn face_yaw(&self) -> f32 {
         self.face_yaw
     }
 
-    /// Whether we drive our own body freely, so the skate mode may take it: in world, not free
+    /// Whether we drive our own body freely, so the kart mode may take it: in world, not free
     /// flying, not on a server spline, not controlled or reseating, not held by a teleport settle.
-    pub(crate) fn may_skate(&self) -> bool {
+    /// Why [`Self::may_drive`] refuses, for the log.
+    pub(crate) fn drive_refusal(&self) -> String {
+        format!(
+            "active {} detached {} server_riding {} control_lost {} reseat {} settling {} foreign {}",
+            self.active,
+            self.detached,
+            self.server_riding,
+            self.control_lost,
+            self.reseat,
+            self.settling,
+            self.foreign_mover.is_some()
+        )
+    }
+
+    pub(crate) fn may_drive(&self) -> bool {
         self.active
             && !self.detached
             && !self.server_riding

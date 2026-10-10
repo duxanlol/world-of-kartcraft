@@ -1,7 +1,8 @@
 # The gates of scripts/gates.sh that need neither a WoW install nor a display, on Linux, for a pull
-# request from a fork: a red one is seen before anyone builds it. A Windows job checks the game
-# still compiles there (World of Skatecraft has no Windows setup yet). The data-gated tests and a
-# live run happen on the maintainer's machine before it lands.
+# request from a fork: a red one is seen before anyone builds it. `--workspace` covers the kart
+# crates (ctr-kart, ctr-assets, kartcraft, kart-demo); ctr-assets' disc test skips without
+# `CTR_DISC`. A Windows job checks the game and the demo still compile there and setup.ps1 parses.
+# The data-gated tests and a live run happen on the maintainer's machine before it lands.
 name: CI
 
 on:
@@ -78,4 +79,4 @@ jobs:
         continue-on-error: true
         run: powershell -ExecutionPolicy Bypass -File setup\setup.ps1 -Doctor
       - name: check
-        run: cargo check --release -p benilla
+        run: cargo check --release -p benilla -p kart-demo

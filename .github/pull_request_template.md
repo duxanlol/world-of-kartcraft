@@ -2,6 +2,6 @@
 
 **What this changes**
 
-**How you checked it** (in game? which distro / Windows version, GPU, controller)
+**How you checked it** (in game? which Windows version / distro, GPU, controller)
 
 - [ ] No game files, and nothing converted from them

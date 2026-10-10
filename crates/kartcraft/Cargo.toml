@@ -1,0 +1,21 @@
+[package]
+name = "kartcraft"
+version.workspace = true
+edition.workspace = true
+# Drives `ctr-kart` (GPL-3.0, ported from the CTR decompilation), so GPL-3.0 as well.
+license = "GPL-3.0-or-later"
+description = "World of Kartcraft's kart over the benilla world: the driving session, controls and the kart's model"
+
+[lints]
+workspace = true
+
+[dependencies]
+bevy.workspace = true
+benilla-world = { path = "../benilla-world", default-features = false }
+ctr-kart = { path = "../ctr-kart" }
+# CTR's HUD, drawn from the player's `kart-data/hud.json`.
+ctr-assets = { path = "../ctr-assets" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The kart's sounds (the vendored kira, as the client's); the host supplies the output.
+kira = { version = "0.12", default-features = false, features = ["wav", "pcm"] }

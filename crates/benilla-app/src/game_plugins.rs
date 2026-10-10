@@ -124,7 +124,7 @@ impl PluginGroup for GamePlugins {
             .add(crate::doodad_events::plugin)
             .add(PlayerPlugin)
             // Skate 3 mode (`J`), ahead of `control`, which drives the body from it while riding.
-            .add(crate::skate::plugin)
+            .add(crate::kart::plugin)
             .add(crate::screen_fade::ScreenFadePlugin)
             // After PlayerPlugin, whose `control` it overrides in the same stage.
             .add(CinematicPlugin)
@@ -678,10 +678,10 @@ pub(crate) mod schedule_tests {
     ///   movement flags of the caster (`Player::move_flags`) and its target
     ///   (`RemoteMotion::flags`), and those writers touch `login_pitch`, the settle fields and a
     ///   rider's pose, never the flags.
-    /// - the skate mode (World of Skatecraft): `skate::board::update` against the other writers of
+    /// - the kart mode (World of Kartcraft): `kartcraft::model::update` against the other writers of
     ///   `Assets<Mesh>`, `Assets<StandardMaterial>` and `Assets<Image>` (the glue screens, the
     ///   portrait booths, the UI model tiles, the world streamers): it adds and rewrites only the
-    ///   board's own handles; `skate::update` and `skate::sound::update` against the writers of
+    ///   kart's own handles; `kart::update` and `kart::sound::update` against the writers of
     ///   `Player`, `Window` and the mover exclusions, of which they read the pose gates once a
     ///   frame (a gate seen a frame late starts or ends a ride a frame late), and against the
     ///   sheath requests' other writers, which the driver applies in any order.

@@ -52,6 +52,12 @@ const FOVY: f32 = 1.221_730_5;
 
 /// Builds and runs the world viewer; `build` is the launcher shim's compile-time git stamp.
 pub fn run(build: BuildId) -> AppExit {
+    run_with(build, "benilla worldview", plugin)
+}
+
+/// The viewer with `scene` in place of its free-fly camera: World of Kartcraft's offline kart
+/// demo drives over the same streamed world.
+pub fn run_with(build: BuildId, title: &str, scene: fn(&mut App)) -> AppExit {
     // The install resolves from the launcher's folder when its stamp names one, as the client's
     // does; this shim has no `dev` feature, so it stamps none and the viewer keeps benilla's.
     benilla_formats::set_project_folder(build.project_dir);
@@ -89,7 +95,7 @@ pub fn run(build: BuildId) -> AppExit {
 
     let background = crate::bgwin::background_run();
     app.add_plugins(boot::tuned_default_plugins(Window {
-        title: "benilla worldview".into(),
+        title: title.into(),
         resolution: std::env::var("WOW_WIN")
             .ok()
             .and_then(|v| {
@@ -127,7 +133,7 @@ pub fn run(build: BuildId) -> AppExit {
     app.add_plugins(crate::world_plugins::WorldPlugins);
     stubs(&mut app);
 
-    app.add_plugins(plugin);
+    app.add_plugins(scene);
 
     // After `AssetPlugin`: the loaders go into the live `AssetServer`, as in the client.
     benilla_assets::register_asset_loaders(&mut app);
