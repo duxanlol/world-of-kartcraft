@@ -284,9 +284,25 @@
             BenillaKartFinder_Refresh()
         end
 
+        -- A widget the player drags with the left button; its place is kept between sessions,
+        -- as a user-placed frame's is (layout-local.txt).
+        function BenillaKart_Movable(frame)
+            frame:SetMovable(1)
+            frame:RegisterForDrag("LeftButton")
+        end
+
+        -- The banner, and the results as a board: one line a racer, the board as tall as them.
         function BenillaKartRace_Show(banner, results)
             BenillaKartRaceBanner:SetText(banner or "")
-            BenillaKartRaceResults:SetText(results or "")
+            results = results or ""
+            BenillaKartRaceResults:SetText(results)
+            if results == "" then
+                BenillaKartResultsFrame:Hide()
+                return
+            end
+            local lines = table.getn(BenillaKart_Split(string.gsub(results, "\n", "\t")))
+            BenillaKartResultsFrame:SetHeight(44 + lines * 16)
+            BenillaKartResultsFrame:Show()
         end
 
         -- The chain: its latest trick, its points, then the experience and skill it earned.
@@ -376,7 +392,7 @@
         </Scripts>
     </CheckButton>
 
-    <Frame name="BenillaKartFinderFrame" toplevel="true" enableMouse="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
+    <Frame name="BenillaKartFinderFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
         <Size><AbsDimension x="320" y="374"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="80"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
@@ -470,6 +486,7 @@
                 local label = getglobal(this:GetName() .. "AnyText")
                 if label then label:SetText("Any course") end
                 if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
+                BenillaKart_Movable(this)
                 this:EnableMouseWheel(1)
             </OnLoad>
             <OnShow>
@@ -478,12 +495,14 @@
             </OnShow>
             <OnHide>PlaySound("igMainMenuClose")</OnHide>
             <OnMouseWheel>BenillaKartFinder_OnMouseWheel(arg1)</OnMouseWheel>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
             <OnUpdate>BenillaKartFinder_Refresh()</OnUpdate>
         </Scripts>
     </Frame>
 
     <!-- The finder minimized while queued: its status, a click opens it again. -->
-    <Button name="BenillaKartQueueButton" parent="UIParent" hidden="true" frameStrata="MEDIUM">
+    <Button name="BenillaKartQueueButton" parent="UIParent" movable="true" clampedToScreen="true" hidden="true" frameStrata="MEDIUM">
         <Size><AbsDimension x="200" y="28"/></Size>
         <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-20" y="-200"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
@@ -499,8 +518,13 @@
             </Layer>
         </Layers>
         <Scripts>
-            <OnLoad>this:SetBackdropColor(0, 0, 0, 0.8)</OnLoad>
+            <OnLoad>
+                this:SetBackdropColor(0, 0, 0, 0.8)
+                BenillaKart_Movable(this)
+            </OnLoad>
             <OnClick>BenillaKartFinderFrame:Show()</OnClick>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
         </Scripts>
     </Button>
 
@@ -511,11 +535,37 @@
                 <FontString name="BenillaKartRaceBanner" inherits="GameFontNormalHuge" justifyH="CENTER">
                     <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-190"/></Offset></Anchor></Anchors>
                 </FontString>
-                <FontString name="BenillaKartRaceResults" inherits="GameFontHighlightLarge" justifyH="RIGHT">
-                    <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-40" y="-250"/></Offset></Anchor></Anchors>
+            </Layer>
+        </Layers>
+    </Frame>
+
+    <!-- The race's results as a board the player can drag: the finished in order, with times. -->
+    <Frame name="BenillaKartResultsFrame" parent="UIParent" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" frameStrata="MEDIUM">
+        <Size><AbsDimension x="240" y="60"/></Size>
+        <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-40" y="-250"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+            <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>
+            <TileSize><AbsValue val="16"/></TileSize>
+            <EdgeSize><AbsValue val="16"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentTitle" inherits="GameFontNormal" text="Race Results">
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-10"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="BenillaKartRaceResults" inherits="GameFontHighlight" justifyH="LEFT" justifyV="TOP">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="14" y="-30"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
+        <Scripts>
+            <OnLoad>
+                this:SetBackdropColor(0, 0, 0, 0.75)
+                BenillaKart_Movable(this)
+            </OnLoad>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
     </Frame>
 
     <!-- The turbo chain's score: the trick, the points, then the experience and skill it earned. -->

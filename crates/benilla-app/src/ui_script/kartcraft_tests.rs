@@ -361,3 +361,65 @@ fn closing_while_queued_minimizes_to_the_queue_button() {
     s.tick(0.0);
     assert!(!shown(&s, "BenillaKartQueueButton"));
 }
+
+#[test]
+fn the_results_are_a_board_and_the_widgets_move() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let race = |s: &mut UiScript, banner: &str, results: &str| {
+        s.fire_event(
+            "BENILLA_KART_RACE",
+            vec![
+                ScriptValue::Str(banner.into()),
+                ScriptValue::Str(results.into()),
+            ],
+        );
+        s.tick(0.0);
+    };
+    let shown = |s: &UiScript, frame: &str| -> bool {
+        s.eval(&format!("return {frame}:IsVisible() == 1")).unwrap()
+    };
+
+    // No results, no board; the finish shows one as tall as its lines.
+    race(&mut s, "GO!", "");
+    assert!(!shown(&s, "BenillaKartResultsFrame"));
+    race(
+        &mut s,
+        "1ST — 1:02.40",
+        "1. Probesix  1:02.40\n2. Goblin  1:03.10\n3. Gnome  1:05.00",
+    );
+    assert!(shown(&s, "BenillaKartResultsFrame"));
+    assert_eq!(
+        s.eval::<String>("return BenillaKartResultsFrameTitle:GetText()")
+            .unwrap(),
+        "Race Results"
+    );
+    assert_eq!(
+        s.eval::<f64>("return BenillaKartResultsFrame:GetHeight()")
+            .unwrap(),
+        44.0 + 3.0 * 16.0
+    );
+    race(&mut s, "", "");
+    assert!(!shown(&s, "BenillaKartResultsFrame"));
+
+    // The finder, its queue button and the board drag, and a dragged one keeps its place.
+    for frame in [
+        "BenillaKartFinderFrame",
+        "BenillaKartQueueButton",
+        "BenillaKartResultsFrame",
+    ] {
+        assert!(
+            s.eval::<bool>(&format!("return {frame}:IsMovable() == 1"))
+                .unwrap(),
+            "{frame} is not movable"
+        );
+    }
+    s.run("BenillaKartResultsFrame:Show() BenillaKartResultsFrame:StartMoving() BenillaKartResultsFrame:StopMovingOrSizing()")
+        .unwrap();
+    assert!(s
+        .eval::<bool>("return BenillaKartResultsFrame:IsUserPlaced() == 1")
+        .unwrap());
+}
