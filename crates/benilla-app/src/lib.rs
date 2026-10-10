@@ -142,6 +142,7 @@ mod ui_inspect;
 mod ui_instance;
 mod ui_item_text;
 mod ui_items;
+mod ui_kart;
 mod ui_layout;
 mod ui_logout;
 mod ui_loot;

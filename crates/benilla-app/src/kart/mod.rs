@@ -6,12 +6,14 @@
 //! Karting profession ([`profession`]) and the score on screen ([`score`]). In a race CTR's
 //! weapons are live ([`weapons`]): crates, items, shots and hits through the server.
 
-mod finder;
 mod profession;
 mod race;
 mod remote;
 mod score;
 mod sound;
+mod ui;
+pub(crate) use race::{COURSES, ZONES};
+pub(crate) use ui::{KartOverlay, ScoreLines};
 mod weapons;
 
 use benilla_world::collision::WorldCollision;
@@ -430,20 +432,14 @@ pub(crate) fn plugin(app: &mut App) {
         .net_handler(benilla_protocol::SessionEventKind::Chat, weapons::on_chat)
         .init_resource::<race::Races>()
         .init_resource::<race::RaceText>()
+        .init_resource::<ui::KartOverlay>()
         .init_resource::<race::GuideHud>()
-        .init_resource::<finder::FinderUi>()
         .add_systems(
             Startup,
-            (
-                score::spawn,
-                kartcraft::hud::spawn,
-                race::spawn_text,
-                finder::spawn,
-                |_: Commands| {
-                    model::preload();
-                    kartcraft::weapons::look::preload();
-                },
-            ),
+            (kartcraft::hud::spawn, |_: Commands| {
+                model::preload();
+                kartcraft::weapons::look::preload();
+            }),
         )
         .add_systems(
             Update,
@@ -456,12 +452,12 @@ pub(crate) fn plugin(app: &mut App) {
                 race::beams,
                 race::place_guide,
                 race::guide,
-                race::draw_text,
-                finder::update,
-                finder::draw,
                 model::update,
                 sound::update,
-                score::draw,
+                score::track_skill,
+                ui::publish,
+                // Into the VM only once the interface is up, or the first frame's events are lost.
+                crate::ui_kart::feed.run_if(crate::ui_script::ingame_ui_up),
                 kartcraft::hud::draw,
             )
                 .chain()

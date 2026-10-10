@@ -19,5 +19,7 @@ ContainerFrameAdapters.xml
 SpellBookAdapters.xml
 # The `/errors` script error log and our slash commands.
 ScriptLogFrame.xml
+# World of Kartcraft's race windows: the Race Finder, its ready check, the race banner and score.
+KartcraftFrames.xml
 # Our fixes to the stock Lua.
 FrameXMLFixes.xml
