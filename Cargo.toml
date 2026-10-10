@@ -42,6 +42,9 @@ lua-src = { path = "third_party/lua-src" }
 # kira 0.12.4, patched to compute spatial gains and the volume tween per output chunk and
 # interpolate them, not per sample frame (`third_party/kira/BENILLA.md`).
 kira = { path = "third_party/kira" }
+# gilrs-core 0.6.7, patched so a controller under Wine/Proton, which lacks
+# RawGameController.NonRoamableId, does not panic (`third_party/gilrs-core/BENILLA.md`).
+gilrs-core = { path = "third_party/gilrs-core" }
 
 # Dependencies at opt-level 3 in dev: at opt-level 0, avian/parry collision drops a run to <1 fps.
 [profile.dev.package."*"]
