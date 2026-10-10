@@ -136,14 +136,6 @@ impl RemoteKarts {
     pub(crate) fn racer(&self, guid: u64) -> &str {
         self.states.get(&guid).map_or("", |(s, _)| s.racer.as_str())
     }
-
-    #[cfg(test)]
-    pub(crate) fn state(&self, guid: u64, now: f32) -> Option<Relayed> {
-        self.states
-            .get(&guid)
-            .filter(|(_, at)| now - at < STATE_TTL)
-            .map(|(s, _)| s.clone())
-    }
 }
 
 /// Kart state relayed by other drivers.

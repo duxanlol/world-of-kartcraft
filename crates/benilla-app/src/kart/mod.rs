@@ -6,6 +6,7 @@
 //! Karting profession ([`profession`]) and the score on screen ([`score`]). In a race CTR's
 //! weapons are live ([`weapons`]): crates, items, shots and hits through the server.
 
+mod finder;
 mod profession;
 mod race;
 mod remote;
@@ -429,12 +430,14 @@ pub(crate) fn plugin(app: &mut App) {
         .net_handler(benilla_protocol::SessionEventKind::Chat, weapons::on_chat)
         .init_resource::<race::Races>()
         .init_resource::<race::RaceText>()
+        .init_resource::<finder::FinderUi>()
         .add_systems(
             Startup,
             (
                 score::spawn,
                 kartcraft::hud::spawn,
                 race::spawn_text,
+                finder::spawn,
                 |_: Commands| {
                     model::preload();
                     kartcraft::weapons::look::preload();
@@ -452,6 +455,8 @@ pub(crate) fn plugin(app: &mut App) {
                 race::beams,
                 race::guide,
                 race::draw_text,
+                finder::update,
+                finder::draw,
                 model::update,
                 sound::update,
                 score::draw,

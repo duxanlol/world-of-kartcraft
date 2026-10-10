@@ -96,7 +96,8 @@ Northshire straight from your WoW install, no server, login or character, to fee
 | Abilities: Wumpa Juice, Turbo Boost, Super Engine, Aku Aku | D-pad ↑ → ↓ ← | D-pad | 1–4 |
 | Climb in / out | | | **J** |
 | Chase camera / your WoW camera | | | **K** |
-| Races: host / join / start · leave | | | **F5** · **F6** |
+| Races: host / join / start / accept · leave / decline | | | **F5** · **F6** |
+| Race Finder · course at a shared start | | | **I** · **F7** |
 
 ### How it drives
 
@@ -150,7 +151,14 @@ it and press **F5** to join; the host's **F5** starts it. CTR's countdown follow
 (hold gas) just before GO for the start boost, too early and it bogs. Beams of light mark the
 checkpoints, the next one bright; the server checks each one against where you really are. Lap
 and place show on CTR's HUD, the music speeds up on the final lap, and a finish pays experience
-and Karting skill by place. **F6** leaves. The courses, laid along Elwynn's roads (the guards'
+and Karting skill by place. **F6** leaves. Where two courses share a start, **F7** picks which one
+**F5** hosts.
+
+**Race Finder.** Press **I** anywhere, tick the courses you want (or Any course) and **Find race**,
+like the dungeon finder. Once two or more players share a course (it waits up to 30 seconds for
+more, up to eight), everyone gets a ready check: **F5** accepts, **F6** declines. When all accept,
+the server puts each of you in your kart and teleports you to a slot on the starting grid, and
+the countdown starts. The courses, laid along Elwynn's roads (the guards'
 own patrol routes):
 
 | Course | Start | Laps |
