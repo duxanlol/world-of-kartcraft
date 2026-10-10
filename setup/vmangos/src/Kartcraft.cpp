@@ -16,9 +16,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#include <set>
 #include <unordered_map>
-#include "GridMap.h"
-
 #include "GridMap.h"
 
 extern SkillRaceClassInfoMap SkillRaceClassInfoBySkill;
@@ -731,6 +730,53 @@ namespace Kartcraft
             race.host = race.racers.front().guid;
     }
 
+    // Racers are out of the fight from the countdown to the finish: monsters and players can't
+    // attack them, nor they anyone (Kartcraft's own rule: courses run through mob country). A
+    // unit belongs to its map's thread, so the change goes through the world's messager, which
+    // runs between map updates; the flags are checked there, so a racer who logs back in mid-race
+    // is covered again.
+    static std::set<ObjectGuid> s_shielded;
+    static uint32 s_shieldedAt = 0;
+    constexpr uint32 SHIELD_INTERVAL = 250;
+    constexpr uint32 RACE_SHIELD_FLAGS = UNIT_FLAG_IMMUNE_TO_NPC | UNIT_FLAG_IMMUNE_TO_PLAYER;
+
+    // Run after every Kartcraft line: a racer let go is freed at once; those racing are covered
+    // again at most every SHIELD_INTERVAL.
+    static void TickShields(uint32 now)
+    {
+        std::set<ObjectGuid> racing;
+        for (auto const& entry : s_races)
+            if (entry.second.start)
+                for (Racer const& r : entry.second.racers)
+                    if (!r.finished)
+                        racing.insert(r.guid);
+        std::vector<ObjectGuid> off;
+        for (ObjectGuid const& guid : s_shielded)
+            if (!racing.count(guid))
+                off.push_back(guid);
+        bool newcomer = std::any_of(racing.begin(), racing.end(),
+            [](ObjectGuid const& guid) { return !s_shielded.count(guid); });
+        s_shielded = racing;
+        bool due = !racing.empty() && WorldTimer::getMSTimeDiff(s_shieldedAt, now) >= SHIELD_INTERVAL;
+        if (off.empty() && !newcomer && !due)
+            return;
+        s_shieldedAt = now;
+        sWorld.GetMessager().AddMessage([racing, off](World*)
+        {
+            for (ObjectGuid const& guid : racing)
+                if (Player* p = ObjectAccessor::FindPlayer(guid))
+                    if (!p->HasFlag(UNIT_FIELD_FLAGS, RACE_SHIELD_FLAGS))
+                    {
+                        p->SetFlag(UNIT_FIELD_FLAGS, RACE_SHIELD_FLAGS);
+                        p->CombatStopWithPets(true);
+                        p->GetHostileRefManager().deleteReferences();
+                    }
+            for (ObjectGuid const& guid : off)
+                if (Player* p = ObjectAccessor::FindPlayer(guid))
+                    p->RemoveFlag(UNIT_FIELD_FLAGS, RACE_SHIELD_FLAGS);
+        });
+    }
+
     // Crates due back come up; old shots are forgotten. Run on every Kartcraft line: a racer's
     // kart sends its state ten times a second, so a respawn is late by at most about 100 ms.
     static void TickWeapons(uint32 now)
@@ -1410,6 +1456,8 @@ namespace Kartcraft
             HandleRace(player, body);
         else if (body.compare(0, 2, "W\t") == 0)
             HandleWeapon(player, body);
+        // After the line: a finish or a leave in it frees the racer at once.
+        TickShields(WorldTimer::getMSTime());
         return true;
     }
 
