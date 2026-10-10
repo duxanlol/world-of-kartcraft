@@ -10,22 +10,25 @@
         it says it is still there every two seconds or the server drops it after ten.
 
         The race and score come from the kart (kart/ui.rs) as BENILLA_KART_RACE and
-        BENILLA_KART_SCORE when they change; BENILLA_KART_FINDER_TOGGLE is the I key.
+        BENILLA_KART_SCORE when they change; BENILLA_KART_FINDER_TOGGLE is the I key, and
+        BENILLA_KART_COURSES names the courses once per load, one "key<TAB>name" a line. The course
+        list scrolls: a fixed set of rows over it, as the stock long lists are (FriendsFrame,
+        QuestLog), so it takes any number of courses.
     -->
     <Script><![CDATA[
         BENILLA_KART_PREFIX = "KARTCRAFT"
-        -- The server's course table (Kartcraft.cpp COURSES), by key.
-        BenillaKartCourses = {
-            { key = "sprint", name = "Northshire Sprint" },
-            { key = "elwynn", name = "Elwynn Loop" },
-            { key = "stormwind", name = "Road to Stormwind" },
-        }
+        -- The courses, { key, name } in the kart's order, from BENILLA_KART_COURSES.
+        BenillaKartCourses = {}
+        -- The rows the list shows at once, and their height.
+        BENILLA_KART_ROWS = 8
+        BENILLA_KART_ROW_HEIGHT = 24
         BENILLA_KART_HEARTBEAT = 2
         BENILLA_KART_RACING = "You're in a race: finish it, or leave it with F6, first."
         BENILLA_KART_XP_COLOR = { r = 111 / 255, g = 111 / 255, b = 1 }
         BENILLA_KART_SKILL_COLOR = { r = 0.4, g = 0.8, b = 1 }
 
-        -- The finder's state: what is ticked, what we queued for and the server's word on it.
+        -- The finder's state: what is ticked (by course key, so a scroll moves no tick), what we
+        -- queued for and the server's word on it.
         BenillaKartFinder = { any = 1, picked = {}, beat = 0, noticeUntil = 0 }
 
         function BenillaKart_Send(body)
@@ -60,9 +63,10 @@
             local keys = ""
             if not f.any then
                 for i = 1, table.getn(BenillaKartCourses) do
-                    if f.picked[i] then
+                    local key = BenillaKartCourses[i].key
+                    if f.picked[key] then
                         if keys ~= "" then keys = keys .. "," end
-                        keys = keys .. BenillaKartCourses[i].key
+                        keys = keys .. key
                     end
                 end
             end
@@ -84,13 +88,14 @@
             BenillaKart_Send("Q-")
         end
 
-        -- A tick: index 0 is "Any course". Changing the courses while queued keeps the place.
-        function BenillaKartFinder_Pick(index)
+        -- A tick: nil is "Any course", else a course's key. Changing the courses while queued
+        -- keeps the place.
+        function BenillaKartFinder_Pick(key)
             local f = BenillaKartFinder
-            if index == 0 then
+            if not key then
                 f.any, f.picked = 1, {}
             else
-                if f.picked[index] then f.picked[index] = nil else f.picked[index] = 1 end
+                if f.picked[key] then f.picked[key] = nil else f.picked[key] = 1 end
                 f.any = nil
                 if not next(f.picked) then f.any = 1 end
             end
@@ -141,6 +146,8 @@
                 if names ~= "" then names = names .. ", " end
                 names = names .. BenillaKart_CourseName(keys[i])
             end
+            -- A long pick reads as a count; the ticks in the list say which.
+            if table.getn(keys) > 3 then names = table.getn(keys) .. " courses" end
             if not f.waited then return "In queue: " .. names end
             return format("In queue: %s\n%d:%02d, %d waiting", names, floor(f.waited / 60),
                 mod(f.waited, 60), f.waiting)
@@ -151,15 +158,56 @@
             if not frame:IsVisible() then return end
             local f = BenillaKartFinder
             getglobal("BenillaKartFinderFrameAny"):SetChecked(f.any)
-            for i = 1, table.getn(BenillaKartCourses) do
-                getglobal("BenillaKartFinderFrameCourse" .. i):SetChecked(f.picked[i])
-            end
+            BenillaKartFinder_UpdateList()
             if f.queued then
                 BenillaKartFinderFrameQueue:SetText("Leave queue")
             else
                 BenillaKartFinderFrameQueue:SetText("Find race")
             end
             BenillaKartFinderFrameStatus:SetText(BenillaKartFinder_Status())
+        end
+
+        -- The course rows over the list from the scroll's offset; the stock faux kit's bar where it
+        -- is loaded, else the list's head.
+        function BenillaKartFinder_UpdateList()
+            local count = table.getn(BenillaKartCourses)
+            local offset = 0
+            if FauxScrollFrame_Update then
+                local scroll = BenillaKartFinderFrameScroll
+                FauxScrollFrame_Update(scroll, count, BENILLA_KART_ROWS, BENILLA_KART_ROW_HEIGHT)
+                if BenillaScrollTrough_Follow then BenillaScrollTrough_Follow(scroll:GetName()) end
+                offset = FauxScrollFrame_GetOffset(scroll)
+            end
+            for i = 1, BENILLA_KART_ROWS do
+                local row = getglobal("BenillaKartFinderFrameRow" .. i)
+                local course = BenillaKartCourses[offset + i]
+                if course then
+                    row.key = course.key
+                    local label = getglobal(row:GetName() .. "Text")
+                    if label then label:SetText(course.name) end
+                    row:SetChecked(BenillaKartFinder.picked[course.key])
+                    row:Show()
+                else
+                    row.key = nil
+                    row:Hide()
+                end
+            end
+        end
+
+        function BenillaKartFinder_OnMouseWheel(delta)
+            if BenillaFauxScrollFrame_OnMouseWheel then
+                BenillaFauxScrollFrame_OnMouseWheel(BenillaKartFinderFrameScroll, delta)
+            end
+        end
+
+        -- BENILLA_KART_COURSES: one "key<TAB>name" a line, in one argument, so a long list fits.
+        function BenillaKartCourses_Set(list)
+            BenillaKartCourses = {}
+            local lines = BenillaKart_Split(string.gsub(list or "", "\n", "\t"))
+            for i = 1, table.getn(lines) - 1, 2 do
+                table.insert(BenillaKartCourses, { key = lines[i], name = lines[i + 1] })
+            end
+            BenillaKartFinder_Refresh()
         end
 
         -- The server's replies.
@@ -223,6 +271,8 @@
                 BenillaKartRace_Show(arg1, arg2)
             elseif event == "BENILLA_KART_SCORE" then
                 BenillaKartScore_Show(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11)
+            elseif event == "BENILLA_KART_COURSES" then
+                BenillaKartCourses_Set(arg1)
             elseif event == "BENILLA_KART_FINDER_TOGGLE" then
                 BenillaKartFinder_Toggle()
             end
@@ -258,12 +308,12 @@
 
     <CheckButton name="BenillaKartFinderCheckTemplate" inherits="OptionsCheckButtonTemplate" virtual="true">
         <Scripts>
-            <OnClick>BenillaKartFinder_Pick(this:GetID())</OnClick>
+            <OnClick>BenillaKartFinder_Pick(this.key)</OnClick>
         </Scripts>
     </CheckButton>
 
     <Frame name="BenillaKartFinderFrame" toplevel="true" enableMouse="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="300" y="250"/></Size>
+        <Size><AbsDimension x="320" y="346"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="80"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -281,23 +331,47 @@
                 </FontString>
                 <FontString name="$parentStatus" inherits="GameFontHighlightSmall" justifyH="LEFT" justifyV="TOP">
                     <Size><AbsDimension x="252" y="32"/></Size>
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-168"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-264"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
         <Frames>
-            <CheckButton name="$parentAny" inherits="BenillaKartFinderCheckTemplate" id="0">
+            <CheckButton name="$parentAny" inherits="BenillaKartFinderCheckTemplate">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-32"/></Offset></Anchor></Anchors>
             </CheckButton>
-            <CheckButton name="$parentCourse1" inherits="BenillaKartFinderCheckTemplate" id="1">
-                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentAny" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-4"/></Offset></Anchor></Anchors>
+            <!-- The rows over the course list; a row's `key` is its course, set as it scrolls. -->
+            <CheckButton name="$parentRow1" inherits="BenillaKartFinderCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentAny" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-6"/></Offset></Anchor></Anchors>
             </CheckButton>
-            <CheckButton name="$parentCourse2" inherits="BenillaKartFinderCheckTemplate" id="2">
-                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentCourse1" relativePoint="BOTTOMLEFT"/></Anchors>
+            <CheckButton name="$parentRow2" inherits="BenillaKartFinderCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow1" relativePoint="TOPLEFT"><Offset><AbsDimension x="0" y="-24"/></Offset></Anchor></Anchors>
             </CheckButton>
-            <CheckButton name="$parentCourse3" inherits="BenillaKartFinderCheckTemplate" id="3">
-                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentCourse2" relativePoint="BOTTOMLEFT"/></Anchors>
+            <CheckButton name="$parentRow3" inherits="BenillaKartFinderCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow2" relativePoint="TOPLEFT"><Offset><AbsDimension x="0" y="-24"/></Offset></Anchor></Anchors>
             </CheckButton>
+            <CheckButton name="$parentRow4" inherits="BenillaKartFinderCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow3" relativePoint="TOPLEFT"><Offset><AbsDimension x="0" y="-24"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRow5" inherits="BenillaKartFinderCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow4" relativePoint="TOPLEFT"><Offset><AbsDimension x="0" y="-24"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRow6" inherits="BenillaKartFinderCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow5" relativePoint="TOPLEFT"><Offset><AbsDimension x="0" y="-24"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRow7" inherits="BenillaKartFinderCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow6" relativePoint="TOPLEFT"><Offset><AbsDimension x="0" y="-24"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRow8" inherits="BenillaKartFinderCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow7" relativePoint="TOPLEFT"><Offset><AbsDimension x="0" y="-24"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <!-- The stock faux kit over the rows: it ranges over the list, the rows repaint. -->
+            <ScrollFrame name="$parentScroll" inherits="FauxScrollFrameTemplate">
+                <Size><AbsDimension x="242" y="192"/></Size>
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow1"/></Anchors>
+                <Scripts>
+                    <OnVerticalScroll>FauxScrollFrame_OnVerticalScroll(BENILLA_KART_ROW_HEIGHT, BenillaKartFinder_UpdateList)</OnVerticalScroll>
+                </Scripts>
+            </ScrollFrame>
             <Button name="$parentQueue" inherits="UIPanelButtonTemplate" text="Find race">
                 <Size><AbsDimension x="120" y="22"/></Size>
                 <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="18"/></Offset></Anchor></Anchors>
@@ -311,20 +385,18 @@
         </Frames>
         <Scripts>
             <OnLoad>
-                -- The labels are the check template's; Escape closes it, as it does a stock panel.
+                -- The label is the check template's; Escape closes it, as it does a stock panel.
                 local label = getglobal(this:GetName() .. "AnyText")
                 if label then label:SetText("Any course") end
-                for i = 1, table.getn(BenillaKartCourses) do
-                    label = getglobal(this:GetName() .. "Course" .. i .. "Text")
-                    if label then label:SetText(BenillaKartCourses[i].name) end
-                end
                 if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
+                this:EnableMouseWheel(1)
             </OnLoad>
             <OnShow>
                 PlaySound("igMainMenuOpen")
                 BenillaKartFinder_Refresh()
             </OnShow>
             <OnHide>PlaySound("igMainMenuClose")</OnHide>
+            <OnMouseWheel>BenillaKartFinder_OnMouseWheel(arg1)</OnMouseWheel>
             <OnUpdate>BenillaKartFinder_Refresh()</OnUpdate>
         </Scripts>
     </Frame>
@@ -379,6 +451,7 @@
                 this:RegisterEvent("BENILLA_KART_RACE")
                 this:RegisterEvent("BENILLA_KART_SCORE")
                 this:RegisterEvent("BENILLA_KART_FINDER_TOGGLE")
+                this:RegisterEvent("BENILLA_KART_COURSES")
             </OnLoad>
             <OnEvent>BenillaKartEvents_OnEvent()</OnEvent>
             <OnUpdate>BenillaKartEvents_OnUpdate()</OnUpdate>

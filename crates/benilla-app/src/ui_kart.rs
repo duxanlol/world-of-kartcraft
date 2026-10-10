@@ -5,13 +5,15 @@
 //! - `BENILLA_KART_SCORE(trick, r, g, b, points, r, g, b, xp, skill, alpha)`, or no arguments
 //!   when there is nothing to show.
 //! - `BENILLA_KART_FINDER_TOGGLE`: `I` was pressed.
+//! - `BENILLA_KART_COURSES(list)`: the courses, one `key<TAB>name` a line, once per VM; one
+//!   argument, so the list can grow past what an event's `arg1`..`argN` would carry.
 //!
 //! The Race Finder itself talks to the server over the addon channel, in Lua.
 
 use benilla_ui::script::{ScriptValue, UiScript};
 use bevy::prelude::*;
 
-use crate::kart::{KartOverlay, ScoreLines};
+use crate::kart::{KartOverlay, ScoreLines, COURSES};
 use crate::ui_script::VmMemo;
 
 /// What this VM was last sent, so an unchanged frame sends nothing.
@@ -19,6 +21,7 @@ use crate::ui_script::VmMemo;
 pub(crate) struct Sent {
     race: Option<(String, Vec<String>)>,
     score: Option<Option<ScoreLines>>,
+    courses: bool,
 }
 
 pub(crate) fn feed(
@@ -30,6 +33,13 @@ pub(crate) fn feed(
         return;
     };
     let sent = sent.get(&script);
+    if !sent.courses {
+        script.fire_event(
+            "BENILLA_KART_COURSES",
+            vec![ScriptValue::Str(course_list())],
+        );
+        sent.courses = true;
+    }
     if std::mem::take(&mut overlay.toggle_finder) {
         script.fire_event("BENILLA_KART_FINDER_TOGGLE", Vec::new());
     }
@@ -53,6 +63,15 @@ pub(crate) fn feed(
         );
         sent.score = Some(overlay.score.clone());
     }
+}
+
+/// The courses for the layer's finder, one `key<TAB>name` a line.
+fn course_list() -> String {
+    COURSES
+        .iter()
+        .map(|(key, name, _)| format!("{key}\t{name}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn score_args(lines: ScoreLines) -> Vec<ScriptValue> {

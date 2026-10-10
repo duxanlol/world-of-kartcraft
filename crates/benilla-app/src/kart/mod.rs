@@ -12,6 +12,7 @@ mod remote;
 mod score;
 mod sound;
 mod ui;
+pub(crate) use race::COURSES;
 pub(crate) use ui::{KartOverlay, ScoreLines};
 mod weapons;
 

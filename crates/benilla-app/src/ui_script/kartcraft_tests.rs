@@ -13,6 +13,21 @@ fn loaded() -> UiScript {
     s
 }
 
+/// The kart's courses as the client sends them: the three of today, then `n - 3` more.
+fn courses(s: &mut UiScript, n: usize) {
+    let mut list = vec![
+        "sprint\tNorthshire Sprint".to_string(),
+        "elwynn\tElwynn Loop".to_string(),
+        "stormwind\tRoad to Stormwind".to_string(),
+    ];
+    list.extend((4..=n).map(|i| format!("c{i}\tCourse {i}")));
+    s.fire_event(
+        "BENILLA_KART_COURSES",
+        vec![ScriptValue::Str(list.join("\n"))],
+    );
+    s.tick(0.0);
+}
+
 /// The addon lines the VM sent since the last call, as `prefix\tmessage`.
 fn sent(s: &mut UiScript) -> Vec<String> {
     s.take_addon_sends().into_iter().map(|a| a.text).collect()
@@ -39,6 +54,7 @@ fn the_finder_queues_keeps_its_place_and_answers_the_ready_check() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut s = loaded();
+    courses(&mut s, 3);
 
     // I opens it, in the stock widgets, with "Any course" ticked and the courses named.
     assert!(!s
@@ -50,7 +66,7 @@ fn the_finder_queues_keeps_its_place_and_answers_the_ready_check() {
         .eval::<bool>("return BenillaKartFinderFrame:IsVisible() == 1")
         .unwrap());
     assert_eq!(
-        s.eval::<String>("return BenillaKartFinderFrameCourse2Text:GetText()")
+        s.eval::<String>("return BenillaKartFinderFrameRow2Text:GetText()")
             .unwrap(),
         "Elwynn Loop"
     );
@@ -59,7 +75,7 @@ fn the_finder_queues_keeps_its_place_and_answers_the_ready_check() {
         .unwrap());
 
     // Elwynn Loop alone, then Find race: the queue line goes up.
-    s.run("BenillaKartFinderFrameCourse2:Click() BenillaKartFinderFrameQueue:Click()")
+    s.run("BenillaKartFinderFrameRow2:Click() BenillaKartFinderFrameQueue:Click()")
         .unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tQ+\telwynn"]);
     assert_eq!(
@@ -195,4 +211,56 @@ fn the_kart_s_race_and_score_reach_their_frames() {
     assert!(!s
         .eval::<bool>("return BenillaKartScoreFrame:IsVisible() == 1")
         .unwrap());
+}
+
+#[test]
+fn forty_courses_scroll_and_a_tick_follows_its_course() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 40);
+    s.run("BenillaKartFinderFrame:Show()").unwrap();
+    s.tick(0.0);
+
+    // Eight rows over the forty, and the bar to range over them.
+    let shown: u32 = s
+        .eval(
+            "local n = 0 for i = 1, BENILLA_KART_ROWS do \
+             if getglobal('BenillaKartFinderFrameRow' .. i):IsVisible() then n = n + 1 end end \
+             return n",
+        )
+        .unwrap();
+    assert_eq!(shown, 8);
+    assert!(s
+        .eval::<bool>("return BenillaKartFinderFrameScrollScrollBar:IsVisible() == 1")
+        .unwrap());
+    let first = |s: &UiScript| -> String {
+        s.eval("return BenillaKartFinderFrameRow1Text:GetText()")
+            .unwrap()
+    };
+    assert_eq!(first(&s), "Northshire Sprint");
+
+    // The wheel moves the list.
+    for _ in 0..12 {
+        s.run("BenillaKartFinder_OnMouseWheel(-1)").unwrap();
+        s.tick(0.0);
+    }
+    assert_ne!(first(&s), "Northshire Sprint", "the wheel scrolled nothing");
+
+    // A tick down the list stays with its course when the list scrolls back.
+    let key: String = s
+        .eval("BenillaKartFinderFrameRow1:Click() return BenillaKartFinderFrameRow1.key")
+        .unwrap();
+    for _ in 0..12 {
+        s.run("BenillaKartFinder_OnMouseWheel(1)").unwrap();
+        s.tick(0.0);
+    }
+    assert_eq!(first(&s), "Northshire Sprint");
+    assert!(!s
+        .eval::<bool>("return BenillaKartFinderFrameRow1:GetChecked() == 1")
+        .unwrap());
+    s.run("BenillaKartFinderFrameQueue:Click()").unwrap();
+    assert_eq!(sent(&mut s), [format!("KARTCRAFT\tR\tQ+\t{key}")]);
 }
