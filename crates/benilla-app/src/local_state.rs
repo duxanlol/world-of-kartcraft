@@ -79,6 +79,12 @@ fn shared_root(here: &Path) -> PathBuf {
     here.to_path_buf()
 }
 
+/// `benilla-config/kart-hud.txt`: where Kartcraft's race guide arrow sits on screen, and its
+/// size (`x y scale`).
+pub(crate) fn kart_hud_path() -> Option<PathBuf> {
+    home().map(|h| h.join("kart-hud.txt"))
+}
+
 /// `benilla-config/config.toml`: the CVar overrides, the `Config.wtf` analog.
 pub(crate) fn config_path() -> Option<PathBuf> {
     home().map(|h| h.join("config.toml"))

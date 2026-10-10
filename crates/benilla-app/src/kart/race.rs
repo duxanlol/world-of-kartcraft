@@ -32,12 +32,13 @@ const START_RADIUS: f32 = 55.0;
 /// this many yards of its centre, or on coming this near it (the server allows 45).
 const GATE_HALF_WIDTH: f32 = 20.0;
 const CHECKPOINT_RADIUS: f32 = 8.0;
-/// The arrow over our kart (yards above its origin, and its length).
-const GUIDE_HEIGHT: f32 = 3.4;
-const GUIDE_LENGTH: f32 = 1.6;
 /// The arrow on each beam towards the checkpoint after it (yards above the ground, length).
 const BEAM_ARROW_HEIGHT: f32 = 9.0;
 const BEAM_ARROW_LENGTH: f32 = 6.0;
+/// How long the results stay up once everyone is in (s), and how long we wait for racers still
+/// out on the course after we finish before closing anyway.
+const RESULTS_SECS: f32 = 10.0;
+const FINISH_WAIT_SECS: f32 = 60.0;
 /// The start boost: revving this long before GO (s) is big, a little earlier small, earlier
 /// still bogs the engine down.
 const BOOST_BIG: std::ops::Range<f32> = 0.15..0.6;
@@ -82,6 +83,10 @@ pub(crate) struct Active {
     /// A Race Finder race is not left for want of a kart until then (local s): the server
     /// summons ours and teleports us, and the aura may land after the roster.
     grace_until: f32,
+    /// When we crossed the finish (local s), and when the results stop showing and the race is
+    /// left: RESULTS_SECS after everyone is in, or after FINISH_WAIT_SECS for the stragglers.
+    finished_at: Option<f32>,
+    closes_at: Option<f32>,
 }
 
 impl Active {
@@ -578,6 +583,28 @@ pub(crate) fn update(
         .iter()
         .map(|(name, place, ms)| format!("{}. {name}  {}", place, clock(*ms)))
         .collect();
+
+    // Over: once everyone is in (or the stragglers have had their minute), the results stay up a
+    // while and then we leave the race, as F6 would.
+    if race.done {
+        let finished_at = *race.finished_at.get_or_insert(now);
+        let everyone = race
+            .roster
+            .iter()
+            .all(|r| race.finished.iter().any(|f| f.0 == *r));
+        if race.closes_at.is_none() && (everyone || now - finished_at >= FINISH_WAIT_SECS) {
+            race.closes_at = Some(now + RESULTS_SECS);
+        }
+        if race.closes_at.is_some_and(|t| now >= t) {
+            info!("kart race: {} over, leaving", race.id);
+            profession.send(format!("KARTCRAFT\tR\tQ\t{}", race.id));
+            races.race = None;
+            *text = RaceText::default();
+            extras.lap = None;
+            extras.place = None;
+            audio.music_rate = 1.0;
+        }
+    }
 }
 
 /// `WOW_KART_RACE=host:<course>` hosts at that course's start and starts once another racer is
@@ -905,20 +932,166 @@ fn checkpoint_name(race: &Active, next: usize) -> String {
     }
 }
 
-/// In a race: the arrow over our kart towards the next checkpoint, and that checkpoint on the
-/// minimap, in the slot a guard's directions use (`crate::poi_marker`).
+/// Where the guide arrow sits on screen and how big it is: `x`, `y` across and down the screen
+/// (0 to 1), `scale` times its standard size. F8 toggles placing it: drag it with the mouse,
+/// the wheel resizes it, and F8 again keeps it (`local_state::kart_hud_path`).
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GuideHud {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) scale: f32,
+    editing: bool,
+}
+
+impl Default for GuideHud {
+    fn default() -> Self {
+        Self {
+            x: 0.5,
+            y: 0.22,
+            scale: 1.0,
+            editing: false,
+        }
+    }
+}
+
+impl GuideHud {
+    const MIN_SCALE: f32 = 0.4;
+    const MAX_SCALE: f32 = 3.0;
+
+    /// The saved placement, `x y scale`, or the default.
+    fn load() -> Self {
+        let read =
+            crate::local_state::kart_hud_path().and_then(|p| std::fs::read_to_string(p).ok());
+        read.and_then(|s| Self::parse(&s)).unwrap_or_default()
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        let mut v = s.split_whitespace().map(|w| w.parse::<f32>().ok());
+        let (x, y, scale) = (v.next()??, v.next()??, v.next()??);
+        Some(Self {
+            x: x.clamp(0.0, 1.0),
+            y: y.clamp(0.0, 1.0),
+            scale: scale.clamp(Self::MIN_SCALE, Self::MAX_SCALE),
+            editing: false,
+        })
+    }
+
+    fn save(&self) {
+        if let Some(path) = crate::local_state::kart_hud_path() {
+            let line = format!("{:.4} {:.4} {:.3}\n", self.x, self.y, self.scale);
+            if let Err(e) = crate::local_state::write_atomic(&path, &line) {
+                warn!("kart: could not save the guide arrow's place: {e}");
+            }
+        }
+    }
+
+    /// The arrow's place in front of a camera looking down −Z with this vertical field of view
+    /// and aspect, `distance` ahead: the point under (x, y) on screen.
+    fn local_position(&self, fov_y: f32, aspect: f32, distance: f32) -> Vec3 {
+        let half = (fov_y / 2.0).tan() * distance;
+        Vec3::new(
+            (self.x * 2.0 - 1.0) * half * aspect,
+            (1.0 - self.y * 2.0) * half,
+            -distance,
+        )
+    }
+}
+
+/// The text shown while the guide arrow is being placed.
+#[derive(Component)]
+pub(crate) struct GuideHint;
+
+/// How far in front of the camera the guide arrow floats (yards), and its length there at
+/// scale 1.
+const GUIDE_DISTANCE: f32 = 4.0;
+const GUIDE_SIZE: f32 = 0.7;
+
+/// F8 places the guide arrow: the mouse drags it, the wheel resizes it, F8 again keeps it.
 #[allow(clippy::too_many_arguments)]
+pub(crate) fn place_guide(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    ui: Res<crate::ui_script::UiKeyboardCapture>,
+    drive: Res<super::KartDrive>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut hud: ResMut<GuideHud>,
+    hints: Query<Entity, With<GuideHint>>,
+    mut loaded: Local<bool>,
+) {
+    if !*loaded {
+        *loaded = true;
+        *hud = GuideHud::load();
+    }
+    let steps: f32 = wheel.read().map(|w| w.y.signum()).sum();
+    if keys.just_pressed(KeyCode::F8) && !ui.typing && drive.active {
+        hud.editing = !hud.editing;
+        if hud.editing {
+            commands.spawn((
+                GuideHint,
+                Text::new("Guide arrow: drag it with the mouse, the wheel resizes it, F8 keeps it"),
+                TextFont {
+                    font_size: 18.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 0.85, 0.3)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: Val::Percent(30.0),
+                    width: Val::Percent(100.0),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                TextLayout::new_with_justify(Justify::Center),
+            ));
+        } else {
+            hud.save();
+        }
+    }
+    if !hud.editing || !drive.active {
+        if hud.editing {
+            hud.editing = false;
+            hud.save();
+        }
+        for e in &hints {
+            commands.entity(e).despawn();
+        }
+        return;
+    }
+    if steps != 0.0 {
+        hud.scale =
+            (hud.scale * 1.1f32.powf(steps)).clamp(GuideHud::MIN_SCALE, GuideHud::MAX_SCALE);
+    }
+    if mouse.pressed(MouseButton::Left) {
+        if let Some((w, at)) = windows
+            .single()
+            .ok()
+            .and_then(|w| Some((w, w.cursor_position()?)))
+        {
+            hud.x = (at.x / w.width()).clamp(0.0, 1.0);
+            hud.y = (at.y / w.height()).clamp(0.0, 1.0);
+        }
+    }
+}
+
+/// In a race (or while it is being placed): the arrow towards the next checkpoint, a child of
+/// the camera so it holds its place on screen; and that checkpoint on the minimap, in the slot a
+/// guard's directions use (`crate::poi_marker`).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn guide(
     mut commands: Commands,
     races: Res<Races>,
     drive: Res<super::KartDrive>,
+    hud: Res<GuideHud>,
     collide: WorldCollision,
     mut marker: ResMut<crate::poi_marker::PoiMarker>,
     current_map: Option<Res<benilla_world::world_map::CurrentMap>>,
     real: Res<Time<bevy::time::Real>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut arrows: Query<(Entity, &mut Transform), With<GuideArrow>>,
+    camera: Query<(Entity, &GlobalTransform, &Projection), With<benilla_world::view::WorldCamera>>,
+    mut arrows: Query<(Entity, &mut Transform, &ChildOf), With<GuideArrow>>,
     mut looks: Local<Option<Looks>>,
     mut shown: Local<Option<String>>,
 ) {
@@ -926,41 +1099,69 @@ pub(crate) fn guide(
     let target = race
         .and_then(|r| Some((r, r.next()?)))
         .filter(|_| drive.active);
-    let Some((race, next)) = target else {
-        for (e, _) in &arrows {
-            commands.entity(e).despawn();
+
+    // The minimap.
+    match target {
+        Some((race, next)) => {
+            let name = checkpoint_name(race, next);
+            if let Some(old) = shown.as_ref().filter(|old| **old != name) {
+                marker.clear_named(old);
+            }
+            let map = current_map.as_ref().map_or(0, |m| m.0);
+            marker.set_landmark(&name, race.points[next], map, real.elapsed_secs_f64());
+            *shown = Some(name);
         }
-        if let Some(name) = shown.take() {
-            marker.clear_named(&name);
+        None => {
+            if let Some(name) = shown.take() {
+                marker.clear_named(&name);
+            }
+        }
+    }
+
+    // The arrow: towards the next checkpoint, or north while it is being placed.
+    let towards = match target {
+        Some((race, next)) => Some(ground_at(&collide, race.points[next], drive.pos.y)),
+        None if hud.editing && drive.active => Some(drive.pos + wow_to_bevy([100.0, 0.0, 0.0])),
+        None => None,
+    };
+    let (Some(towards), Ok((cam, cam_at, projection))) = (towards, camera.single()) else {
+        for (e, ..) in &arrows {
+            commands.entity(e).despawn();
         }
         return;
     };
-    let p = race.points[next];
-    let name = checkpoint_name(race, next);
-    if let Some(old) = shown.as_ref().filter(|old| **old != name) {
-        marker.clear_named(old);
-    }
-    let map = current_map.as_ref().map_or(0, |m| m.0);
-    marker.set_landmark(&name, p, map, real.elapsed_secs_f64());
-    *shown = Some(name);
-
-    let over = drive.pos + Vec3::Y * GUIDE_HEIGHT;
-    let towards = ground_at(&collide, p, over.y);
-    let rotation = pointing(over, Vec3::new(towards.x, over.y, towards.z));
-    if let Ok((_, mut t)) = arrows.single_mut() {
-        t.translation = over;
-        t.rotation = rotation;
-    } else {
-        let looks = looks.get_or_insert_with(|| Looks::new(&mut meshes, &mut materials));
-        commands.spawn((
-            GuideArrow,
-            Mesh3d(looks.arrow.clone()),
-            MeshMaterial3d(looks.guide.clone()),
-            Transform::from_translation(over)
-                .with_rotation(rotation)
-                .with_scale(Vec3::splat(GUIDE_LENGTH)),
-            Name::new("race guide arrow"),
-        ));
+    let (fov, aspect) = match projection {
+        Projection::Perspective(p) => (p.fov, p.aspect_ratio),
+        _ => (1.0, 16.0 / 9.0),
+    };
+    let local = hud.local_position(fov, aspect, GUIDE_DISTANCE);
+    // Level in the world, pointing along the ground at the checkpoint, seen from the camera.
+    let at = cam_at.transform_point(local);
+    let world = pointing(at, Vec3::new(towards.x, at.y, towards.z));
+    let rotation = cam_at.compute_transform().rotation.inverse() * world;
+    let scale = Vec3::splat(GUIDE_SIZE * hud.scale);
+    match arrows.single_mut() {
+        Ok((_, mut t, parent)) if parent.parent() == cam => {
+            t.translation = local;
+            t.rotation = rotation;
+            t.scale = scale;
+        }
+        _ => {
+            for (e, ..) in &arrows {
+                commands.entity(e).despawn();
+            }
+            let looks = looks.get_or_insert_with(|| Looks::new(&mut meshes, &mut materials));
+            commands.spawn((
+                GuideArrow,
+                Mesh3d(looks.arrow.clone()),
+                MeshMaterial3d(looks.guide.clone()),
+                Transform::from_translation(local)
+                    .with_rotation(rotation)
+                    .with_scale(scale),
+                ChildOf(cam),
+                Name::new("race guide arrow"),
+            ));
+        }
     }
 }
 
@@ -1119,6 +1320,34 @@ mod tests {
         );
         // Cutting the corner diagonally through the gate counts.
         assert!(race.passes(2, Some([190.0, -2.0]), [194.0, 8.0]));
+    }
+
+    #[test]
+    fn the_guide_arrow_keeps_its_place_and_lands_where_it_is_put() {
+        let hud = GuideHud::parse("0.25 0.75 9.0\n").unwrap();
+        assert_eq!((hud.x, hud.y), (0.25, 0.75));
+        assert_eq!(
+            hud.scale,
+            GuideHud::MAX_SCALE,
+            "an out-of-range size is clamped"
+        );
+        assert_eq!(GuideHud::parse("garbage"), None);
+        // The screen's centre is straight ahead; its top-left corner is up and to the left.
+        let centre = GuideHud {
+            x: 0.5,
+            y: 0.5,
+            ..default()
+        }
+        .local_position(1.0, 2.0, 4.0);
+        assert!(centre.abs_diff_eq(Vec3::new(0.0, 0.0, -4.0), 1e-5));
+        let corner = GuideHud {
+            x: 0.0,
+            y: 0.0,
+            ..default()
+        }
+        .local_position(1.0, 2.0, 4.0);
+        let half = 0.5f32.tan() * 4.0;
+        assert!(corner.abs_diff_eq(Vec3::new(-half * 2.0, half, -4.0), 1e-4));
     }
 
     #[test]

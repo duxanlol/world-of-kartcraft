@@ -430,6 +430,7 @@ pub(crate) fn plugin(app: &mut App) {
         .net_handler(benilla_protocol::SessionEventKind::Chat, weapons::on_chat)
         .init_resource::<race::Races>()
         .init_resource::<race::RaceText>()
+        .init_resource::<race::GuideHud>()
         .init_resource::<finder::FinderUi>()
         .add_systems(
             Startup,
@@ -453,6 +454,7 @@ pub(crate) fn plugin(app: &mut App) {
                 race::update,
                 weapons::update,
                 race::beams,
+                race::place_guide,
                 race::guide,
                 race::draw_text,
                 finder::update,
