@@ -76,6 +76,29 @@ const VERDICTS: &[(&str, Verdict)] = &[
              window would warp it back in. Draining it would blind the gate to its own signal.",
         ),
     ),
+    // The kart's pad (World of Kartcraft): read only while the kart drives, and a load stops the
+    // ride (`Player::may_drive`), so nothing under the cover moves it; the offline demo has no
+    // cover at all.
+    (
+        "Gamepad",
+        Open("the kart reads it only while driving, and a load ends the drive"),
+    ),
+    (
+        "GamepadAxis",
+        Open("the kart reads it only while driving, and a load ends the drive"),
+    ),
+    (
+        "GamepadButton",
+        Open("the kart reads it only while driving, and a load ends the drive"),
+    ),
+    (
+        "GamepadConnection",
+        Open("`kartcraft::input::log_pads` names a pad as it comes and goes; it acts on nothing"),
+    ),
+    (
+        "GamepadConnectionEvent",
+        Open("`kartcraft::input::log_pads` names a pad as it comes and goes; it acts on nothing"),
+    ),
     // ── Not input at all ────────────────────────────────────────────────────────────────────
     ("ButtonState", Plumbing),
     // Cursor outputs benilla writes; nothing arrives through them.

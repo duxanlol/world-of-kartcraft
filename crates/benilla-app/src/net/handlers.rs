@@ -254,6 +254,30 @@ mod tests {
                 if kind == "Disconnected" {
                     continue;
                 }
+                // `module::handler` lives in the module's own file beside the registering one.
+                let (text, handler) = match handler.rsplit_once("::") {
+                    Some((module, name)) => {
+                        let dir = path.parent().expect("a file's directory");
+                        let module = module.rsplit("::").next().unwrap_or(module);
+                        let file = [
+                            dir.join(format!("{module}.rs")),
+                            dir.join(module).join("mod.rs"),
+                        ]
+                        .into_iter()
+                        .find_map(|f| std::fs::read_to_string(f).ok());
+                        match file {
+                            Some(t) => (regex_lite_strip_comments(&t), name),
+                            None => {
+                                problems.push(format!(
+                                    "{}: `{handler}`: no `{module}.rs` beside it",
+                                    path.display()
+                                ));
+                                continue;
+                            }
+                        }
+                    }
+                    None => (text.clone(), handler),
+                };
                 let Some(at) = text.find(&format!("fn {handler}(")) else {
                     problems.push(format!(
                         "{}: `{handler}` is not in the file that registers it",

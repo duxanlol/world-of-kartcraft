@@ -32,6 +32,7 @@
 //! [patch.crates-io]
 //! lua-src = { git = "https://github.com/samwhosung/benilla" }
 //! kira = { git = "https://github.com/samwhosung/benilla" }
+//! gilrs-core = { git = "https://github.com/duxanlol/world-of-kartcraft" }
 //!
 //! [profile.dev]
 //! opt-level = 1
