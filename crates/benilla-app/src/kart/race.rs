@@ -19,13 +19,56 @@ use benilla_protocol::SessionEvent;
 use benilla_world::collision::WorldCollision;
 use bevy::prelude::*;
 
-/// The courses' starts, so a driver at one may host (the server's table, `Kartcraft.cpp`,
-/// holds the whole course and sends it at the start).
-pub(crate) const COURSES: [(&str, &str, [f32; 2]); 3] = [
-    ("sprint", "Northshire Sprint", [-8930.0, -118.0]),
-    ("elwynn", "Elwynn Loop", [-9436.0, 59.0]),
-    ("stormwind", "Road to Stormwind", [-9436.0, 59.0]),
-];
+/// A course of `courses/courses.json`, the file the server's table is made from
+/// (`docs/courses.md`). The server sends the checkpoints at the start ("R\tC"); here are the
+/// start a driver hosts at and the gates' widths.
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct Course {
+    pub(crate) key: String,
+    pub(crate) name: String,
+    checkpoints: Vec<CourseCheckpoint>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CourseCheckpoint {
+    x: f32,
+    y: f32,
+    /// The gate's half-width (yards); absent or 0 for `GATE_HALF_WIDTH`.
+    #[serde(default)]
+    gate: f32,
+}
+
+impl Course {
+    /// The first checkpoint, WoW x, y.
+    pub(crate) fn start(&self) -> [f32; 2] {
+        self.checkpoints.first().map_or([0.0; 2], |c| [c.x, c.y])
+    }
+
+    /// Each checkpoint's gate half-width.
+    fn gates(&self) -> Vec<f32> {
+        self.checkpoints
+            .iter()
+            .map(|c| {
+                if c.gate > 0.0 {
+                    c.gate
+                } else {
+                    GATE_HALF_WIDTH
+                }
+            })
+            .collect()
+    }
+}
+
+/// The courses, in the file's order (the Race Finder's).
+pub(crate) static COURSES: std::sync::LazyLock<Vec<Course>> = std::sync::LazyLock::new(|| {
+    #[derive(serde::Deserialize)]
+    struct File {
+        courses: Vec<Course>,
+    }
+    serde_json::from_str::<File>(include_str!("../../../../courses/courses.json"))
+        .expect("courses/courses.json")
+        .courses
+});
 /// How near a start (yards) a driver may host or join.
 const START_RADIUS: f32 = 55.0;
 /// A checkpoint is a gate: passed on crossing the line through it across the course, within
@@ -62,6 +105,8 @@ pub(crate) struct Active {
     laps: u8,
     /// Checkpoints in WoW x, y; the first is the start (and finish of a lap).
     points: Vec<[f32; 2]>,
+    /// Each checkpoint's gate half-width, from our copy of the course; empty for the default.
+    gates: Vec<f32>,
     /// When GO falls, local seconds; `None` until the countdown arrives.
     go_at: Option<f32>,
     roster: Vec<String>,
@@ -149,7 +194,9 @@ impl Active {
         let h = self.heading(i);
         let along = |q: [f32; 2]| (q[0] - p[0]) * h[0] + (q[1] - p[1]) * h[1];
         let across = |q: [f32; 2]| ((q[0] - p[0]) * h[1] - (q[1] - p[1]) * h[0]).abs();
-        along(from) < 0.0 && along(to) >= 0.0 && across(to).min(across(from)) <= GATE_HALF_WIDTH
+        along(from) < 0.0
+            && along(to) >= 0.0
+            && across(to).min(across(from)) <= self.gates.get(i).copied().unwrap_or(GATE_HALF_WIDTH)
     }
 }
 
@@ -348,6 +395,10 @@ pub(crate) fn update(
                             Some([x.parse().ok()?, y.parse().ok()?])
                         })
                         .collect();
+                    race.gates = COURSES
+                        .iter()
+                        .find(|c| c.key == f[2] && c.checkpoints.len() == race.points.len())
+                        .map_or_else(Vec::new, Course::gates);
                     info!(
                         "kart race: course {} — {} checkpoints, {} laps",
                         f[2],
@@ -447,7 +498,10 @@ pub(crate) fn update(
     let near = |p: [f32; 2], r: f32| (p[0] - at[0]).hypot(p[1] - at[1]) <= r;
 
     // The courses starting here; F7 steps through them where several share a start.
-    let here: Vec<_> = COURSES.iter().filter(|c| near(c.2, START_RADIUS)).collect();
+    let here: Vec<_> = COURSES
+        .iter()
+        .filter(|c| near(c.start(), START_RADIUS))
+        .collect();
     if keys.just_pressed(KeyCode::F7) && !ui.typing && here.len() > 1 {
         races.pick += 1;
     }
@@ -465,7 +519,7 @@ pub(crate) fn update(
                 profession.send(format!("KARTCRAFT\tR\tJ\t{}", offer.id));
             }
             (None, None, Some(course)) => {
-                profession.send(format!("KARTCRAFT\tR\tH\t{}", course.0));
+                profession.send(format!("KARTCRAFT\tR\tH\t{}", course.key));
             }
             _ => {}
         }
@@ -483,10 +537,10 @@ pub(crate) fn update(
                 let other = here[(races.pick + 1) % here.len()];
                 format!(
                     "{} starts here — F5 to host a race, F7 for {}",
-                    c.1, other.1
+                    c.name, other.name
                 )
             }
-            (None, Some(c)) => format!("{} starts here — F5 to host a race", c.1),
+            (None, Some(c)) => format!("{} starts here — F5 to host a race", c.name),
             _ => queue_banner,
         };
         return;
@@ -677,8 +731,8 @@ fn races_start_boost(boost: Option<bool>) {
 fn course_name(key: &str) -> &str {
     COURSES
         .iter()
-        .find(|c| c.0 == key)
-        .map_or(if key == "any" { "any course" } else { key }, |c| c.1)
+        .find(|c| c.key == key)
+        .map_or(if key == "any" { "any course" } else { key }, |c| &c.name)
 }
 
 /// The queue status line: `Qs\t<waiting>\t<secs>`.
@@ -1256,6 +1310,24 @@ pub(crate) fn draw_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_courses_file_holds_the_courses_and_their_starts() {
+        let starts: Vec<_> = COURSES
+            .iter()
+            .map(|c| (c.key.as_str(), c.name.as_str(), c.start()))
+            .collect();
+        assert_eq!(
+            starts,
+            [
+                ("sprint", "Northshire Sprint", [-8930.0, -118.0]),
+                ("elwynn", "Elwynn Loop", [-9436.0, 59.0]),
+                ("stormwind", "Road to Stormwind", [-9436.0, 59.0]),
+            ]
+        );
+        assert_eq!(COURSES[1].checkpoints.len(), 6);
+        assert!(COURSES[1].gates().iter().all(|&g| g == GATE_HALF_WIDTH));
+    }
 
     #[test]
     fn clocks_and_ordinals_read_like_ctr() {

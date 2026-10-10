@@ -15,7 +15,8 @@ const ROW_HOVER: Color = Color::srgba(1.0, 0.82, 0.0, 0.25);
 pub(crate) struct FinderUi {
     open: bool,
     any: bool,
-    picked: [bool; COURSES.len()],
+    /// Per course of `COURSES`, ticked.
+    picked: Vec<bool>,
 }
 
 impl Default for FinderUi {
@@ -23,7 +24,7 @@ impl Default for FinderUi {
         Self {
             open: false,
             any: true,
-            picked: [false; COURSES.len()],
+            picked: vec![false; COURSES.len()],
         }
     }
 }
@@ -36,9 +37,9 @@ impl FinderUi {
         }
         let keys: Vec<&str> = COURSES
             .iter()
-            .zip(self.picked)
-            .filter(|(_, on)| *on)
-            .map(|(c, _)| c.0)
+            .zip(&self.picked)
+            .filter(|(_, on)| **on)
+            .map(|(c, _)| c.key.as_str())
             .collect();
         keys.join(",")
     }
@@ -147,7 +148,7 @@ pub(crate) fn update(
         let picks_changed = match *button {
             FinderButton::Any => {
                 state.any = true;
-                state.picked = [false; COURSES.len()];
+                state.picked.fill(false);
                 true
             }
             FinderButton::Course(i) => {
@@ -221,7 +222,7 @@ pub(crate) fn draw(
     for (button, interaction, children, mut bg) in &mut buttons {
         let label = match *button {
             FinderButton::Any => format!("{} Any course", tick(state.any)),
-            FinderButton::Course(i) => format!("{} {}", tick(state.picked[i]), COURSES[i].1),
+            FinderButton::Course(i) => format!("{} {}", tick(state.picked[i]), COURSES[i].name),
             FinderButton::Queue if races.finder.queued.is_some() => "Leave queue".into(),
             FinderButton::Queue => "Find race".into(),
             FinderButton::Close => "Close (I)".into(),
@@ -257,7 +258,7 @@ mod tests {
         let mut ui = FinderUi::default();
         assert_eq!(ui.keys(), "any");
         ui.any = false;
-        ui.picked = [true, false, true];
+        ui.picked = vec![true, false, true];
         assert_eq!(ui.keys(), "sprint,stormwind");
     }
 }

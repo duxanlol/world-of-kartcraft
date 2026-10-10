@@ -1,0 +1,54 @@
+{
+  "courses": [
+    {
+      "key": "sprint",
+      "name": "Northshire Sprint",
+      "zone": "Elwynn Forest",
+      "map": 0,
+      "laps": 0,
+      "note": "Northshire Guard 79948's waypoints down the valley, then Stormwind Guard 80263's from the valley's gate to Goldshire.",
+      "checkpoints": [
+        { "x": -8930, "y": -118 },
+        { "x": -8989, "y": -96 },
+        { "x": -9040, "y": -60 },
+        { "x": -9076, "y": -46 },
+        { "x": -9123, "y": -84 },
+        { "x": -9228, "y": -105 },
+        { "x": -9346, "y": -45 },
+        { "x": -9436, "y": 59 }
+      ]
+    },
+    {
+      "key": "elwynn",
+      "name": "Elwynn Loop",
+      "zone": "Elwynn Forest",
+      "map": 0,
+      "laps": 3,
+      "note": "From Goldshire's inn past the farms and back.",
+      "checkpoints": [
+        { "x": -9436, "y": 59 },
+        { "x": -9640, "y": 150 },
+        { "x": -9880, "y": 320 },
+        { "x": -9960, "y": 180 },
+        { "x": -9960, "y": 50 },
+        { "x": -9750, "y": 60 }
+      ]
+    },
+    {
+      "key": "stormwind",
+      "name": "Road to Stormwind",
+      "zone": "Elwynn Forest",
+      "map": 0,
+      "laps": 0,
+      "note": "From Goldshire up the road to the city's gate guard 99140.",
+      "checkpoints": [
+        { "x": -9436, "y": 59 },
+        { "x": -9350, "y": 150 },
+        { "x": -9250, "y": 260 },
+        { "x": -9165, "y": 352 },
+        { "x": -9121, "y": 395 },
+        { "x": -9073, "y": 427 }
+      ]
+    }
+  ]
+}

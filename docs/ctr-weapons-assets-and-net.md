@@ -272,10 +272,9 @@ How the server checks and stores race state:
   - A race is erased when everyone has finished or left.
   - Rewards: XP and Karting skill by place.
 - **Course data.**
-  - The authoritative copy is `static const std::vector<Course> COURSES` in `Kartcraft.cpp`:
-    key, name, map, laps and points in WoW x,y.
-  - The client has only the starts: `const COURSES: [(&str,&str,[f32;2]);3]` in
-    `kart/race.rs:18`. It is a hand-kept duplicate and must match the server's point 0.
+  - One source: `courses/courses.json` (`docs/courses.md`). `pack.py` makes it into
+    `KartcraftCourses.h`, the server's `COURSES`; the client reads it at compile time
+    (`kart/race.rs` `COURSES`) for keys, names, starts and gate widths.
   - The client learns the full course only from `R\tC` at the start.
 - **Placing.** Done client-side from `R\tP` (`race.rs` `standing`).
 

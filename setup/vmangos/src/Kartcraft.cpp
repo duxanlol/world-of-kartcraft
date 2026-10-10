@@ -225,7 +225,12 @@ namespace Kartcraft
     // course's checkpoints ("R\tC") and a countdown ("R\tG"). Each checkpoint a client reports
     // ("R\tK\t<id>\t<index>") is checked against the racer's real position and the course's order;
     // progress ("R\tP") and finishes ("R\tF") go to every racer, and a finish pays experience and
-    // Karting skill by place. The course table lives here; clients learn it from "R\tC".
+    // Karting skill by place. The courses are courses/courses.json (KartcraftCourses.h); clients
+    // learn a course from "R\tC".
+
+    // A crate or fruit: 'F' fruit crate, 'Q' weapon crate, 'W' fruit; z at or below
+    // INVALID_HEIGHT for the ground's.
+    struct CrateSpot { char kind; float x, y, z; };
 
     struct Course
     {
@@ -235,24 +240,14 @@ namespace Kartcraft
         // 0: a sprint from the first checkpoint to the last; else laps back through the first.
         uint8 laps;
         std::vector<std::pair<float, float>> points; // WoW x, y
+        // Per checkpoint, how near (yards) a racer must pass it, 0 for CHECKPOINT_RADIUS; may be empty.
+        std::vector<float> gates;
+        // The crate layout; empty for the one built from the checkpoints (Layout).
+        std::vector<CrateSpot> crates;
     };
 
-    // Elwynn Forest, along its roads: the waypoints of the guards who patrol them (the world
-    // database's `creature_movement`: Northshire Guard 79948 down the valley, Stormwind Guard
-    // 80263 from the valley's gate to Goldshire, the city's gate guard 99140), with the farms
-    // and Goldshire's inn between.
-    static std::vector<Course> const COURSES = {
-        { "sprint", "Northshire Sprint", 0, 0,
-          { { -8930.f, -118.f }, { -8989.f, -96.f }, { -9040.f, -60.f }, { -9076.f, -46.f },
-            { -9123.f, -84.f },
-            { -9228.f, -105.f }, { -9346.f, -45.f }, { -9436.f, 59.f } } },
-        { "elwynn", "Elwynn Loop", 0, 3,
-          { { -9436.f, 59.f }, { -9640.f, 150.f }, { -9880.f, 320.f }, { -9960.f, 180.f },
-            { -9960.f, 50.f }, { -9750.f, 60.f } } },
-        { "stormwind", "Road to Stormwind", 0, 0,
-          { { -9436.f, 59.f }, { -9350.f, 150.f }, { -9250.f, 260.f }, { -9165.f, 352.f },
-            { -9121.f, 395.f }, { -9073.f, 427.f } } },
-    };
+    // The courses: courses/courses.json, made into this table by setup/vmangos/pack.py.
+#include "KartcraftCourses.h"
 
     // How near a checkpoint (yards, across the ground) a racer must pass, how near the start a
     // driver must be to host or join, how long a countdown runs (ms), and how long a race may
@@ -343,6 +338,12 @@ namespace Kartcraft
         return std::sqrt(dx * dx + dy * dy);
     }
 
+    // How near checkpoint `index` a racer must pass: its gate, at least CHECKPOINT_RADIUS.
+    static float GateRadius(Course const& c, uint32 index)
+    {
+        return index < c.gates.size() ? std::max(CHECKPOINT_RADIUS, c.gates[index]) : CHECKPOINT_RADIUS;
+    }
+
     static Course const* FindCourse(std::string const& key)
     {
         for (Course const& c : COURSES)
@@ -427,7 +428,6 @@ namespace Kartcraft
 
     enum ItemSet { SET_RACE1, SET_RACE2, SET_RACE3, SET_RACE4, SET_BOSS, SET_FALLBACK };
 
-    struct CrateSpot { char kind; float x, y, z; };
     // A course's crate layout, built once from its checkpoints and the ground.
     static std::unordered_map<Course const*, std::vector<CrateSpot>> s_layouts;
 
@@ -477,8 +477,16 @@ namespace Kartcraft
             }
             spots.push_back({ kind, x, y, z });
         };
+        // The course's own layout where it has one, else one built along its segments.
+        for (CrateSpot const& spot : course.crates)
+        {
+            if (spot.z > INVALID_HEIGHT)
+                spots.push_back(spot);
+            else
+                place(spot.kind, spot.x, spot.y);
+        }
         size_t n = course.points.size();
-        size_t segments = course.laps ? n : n - 1;
+        size_t segments = !course.crates.empty() ? 0 : course.laps ? n : n - 1;
         for (size_t i = 0; i < segments; ++i)
         {
             auto const& a = course.points[i];
@@ -1301,7 +1309,7 @@ namespace Kartcraft
             uint32 n = uint32(c.points.size());
             uint32 index = uint32(std::strtoul(f[3].c_str(), nullptr, 10));
             uint32 expected = c.laps ? (me->checkpoint + 1) % n : me->checkpoint + 1;
-            if (index != expected || index >= n || DistanceTo(player, c.points[index]) > CHECKPOINT_RADIUS)
+            if (index != expected || index >= n || DistanceTo(player, c.points[index]) > GateRadius(c, index))
                 return;
             me->checkpoint = uint8(index);
             bool done = false;
