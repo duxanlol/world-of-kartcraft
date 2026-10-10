@@ -1303,6 +1303,53 @@ namespace Kartcraft
                 s_pops.erase(pop);
             }
         }
+        else if (verb == "X")
+        {
+            // Out of everything (/leaverace, F6): the queue, any ready check (as a no), and every
+            // race, waiting or under way. Always answered, so a client sure it is racing when the
+            // server is not lets go too; the shields come off with the next tick.
+            if (mine != s_queue.end())
+                s_queue.erase(mine);
+            for (auto it = s_pops.begin(); it != s_pops.end();)
+            {
+                Pop& p = it->second;
+                bool member = std::any_of(p.members.begin(), p.members.end(), [guid](Queued const& q) { return q.guid == guid; });
+                if (!member)
+                {
+                    it = std::next(it);
+                    continue;
+                }
+                p.accepted.erase(std::remove(p.accepted.begin(), p.accepted.end(), guid), p.accepted.end());
+                EndPop(it->first, p, now);
+                it = s_pops.erase(it);
+            }
+            for (auto it = s_races.begin(); it != s_races.end();)
+            {
+                Race& r = it->second;
+                auto x = std::find_if(r.racers.begin(), r.racers.end(), [guid](Racer const& m) { return m.guid == guid; });
+                if (x == r.racers.end())
+                {
+                    it = std::next(it);
+                    continue;
+                }
+                RemoveRacer(r, x);
+                if (r.racers.empty())
+                    it = s_races.erase(it);
+                else
+                {
+                    SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(it->first) + "\t" + Roster(r));
+                    it = std::next(it);
+                }
+            }
+            // The race shields too, whatever the bookkeeping says (TickShields).
+            s_shielded.erase(guid);
+            sWorld.GetMessager().AddMessage([guid](World*)
+            {
+                if (Player* p = ObjectAccessor::FindPlayer(guid))
+                    p->RemoveFlag(UNIT_FIELD_FLAGS, RACE_SHIELD_FLAGS);
+            });
+            SendLine(player, "KARTCRAFT\tR\tX");
+        }
         else
             return false;
         return true;

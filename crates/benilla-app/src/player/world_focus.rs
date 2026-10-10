@@ -49,6 +49,12 @@ pub(super) fn publish_viewer(
     };
 }
 
+/// How far ahead (seconds of travel, capped in yards) the stream looks from a moving kart, and
+/// the speed (yd/s) below which it centres on the kart as on a walker.
+const KART_LEAD_SECS: f32 = 4.0;
+const KART_LEAD_MAX_YARDS: f32 = 220.0;
+const KART_LEAD_MIN_SPEED: f32 = 12.0;
+
 /// Tells the world where to stream from each frame, before the stream stage; a cinematic, which
 /// streams from the camera, also puts the body on the settle hold.
 pub(super) fn publish_view_focus(
@@ -56,6 +62,7 @@ pub(super) fn publish_view_focus(
     mut player: Option<ResMut<Player>>,
     roster: Option<Res<crate::char_select::Roster>>,
     cinematic: Option<Res<crate::cinematic::Cinematic>>,
+    kart: Option<Res<crate::kart::KartDrive>>,
     mut was_flying: Local<bool>,
 ) {
     let entry = roster
@@ -80,8 +87,17 @@ pub(super) fn publish_view_focus(
     // teleport, a world swap) a cap would only lengthen the reveal.
     *focus = match player.as_deref() {
         Some(p) if p.active => {
-            let wow = benilla_assets::coords::bevy_to_wow(p.pos);
             let paced = !p.settling && !p.world_stale;
+            // Kartcraft: a kart outruns a stream centred on it, so in a settled world the stream
+            // looks ahead of a moving kart, to where it will be in a few seconds.
+            let lead = kart
+                .as_deref()
+                .filter(|k| paced && k.active && k.speed > KART_LEAD_MIN_SPEED)
+                .map_or(Vec3::ZERO, |k| {
+                    let ahead = (k.speed * KART_LEAD_SECS).min(KART_LEAD_MAX_YARDS);
+                    Vec3::new(-k.yaw.sin(), 0.0, -k.yaw.cos()) * ahead
+                });
+            let wow = benilla_assets::coords::bevy_to_wow(p.pos + lead);
             if p.detached || flying {
                 ViewFocus::detached(wow, paced)
             } else {

@@ -35,8 +35,9 @@ use crate::{from_lu, heading_of, lu_per_yard, to_lu, yaw_of};
 use wire::{Aim, CrateKind, Down, Up};
 
 /// How near (yards, in the ground plane) our kart takes a crate: CTR breaks it when the kart's
-/// sphere touches its hitbox (`COLL.c:2186-2236`); the server allows 6.
-const TOUCH_YARDS: f32 = 2.5;
+/// sphere touches its hitbox (`COLL.c:2186-2236`), here at half CTR's size (`look::CRATE_SIZE`);
+/// the server allows 6.
+const TOUCH_YARDS: f32 = 2.0;
 const TOUCH_HEIGHT: f32 = 3.0;
 /// A claim the server has not answered is asked again after this many frames.
 const CLAIM_RETRY: u64 = 30;

@@ -280,7 +280,9 @@ fn update(
     let wumpa = if auras.juice { 10 } else { arms.wumpa() };
     extras.wumpa = wumpa;
     drive.revving = controls.accelerate;
-    // A race's countdown holds the kart on the line (the gas only revs it).
+    // A race's countdown holds the kart on the line (the gas only revs it), pinned there so a
+    // start on a slope does not roll it back.
+    host.session.pin(races.holding(now));
     let controls = if races.holding(now) {
         input::Controls {
             brake: true,

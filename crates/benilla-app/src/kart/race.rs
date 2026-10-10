@@ -316,6 +316,18 @@ pub(crate) fn update(
                 audio.cues.push(kartcraft::sound::Cue::Countdown(true));
             }
             Some("Pop-") => races.check_pending = false,
+            // Out of everything (`/leaverace`, F6): the server has let us go, so whatever we
+            // thought we were in goes too.
+            Some("X") => {
+                info!("kart race: left every race and the queue");
+                races.race = None;
+                races.offer = None;
+                races.check_pending = false;
+                *text = RaceText::default();
+                extras.lap = None;
+                extras.place = None;
+                audio.music_rate = 1.0;
+            }
             Some("O") if f.len() >= 5 => {
                 if races.race.is_none() {
                     races.offer = Some(Offer {
@@ -435,9 +447,9 @@ pub(crate) fn update(
     }
     let host_here = (!here.is_empty()).then(|| here[races.pick % here.len()]);
     if f6 {
-        if let Some(race) = races.race.take() {
-            profession.send(format!("KARTCRAFT\tR\tQ\t{}", race.id));
-        }
+        // Leaves every race and the queue, here and on the server, whatever either thinks.
+        races.race = None;
+        profession.send("KARTCRAFT\tR\tX".into());
     } else if f5 {
         match (&races.race, &races.offer, host_here) {
             (Some(race), _, _) if race.host && race.go_at.is_none() => {

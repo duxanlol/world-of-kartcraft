@@ -18,6 +18,13 @@ const LOOK_H: f32 = 112.0;
 const PITCH: i32 = 100;
 /// The vertical field of view, radians (73.74°).
 pub const FOV_Y: f32 = 1.2870;
+/// How far ahead of the kart the ground's rise is read (lu), the most of it heeded (lu), how
+/// fast the camera takes it up each tick, and how much of it raises the gaze and the eye.
+const SLOPE_PROBE: f32 = 480.0;
+const SLOPE_MAX: f32 = 320.0;
+const SLOPE_FOLLOW: f32 = 0.12;
+const SLOPE_LOOK: f32 = 0.6;
+const SLOPE_EYE: f32 = 0.25;
 
 fn rad(angle: i32) -> f32 {
     angle as f32 * std::f32::consts::TAU / 4096.0
@@ -59,6 +66,8 @@ pub struct ChaseCamera {
     start_height: f32,
     blend: i32,
     started: bool,
+    /// The ground's rise ahead of the kart (lu), filtered.
+    slope: f32,
 }
 
 impl ChaseCamera {
@@ -106,7 +115,19 @@ impl ChaseCamera {
         };
         let g = fwd(a_eye + k.turn_angle);
         let ahead = -(self.ahead as f32);
-        let look = base + g * (cp * ahead) + Vec3::Y * (LOOK_H - sp * ahead);
+        let mut look = base + g * (cp * ahead) + Vec3::Y * (LOOK_H - sp * ahead);
+
+        // Deviation: CTR's tracks climb gently, so its level gaze sees the road; a WoW hill fills
+        // the screen. The gaze, and a little of the eye, follow the ground's rise ahead, filtered.
+        let probe = k.position + fwd(k.heading) * SLOPE_PROBE;
+        let rise = world
+            .ground(probe + Vec3::Y * 1024.0, 4096.0)
+            .map_or(0.0, |hit| {
+                (hit.point.y - k.position.y).clamp(-SLOPE_MAX, SLOPE_MAX)
+            });
+        self.slope += (rise - self.slope) * SLOPE_FOLLOW;
+        look.y += self.slope * SLOPE_LOOK;
+        eye.y += self.slope * SLOPE_EYE;
 
         // 2.5: the ground's lean, filtered (after use, as the game does).
         self.roll = (224 * self.roll + 32 * k.roll) >> 8;
@@ -215,5 +236,49 @@ mod tests {
             cam.tick(&input(13000), &world);
         }
         assert!((cam.tick(&input(13000), &world).eye.z - before).abs() < 1.0);
+    }
+
+    /// Ground rising `grade` (rise per run) towards +Z, in 64 lu tiles.
+    fn slope(grade: f32) -> Collision {
+        let mut tris = Vec::new();
+        for i in -30..30 {
+            for j in -30..30 {
+                let (x0, z0) = (i as f32 * 64.0, j as f32 * 64.0);
+                let (x1, z1) = (x0 + 64.0, z0 + 64.0);
+                let y = |z: f32| z * grade;
+                let (a, b, c, d) = (
+                    [x0, y(z0), z0],
+                    [x1, y(z0), z0],
+                    [x1, y(z1), z1],
+                    [x0, y(z1), z1],
+                );
+                tris.push([a, c, b]);
+                tris.push([a, d, c]);
+            }
+        }
+        Collision::new(tris, 160.0)
+    }
+
+    #[test]
+    fn uphill_the_gaze_lifts_to_the_road_ahead() {
+        let settle = |world: &Collision| {
+            let mut cam = ChaseCamera::default();
+            let mut shot = cam.tick(&input(13000), world);
+            for _ in 0..90 {
+                shot = cam.tick(&input(13000), world);
+            }
+            shot
+        };
+        let level = settle(&slope(0.0));
+        let uphill = settle(&slope(0.35));
+        let downhill = settle(&slope(-0.35));
+        assert!(
+            uphill.look.y > level.look.y + 80.0,
+            "{uphill:?} vs {level:?}"
+        );
+        assert!(
+            downhill.look.y < level.look.y - 80.0,
+            "{downhill:?} vs {level:?}"
+        );
     }
 }

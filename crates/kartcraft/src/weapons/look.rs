@@ -165,6 +165,9 @@ const BOMB_ROLL: f32 = 0x200 as f32;
 const MINE_GROW: f32 = 0x200 as f32;
 /// The fruit turns once in its 32-frame spin.
 const FRUIT_TURN_FRAMES: f32 = 32.0;
+/// The "?" and fruit crates at half CTR's size beside the kart (Kartcraft's own: at full size
+/// they stand as tall as a WoW character).
+pub(crate) const CRATE_SIZE: f32 = 0.5;
 /// The rain cloud hangs this far over the kart, meters.
 const CLOUD_HEIGHT: f32 = 1.9;
 
@@ -698,12 +701,13 @@ fn list(
         if grown <= 0.0 {
             continue;
         }
-        let (model, rotation) = match c.kind {
-            super::wire::CrateKind::Weapon => ("crate_question", Quat::IDENTITY),
-            super::wire::CrateKind::Fruit => ("crate_fruit", Quat::IDENTITY),
+        let (model, rotation, scale) = match c.kind {
+            super::wire::CrateKind::Weapon => ("crate_question", Quat::IDENTITY, CRATE_SIZE),
+            super::wire::CrateKind::Fruit => ("crate_fruit", Quat::IDENTITY, CRATE_SIZE),
             super::wire::CrateKind::Wumpa => (
                 "fruit",
                 Quat::from_rotation_y(frame as f32 / FRUIT_TURN_FRAMES * std::f32::consts::TAU),
+                1.0,
             ),
         };
         draws.push(Draw {
@@ -713,7 +717,7 @@ fn list(
             transform: Transform {
                 translation: c.at,
                 rotation,
-                scale: Vec3::splat(size * grown),
+                scale: Vec3::splat(size * grown * scale),
             },
         });
     }

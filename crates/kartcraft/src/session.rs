@@ -94,6 +94,9 @@ pub struct Session {
     /// since (s): a kart lost in a fall is put back, as Aku Aku lifts a fallen racer.
     last_ground: Option<(Vec3, i32)>,
     falling: f32,
+    /// Held where it stands across the ground (a race's countdown): it settles onto the ground
+    /// but neither rolls nor slides, however the start slopes.
+    pinned: bool,
 }
 
 /// Every collision triangle in the box around `centre`, in lu from `origin`; zero-area and
@@ -147,6 +150,13 @@ fn hold_at_void(world: &Collision, kart: &mut Kart, before: Vec3) -> bool {
         kart.halt_at(before);
     }
     void
+}
+
+/// Puts the kart back where it stood `before` the tick across the ground, keeping the height
+/// the tick gave it: it settles onto the ground but goes nowhere.
+fn pin_in_place(kart: &mut Kart, before: Vec3) {
+    let settled = kart.pose().position.y;
+    kart.halt_at(Vec3::new(before.x, settled, before.z));
 }
 
 /// The pose to draw: the last two ticks blended by how far into the next one we are.
@@ -228,6 +238,12 @@ impl Session {
         self.origin
     }
 
+    /// Pins the kart where it stands across the ground, or lets it go (a race's countdown: a
+    /// start on a slope would otherwise roll it back off the line).
+    pub fn pin(&mut self, on: bool) {
+        self.pinned = on;
+    }
+
     /// How far into the next tick the drawn frame is, 0 to 1, for drawing between ticks.
     pub fn tick_fraction(&self) -> f32 {
         (self.owed / ctr_kart::TICK).clamp(0.0, 1.0)
@@ -307,6 +323,9 @@ impl Session {
             kart.tick_among(&world, input, mods, &others);
             after_tick(&world, kart, origin);
             hold_at_void(&world, kart, before);
+            if self.pinned {
+                pin_in_place(kart, before);
+            }
             if kart.grounded() {
                 let pose = kart.pose();
                 self.last_ground = Some((pose.position, pose.heading));
@@ -466,5 +485,56 @@ mod tests {
         );
         let at = kart.pose().position;
         assert!(at.y < 100.0, "it dropped to the floor below: {at:?}");
+    }
+
+    #[test]
+    fn a_pinned_kart_holds_its_place_on_a_slope_and_rolls_when_let_go() {
+        // A 20 degree slope rising towards +z, in 50 lu tiles.
+        let rise = 20f32.to_radians().tan();
+        let mut tris: Vec<Tri> = Vec::new();
+        for i in -20..20 {
+            for j in -20..20 {
+                let (x0, z0) = (i as f32 * 50.0, j as f32 * 50.0);
+                let (x1, z1) = (x0 + 50.0, z0 + 50.0);
+                let y = |z: f32| z * rise;
+                let (a, b, c, d) = (
+                    [x0, y(z0), z0],
+                    [x1, y(z0), z0],
+                    [x1, y(z1), z1],
+                    [x0, y(z1), z1],
+                );
+                tris.push([a, c, b]);
+                tris.push([a, d, c]);
+            }
+        }
+        let world = Collision::new(tris, CELL_LU);
+        // Facing uphill, a little above the ground, as a teleport leaves it.
+        let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 30.0, 0.0), 0);
+        let brake = Input {
+            brake: true,
+            ..Default::default()
+        };
+        let start = kart.pose().position;
+        for _ in 0..30 * 4 {
+            let before = kart.pose().position;
+            kart.tick(&world, &brake, &Modifiers::default());
+            pin_in_place(&mut kart, before);
+        }
+        let held = kart.pose().position;
+        assert!(
+            (held.x - start.x).abs() < 0.01 && (held.z - start.z).abs() < 0.01,
+            "pinned: {held:?}"
+        );
+        assert!(held.y < 15.0, "it settled onto the slope: {held:?}");
+        assert!(kart.grounded(), "and stands on it");
+
+        for _ in 0..30 * 3 {
+            kart.tick(&world, &Input::default(), &Modifiers::default());
+        }
+        assert!(
+            kart.pose().position.z < held.z - 20.0,
+            "let go, it rolls back down: {:?}",
+            kart.pose().position
+        );
     }
 }

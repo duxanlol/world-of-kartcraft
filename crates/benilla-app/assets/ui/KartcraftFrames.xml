@@ -247,6 +247,11 @@
                 if f.check and not f.check.answered then f.queued = nil end
                 f.check = nil
                 if StaticPopup_Hide then StaticPopup_Hide("BENILLA_KART_READY") end
+            elseif verb == "X" then
+                -- Out of every race and the queue (/leaverace, F6).
+                f.check, f.queued, f.waiting, f.waited = nil, nil, nil, nil
+                if StaticPopup_Hide then StaticPopup_Hide("BENILLA_KART_READY") end
+                if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("You left every race and the Race Finder queue.", 1, 0.82, 0) end
             elseif verb == "L" then
                 -- A roster with us in it: the race has begun, so the finder is done.
                 local me = UnitName("player")
@@ -320,6 +325,10 @@
         if SlashCmdList then
             SLASH_BENILLA_RACEFINDER1 = "/racefinder"
             SlashCmdList["BENILLA_RACEFINDER"] = function() BenillaKartFinder_Toggle() end
+            -- Out of every race and the queue, whatever the kart or the server thinks.
+            SLASH_BENILLA_LEAVERACE1 = "/leaverace"
+            SLASH_BENILLA_LEAVERACE2 = "/lr"
+            SlashCmdList["BENILLA_LEAVERACE"] = function() BenillaKart_Send("X") end
         end
     ]]></Script>
 

@@ -264,3 +264,34 @@ fn forty_courses_scroll_and_a_tick_follows_its_course() {
     s.run("BenillaKartFinderFrameQueue:Click()").unwrap();
     assert_eq!(sent(&mut s), [format!("KARTCRAFT\tR\tQ+\t{key}")]);
 }
+
+#[test]
+fn leaverace_leaves_everything_and_the_answer_clears_the_finder() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 3);
+
+    // Queued, with a ready check up.
+    s.fire_event("BENILLA_KART_FINDER_TOGGLE", Vec::new());
+    s.tick(0.0);
+    s.run("BenillaKartFinderFrameQueue:Click()").unwrap();
+    from_server(&mut s, "R\tPop\t7\tsprint\t2\t20");
+    sent(&mut s);
+
+    // /leaverace (and /lr) asks the server to let us go from everything.
+    s.run("SlashCmdList[\"BENILLA_LEAVERACE\"](\"\")").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tX"]);
+    assert_eq!(
+        s.eval::<String>("return SLASH_BENILLA_LEAVERACE2").unwrap(),
+        "/lr"
+    );
+
+    // Its answer clears the queue and the ready check.
+    from_server(&mut s, "R\tX");
+    assert!(s
+        .eval::<bool>("return BenillaKartFinder.queued == nil and BenillaKartFinder.check == nil")
+        .unwrap());
+}
