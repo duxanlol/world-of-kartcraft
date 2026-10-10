@@ -15,9 +15,9 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 use uuid::Uuid;
-use windows::core::HSTRING;
+use windows::core::{Interface, HSTRING};
 use windows::Devices::Power::BatteryReport;
 use windows::Foundation::EventHandler;
 use windows::Gaming::Input::{
@@ -141,7 +141,6 @@ impl Gilrs {
                 // To avoid allocating every update, store old and new readings for every controller
                 // and swap their memory
                 let mut readings: Vec<(HSTRING, Reading, Reading)> = Vec::new();
-                let mut last_failed_get_id: Option<Instant> = None;
                 loop {
                     match stop_rx.try_recv() {
                         Ok(_) => break,
@@ -165,20 +164,7 @@ impl Gilrs {
                     }
 
                     for controller in controllers.iter() {
-                        let id: HSTRING = match controller.NonRoamableId() {
-                            Ok(id) => id,
-                            Err(e) => {
-                                if last_failed_get_id.map_or(true, |x| x.elapsed().as_secs() > 59) {
-                                    error!(
-                                        "Failed to get gamepad id: {e}! Skipping reading events \
-                                         for this gamepad."
-                                    );
-                                    last_failed_get_id = Some(Instant::now());
-                                }
-
-                                continue;
-                            }
-                        };
+                        let id = controller_id(controller);
                         // Find readings for this controller or insert new ones.
                         let index = match readings.iter().position(|(other_id, ..)| id == *other_id)
                         {
@@ -263,10 +249,7 @@ impl Gilrs {
             .gamepads
             .iter()
             .position(
-                |gamepad| match wgi_event.raw_game_controller.NonRoamableId() {
-                    Ok(id) => id == gamepad.non_roamable_id,
-                    _ => false,
-                },
+                |gamepad| controller_id(&wgi_event.raw_game_controller) == gamepad.non_roamable_id,
             )
             .unwrap_or_else(|| {
                 self.gamepads.push(Gamepad::new(
@@ -538,11 +521,19 @@ pub struct Gamepad {
     buttons: Option<Vec<EvCode>>,
 }
 
+/// `NonRoamableId`, or under Wine, which leaves it unimplemented, the controller's COM pointer:
+/// Wine keeps one object per connected controller, so the pointer is stable while it stays plugged in.
+fn controller_id(controller: &RawGameController) -> HSTRING {
+    controller
+        .NonRoamableId()
+        .unwrap_or_else(|_| HSTRING::from(format!("wine:{:p}", controller.as_raw())))
+}
+
 impl Gamepad {
     fn new(id: u32, raw_game_controller: RawGameController) -> Gamepad {
         let is_connected = true;
 
-        let non_roamable_id = raw_game_controller.NonRoamableId().unwrap_or_default();
+        let non_roamable_id = controller_id(&raw_game_controller);
 
         // See if we can cast this to a windows definition of a gamepad
         let wgi_gamepad = WgiGamepad::FromGameController(&raw_game_controller).ok();
