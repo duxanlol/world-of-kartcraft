@@ -114,6 +114,11 @@ fn the_finder_queues_keeps_its_place_and_answers_the_ready_check() {
     assert!(s
         .eval::<bool>("return BenillaKartFinder.queued == nil and BenillaKartFinder.check == nil")
         .unwrap());
+    assert!(
+        !s.eval::<bool>("return BenillaKartFinderFrame:IsVisible() == 1")
+            .unwrap(),
+        "the finder closes once the race has us"
+    );
     s.tick(2.1);
     assert!(sent(&mut s).is_empty(), "no heartbeat once the race has us");
 }

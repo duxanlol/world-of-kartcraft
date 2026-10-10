@@ -248,11 +248,12 @@
                 f.check = nil
                 if StaticPopup_Hide then StaticPopup_Hide("BENILLA_KART_READY") end
             elseif verb == "L" then
-                -- A roster with us in it: the race has begun, so the finder is done.
+                -- A roster with us in it: we are in a race, so the finder is done and closes.
                 local me = UnitName("player")
                 if me and string.find("," .. (line[4] or "") .. ",", "," .. me .. ",", 1, 1) then
                     f.check, f.queued, f.waiting, f.waited = nil, nil, nil, nil
                     if StaticPopup_Hide then StaticPopup_Hide("BENILLA_KART_READY") end
+                    BenillaKartFinderFrame:Hide()
                 end
             end
             BenillaKartFinder_Refresh()
