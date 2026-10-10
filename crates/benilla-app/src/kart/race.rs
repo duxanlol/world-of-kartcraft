@@ -4,7 +4,13 @@
 //! held on the line, with CTR's start boost for an engine revved just before GO. Each checkpoint
 //! passed is reported, and the server checks it against where we really are; it relays everyone's
 //! progress, from which our place is worked out, and the finishes with their times. Checkpoints
-//! stand in the world as beams of light, the next one bright. F6 leaves a race.
+//! stand in the world as beams of light, the next one bright. F6 leaves a race. Where two
+//! courses share a start, F7 picks which one F5 hosts.
+//!
+//! The Race Finder (`finder.rs`, `I`) queues for races from anywhere: the server groups the
+//! queued, sends a ready check (F5 accepts, F6 declines) and teleports everyone who accepted to
+//! the start. Its lines: `Qs` (queue status), `Qx` (not queued), `Pop` (ready check), `Pop-`
+//! (the ready check failed); `Q+`, `Q-`, `W` (heartbeat), `Y` and `N` go up.
 
 use std::collections::HashMap;
 
@@ -15,7 +21,7 @@ use bevy::prelude::*;
 
 /// The courses' starts, so a driver at one may host (the server's table, `Kartcraft.cpp`,
 /// holds the whole course and sends it at the start).
-const COURSES: [(&str, &str, [f32; 2]); 3] = [
+pub(crate) const COURSES: [(&str, &str, [f32; 2]); 3] = [
     ("sprint", "Northshire Sprint", [-8930.0, -118.0]),
     ("elwynn", "Elwynn Loop", [-9436.0, 59.0]),
     ("stormwind", "Road to Stormwind", [-9436.0, 59.0]),
@@ -28,6 +34,8 @@ const CHECKPOINT_RADIUS: f32 = 38.0;
 /// still bogs the engine down.
 const BOOST_BIG: std::ops::Range<f32> = 0.15..0.6;
 const BOOST_SMALL: std::ops::Range<f32> = 0.6..1.2;
+/// How often a queued finder says it is still there (s); the server drops it after 10.
+const FINDER_HEARTBEAT: f32 = 2.0;
 /// A checkpoint's beam: its height (yards) and radius.
 const BEAM_HEIGHT: f32 = 40.0;
 const BEAM_RADIUS: f32 = 1.2;
@@ -59,11 +67,39 @@ pub(crate) struct Active {
     /// When the gas went down during the countdown (local s), for the start boost.
     revved_at: Option<f32>,
     beeped: i32,
+    /// A Race Finder race is not left for want of a kart until then (local s): the server
+    /// summons ours and teleports us, and the aura may land after the roster.
+    grace_until: f32,
+}
+
+/// A ready check from the Race Finder.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ReadyCheck {
+    pub(crate) id: u32,
+    pub(crate) course: String,
+    pub(crate) racers: u32,
+    /// When the answer is due, local seconds.
+    pub(crate) until: f32,
+    pub(crate) accepted: bool,
+}
+
+/// The Race Finder's side of the races.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Finder {
+    /// The course keys we queued for (`any` for all), while in the queue.
+    pub(crate) queued: Option<String>,
+    /// (racers waiting for our courses, seconds we have waited) from the server.
+    pub(crate) status: Option<(u32, u32)>,
+    pub(crate) check: Option<ReadyCheck>,
+    beat_at: f32,
 }
 
 #[derive(Resource, Default)]
 pub(crate) struct Races {
     pub(crate) offer: Option<Offer>,
+    pub(crate) finder: Finder,
+    /// Which of the courses sharing a start F5 hosts (F7 steps it).
+    pick: usize,
     pub(crate) race: Option<Active>,
     /// Our character's name, to find ourselves in rosters.
     pub(crate) me: String,
@@ -149,6 +185,28 @@ pub(crate) fn update(
     for f in std::mem::take(&mut races.inbox) {
         let id = f.get(1).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
         match f.first().map(String::as_str) {
+            Some("Qs") => races.finder.status = parse_status(&f),
+            Some("Qx") => {
+                races.finder.queued = None;
+                races.finder.status = None;
+            }
+            Some("Pop") if f.len() >= 5 => {
+                races.finder.check = Some(ReadyCheck {
+                    id,
+                    course: f[2].clone(),
+                    racers: f[3].parse().unwrap_or(0),
+                    until: now + f[4].parse::<f32>().unwrap_or(20.0),
+                    accepted: false,
+                });
+                audio.cues.push(kartcraft::sound::Cue::Countdown(true));
+            }
+            Some("Pop-") => {
+                // The server queues again those who accepted.
+                if races.finder.check.take().is_none_or(|c| !c.accepted) {
+                    races.finder.queued = None;
+                }
+                races.finder.status = None;
+            }
             Some("O") if f.len() >= 5 => {
                 if races.race.is_none() {
                     races.offer = Some(Offer {
@@ -161,8 +219,13 @@ pub(crate) fn update(
             Some("L") if f.len() >= 3 => {
                 let roster: Vec<String> = f[2].split(',').map(str::to_string).collect();
                 if roster.contains(&me) {
+                    let from_finder = races.finder.check.as_ref().is_some_and(|c| c.accepted);
+                    races.finder.check = None;
+                    races.finder.queued = None;
+                    races.finder.status = None;
                     let race = races.race.get_or_insert_with(|| Active {
                         id,
+                        grace_until: if from_finder { now + 10.0 } else { 0.0 },
                         ..Default::default()
                     });
                     race.host = roster.first() == Some(&me);
@@ -225,32 +288,73 @@ pub(crate) fn update(
         }
     }
 
-    // Out of the kart, out of the race.
+    // F5: answer a ready check, else join, host, or start; F6: decline or leave. `WOW_KART_RACE`
+    // presses F5 for unattended runs.
+    let f5 = (keys.just_pressed(KeyCode::F5) && !ui.typing) || auto.press(now, races);
+    let f6 = keys.just_pressed(KeyCode::F6) && !ui.typing;
+
+    // The Race Finder: the heartbeat that keeps our place, and the ready check's answer.
+    let finder = &mut races.finder;
+    if finder.check.as_ref().is_some_and(|c| now > c.until + 2.0) {
+        finder.check = None;
+    }
+    if (finder.queued.is_some() || finder.check.is_some()) && now >= finder.beat_at {
+        finder.beat_at = now + FINDER_HEARTBEAT;
+        profession.send("KARTCRAFT\tR\tW".into());
+    }
+    let answering = races.race.is_none() && finder.check.as_ref().is_some_and(|c| !c.accepted);
+    if answering && (f5 || f6) {
+        if let Some(check) = finder.check.as_mut() {
+            if f5 {
+                check.accepted = true;
+                profession.send(format!("KARTCRAFT\tR\tY\t{}", check.id));
+            } else {
+                profession.send(format!("KARTCRAFT\tR\tN\t{}", check.id));
+                finder.check = None;
+                finder.queued = None;
+            }
+        }
+    }
+    let (f5, f6) = if answering { (false, false) } else { (f5, f6) };
+    *text = RaceText::default();
+    let queue_banner = finder_banner(&races.finder, now);
+
+    // Out of the kart, out of the race; but not while the kart aura stays on us, as it does
+    // through the Race Finder's teleport to the start.
     if !drive.active {
-        if let Some(race) = races.race.take() {
-            profession.send(format!("KARTCRAFT\tR\tQ\t{}", race.id));
+        let grace = races.race.as_ref().is_some_and(|r| now < r.grace_until);
+        if !profession.auras().kart && !grace {
+            if let Some(race) = races.race.take() {
+                profession.send(format!("KARTCRAFT\tR\tQ\t{}", race.id));
+            }
         }
         races.offer = None;
-        *text = RaceText::default();
         extras.lap = None;
         extras.place = None;
         audio.music_rate = 1.0;
+        text.banner = if races.race.is_some() {
+            "Getting to the start...".into()
+        } else {
+            queue_banner
+        };
         return;
     }
     let wow = bevy_to_wow(drive.pos);
     let at = [wow[0], wow[1]];
     let near = |p: [f32; 2], r: f32| (p[0] - at[0]).hypot(p[1] - at[1]) <= r;
 
-    // F5: join, host, or start; F6: leave. `WOW_KART_RACE` presses F5 for unattended runs.
-    let f5 = (keys.just_pressed(KeyCode::F5) && !ui.typing) || auto.press(now, races);
-    let f6 = keys.just_pressed(KeyCode::F6) && !ui.typing;
-    let here = COURSES.iter().find(|c| near(c.2, START_RADIUS));
+    // The courses starting here; F7 steps through them where several share a start.
+    let here: Vec<_> = COURSES.iter().filter(|c| near(c.2, START_RADIUS)).collect();
+    if keys.just_pressed(KeyCode::F7) && !ui.typing && here.len() > 1 {
+        races.pick += 1;
+    }
+    let host_here = (!here.is_empty()).then(|| here[races.pick % here.len()]);
     if f6 {
         if let Some(race) = races.race.take() {
             profession.send(format!("KARTCRAFT\tR\tQ\t{}", race.id));
         }
     } else if f5 {
-        match (&races.race, &races.offer, here) {
+        match (&races.race, &races.offer, host_here) {
             (Some(race), _, _) if race.host && race.go_at.is_none() => {
                 profession.send(format!("KARTCRAFT\tR\tS\t{}", race.id));
             }
@@ -265,15 +369,22 @@ pub(crate) fn update(
     }
 
     // The countdown, the start boost and the race.
-    *text = RaceText::default();
     let Some(race) = races.race.as_mut() else {
         extras.lap = None;
         extras.place = None;
         audio.music_rate = 1.0;
-        text.banner = match (&races.offer, here) {
+        text.banner = match (&races.offer, host_here) {
+            _ if races.finder.check.is_some() => queue_banner,
             (Some(o), _) => format!("{}'s {} — F5 to join", o.host, o.name),
+            (None, Some(c)) if here.len() > 1 => {
+                let other = here[(races.pick + 1) % here.len()];
+                format!(
+                    "{} starts here — F5 to host a race, F7 for {}",
+                    c.1, other.1
+                )
+            }
             (None, Some(c)) => format!("{} starts here — F5 to host a race", c.1),
-            _ => String::new(),
+            _ => queue_banner,
         };
         return;
     };
@@ -437,6 +548,48 @@ pub(crate) static START_BOOST: std::sync::Mutex<Option<bool>> = std::sync::Mutex
 fn races_start_boost(boost: Option<bool>) {
     if let Some(big) = boost {
         *START_BOOST.lock().unwrap() = Some(big);
+    }
+}
+
+/// A course's name from its key; `any` reads "any course".
+fn course_name(key: &str) -> &str {
+    COURSES
+        .iter()
+        .find(|c| c.0 == key)
+        .map_or(if key == "any" { "any course" } else { key }, |c| c.1)
+}
+
+/// The queue status line: `Qs\t<waiting>\t<secs>`.
+fn parse_status(f: &[String]) -> Option<(u32, u32)> {
+    Some((f.get(1)?.parse().ok()?, f.get(2)?.parse().ok()?))
+}
+
+/// The Race Finder's banner: the ready check, else the queue, else nothing.
+pub(crate) fn finder_banner(finder: &Finder, now: f32) -> String {
+    if let Some(c) = &finder.check {
+        return if c.accepted {
+            "Race ready — waiting for the others...".into()
+        } else {
+            format!(
+                "Race ready: {} ({} racers) — F5 to accept, F6 to decline ({})",
+                course_name(&c.course),
+                c.racers,
+                (c.until - now).max(0.0).ceil()
+            )
+        };
+    }
+    let Some(keys) = &finder.queued else {
+        return String::new();
+    };
+    let names: Vec<&str> = keys.split(',').map(course_name).collect();
+    match finder.status {
+        Some((waiting, secs)) => format!(
+            "Race Finder: {} — {}:{:02}, {waiting} waiting",
+            names.join(", "),
+            secs / 60,
+            secs % 60
+        ),
+        None => format!("Race Finder: {}", names.join(", ")),
     }
 }
 
@@ -626,6 +779,39 @@ mod tests {
         assert_eq!(ordinal(1), "1ST");
         assert_eq!(ordinal(3), "3RD");
         assert_eq!(ordinal(7), "7TH");
+    }
+
+    #[test]
+    fn finder_reads_the_queue_and_the_ready_check() {
+        let line = |s: &str| s.split('\t').map(str::to_string).collect::<Vec<_>>();
+        assert_eq!(parse_status(&line("Qs\t3\t42")), Some((3, 42)));
+        assert_eq!(parse_status(&line("Qs\tx")), None);
+        assert_eq!(course_name("elwynn"), "Elwynn Loop");
+        assert_eq!(course_name("any"), "any course");
+
+        let mut finder = Finder::default();
+        assert_eq!(finder_banner(&finder, 0.0), "");
+        finder.queued = Some("sprint,stormwind".into());
+        assert_eq!(
+            finder_banner(&finder, 0.0),
+            "Race Finder: Northshire Sprint, Road to Stormwind"
+        );
+        finder.status = Some((2, 75));
+        assert_eq!(
+            finder_banner(&finder, 0.0),
+            "Race Finder: Northshire Sprint, Road to Stormwind — 1:15, 2 waiting"
+        );
+        finder.check = Some(ReadyCheck {
+            id: 7,
+            course: "elwynn".into(),
+            racers: 3,
+            until: 20.0,
+            accepted: false,
+        });
+        assert_eq!(
+            finder_banner(&finder, 4.5),
+            "Race ready: Elwynn Loop (3 racers) — F5 to accept, F6 to decline (16)"
+        );
     }
 
     #[test]

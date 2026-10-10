@@ -5,6 +5,7 @@
 //! ([`seat`]) and the kart is drawn under it (`kartcraft::model`). Banked turbo chains feed the
 //! Karting profession ([`profession`]) and the score on screen ([`score`]).
 
+mod finder;
 mod profession;
 mod race;
 mod remote;
@@ -406,12 +407,14 @@ pub(crate) fn plugin(app: &mut App) {
         .net_handler(benilla_protocol::SessionEventKind::Chat, race::on_chat)
         .init_resource::<race::Races>()
         .init_resource::<race::RaceText>()
+        .init_resource::<finder::FinderUi>()
         .add_systems(
             Startup,
             (
                 score::spawn,
                 kartcraft::hud::spawn,
                 race::spawn_text,
+                finder::spawn,
                 |_: Commands| model::preload(),
             ),
         )
@@ -424,6 +427,8 @@ pub(crate) fn plugin(app: &mut App) {
                 race::update,
                 race::beams,
                 race::draw_text,
+                finder::update,
+                finder::draw,
                 model::update,
                 sound::update,
                 score::draw,

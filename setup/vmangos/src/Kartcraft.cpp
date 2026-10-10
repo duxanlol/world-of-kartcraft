@@ -12,8 +12,10 @@
 #include <string>
 #include <vector>
 
+#include <algorithm>
 #include <cstdlib>
 #include <unordered_map>
+#include "GridMap.h"
 
 extern SkillRaceClassInfoMap SkillRaceClassInfoBySkill;
 
@@ -333,11 +335,268 @@ namespace Kartcraft
         }
     }
 
+    // Sends the course and the countdown: the race is on once it runs out.
+    static void StartRace(uint32 id, Race& r, uint32 now, uint32 countdown)
+    {
+        r.start = now + countdown;
+        std::string points;
+        for (auto const& p : r.course->points)
+            points += (points.empty() ? "" : ";") + std::to_string(int32(p.first)) + ":" + std::to_string(int32(p.second));
+        SendRace(r, "KARTCRAFT\tR\tC\t" + std::to_string(id) + "\t" + r.course->key + "\t" +
+            std::to_string(r.course->laps) + "\t" + points);
+        SendRace(r, "KARTCRAFT\tR\tG\t" + std::to_string(id) + "\t" + std::to_string(countdown) + "\t" + Roster(r));
+    }
+
+    // ── Race Finder ────────────────────────────────────────────────────────────────────────────
+    //
+    // A dungeon finder for races: from anywhere, a player queues for some courses or any
+    // ("R\tQ+\t<key,key|any>", "R\tQ-" to leave) and keeps the place with a heartbeat every 2 s
+    // ("R\tW", answered "R\tQs\t<waiting>\t<secs>", or "R\tQx" when not queued). Two or more
+    // sharing a course, once the later of the first two has waited FILL_WAIT or eight are in,
+    // get a ready check ("R\tPop\t<pop>\t<course>\t<racers>\t<secs>"), answered "R\tY\t<pop>" or
+    // "R\tN\t<pop>". All yes: each is put in the kart, teleported to a grid slot behind the start
+    // and raced as above. A no or a timeout ends it ("R\tPop-\t<pop>"); those who said yes queue
+    // again at the front. ponytail: matching runs on the queued clients' heartbeats, not a world
+    // timer; add an update hook if queues get busy.
+
+    constexpr uint32 FILL_WAIT = 30 * IN_MILLISECONDS;
+    constexpr uint32 QUEUE_STALE = 10 * IN_MILLISECONDS;
+    constexpr uint32 POP_ANSWER = 20 * IN_MILLISECONDS;
+    // Countdown plus time for a teleport to settle before it.
+    constexpr uint32 FINDER_COUNTDOWN = COUNTDOWN + 4 * IN_MILLISECONDS;
+    constexpr float GRID_SPACING = 4.f;
+
+    struct Queued
+    {
+        ObjectGuid guid;
+        uint32 courses; // bit i: COURSES[i]
+        uint32 joined;
+        uint32 seen;
+    };
+
+    struct Pop
+    {
+        Course const* course = nullptr;
+        uint32 created = 0;
+        std::vector<Queued> members;
+        std::vector<ObjectGuid> accepted;
+    };
+
+    static std::vector<Queued> s_queue;
+    static std::unordered_map<uint32, Pop> s_pops;
+    static uint32 s_nextPop = 1;
+
+    static uint32 CourseMask(std::string const& keys)
+    {
+        uint32 mask = 0;
+        for (size_t i = 0; i < COURSES.size(); ++i)
+            if (keys == "any" || ("," + keys + ",").find(std::string(",") + COURSES[i].key + ",") != std::string::npos)
+                mask |= 1u << i;
+        return mask;
+    }
+
+    static void SendTo(ObjectGuid guid, std::string const& text)
+    {
+        if (Player* p = ObjectAccessor::FindPlayer(guid))
+            SendLine(p, text);
+    }
+
+    // A grid slot behind the start, two abreast, facing down the course.
+    static void TeleportToGrid(Player* player, Course const& c, size_t slot)
+    {
+        float sx = c.points[0].first, sy = c.points[0].second;
+        float dx = c.points[1].first - sx, dy = c.points[1].second - sy;
+        float len = std::max(std::sqrt(dx * dx + dy * dy), 1.f);
+        dx /= len;
+        dy /= len;
+        float back = GRID_SPACING * float(slot / 2 + 1);
+        float side = GRID_SPACING * (slot % 2 ? 0.5f : -0.5f);
+        float x = sx - dx * back - dy * side;
+        float y = sy - dy * back + dx * side;
+        float ground = sTerrainMgr.LoadTerrain(c.map)->GetHeightStatic(x, y, 500.f);
+        // No terrain data there: better left where they are, to drive over, than dropped from the sky.
+        if (ground <= INVALID_HEIGHT)
+            return;
+        float z = ground + 0.5f;
+        if (!player->HasAura(SPELL_SUMMON_KART))
+        {
+            player->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
+            player->CastSpell(player, SPELL_SUMMON_KART, true);
+        }
+        player->TeleportTo(c.map, x, y, z, std::atan2(dy, dx));
+    }
+
+    static void EndPop(uint32 id, Pop& pop, uint32 now)
+    {
+        // Those who said yes go back to the front of the queue, keeping their place.
+        for (Queued q : pop.members)
+            if (std::find(pop.accepted.begin(), pop.accepted.end(), q.guid) != pop.accepted.end())
+            {
+                q.seen = now;
+                s_queue.insert(s_queue.begin(), q);
+            }
+        for (Queued const& q : pop.members)
+            SendTo(q.guid, "KARTCRAFT\tR\tPop-\t" + std::to_string(id));
+    }
+
+    static void LaunchPop(Pop& pop, uint32 now)
+    {
+        uint32 raceId = s_nextRace++;
+        Race& r = s_races[raceId];
+        r.course = pop.course;
+        r.host = pop.members.front().guid;
+        r.created = now;
+        size_t slot = 0;
+        for (Queued const& q : pop.members)
+            if (Player* p = ObjectAccessor::FindPlayer(q.guid))
+            {
+                r.racers.push_back({ p->GetObjectGuid(), p->GetName() });
+                TeleportToGrid(p, *pop.course, slot++);
+            }
+        SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(raceId) + "\t" + Roster(r));
+        StartRace(raceId, r, now, FINDER_COUNTDOWN);
+    }
+
+    // Drops the stale, fails late ready checks and pops the courses that are ready.
+    static void UpdateFinder(uint32 now)
+    {
+        s_queue.erase(std::remove_if(s_queue.begin(), s_queue.end(), [now](Queued const& q) {
+            return WorldTimer::getMSTimeDiff(q.seen, now) > QUEUE_STALE || !ObjectAccessor::FindPlayer(q.guid);
+        }), s_queue.end());
+
+        for (auto it = s_pops.begin(); it != s_pops.end();)
+            if (WorldTimer::getMSTimeDiff(it->second.created, now) > POP_ANSWER)
+            {
+                EndPop(it->first, it->second, now);
+                it = s_pops.erase(it);
+            }
+            else
+                it = std::next(it);
+
+        // The course with the most takers that is ready, oldest first.
+        std::stable_sort(s_queue.begin(), s_queue.end(), [now](Queued const& a, Queued const& b) {
+            return WorldTimer::getMSTimeDiff(a.joined, now) > WorldTimer::getMSTimeDiff(b.joined, now);
+        });
+        int best = -1;
+        size_t bestCount = 0;
+        for (size_t i = 0; i < COURSES.size(); ++i)
+        {
+            std::vector<Queued const*> takers;
+            for (Queued const& q : s_queue)
+                if (q.courses & (1u << i))
+                    takers.push_back(&q);
+            bool ready = takers.size() >= MAX_RACERS ||
+                (takers.size() >= 2 && WorldTimer::getMSTimeDiff(takers[1]->joined, now) >= FILL_WAIT);
+            if (ready && takers.size() > bestCount)
+            {
+                best = int(i);
+                bestCount = takers.size();
+            }
+        }
+        if (best < 0)
+            return;
+        uint32 popId = s_nextPop++;
+        Pop& pop = s_pops[popId];
+        pop.course = &COURSES[best];
+        pop.created = now;
+        for (auto it = s_queue.begin(); it != s_queue.end() && pop.members.size() < MAX_RACERS;)
+            if (it->courses & (1u << best))
+            {
+                pop.members.push_back(*it);
+                it = s_queue.erase(it);
+            }
+            else
+                it = std::next(it);
+        std::string check = "KARTCRAFT\tR\tPop\t" + std::to_string(popId) + "\t" + pop.course->key + "\t" +
+            std::to_string(pop.members.size()) + "\t" + std::to_string(POP_ANSWER / IN_MILLISECONDS);
+        for (Queued const& q : pop.members)
+            SendTo(q.guid, check);
+    }
+
+    // The finder's verbs; false when the line is not one of them.
+    static bool HandleFinder(Player* player, std::vector<std::string> const& f, uint32 now)
+    {
+        std::string const& verb = f[1];
+        ObjectGuid guid = player->GetObjectGuid();
+        auto mine = std::find_if(s_queue.begin(), s_queue.end(), [guid](Queued const& q) { return q.guid == guid; });
+        if (verb == "Q+" && f.size() > 2)
+        {
+            uint32 mask = CourseMask(f[2]);
+            // Not while racing: a pop would teleport them off the course.
+            for (auto const& r : s_races)
+                for (Racer const& x : r.second.racers)
+                    if (x.guid == guid && !x.finished)
+                        mask = 0;
+            if (!mask)
+                return true;
+            if (mine != s_queue.end())
+                mine->courses = mask;
+            else
+                s_queue.push_back({ guid, mask, now, now });
+        }
+        else if (verb == "Q-")
+        {
+            if (mine != s_queue.end())
+                s_queue.erase(mine);
+        }
+        else if (verb == "W")
+        {
+            if (mine == s_queue.end())
+            {
+                bool pending = false;
+                for (auto const& p : s_pops)
+                    for (Queued const& q : p.second.members)
+                        pending |= q.guid == guid;
+                if (!pending)
+                    SendLine(player, "KARTCRAFT\tR\tQx");
+                return true;
+            }
+            mine->seen = now;
+            size_t waiting = 0;
+            for (Queued const& q : s_queue)
+                waiting += (q.courses & mine->courses) ? 1 : 0;
+            SendLine(player, "KARTCRAFT\tR\tQs\t" + std::to_string(waiting) + "\t" +
+                std::to_string(WorldTimer::getMSTimeDiff(mine->joined, now) / IN_MILLISECONDS));
+        }
+        else if ((verb == "Y" || verb == "N") && f.size() > 2)
+        {
+            uint32 id = uint32(std::strtoul(f[2].c_str(), nullptr, 10));
+            auto pop = s_pops.find(id);
+            if (pop == s_pops.end())
+                return true;
+            Pop& p = pop->second;
+            bool member = std::any_of(p.members.begin(), p.members.end(), [guid](Queued const& q) { return q.guid == guid; });
+            if (!member)
+                return true;
+            if (verb == "N")
+            {
+                p.accepted.erase(std::remove(p.accepted.begin(), p.accepted.end(), guid), p.accepted.end());
+                EndPop(id, p, now);
+                s_pops.erase(pop);
+                return true;
+            }
+            // A dead or fighting racer can't be raced off; their yes waits until they can.
+            if (!player->IsAlive() || player->IsInCombat() || player->IsBeingTeleported())
+                return true;
+            if (std::find(p.accepted.begin(), p.accepted.end(), guid) == p.accepted.end())
+                p.accepted.push_back(guid);
+            if (p.accepted.size() == p.members.size())
+            {
+                LaunchPop(p, now);
+                s_pops.erase(pop);
+            }
+        }
+        else
+            return false;
+        return true;
+    }
+
     static void HandleRace(Player* player, std::string const& body)
     {
         uint32 now = WorldTimer::getMSTime();
         for (auto it = s_races.begin(); it != s_races.end();)
             it = WorldTimer::getMSTimeDiff(it->second.created, now) > RACE_LIFETIME ? s_races.erase(it) : std::next(it);
+        UpdateFinder(now);
 
         std::vector<std::string> f;
         for (size_t at = 0, tab; at <= body.size(); at = tab + 1)
@@ -347,7 +606,8 @@ namespace Kartcraft
                 tab = body.size();
             f.push_back(body.substr(at, tab - at));
         }
-        if (f.size() < 2 || !player->HasAura(SPELL_SUMMON_KART))
+        // The finder's verbs work on foot; the rest need the kart.
+        if (f.size() < 2 || HandleFinder(player, f, now) || !player->HasAura(SPELL_SUMMON_KART))
             return;
         std::string const& verb = f[1];
         uint32 id = f.size() > 2 ? uint32(std::strtoul(f[2].c_str(), nullptr, 10)) : 0;
@@ -388,13 +648,7 @@ namespace Kartcraft
             Race& r = race->second;
             if (r.start || r.host != player->GetObjectGuid())
                 return;
-            r.start = now + COUNTDOWN;
-            std::string points;
-            for (auto const& p : r.course->points)
-                points += (points.empty() ? "" : ";") + std::to_string(int32(p.first)) + ":" + std::to_string(int32(p.second));
-            SendRace(r, "KARTCRAFT\tR\tC\t" + std::to_string(id) + "\t" + r.course->key + "\t" +
-                std::to_string(r.course->laps) + "\t" + points);
-            SendRace(r, "KARTCRAFT\tR\tG\t" + std::to_string(id) + "\t" + std::to_string(COUNTDOWN) + "\t" + Roster(r));
+            StartRace(id, r, now, COUNTDOWN);
         }
         else if (verb == "K" && race != s_races.end() && f.size() > 3)
         {

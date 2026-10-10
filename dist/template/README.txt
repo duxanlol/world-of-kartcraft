@@ -44,8 +44,10 @@ CONTROLS
   Abilities           D-pad         D-pad       1-4
   Climb in / out                                J
   Camera                                        K
-  Race: host / join / start                     F5
-  Race: leave                                   F6
+  Race: host / join / start / accept            F5
+  Race: leave / decline                         F6
+  Race Finder                                   I
+  Race: other course at a shared start          F7
 
 Powerslide: hop and hold while steering into a turn; the turbo meter by the speedometer fills.
 Press the other shoulder when it turns red for a boost, up to three per slide. The exhaust smokes
@@ -56,6 +58,11 @@ RACES
 -----
 Drive to a course's start and press F5 to host; drivers near you press F5 to join; the host's F5
 starts it. Rev the engine just before GO for a start boost. Beams of light mark the checkpoints.
+Where two courses share a start, F7 picks which one F5 hosts.
+
+Or press I anywhere for the Race Finder: tick courses (or Any course) and Find race. When two or
+more players match (it waits up to 30 seconds for more), a ready check pops: F5 accepts, F6
+declines. When everyone accepts, you are put in your kart and teleported to the starting grid.
   Northshire Sprint   in front of Northshire Abbey, down to Goldshire
   Elwynn Loop         Goldshire, by the inn, 3 laps
   Road to Stormwind   Goldshire, by the inn, to the city gate
