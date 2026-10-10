@@ -201,6 +201,8 @@ fn the_use_column_can_fail() {
 /// `!OmniCC` is never `raised`: its output is a `FontString` on an anonymous mouse-disabled frame,
 /// so it is `untouched`. Bagnon's item slots must be reachable (`driven >= 1` on a `BagnonItem*`
 /// frame); whether they raise is not asserted here.
+// The corpus is symlinked in, which these tests do the Unix way.
+#[cfg(unix)]
 #[test]
 fn bagnon_is_reachable_and_omnicc_is_not_broken() {
     benilla_formats::wow_data_or_skip!();

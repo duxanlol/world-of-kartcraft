@@ -70,6 +70,38 @@ impl PoiMarker {
         });
     }
 
+    /// A landmark of Kartcraft's own (a race's next checkpoint) in the same slot, drawn as the
+    /// guard's red flag; setting the same one again leaves its clock running.
+    pub(crate) fn set_landmark(&mut self, name: &str, pos: [f32; 2], map_id: u32, now_secs: f64) {
+        let same = self
+            .poi
+            .as_ref()
+            .is_some_and(|p| p.name == name && p.pos[..2] == pos && p.continent_id == map_id);
+        if same {
+            return;
+        }
+        self.expires_at = now_secs + MARKER_TTL_SECS;
+        self.poi = Some(AreaPoi {
+            importance: 0,
+            icon: 6,
+            faction_id: 0,
+            pos: [pos[0], pos[1], 0.0],
+            continent_id: map_id,
+            flags: 99,
+            area_id: 0,
+            name: name.to_string(),
+            description: String::new(),
+            world_state_id: 0,
+        });
+    }
+
+    /// Clears the marker if it is the one called `name`, leaving a guard's directions alone.
+    pub(crate) fn clear_named(&mut self, name: &str) {
+        if self.poi.as_ref().is_some_and(|p| p.name == name) {
+            self.poi = None;
+        }
+    }
+
     /// The marker, if it is on `map_id`.
     pub(crate) fn on_map(&self, map_id: u32) -> Option<&AreaPoi> {
         self.poi.as_ref().filter(|p| p.continent_id == map_id)

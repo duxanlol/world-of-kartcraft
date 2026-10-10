@@ -20,10 +20,18 @@ const COURSES: [(&str, &str, [f32; 2]); 3] = [
     ("elwynn", "Elwynn Loop", [-9436.0, 59.0]),
     ("stormwind", "Road to Stormwind", [-9436.0, 59.0]),
 ];
-/// How near a start (yards) a driver may host or join, and how near a checkpoint counts as
-/// passing it (the server allows 45).
+/// How near a start (yards) a driver may host or join.
 const START_RADIUS: f32 = 55.0;
-const CHECKPOINT_RADIUS: f32 = 38.0;
+/// A checkpoint is a gate: passed on crossing the line through it across the course, within
+/// this many yards of its centre, or on coming this near it (the server allows 45).
+const GATE_HALF_WIDTH: f32 = 20.0;
+const CHECKPOINT_RADIUS: f32 = 8.0;
+/// The arrow over our kart (yards above its origin, and its length).
+const GUIDE_HEIGHT: f32 = 3.4;
+const GUIDE_LENGTH: f32 = 1.6;
+/// The arrow on each beam towards the checkpoint after it (yards above the ground, length).
+const BEAM_ARROW_HEIGHT: f32 = 9.0;
+const BEAM_ARROW_LENGTH: f32 = 6.0;
 /// The start boost: revving this long before GO (s) is big, a little earlier small, earlier
 /// still bogs the engine down.
 const BOOST_BIG: std::ops::Range<f32> = 0.15..0.6;
@@ -61,6 +69,72 @@ pub(crate) struct Active {
     beeped: i32,
     /// The standings, leader first, as last worked out.
     order: Vec<String>,
+    /// Where we were last frame (WoW x, y), to see a gate crossed.
+    last_at: Option<[f32; 2]>,
+}
+
+impl Active {
+    /// The checkpoint to reach next; `None` before there is a course.
+    fn next(&self) -> Option<usize> {
+        let n = self.points.len();
+        (n > 1).then(|| {
+            if self.laps > 0 {
+                (self.checkpoint + 1) % n
+            } else {
+                (self.checkpoint + 1).min(n - 1)
+            }
+        })
+    }
+
+    /// The checkpoint after `i` on the course; `None` after a sprint's finish.
+    fn after(&self, i: usize) -> Option<usize> {
+        let n = self.points.len();
+        if self.laps > 0 {
+            Some((i + 1) % n)
+        } else {
+            (i + 1 < n).then_some(i + 1)
+        }
+    }
+
+    /// The direction the course runs through checkpoint `i` (WoW x, y, unit): halfway between
+    /// the way in and the way out, so its gate stands square across a bend.
+    fn heading(&self, i: usize) -> [f32; 2] {
+        let n = self.points.len();
+        let p = self.points[i];
+        let unit = |a: [f32; 2], b: [f32; 2]| {
+            let (x, y) = (b[0] - a[0], b[1] - a[1]);
+            let l = x.hypot(y).max(1e-3);
+            [x / l, y / l]
+        };
+        let before = if self.laps > 0 || i > 0 {
+            Some(self.points[(i + n - 1) % n])
+        } else {
+            None
+        };
+        let into = before.map(|b| unit(b, p));
+        let out = self.after(i).map(|j| unit(p, self.points[j]));
+        match (into, out) {
+            (Some(a), Some(b)) => unit([0.0, 0.0], [a[0] + b[0], a[1] + b[1]]),
+            (Some(a), None) | (None, Some(a)) => a,
+            (None, None) => [1.0, 0.0],
+        }
+    }
+
+    /// Whether going from `from` to `to` (WoW x, y) passes checkpoint `i`: through its gate, or
+    /// near its centre.
+    fn passes(&self, i: usize, from: Option<[f32; 2]>, to: [f32; 2]) -> bool {
+        let p = self.points[i];
+        if (to[0] - p[0]).hypot(to[1] - p[1]) <= CHECKPOINT_RADIUS {
+            return true;
+        }
+        let Some(from) = from else {
+            return false;
+        };
+        let h = self.heading(i);
+        let along = |q: [f32; 2]| (q[0] - p[0]) * h[0] + (q[1] - p[1]) * h[1];
+        let across = |q: [f32; 2]| ((q[0] - p[0]) * h[1] - (q[1] - p[1]) * h[0]).abs();
+        along(from) < 0.0 && along(to) >= 0.0 && across(to).min(across(from)) <= GATE_HALF_WIDTH
+    }
 }
 
 #[derive(Resource, Default)]
@@ -80,13 +154,7 @@ impl Races {
         if race.done || race.go_at.is_none_or(|go| now < go) || race.points.len() < 2 {
             return None;
         }
-        let n = race.points.len();
-        let next = if race.laps > 0 {
-            (race.checkpoint + 1) % n
-        } else {
-            (race.checkpoint + 1).min(n - 1)
-        };
-        let p = race.points[next];
+        let p = race.points[race.next()?];
         Some(wow_to_bevy([p[0], p[1], 0.0]))
     }
 
@@ -342,13 +410,8 @@ pub(crate) fn update(
     }
 
     // Checkpoints: the next one passed is reported (the server checks it).
-    let n = race.points.len();
-    if n > 1 && !race.done {
-        let next = if race.laps > 0 {
-            (race.checkpoint + 1) % n
-        } else {
-            (race.checkpoint + 1).min(n - 1)
-        };
+    let last_at = race.last_at.replace(at);
+    if let Some(next) = race.next().filter(|_| !race.done) {
         if std::env::var_os("WOW_KART_DEBUG").is_some()
             && (now * 2.0) as i32 != ((now - time.delta_secs()) * 2.0) as i32
         {
@@ -358,7 +421,7 @@ pub(crate) fn update(
                 (p[0] - at[0]).hypot(p[1] - at[1])
             );
         }
-        if near(race.points[next], CHECKPOINT_RADIUS) {
+        if race.passes(next, last_at, at) {
             info!("kart race: checkpoint {next}, lap {}", race.lap);
             profession.send(format!("KARTCRAFT\tR\tK\t{}\t{next}", race.id));
             race.checkpoint = next;
@@ -371,6 +434,7 @@ pub(crate) fn update(
     }
 
     // Standings: the finished in order, then the rest by progress.
+    let n = race.points.len();
     let mut order: Vec<String> = race.finished.iter().map(|f| f.0.clone()).collect();
     let mut running: Vec<(&String, (i64, f32))> = race
         .roster
@@ -477,7 +541,110 @@ fn clock(ms: u32) -> String {
 #[derive(Component)]
 pub(crate) struct Beam(usize);
 
-/// Stands a beam at each checkpoint of the race we are in, the next one bright.
+/// The arrow on beam `.0`, pointing on to the checkpoint after it.
+#[derive(Component)]
+pub(crate) struct BeamArrow(usize);
+
+/// The arrow over our kart, pointing at the next checkpoint.
+#[derive(Component)]
+pub(crate) struct GuideArrow;
+
+/// The beams' and arrows' meshes and looks, made once.
+#[derive(Clone)]
+pub(crate) struct Looks {
+    beam: Handle<Mesh>,
+    arrow: Handle<Mesh>,
+    bright: Handle<StandardMaterial>,
+    dim: Handle<StandardMaterial>,
+    guide: Handle<StandardMaterial>,
+}
+
+impl Looks {
+    fn new(meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) -> Self {
+        let glow = |c: Color| StandardMaterial {
+            base_color: c,
+            unlit: true,
+            alpha_mode: AlphaMode::Add,
+            cull_mode: None,
+            double_sided: true,
+            ..default()
+        };
+        Self {
+            beam: meshes.add(Cylinder::new(BEAM_RADIUS, BEAM_HEIGHT)),
+            arrow: meshes.add(arrow_mesh()),
+            bright: materials.add(glow(Color::srgb(1.0, 0.85, 0.2))),
+            dim: materials.add(glow(Color::srgb(0.18, 0.12, 0.04))),
+            guide: materials.add(StandardMaterial {
+                base_color: Color::srgb(1.0, 0.6, 0.08),
+                unlit: true,
+                cull_mode: None,
+                double_sided: true,
+                ..default()
+            }),
+        }
+    }
+}
+
+/// A flat arrow one unit long, lying in the ground plane, its centre at the origin and its tip
+/// along −Z (Bevy's forward); a little thick, so it reads edge-on too.
+fn arrow_mesh() -> Mesh {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    // The outline, (x, z): the shaft's tail, the head's shoulders, the tip.
+    let outline: [[f32; 2]; 7] = [
+        [-0.12, 0.5],
+        [0.12, 0.5],
+        [0.12, -0.1],
+        [0.4, -0.1],
+        [0.0, -0.5],
+        [-0.4, -0.1],
+        [-0.12, -0.1],
+    ];
+    let half = 0.06;
+    let mut positions = Vec::new();
+    for y in [half, -half] {
+        positions.extend(outline.iter().map(|p| [p[0], y, p[1]]));
+    }
+    // Top and bottom: the shaft's two triangles and the head's one.
+    let faces = [[0u32, 1, 2], [0, 2, 6], [5, 3, 4]];
+    let mut indices: Vec<u32> = Vec::new();
+    for f in faces {
+        indices.extend(f);
+        indices.extend(f.map(|i| i + 7));
+    }
+    // The rim.
+    for i in 0..7u32 {
+        let j = (i + 1) % 7;
+        indices.extend([i, j, j + 7, i, j + 7, i + 7]);
+    }
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_indices(Indices::U32(indices));
+    mesh.duplicate_vertices();
+    mesh.compute_flat_normals();
+    mesh
+}
+
+/// The rotation turning the arrow's −Z to point from `from` to `to` (Bevy world, level).
+fn pointing(from: Vec3, to: Vec3) -> Quat {
+    let d = to - from;
+    Quat::from_rotation_y((-d.x).atan2(-d.z))
+}
+
+/// The ground under a WoW x, y, in Bevy world; at height `fallback` where there is none.
+fn ground_at(collide: &WorldCollision, p: [f32; 2], fallback: f32) -> Vec3 {
+    let column = wow_to_bevy([p[0], p[1], 0.0]);
+    let y = collide
+        .ray_body(Vec3::new(column.x, 2000.0, column.z), Dir3::NEG_Y, 4000.0)
+        .map_or(fallback, |hit| 2000.0 - hit.distance);
+    Vec3::new(column.x, y, column.z)
+}
+
+/// Stands a beam at each checkpoint of the race we are in, the next one bright, each with an
+/// arrow on to the checkpoint after it.
 #[allow(clippy::type_complexity)]
 pub(crate) fn beams(
     mut commands: Commands,
@@ -485,81 +652,162 @@ pub(crate) fn beams(
     collide: WorldCollision,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut beams: Query<(
-        Entity,
-        &Beam,
-        &mut Transform,
-        &mut MeshMaterial3d<StandardMaterial>,
-    )>,
-    mut looks: Local<
-        Option<(
-            Handle<Mesh>,
-            Handle<StandardMaterial>,
-            Handle<StandardMaterial>,
-        )>,
+    mut beams: Query<
+        (
+            Entity,
+            &Beam,
+            &mut Transform,
+            &mut MeshMaterial3d<StandardMaterial>,
+        ),
+        Without<BeamArrow>,
     >,
+    mut arrows: Query<
+        (
+            Entity,
+            &BeamArrow,
+            &mut Transform,
+            &mut MeshMaterial3d<StandardMaterial>,
+        ),
+        Without<Beam>,
+    >,
+    mut looks: Local<Option<Looks>>,
 ) {
     let race = races.race.as_ref().filter(|r| r.go_at.is_some() && !r.done);
-    let Some(race) = race else {
+    let Some((race, next)) = race.and_then(|r| Some((r, r.next()?))) else {
         for (e, ..) in &beams {
+            commands.entity(e).despawn();
+        }
+        for (e, ..) in &arrows {
             commands.entity(e).despawn();
         }
         return;
     };
-    let (mesh, next_look, other_look) = looks
-        .get_or_insert_with(|| {
-            let mesh = meshes.add(Cylinder::new(BEAM_RADIUS, BEAM_HEIGHT));
-            let look = |c: Color| StandardMaterial {
-                base_color: c,
-                unlit: true,
-                alpha_mode: AlphaMode::Add,
-                cull_mode: None,
-                double_sided: true,
-                ..default()
-            };
-            (
-                mesh,
-                materials.add(look(Color::srgb(1.0, 0.85, 0.2))),
-                materials.add(look(Color::srgb(0.18, 0.12, 0.04))),
-            )
-        })
+    let looks = looks
+        .get_or_insert_with(|| Looks::new(&mut meshes, &mut materials))
         .clone();
-    let n = race.points.len();
-    let next = if race.laps > 0 {
-        (race.checkpoint + 1) % n.max(1)
-    } else {
-        (race.checkpoint + 1).min(n.saturating_sub(1))
+    let look = |i: usize| {
+        if i == next {
+            looks.bright.clone()
+        } else {
+            looks.dim.clone()
+        }
     };
+    let n = race.points.len();
     let mut have = vec![false; n];
     for (_, beam, mut t, mut material) in &mut beams {
-        let Some(p) = race.points.get(beam.0) else {
+        let Some(&p) = race.points.get(beam.0) else {
             continue;
         };
         have[beam.0] = true;
-        let column = wow_to_bevy([p[0], p[1], 0.0]);
-        let ground = collide
-            .ray_body(Vec3::new(column.x, 2000.0, column.z), Dir3::NEG_Y, 4000.0)
-            .map_or(t.translation.y - BEAM_HEIGHT / 2.0, |hit| {
-                2000.0 - hit.distance
-            });
-        t.translation = Vec3::new(column.x, ground + BEAM_HEIGHT / 2.0, column.z);
-        material.0 = if beam.0 == next {
-            next_look.clone()
-        } else {
-            other_look.clone()
+        let ground = ground_at(&collide, p, t.translation.y - BEAM_HEIGHT / 2.0);
+        t.translation = ground + Vec3::Y * (BEAM_HEIGHT / 2.0);
+        material.0 = look(beam.0);
+    }
+    let mut have_arrow = vec![false; n];
+    for (e, arrow, mut t, mut material) in &mut arrows {
+        let (Some(&p), Some(on)) = (race.points.get(arrow.0), race.after(arrow.0)) else {
+            commands.entity(e).despawn();
+            continue;
         };
+        have_arrow[arrow.0] = true;
+        let at = ground_at(&collide, p, t.translation.y - BEAM_ARROW_HEIGHT);
+        let towards = wow_to_bevy([race.points[on][0], race.points[on][1], 0.0]);
+        t.translation = at + Vec3::Y * BEAM_ARROW_HEIGHT;
+        t.rotation = pointing(at, Vec3::new(towards.x, at.y, towards.z));
+        material.0 = look(arrow.0);
     }
     for (i, p) in race.points.iter().enumerate() {
+        let at = wow_to_bevy([p[0], p[1], 0.0]);
         if !have[i] {
-            let at = wow_to_bevy([p[0], p[1], 0.0]);
             commands.spawn((
                 Beam(i),
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(other_look.clone()),
+                Mesh3d(looks.beam.clone()),
+                MeshMaterial3d(looks.dim.clone()),
                 Transform::from_translation(at),
                 Name::new("race checkpoint"),
             ));
         }
+        if !have_arrow[i] && race.after(i).is_some() {
+            commands.spawn((
+                BeamArrow(i),
+                Mesh3d(looks.arrow.clone()),
+                MeshMaterial3d(looks.dim.clone()),
+                Transform::from_translation(at).with_scale(Vec3::splat(BEAM_ARROW_LENGTH)),
+                Name::new("race checkpoint arrow"),
+            ));
+        }
+    }
+}
+
+/// What the minimap calls the next checkpoint.
+fn checkpoint_name(race: &Active, next: usize) -> String {
+    let n = race.points.len();
+    let last_lap = race.laps == 0 || race.lap + 1 >= race.laps;
+    if (race.laps == 0 && next == n - 1) || (race.laps > 0 && next == 0 && last_lap) {
+        "Finish".into()
+    } else if race.laps > 0 && next == 0 {
+        format!("Lap {} of {}", race.lap + 2, race.laps)
+    } else {
+        format!("Checkpoint {next} of {}", n - 1)
+    }
+}
+
+/// In a race: the arrow over our kart towards the next checkpoint, and that checkpoint on the
+/// minimap, in the slot a guard's directions use (`crate::poi_marker`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn guide(
+    mut commands: Commands,
+    races: Res<Races>,
+    drive: Res<super::KartDrive>,
+    collide: WorldCollision,
+    mut marker: ResMut<crate::poi_marker::PoiMarker>,
+    current_map: Option<Res<benilla_world::world_map::CurrentMap>>,
+    real: Res<Time<bevy::time::Real>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut arrows: Query<(Entity, &mut Transform), With<GuideArrow>>,
+    mut looks: Local<Option<Looks>>,
+    mut shown: Local<Option<String>>,
+) {
+    let race = races.race.as_ref().filter(|r| r.go_at.is_some() && !r.done);
+    let target = race
+        .and_then(|r| Some((r, r.next()?)))
+        .filter(|_| drive.active);
+    let Some((race, next)) = target else {
+        for (e, _) in &arrows {
+            commands.entity(e).despawn();
+        }
+        if let Some(name) = shown.take() {
+            marker.clear_named(&name);
+        }
+        return;
+    };
+    let p = race.points[next];
+    let name = checkpoint_name(race, next);
+    if let Some(old) = shown.as_ref().filter(|old| **old != name) {
+        marker.clear_named(old);
+    }
+    let map = current_map.as_ref().map_or(0, |m| m.0);
+    marker.set_landmark(&name, p, map, real.elapsed_secs_f64());
+    *shown = Some(name);
+
+    let over = drive.pos + Vec3::Y * GUIDE_HEIGHT;
+    let towards = ground_at(&collide, p, over.y);
+    let rotation = pointing(over, Vec3::new(towards.x, over.y, towards.z));
+    if let Ok((_, mut t)) = arrows.single_mut() {
+        t.translation = over;
+        t.rotation = rotation;
+    } else {
+        let looks = looks.get_or_insert_with(|| Looks::new(&mut meshes, &mut materials));
+        commands.spawn((
+            GuideArrow,
+            Mesh3d(looks.arrow.clone()),
+            MeshMaterial3d(looks.guide.clone()),
+            Transform::from_translation(over)
+                .with_rotation(rotation)
+                .with_scale(Vec3::splat(GUIDE_LENGTH)),
+            Name::new("race guide arrow"),
+        ));
     }
 }
 
@@ -649,5 +897,54 @@ mod tests {
         let c = standing(&(1, 3, 12.0), 6);
         assert!(b > a);
         assert!(b > c, "the earlier of two at the same checkpoint leads");
+    }
+
+    /// A sprint east along x, then a bend north: checkpoints at x 0, 100, 200 (then y 100).
+    fn course() -> Active {
+        Active {
+            laps: 0,
+            points: vec![[0.0, 0.0], [100.0, 0.0], [200.0, 0.0], [200.0, 100.0]],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_gate_counts_when_crossed_not_when_merely_near() {
+        let race = course();
+        // 30 yd short of checkpoint 1 is no longer "passed" (the old 38 yd circle was).
+        assert!(!race.passes(1, Some([69.0, 0.0]), [70.0, 0.0]));
+        // Crossing its line, a little off centre, is.
+        assert!(race.passes(1, Some([99.5, 6.0]), [100.5, 6.0]));
+        // Crossing the line 30 yd to the side is not.
+        assert!(!race.passes(1, Some([99.5, 30.0]), [100.5, 30.0]));
+        // Driving back across it (off the centre) is not.
+        assert!(!race.passes(1, Some([100.5, 12.0]), [99.5, 12.0]));
+        // Arriving on the centre is.
+        assert!(race.passes(1, None, [100.0, 5.0]));
+    }
+
+    #[test]
+    fn a_gate_at_a_bend_stands_square_to_both_legs() {
+        let race = course();
+        let h = race.heading(2);
+        assert!(
+            (h[0] - h[1]).abs() < 1e-4 && h[0] > 0.0,
+            "halfway between east and north: {h:?}"
+        );
+        // Cutting the corner diagonally through the gate counts.
+        assert!(race.passes(2, Some([190.0, -2.0]), [194.0, 8.0]));
+    }
+
+    #[test]
+    fn the_minimap_names_checkpoints_laps_and_the_finish() {
+        let mut race = course();
+        assert_eq!(checkpoint_name(&race, 1), "Checkpoint 1 of 3");
+        assert_eq!(checkpoint_name(&race, 3), "Finish");
+        assert_eq!(race.after(3), None);
+        race.laps = 3;
+        assert_eq!(checkpoint_name(&race, 0), "Lap 2 of 3");
+        race.lap = 2;
+        assert_eq!(checkpoint_name(&race, 0), "Finish");
+        assert_eq!(race.after(3), Some(0));
     }
 }

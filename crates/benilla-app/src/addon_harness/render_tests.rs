@@ -140,6 +140,8 @@ fn the_render_column_can_fail() {
 
 /// `!OmniCC` paints through an anonymous frame parented to an existing cooldown, an overlay;
 /// Bagnon builds its own window of item-slot buttons.
+// The corpus is symlinked in, which these tests do the Unix way.
+#[cfg(unix)]
 #[test]
 fn omnicc_and_bagnon_come_out_on_opposite_sides() {
     benilla_formats::wow_data_or_skip!();

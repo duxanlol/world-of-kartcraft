@@ -450,6 +450,7 @@ pub(crate) fn plugin(app: &mut App) {
                 race::update,
                 weapons::update,
                 race::beams,
+                race::guide,
                 race::draw_text,
                 model::update,
                 sound::update,
