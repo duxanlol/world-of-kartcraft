@@ -41,7 +41,9 @@ client's list are both made from it; nothing else holds course data.
 - `crates`: optional. When present it replaces the layout the server builds along the
   segments: `kind` `F` (fruit crate), `Q` (weapon crate) or `W` (wumpa fruit), `x`, `y`, and an
   optional `z` (else the ground's).
-- At most 32 courses (the Race Finder's queue is a 32-bit mask). The order is the Race Finder's.
+- Up to 1000 courses. The Race Finder offers them by zone, in the order the file first names each
+  zone; a queue line names a zone by that place (`z3`), so keep zones' first appearances in order
+  when adding courses (the exporter appends).
 
 ## Regenerating
 

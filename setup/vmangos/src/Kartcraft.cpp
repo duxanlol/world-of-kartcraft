@@ -236,6 +236,8 @@ namespace Kartcraft
     {
         char const* key;
         char const* name;
+        // The zone it is in, as the Race Finder groups courses; may be empty.
+        char const* zone;
         uint32 map;
         // 0: a sprint from the first checkpoint to the last; else laps back through the first.
         uint8 laps;
@@ -959,7 +961,7 @@ namespace Kartcraft
     struct Queued
     {
         ObjectGuid guid;
-        uint32 courses; // bit i: COURSES[i]
+        std::vector<bool> courses; // [i]: COURSES[i]
         uint32 joined;
         uint32 seen;
     };
@@ -976,13 +978,56 @@ namespace Kartcraft
     static std::unordered_map<uint32, Pop> s_pops;
     static uint32 s_nextPop = 1;
 
-    static uint32 CourseMask(std::string const& keys)
+    // The Race Finder's zones, in the order courses.json first names them: the client asks for a
+    // zone by its place in this list ("z3"), which keeps a queue line short however many it ticks.
+    static std::vector<std::string> const& Zones()
     {
-        uint32 mask = 0;
-        for (size_t i = 0; i < COURSES.size(); ++i)
-            if (keys == "any" || ("," + keys + ",").find(std::string(",") + COURSES[i].key + ",") != std::string::npos)
-                mask |= 1u << i;
+        static std::vector<std::string> zones = [] {
+            std::vector<std::string> out;
+            for (Course const& c : COURSES)
+                if (*c.zone && std::find(out.begin(), out.end(), c.zone) == out.end())
+                    out.push_back(c.zone);
+            return out;
+        }();
+        return zones;
+    }
+
+    // The courses a queue line asks for: "any", or a comma list of zones ("z<index>") and keys.
+    static std::vector<bool> CourseMask(std::string const& asked)
+    {
+        std::vector<bool> mask(COURSES.size(), false);
+        std::vector<std::string> const& zones = Zones();
+        for (size_t at = 0, comma; at <= asked.size(); at = comma + 1)
+        {
+            comma = asked.find(',', at);
+            if (comma == std::string::npos)
+                comma = asked.size();
+            std::string token = asked.substr(at, comma - at);
+            std::string const* zone = nullptr;
+            if (token.size() > 1 && token[0] == 'z' && std::isdigit(uint8(token[1])))
+            {
+                size_t index = std::strtoul(token.c_str() + 1, nullptr, 10);
+                if (index < zones.size())
+                    zone = &zones[index];
+            }
+            for (size_t i = 0; i < COURSES.size(); ++i)
+                if (token == "any" || token == COURSES[i].key || (zone && *zone == COURSES[i].zone))
+                    mask[i] = true;
+        }
         return mask;
+    }
+
+    static bool AnyCourse(std::vector<bool> const& mask)
+    {
+        return std::find(mask.begin(), mask.end(), true) != mask.end();
+    }
+
+    static bool Overlap(std::vector<bool> const& a, std::vector<bool> const& b)
+    {
+        for (size_t i = 0; i < a.size() && i < b.size(); ++i)
+            if (a[i] && b[i])
+                return true;
+        return false;
     }
 
     static void SendTo(ObjectGuid guid, std::string const& text)
@@ -1086,7 +1131,7 @@ namespace Kartcraft
         {
             std::vector<Queued const*> takers;
             for (Queued const& q : s_queue)
-                if (q.courses & (1u << i))
+                if (q.courses[i])
                     takers.push_back(&q);
             bool ready = takers.size() >= MAX_RACERS ||
                 (takers.size() >= 2 && WorldTimer::getMSTimeDiff(takers[1]->joined, now) >= FILL_WAIT);
@@ -1103,7 +1148,7 @@ namespace Kartcraft
         pop.course = &COURSES[best];
         pop.created = now;
         for (auto it = s_queue.begin(); it != s_queue.end() && pop.members.size() < MAX_RACERS;)
-            if (it->courses & (1u << best))
+            if (it->courses[best])
             {
                 pop.members.push_back(*it);
                 it = s_queue.erase(it);
@@ -1124,11 +1169,9 @@ namespace Kartcraft
         auto mine = std::find_if(s_queue.begin(), s_queue.end(), [guid](Queued const& q) { return q.guid == guid; });
         if (verb == "Q+" && f.size() > 2)
         {
-            uint32 mask = CourseMask(f[2]);
+            std::vector<bool> mask = CourseMask(f[2]);
             // Not from a dungeon, a raid or a battleground: a pop would teleport them out of it.
-            if (player->InBattleGround() || player->GetMap()->Instanceable())
-                mask = 0;
-            if (!mask)
+            if (player->InBattleGround() || player->GetMap()->Instanceable() || !AnyCourse(mask))
                 return true;
             // A race still waiting to start is left for the queue; one under way is not: a pop
             // would teleport them off the course, so they are told why instead.
@@ -1181,7 +1224,7 @@ namespace Kartcraft
             mine->seen = now;
             size_t waiting = 0;
             for (Queued const& q : s_queue)
-                waiting += (q.courses & mine->courses) ? 1 : 0;
+                waiting += Overlap(q.courses, mine->courses) ? 1 : 0;
             SendLine(player, "KARTCRAFT\tR\tQs\t" + std::to_string(waiting) + "\t" +
                 std::to_string(WorldTimer::getMSTimeDiff(mine->joined, now) / IN_MILLISECONDS));
         }
