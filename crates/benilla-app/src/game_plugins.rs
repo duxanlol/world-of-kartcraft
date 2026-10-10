@@ -687,17 +687,16 @@ pub(crate) mod schedule_tests {
     ///   kart's own handles; `kart::update` and `kart::sound::update` against the writers of
     ///   `Player`, `Window` and the mover exclusions, of which they read the pose gates once a
     ///   frame (a gate seen a frame late starts or ends a ride a frame late), and against the
-    ///   sheath requests' other writers, which the driver applies in any order. Its overlays
-    ///   (`kart::finder`'s window, `kart::race`'s banner, results, beams and guide arrow,
-    ///   `kart::score::draw`, `kart::weapons::update`) against the glue, login, character and
-    ///   portrait screens and the world streamers over `Text`, `Node`, `Visibility`,
-    ///   `Transform` and the material handles: each writes only its own marker entities, which
-    ///   none of those touch, and the screens never run in the world.
+    ///   sheath requests' other writers, which the driver applies in any order. Its world pieces
+    ///   (`kart::race`'s beams and guide arrow, `kart::weapons::update`) against the glue, login,
+    ///   character and portrait screens and the world streamers over `Transform`, `Visibility`
+    ///   and the material handles: each writes only its own marker entities, which none of those
+    ///   touch, and the screens never run in the world. Its race windows are the layer's.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_027;
+    const UPDATE_ACTIONABLE_CEILING: usize = 4_968;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

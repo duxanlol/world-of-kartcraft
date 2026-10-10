@@ -1,0 +1,387 @@
+<Ui>
+    <!--
+        World of Kartcraft's race windows, in the stock widgets and fonts: the Race Finder (I, or
+        /racefinder), its ready check as a stock popup, and the race's banner, results and chain
+        score at the top of the screen.
+
+        The finder is a plain addon over the addon channel, as a 1.12 group-finder addon is: it
+        sends the server's verbs with SendAddonMessage ("KARTCRAFT", "R\t<verb>...") and reads its
+        replies from CHAT_MSG_ADDON (docs on the protocol: kart/race.rs and Kartcraft.cpp). Queued,
+        it says it is still there every two seconds or the server drops it after ten.
+
+        The race and score come from the kart (kart/ui.rs) as BENILLA_KART_RACE and
+        BENILLA_KART_SCORE when they change; BENILLA_KART_FINDER_TOGGLE is the I key.
+    -->
+    <Script><![CDATA[
+        BENILLA_KART_PREFIX = "KARTCRAFT"
+        -- The server's course table (Kartcraft.cpp COURSES), by key.
+        BenillaKartCourses = {
+            { key = "sprint", name = "Northshire Sprint" },
+            { key = "elwynn", name = "Elwynn Loop" },
+            { key = "stormwind", name = "Road to Stormwind" },
+        }
+        BENILLA_KART_HEARTBEAT = 2
+        BENILLA_KART_RACING = "You're in a race: finish it, or leave it with F6, first."
+        BENILLA_KART_XP_COLOR = { r = 111 / 255, g = 111 / 255, b = 1 }
+        BENILLA_KART_SKILL_COLOR = { r = 0.4, g = 0.8, b = 1 }
+
+        -- The finder's state: what is ticked, what we queued for and the server's word on it.
+        BenillaKartFinder = { any = 1, picked = {}, beat = 0, noticeUntil = 0 }
+
+        function BenillaKart_Send(body)
+            SendAddonMessage(BENILLA_KART_PREFIX, "R\t" .. body, "PARTY")
+        end
+
+        -- `text` cut at each TAB.
+        function BenillaKart_Split(text)
+            local out, from = {}, 1
+            while true do
+                local at = string.find(text, "\t", from, 1)
+                if not at then
+                    table.insert(out, string.sub(text, from))
+                    return out
+                end
+                table.insert(out, string.sub(text, from, at - 1))
+                from = at + 1
+            end
+        end
+
+        function BenillaKart_CourseName(key)
+            for i = 1, table.getn(BenillaKartCourses) do
+                if BenillaKartCourses[i].key == key then return BenillaKartCourses[i].name end
+            end
+            if key == "any" then return "any course" end
+            return key
+        end
+
+        -- "any", or the ticked courses' keys.
+        function BenillaKartFinder_Keys()
+            local f = BenillaKartFinder
+            local keys = ""
+            if not f.any then
+                for i = 1, table.getn(BenillaKartCourses) do
+                    if f.picked[i] then
+                        if keys ~= "" then keys = keys .. "," end
+                        keys = keys .. BenillaKartCourses[i].key
+                    end
+                end
+            end
+            if keys == "" then return "any" end
+            return keys
+        end
+
+        function BenillaKartFinder_Queue()
+            local f = BenillaKartFinder
+            f.queued = BenillaKartFinder_Keys()
+            f.waiting, f.waited, f.noticeUntil = nil, nil, 0
+            BenillaKart_Send("Q+\t" .. f.queued)
+            f.beat = GetTime() + BENILLA_KART_HEARTBEAT
+        end
+
+        function BenillaKartFinder_Leave()
+            local f = BenillaKartFinder
+            f.queued, f.waiting, f.waited = nil, nil, nil
+            BenillaKart_Send("Q-")
+        end
+
+        -- A tick: index 0 is "Any course". Changing the courses while queued keeps the place.
+        function BenillaKartFinder_Pick(index)
+            local f = BenillaKartFinder
+            if index == 0 then
+                f.any, f.picked = 1, {}
+            else
+                if f.picked[index] then f.picked[index] = nil else f.picked[index] = 1 end
+                f.any = nil
+                if not next(f.picked) then f.any = 1 end
+            end
+            if f.queued then BenillaKartFinder_Queue() end
+            BenillaKartFinder_Refresh()
+        end
+
+        function BenillaKartFinder_QueueClick()
+            if BenillaKartFinder.queued then BenillaKartFinder_Leave() else BenillaKartFinder_Queue() end
+            BenillaKartFinder_Refresh()
+        end
+
+        function BenillaKartFinder_Answer(accept)
+            local f = BenillaKartFinder
+            local check = f.check
+            if not check or check.answered then return end
+            check.answered = 1
+            if accept then
+                BenillaKart_Send("Y\t" .. check.id)
+            else
+                BenillaKart_Send("N\t" .. check.id)
+                f.check, f.queued = nil, nil
+            end
+        end
+
+        function BenillaKartFinder_Toggle()
+            if BenillaKartFinderFrame:IsVisible() then
+                BenillaKartFinderFrame:Hide()
+            else
+                BenillaKartFinderFrame:Show()
+            end
+        end
+
+        -- The status line: the ready check, a refusal, the queue, or how to start.
+        function BenillaKartFinder_Status()
+            local f = BenillaKartFinder
+            if f.check then
+                if f.check.answered then return "Race ready: waiting for the others..." end
+                return "Race ready: " .. BenillaKart_CourseName(f.check.course)
+            end
+            if not f.queued then
+                if GetTime() < f.noticeUntil then return BENILLA_KART_RACING end
+                return "Pick courses and find a race."
+            end
+            local names = ""
+            local keys = BenillaKart_Split(string.gsub(f.queued, ",", "\t"))
+            for i = 1, table.getn(keys) do
+                if names ~= "" then names = names .. ", " end
+                names = names .. BenillaKart_CourseName(keys[i])
+            end
+            if not f.waited then return "In queue: " .. names end
+            return format("In queue: %s\n%d:%02d, %d waiting", names, floor(f.waited / 60),
+                mod(f.waited, 60), f.waiting)
+        end
+
+        function BenillaKartFinder_Refresh()
+            local frame = BenillaKartFinderFrame
+            if not frame:IsVisible() then return end
+            local f = BenillaKartFinder
+            getglobal("BenillaKartFinderFrameAny"):SetChecked(f.any)
+            for i = 1, table.getn(BenillaKartCourses) do
+                getglobal("BenillaKartFinderFrameCourse" .. i):SetChecked(f.picked[i])
+            end
+            if f.queued then
+                BenillaKartFinderFrameQueue:SetText("Leave queue")
+            else
+                BenillaKartFinderFrameQueue:SetText("Find race")
+            end
+            BenillaKartFinderFrameStatus:SetText(BenillaKartFinder_Status())
+        end
+
+        -- The server's replies.
+        function BenillaKartFinder_OnLine(message)
+            local f = BenillaKartFinder
+            local line = BenillaKart_Split(message)
+            if line[1] ~= "R" then return end
+            local verb = line[2]
+            if verb == "Qs" then
+                f.waiting, f.waited = tonumber(line[3]), tonumber(line[4])
+            elseif verb == "Qx" then
+                f.queued, f.waiting, f.waited = nil, nil, nil
+                if line[3] == "racing" then f.noticeUntil = GetTime() + 6 end
+            elseif verb == "Pop" then
+                f.check = { id = line[3], course = line[4], racers = tonumber(line[5]) or 0 }
+                if StaticPopupDialogs then
+                    StaticPopupDialogs["BENILLA_KART_READY"].timeout = tonumber(line[6]) or 20
+                    StaticPopup_Show("BENILLA_KART_READY", BenillaKart_CourseName(line[4]), f.check.racers)
+                end
+            elseif verb == "Pop-" then
+                -- The server queues again those who accepted.
+                if f.check and not f.check.answered then f.queued = nil end
+                f.check = nil
+                if StaticPopup_Hide then StaticPopup_Hide("BENILLA_KART_READY") end
+            elseif verb == "L" then
+                -- A roster with us in it: the race has begun, so the finder is done.
+                local me = UnitName("player")
+                if me and string.find("," .. (line[4] or "") .. ",", "," .. me .. ",", 1, 1) then
+                    f.check, f.queued, f.waiting, f.waited = nil, nil, nil, nil
+                    if StaticPopup_Hide then StaticPopup_Hide("BENILLA_KART_READY") end
+                end
+            end
+            BenillaKartFinder_Refresh()
+        end
+
+        function BenillaKartRace_Show(banner, results)
+            BenillaKartRaceBanner:SetText(banner or "")
+            BenillaKartRaceResults:SetText(results or "")
+        end
+
+        -- The chain: its latest trick, its points, then the experience and skill it earned.
+        function BenillaKartScore_Show(trick, tr, tg, tb, points, pr, pg, pb, xp, skill, alpha)
+            if not trick then
+                BenillaKartScoreFrame:Hide()
+                return
+            end
+            BenillaKartScoreTrick:SetText(trick)
+            BenillaKartScoreTrick:SetTextColor(tr, tg, tb)
+            BenillaKartScorePoints:SetText(points)
+            BenillaKartScorePoints:SetTextColor(pr, pg, pb)
+            BenillaKartScoreXp:SetText(xp)
+            BenillaKartScoreSkill:SetText(skill)
+            BenillaKartScoreFrame:SetAlpha(alpha)
+            BenillaKartScoreFrame:Show()
+        end
+
+        function BenillaKartEvents_OnEvent()
+            if event == "CHAT_MSG_ADDON" then
+                if arg1 == BENILLA_KART_PREFIX then BenillaKartFinder_OnLine(arg2) end
+            elseif event == "BENILLA_KART_RACE" then
+                BenillaKartRace_Show(arg1, arg2)
+            elseif event == "BENILLA_KART_SCORE" then
+                BenillaKartScore_Show(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11)
+            elseif event == "BENILLA_KART_FINDER_TOGGLE" then
+                BenillaKartFinder_Toggle()
+            end
+        end
+
+        -- The heartbeat, and the end of a ready check nobody answered.
+        function BenillaKartEvents_OnUpdate()
+            local f = BenillaKartFinder
+            if (f.queued or f.check) and GetTime() >= f.beat then
+                f.beat = GetTime() + BENILLA_KART_HEARTBEAT
+                BenillaKart_Send("W")
+            end
+        end
+        -- The stock tables last, and only where they exist: a load without the stock interface
+        -- (a dev build's harness) still defines everything above.
+        if StaticPopupDialogs then
+            StaticPopupDialogs["BENILLA_KART_READY"] = {
+                text = "Race ready: %s (%d racers).\nJoin it?",
+                button1 = ACCEPT,
+                button2 = DECLINE,
+                timeout = 20,
+                whileDead = 1,
+                hideOnEscape = 1,
+                OnAccept = function() BenillaKartFinder_Answer(1) end,
+                OnCancel = function() BenillaKartFinder_Answer(nil) end,
+            }
+        end
+        if SlashCmdList then
+            SLASH_BENILLA_RACEFINDER1 = "/racefinder"
+            SlashCmdList["BENILLA_RACEFINDER"] = function() BenillaKartFinder_Toggle() end
+        end
+    ]]></Script>
+
+    <CheckButton name="BenillaKartFinderCheckTemplate" inherits="OptionsCheckButtonTemplate" virtual="true">
+        <Scripts>
+            <OnClick>BenillaKartFinder_Pick(this:GetID())</OnClick>
+        </Scripts>
+    </CheckButton>
+
+    <Frame name="BenillaKartFinderFrame" toplevel="true" enableMouse="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
+        <Size><AbsDimension x="300" y="250"/></Size>
+        <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="80"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
+            <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
+            <TileSize><AbsValue val="32"/></TileSize>
+            <EdgeSize><AbsValue val="32"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
+                    <Size><AbsDimension x="256" y="64"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
+                </Texture>
+                <FontString inherits="GameFontNormal" text="Race Finder">
+                    <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentStatus" inherits="GameFontHighlightSmall" justifyH="LEFT" justifyV="TOP">
+                    <Size><AbsDimension x="252" y="32"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-168"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <CheckButton name="$parentAny" inherits="BenillaKartFinderCheckTemplate" id="0">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-32"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentCourse1" inherits="BenillaKartFinderCheckTemplate" id="1">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentAny" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-4"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentCourse2" inherits="BenillaKartFinderCheckTemplate" id="2">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentCourse1" relativePoint="BOTTOMLEFT"/></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentCourse3" inherits="BenillaKartFinderCheckTemplate" id="3">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentCourse2" relativePoint="BOTTOMLEFT"/></Anchors>
+            </CheckButton>
+            <Button name="$parentQueue" inherits="UIPanelButtonTemplate" text="Find race">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="18"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartFinder_QueueClick()</OnClick></Scripts>
+            </Button>
+            <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-24" y="18"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartFinderFrame:Hide()</OnClick></Scripts>
+            </Button>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                -- The labels are the check template's; Escape closes it, as it does a stock panel.
+                local label = getglobal(this:GetName() .. "AnyText")
+                if label then label:SetText("Any course") end
+                for i = 1, table.getn(BenillaKartCourses) do
+                    label = getglobal(this:GetName() .. "Course" .. i .. "Text")
+                    if label then label:SetText(BenillaKartCourses[i].name) end
+                end
+                if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
+            </OnLoad>
+            <OnShow>
+                PlaySound("igMainMenuOpen")
+                BenillaKartFinder_Refresh()
+            </OnShow>
+            <OnHide>PlaySound("igMainMenuClose")</OnHide>
+            <OnUpdate>BenillaKartFinder_Refresh()</OnUpdate>
+        </Scripts>
+    </Frame>
+
+    <!-- The race's banner (the prompt at a start, the countdown, the result) and the results. -->
+    <Frame name="BenillaKartRaceFrame" parent="UIParent" setAllPoints="true" frameStrata="LOW">
+        <Layers>
+            <Layer level="OVERLAY">
+                <FontString name="BenillaKartRaceBanner" inherits="GameFontNormalHuge" justifyH="CENTER">
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-190"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="BenillaKartRaceResults" inherits="GameFontHighlightLarge" justifyH="RIGHT">
+                    <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-40" y="-250"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+    </Frame>
+
+    <!-- The turbo chain's score: the trick, the points, then the experience and skill it earned. -->
+    <Frame name="BenillaKartScoreFrame" parent="UIParent" hidden="true" frameStrata="LOW">
+        <Size><AbsDimension x="400" y="100"/></Size>
+        <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-80"/></Offset></Anchor></Anchors>
+        <Layers>
+            <Layer level="OVERLAY">
+                <FontString name="BenillaKartScoreTrick" inherits="GameFontHighlightLarge">
+                    <Anchors><Anchor point="TOP"/></Anchors>
+                </FontString>
+                <FontString name="BenillaKartScorePoints" inherits="GameFontNormalHuge">
+                    <Anchors><Anchor point="TOP" relativeTo="BenillaKartScoreTrick" relativePoint="BOTTOM"><Offset><AbsDimension x="0" y="-4"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="BenillaKartScoreXp" inherits="GameFontNormal" justifyH="RIGHT">
+                    <Anchors><Anchor point="TOPRIGHT" relativeTo="BenillaKartScorePoints" relativePoint="BOTTOM"><Offset><AbsDimension x="-12" y="-4"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="BenillaKartScoreSkill" inherits="GameFontNormal" justifyH="LEFT">
+                    <Anchors><Anchor point="TOPLEFT" relativeTo="BenillaKartScorePoints" relativePoint="BOTTOM"><Offset><AbsDimension x="12" y="-4"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Scripts>
+            <OnLoad>
+                BenillaKartScoreXp:SetTextColor(BENILLA_KART_XP_COLOR.r, BENILLA_KART_XP_COLOR.g, BENILLA_KART_XP_COLOR.b)
+                BenillaKartScoreSkill:SetTextColor(BENILLA_KART_SKILL_COLOR.r, BENILLA_KART_SKILL_COLOR.g, BENILLA_KART_SKILL_COLOR.b)
+            </OnLoad>
+        </Scripts>
+    </Frame>
+
+    <!-- The finder's ear and heartbeat, shown always and drawing nothing. -->
+    <Frame name="BenillaKartEventFrame" parent="UIParent">
+        <Scripts>
+            <OnLoad>
+                this:RegisterEvent("CHAT_MSG_ADDON")
+                this:RegisterEvent("BENILLA_KART_RACE")
+                this:RegisterEvent("BENILLA_KART_SCORE")
+                this:RegisterEvent("BENILLA_KART_FINDER_TOGGLE")
+            </OnLoad>
+            <OnEvent>BenillaKartEvents_OnEvent()</OnEvent>
+            <OnUpdate>BenillaKartEvents_OnUpdate()</OnUpdate>
+        </Scripts>
+    </Frame>
+</Ui>

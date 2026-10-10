@@ -17,6 +17,8 @@ mod content;
 pub(crate) mod extract;
 mod input;
 #[cfg(test)]
+mod kartcraft_tests;
+#[cfg(test)]
 mod layer_tests;
 mod load_log;
 mod manifest;

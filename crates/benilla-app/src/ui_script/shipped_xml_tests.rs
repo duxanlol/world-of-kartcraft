@@ -1937,6 +1937,9 @@ fn the_layer_does_not_grow() {
         "ContainerFrameAdapters.xml",
         "SpellBookAdapters.xml",
         "ScriptLogFrame.xml",
+        // World of Kartcraft's race windows, drawn with the stock widgets: the kart mode has no
+        // stock window to adapt.
+        "KartcraftFrames.xml",
         "FrameXMLFixes.xml",
     ];
     assert_eq!(

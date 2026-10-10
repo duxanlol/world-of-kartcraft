@@ -6,7 +6,6 @@
 use benilla_formats::kartcraft::SKILL_KARTING;
 use benilla_protocol::SessionEvent;
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
 
 use crate::net::{ObjectStore, SelfPlayer};
 use kartcraft::chain::Line;
@@ -23,9 +22,6 @@ const TRICK_COLOR: Color = Color::srgb(1.0, 1.0, 1.0);
 const POINTS_COLOR: Color = Color::srgb(1.0, 0.82, 0.0);
 const BANKED_COLOR: Color = Color::srgb(0.35, 1.0, 0.35);
 const CRASH_COLOR: Color = Color::srgb(1.0, 0.25, 0.2);
-/// The chat's experience colour (`CHAT_MSG_COMBAT_XP_GAIN`).
-const XP_COLOR: Color = Color::srgb(111.0 / 255.0, 111.0 / 255.0, 1.0);
-const SKILL_COLOR: Color = Color::srgb(0.4, 0.8, 1.0);
 
 /// The score feed, written by the kart update and the experience handler.
 #[derive(Resource, Default)]
@@ -88,84 +84,21 @@ pub(super) fn on_xp_gain(In(ev): In<SessionEvent>, time: Res<Time>, mut score: R
     }
 }
 
-#[derive(Component)]
-pub(super) struct ScoreRoot;
-
-#[derive(Component, Clone, Copy)]
-pub(super) enum ScoreLine {
-    Trick,
-    Points,
-    Xp,
-    Skill,
+/// What the score shows this frame: per line its text and colour, and the shared alpha. The
+/// client's UI layer draws it (`super::ui`).
+pub(super) struct Shown {
+    pub(super) trick: (String, Color),
+    pub(super) points: (String, Color),
+    pub(super) xp: String,
+    pub(super) skill: String,
+    pub(super) alpha: f32,
 }
 
-pub(super) fn spawn(mut commands: Commands) {
-    commands
-        .spawn((
-            ScoreRoot,
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Percent(11.0),
-                width: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            Pickable::IGNORE,
-            GlobalZIndex(10),
-            Visibility::Hidden,
-        ))
-        .with_children(|root| {
-            let text = |line| {
-                (
-                    line,
-                    Text::new(String::new()),
-                    TextFont::default(),
-                    TextColor(Color::WHITE),
-                    TextShadow::default(),
-                    Pickable::IGNORE,
-                )
-            };
-            root.spawn(text(ScoreLine::Trick));
-            root.spawn(text(ScoreLine::Points));
-            // Experience and skill side by side, each in its own colour.
-            root.spawn((
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(24.0),
-                    ..default()
-                },
-                Pickable::IGNORE,
-            ))
-            .with_children(|row| {
-                row.spawn(text(ScoreLine::Xp));
-                row.spawn(text(ScoreLine::Skill));
-            });
-        });
-}
-
-/// What the overlay shows this frame: per line its text and colour, and the shared alpha.
-struct Shown {
-    trick: (String, Color),
-    points: (String, Color),
-    xp: String,
-    skill: String,
-    alpha: f32,
-}
-
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub(super) fn draw(
-    time: Res<Time>,
-    assets: Res<AssetServer>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+/// The Karting skill's rise lands on the chain it came from.
+pub(super) fn track_skill(
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     mut score: ResMut<KartScore>,
-    mut root: Query<&mut Visibility, With<ScoreRoot>>,
-    mut lines: Query<(&ScoreLine, &mut Text, &mut TextFont, &mut TextColor)>,
-    mut font: Local<Option<Handle<Font>>>,
 ) {
-    let now = time.elapsed_secs();
-    // The skill's rise lands on the chain it came from.
     let skill = self_q.single().ok().and_then(|store| {
         (0..benilla_protocol::messages::PLAYER_SKILL_SLOTS)
             .filter_map(|slot| store.0.player_skill(slot))
@@ -180,34 +113,12 @@ pub(super) fn draw(
         }
     }
     score.skill = skill.or(score.skill);
+}
 
-    let shown = shown(&score, now, skill);
-    let Ok(mut visibility) = root.single_mut() else {
-        return;
-    };
-    let Some(shown) = shown else {
-        *visibility = Visibility::Hidden;
-        return;
-    };
-    *visibility = Visibility::Visible;
-
-    let height = windows.single().map(|w| w.height()).unwrap_or(768.0);
-    let font = font.get_or_insert_with(|| crate::char_select::wow_font(&assets));
-    for (line, mut text, mut text_font, mut color) in &mut lines {
-        let (value, tint, size) = match line {
-            ScoreLine::Trick => (&shown.trick.0, shown.trick.1, 0.032),
-            ScoreLine::Points => (&shown.points.0, shown.points.1, 0.055),
-            ScoreLine::Xp => (&shown.xp, XP_COLOR, 0.028),
-            ScoreLine::Skill => (&shown.skill, SKILL_COLOR, 0.028),
-        };
-        if text_font.font != *font {
-            text_font.font = font.clone();
-        }
-        text_font.font_size = (height * size).round();
-        color.0 = tint.with_alpha(shown.alpha);
-        if text.0 != *value {
-            text.0.clone_from(value);
-        }
+impl KartScore {
+    /// What to show at `now`, or nothing.
+    pub(super) fn shown(&self, now: f32) -> Option<Shown> {
+        shown(self, now, self.skill)
     }
 }
 
