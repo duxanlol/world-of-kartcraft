@@ -114,6 +114,11 @@ fn the_finder_queues_keeps_its_place_and_answers_the_ready_check() {
     assert!(s
         .eval::<bool>("return BenillaKartFinder.queued == nil and BenillaKartFinder.check == nil")
         .unwrap());
+    assert!(
+        !s.eval::<bool>("return BenillaKartFinderFrame:IsVisible() == 1")
+            .unwrap(),
+        "the finder closes once the race has us"
+    );
     s.tick(2.1);
     assert!(sent(&mut s).is_empty(), "no heartbeat once the race has us");
 }
@@ -263,6 +268,160 @@ fn forty_courses_scroll_and_a_tick_follows_its_course() {
         .unwrap());
     s.run("BenillaKartFinderFrameQueue:Click()").unwrap();
     assert_eq!(sent(&mut s), [format!("KARTCRAFT\tR\tQ+\t{key}")]);
+}
+
+#[test]
+fn the_search_narrows_the_list() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 40);
+    s.run("BenillaKartFinderFrame:Show()").unwrap();
+    s.tick(0.0);
+    let visible = |s: &UiScript| -> Vec<String> {
+        s.eval(
+            "local out = {} for i = 1, BENILLA_KART_ROWS do \
+             local row = getglobal('BenillaKartFinderFrameRow' .. i) \
+             if row:IsVisible() then table.insert(out, getglobal(row:GetName() .. 'Text'):GetText()) end \
+             end return out",
+        )
+        .unwrap()
+    };
+
+    // Any case, anywhere in the name.
+    s.run("BenillaKartFinderFrameSearch:SetText('COURSE 4')")
+        .unwrap();
+    s.tick(0.0);
+    assert_eq!(visible(&s), ["Course 4", "Course 40"]);
+    s.run("BenillaKartFinderFrameSearch:SetText('elwyn')")
+        .unwrap();
+    s.tick(0.0);
+    assert_eq!(visible(&s), ["Elwynn Loop"]);
+
+    // A tick made under a search queues; clearing it brings the whole list back.
+    s.run("BenillaKartFinderFrameRow1:Click()").unwrap();
+    s.run("BenillaKartFinderFrameSearch:SetText('')").unwrap();
+    s.tick(0.0);
+    assert_eq!(visible(&s).len(), 8);
+    s.run("BenillaKartFinderFrameQueue:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tQ+\telwynn"]);
+}
+
+#[test]
+fn closing_while_queued_minimizes_to_the_queue_button() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 3);
+    s.run("BenillaKartFinderFrame:Show()").unwrap();
+    s.tick(0.0);
+    let shown = |s: &UiScript, frame: &str| -> bool {
+        s.eval(&format!("return {frame}:IsVisible() == 1")).unwrap()
+    };
+
+    // Not queued: Close closes, and nothing stays on screen.
+    assert_eq!(
+        s.eval::<String>("return BenillaKartFinderFrameClose:GetText()")
+            .unwrap(),
+        "Close"
+    );
+    s.run("BenillaKartFinderFrameClose:Click()").unwrap();
+    s.tick(0.0);
+    assert!(!shown(&s, "BenillaKartFinderFrame") && !shown(&s, "BenillaKartQueueButton"));
+
+    // Queued: Close reads Minimize, and the queue button shows the server's status.
+    s.run("BenillaKartFinderFrame:Show() BenillaKartFinderFrameQueue:Click()")
+        .unwrap();
+    from_server(&mut s, "R\tQs\t3\t65");
+    assert_eq!(
+        s.eval::<String>("return BenillaKartFinderFrameClose:GetText()")
+            .unwrap(),
+        "Minimize"
+    );
+    s.run("BenillaKartFinderFrameClose:Click()").unwrap();
+    s.tick(0.0);
+    assert!(!shown(&s, "BenillaKartFinderFrame"));
+    assert!(shown(&s, "BenillaKartQueueButton"));
+    assert_eq!(
+        s.eval::<String>("return BenillaKartQueueButtonText:GetText()")
+            .unwrap(),
+        "Race Finder: 1:05, 3 waiting"
+    );
+
+    // A click opens the window again; leaving the queue retires the button.
+    s.run("BenillaKartQueueButton:Click()").unwrap();
+    s.tick(0.0);
+    assert!(shown(&s, "BenillaKartFinderFrame") && !shown(&s, "BenillaKartQueueButton"));
+    s.run("BenillaKartFinderFrameQueue:Click() BenillaKartFinderFrame:Hide()")
+        .unwrap();
+    s.tick(0.0);
+    assert!(!shown(&s, "BenillaKartQueueButton"));
+}
+
+#[test]
+fn the_results_are_a_board_and_the_widgets_move() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let race = |s: &mut UiScript, banner: &str, results: &str| {
+        s.fire_event(
+            "BENILLA_KART_RACE",
+            vec![
+                ScriptValue::Str(banner.into()),
+                ScriptValue::Str(results.into()),
+            ],
+        );
+        s.tick(0.0);
+    };
+    let shown = |s: &UiScript, frame: &str| -> bool {
+        s.eval(&format!("return {frame}:IsVisible() == 1")).unwrap()
+    };
+
+    // No results, no board; the finish shows one as tall as its lines.
+    race(&mut s, "GO!", "");
+    assert!(!shown(&s, "BenillaKartResultsFrame"));
+    race(
+        &mut s,
+        "1ST — 1:02.40",
+        "1. Probesix  1:02.40\n2. Goblin  1:03.10\n3. Gnome  1:05.00",
+    );
+    assert!(shown(&s, "BenillaKartResultsFrame"));
+    assert_eq!(
+        s.eval::<String>("return BenillaKartResultsFrameTitle:GetText()")
+            .unwrap(),
+        "Race Results"
+    );
+    assert_eq!(
+        s.eval::<f64>("return BenillaKartResultsFrame:GetHeight()")
+            .unwrap(),
+        44.0 + 3.0 * 16.0
+    );
+    race(&mut s, "", "");
+    assert!(!shown(&s, "BenillaKartResultsFrame"));
+
+    // The finder, its queue button and the board drag, and a dragged one keeps its place.
+    for frame in [
+        "BenillaKartFinderFrame",
+        "BenillaKartQueueButton",
+        "BenillaKartResultsFrame",
+    ] {
+        assert!(
+            s.eval::<bool>(&format!("return {frame}:IsMovable() == 1"))
+                .unwrap(),
+            "{frame} is not movable"
+        );
+    }
+    s.run("BenillaKartResultsFrame:Show() BenillaKartResultsFrame:StartMoving() BenillaKartResultsFrame:StopMovingOrSizing()")
+        .unwrap();
+    assert!(s
+        .eval::<bool>("return BenillaKartResultsFrame:IsUserPlaced() == 1")
+        .unwrap());
 }
 
 #[test]

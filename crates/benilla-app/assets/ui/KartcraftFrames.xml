@@ -34,7 +34,7 @@
 
         -- The finder's state: what is ticked (by course key, so a scroll moves no tick), what we
         -- queued for and the server's word on it.
-        BenillaKartFinder = { any = 1, picked = {}, beat = 0, noticeUntil = 0 }
+        BenillaKartFinder = { any = 1, picked = {}, beat = 0, noticeUntil = 0, search = "" }
 
         function BenillaKart_Send(body)
             SendAddonMessage(BENILLA_KART_PREFIX, "R\t" .. body, "PARTY")
@@ -167,16 +167,41 @@
             BenillaKartFinder_UpdateList()
             if f.queued then
                 BenillaKartFinderFrameQueue:SetText("Leave queue")
+                BenillaKartFinderFrameClose:SetText("Minimize")
             else
                 BenillaKartFinderFrameQueue:SetText("Find race")
+                BenillaKartFinderFrameClose:SetText("Close")
             end
             BenillaKartFinderFrameStatus:SetText(BenillaKartFinder_Status())
+        end
+
+        -- What the list shows: every entry whose name holds the search, any case.
+        function BenillaKartFinder_Shown()
+            local search = string.lower(BenillaKartFinder.search or "")
+            if search == "" then return BenillaKartCourses end
+            local shown = {}
+            for i = 1, table.getn(BenillaKartCourses) do
+                local course = BenillaKartCourses[i]
+                if string.find(string.lower(course.name), search, 1, 1) then
+                    table.insert(shown, course)
+                end
+            end
+            return shown
+        end
+
+        -- The search box's text: the list filters and goes back to its head.
+        function BenillaKartFinder_Search(text)
+            BenillaKartFinder.search = text or ""
+            local bar = getglobal("BenillaKartFinderFrameScrollScrollBar")
+            if bar then bar:SetValue(0) end
+            BenillaKartFinder_Refresh()
         end
 
         -- The course rows over the list from the scroll's offset; the stock faux kit's bar where it
         -- is loaded, else the list's head.
         function BenillaKartFinder_UpdateList()
-            local count = table.getn(BenillaKartCourses)
+            local list = BenillaKartFinder_Shown()
+            local count = table.getn(list)
             local offset = 0
             if FauxScrollFrame_Update then
                 local scroll = BenillaKartFinderFrameScroll
@@ -186,7 +211,7 @@
             end
             for i = 1, BENILLA_KART_ROWS do
                 local row = getglobal("BenillaKartFinderFrameRow" .. i)
-                local course = BenillaKartCourses[offset + i]
+                local course = list[offset + i]
                 if course then
                     row.key = course.key
                     local label = getglobal(row:GetName() .. "Text")
@@ -253,19 +278,36 @@
                 if StaticPopup_Hide then StaticPopup_Hide("BENILLA_KART_READY") end
                 if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("You left every race and the Race Finder queue.", 1, 0.82, 0) end
             elseif verb == "L" then
-                -- A roster with us in it: the race has begun, so the finder is done.
+                -- A roster with us in it: we are in a race, so the finder is done and closes.
                 local me = UnitName("player")
                 if me and string.find("," .. (line[4] or "") .. ",", "," .. me .. ",", 1, 1) then
                     f.check, f.queued, f.waiting, f.waited = nil, nil, nil, nil
                     if StaticPopup_Hide then StaticPopup_Hide("BENILLA_KART_READY") end
+                    BenillaKartFinderFrame:Hide()
                 end
             end
             BenillaKartFinder_Refresh()
         end
 
+        -- A widget the player drags with the left button; its place is kept between sessions,
+        -- as a user-placed frame's is (layout-local.txt).
+        function BenillaKart_Movable(frame)
+            frame:SetMovable(1)
+            frame:RegisterForDrag("LeftButton")
+        end
+
+        -- The banner, and the results as a board: one line a racer, the board as tall as them.
         function BenillaKartRace_Show(banner, results)
             BenillaKartRaceBanner:SetText(banner or "")
-            BenillaKartRaceResults:SetText(results or "")
+            results = results or ""
+            BenillaKartRaceResults:SetText(results)
+            if results == "" then
+                BenillaKartResultsFrame:Hide()
+                return
+            end
+            local lines = table.getn(BenillaKart_Split(string.gsub(results, "\n", "\t")))
+            BenillaKartResultsFrame:SetHeight(44 + lines * 16)
+            BenillaKartResultsFrame:Show()
         end
 
         -- The chain: its latest trick, its points, then the experience and skill it earned.
@@ -300,8 +342,29 @@
             end
         end
 
+        -- The finder minimized: queued (or a ready check out) with the window shut, a small button
+        -- shows the queue and opens the window again.
+        function BenillaKartQueueButton_Update()
+            local f = BenillaKartFinder
+            local button = BenillaKartQueueButton
+            if (f.queued or f.check) and not BenillaKartFinderFrame:IsVisible() then
+                local text = "Race Finder: in queue"
+                if f.check then
+                    text = "Race Finder: race ready"
+                elseif f.waited then
+                    text = format("Race Finder: %d:%02d, %d waiting", floor(f.waited / 60),
+                        mod(f.waited, 60), f.waiting or 0)
+                end
+                BenillaKartQueueButtonText:SetText(text)
+                button:Show()
+            else
+                button:Hide()
+            end
+        end
+
         -- The heartbeat, and the end of a ready check nobody answered.
         function BenillaKartEvents_OnUpdate()
+            BenillaKartQueueButton_Update()
             local f = BenillaKartFinder
             if (f.queued or f.check) and GetTime() >= f.beat then
                 f.beat = GetTime() + BENILLA_KART_HEARTBEAT
@@ -338,8 +401,8 @@
         </Scripts>
     </CheckButton>
 
-    <Frame name="BenillaKartFinderFrame" toplevel="true" enableMouse="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="320" y="346"/></Size>
+    <Frame name="BenillaKartFinderFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
+        <Size><AbsDimension x="320" y="374"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="80"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -357,13 +420,30 @@
                 </FontString>
                 <FontString name="$parentStatus" inherits="GameFontHighlightSmall" justifyH="LEFT" justifyV="TOP">
                     <Size><AbsDimension x="252" y="32"/></Size>
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-264"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-292"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
         <Frames>
+            <!-- The search over the list's names: the stock input box, the keyboard only on a click. -->
+            <EditBox name="$parentSearch" inherits="InputBoxTemplate" autoFocus="false" letters="40">
+                <Size><AbsDimension x="200" y="20"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="80" y="-34"/></Offset></Anchor></Anchors>
+                <Layers>
+                    <Layer level="ARTWORK">
+                        <FontString inherits="GameFontNormalSmall" text="Search">
+                            <Anchors><Anchor point="RIGHT" relativePoint="LEFT"><Offset><AbsDimension x="-10" y="0"/></Offset></Anchor></Anchors>
+                        </FontString>
+                    </Layer>
+                </Layers>
+                <Scripts>
+                    <OnTextChanged>BenillaKartFinder_Search(this:GetText())</OnTextChanged>
+                    <OnEscapePressed>this:ClearFocus()</OnEscapePressed>
+                    <OnEnterPressed>this:ClearFocus()</OnEnterPressed>
+                </Scripts>
+            </EditBox>
             <CheckButton name="$parentAny" inherits="BenillaKartFinderCheckTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-32"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-60"/></Offset></Anchor></Anchors>
             </CheckButton>
             <!-- The rows over the course list; a row's `key` is its course, set as it scrolls. -->
             <CheckButton name="$parentRow1" inherits="BenillaKartFinderCheckTemplate">
@@ -415,6 +495,7 @@
                 local label = getglobal(this:GetName() .. "AnyText")
                 if label then label:SetText("Any course") end
                 if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
+                BenillaKart_Movable(this)
                 this:EnableMouseWheel(1)
             </OnLoad>
             <OnShow>
@@ -423,9 +504,38 @@
             </OnShow>
             <OnHide>PlaySound("igMainMenuClose")</OnHide>
             <OnMouseWheel>BenillaKartFinder_OnMouseWheel(arg1)</OnMouseWheel>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
             <OnUpdate>BenillaKartFinder_Refresh()</OnUpdate>
         </Scripts>
     </Frame>
+
+    <!-- The finder minimized while queued: its status, a click opens it again. -->
+    <Button name="BenillaKartQueueButton" parent="UIParent" movable="true" clampedToScreen="true" hidden="true" frameStrata="MEDIUM">
+        <Size><AbsDimension x="200" y="28"/></Size>
+        <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-20" y="-200"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+            <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>
+            <TileSize><AbsValue val="16"/></TileSize>
+            <EdgeSize><AbsValue val="16"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentText" inherits="GameFontNormalSmall">
+                    <Anchors><Anchor point="CENTER"/></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Scripts>
+            <OnLoad>
+                this:SetBackdropColor(0, 0, 0, 0.8)
+                BenillaKart_Movable(this)
+            </OnLoad>
+            <OnClick>BenillaKartFinderFrame:Show()</OnClick>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Button>
 
     <!-- The race's banner (the prompt at a start, the countdown, the result) and the results. -->
     <Frame name="BenillaKartRaceFrame" parent="UIParent" setAllPoints="true" frameStrata="LOW">
@@ -434,11 +544,37 @@
                 <FontString name="BenillaKartRaceBanner" inherits="GameFontNormalHuge" justifyH="CENTER">
                     <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-190"/></Offset></Anchor></Anchors>
                 </FontString>
-                <FontString name="BenillaKartRaceResults" inherits="GameFontHighlightLarge" justifyH="RIGHT">
-                    <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-40" y="-250"/></Offset></Anchor></Anchors>
+            </Layer>
+        </Layers>
+    </Frame>
+
+    <!-- The race's results as a board the player can drag: the finished in order, with times. -->
+    <Frame name="BenillaKartResultsFrame" parent="UIParent" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" frameStrata="MEDIUM">
+        <Size><AbsDimension x="240" y="60"/></Size>
+        <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-40" y="-250"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+            <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>
+            <TileSize><AbsValue val="16"/></TileSize>
+            <EdgeSize><AbsValue val="16"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentTitle" inherits="GameFontNormal" text="Race Results">
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-10"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="BenillaKartRaceResults" inherits="GameFontHighlight" justifyH="LEFT" justifyV="TOP">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="14" y="-30"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
+        <Scripts>
+            <OnLoad>
+                this:SetBackdropColor(0, 0, 0, 0.75)
+                BenillaKart_Movable(this)
+            </OnLoad>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
     </Frame>
 
     <!-- The turbo chain's score: the trick, the points, then the experience and skill it earned. -->
