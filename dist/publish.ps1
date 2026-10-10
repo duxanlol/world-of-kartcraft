@@ -14,6 +14,7 @@
 # .setup\publish.cfg (yours, never committed) presets the package, one KEY=value per line:
 #   SERVER=host           the game server friends connect to (they are not asked for it)
 #   UPDATE_URL=https://... where launchers look for updates (default http://SERVER:8080)
+#   REGISTER_URL=https://... the account sign-up page, shown to new players
 #   AZURE_STORAGE=name    also upload dist\updates to that storage account's static website
 param([switch]$NoBuild)
 $ErrorActionPreference = 'Stop'
@@ -81,7 +82,7 @@ foreach ($name in 'Play Kartcraft.bat', 'Demo.bat', 'README.txt', 'update.ps1') 
     [IO.File]::WriteAllText((Join-Path $client $name), $text, (New-Object Text.UTF8Encoding $false))
 }
 # The launcher's presets; a player's own kartcraft.cfg overrides them.
-$defaults = (@('SERVER', 'UPDATE_URL') | Where-Object { $settings[$_] } | ForEach-Object { "$_=$($settings[$_])" }) -join "`r`n"
+$defaults = (@('SERVER', 'UPDATE_URL', 'REGISTER_URL') | Where-Object { $settings[$_] } | ForEach-Object { "$_=$($settings[$_])" }) -join "`r`n"
 [IO.File]::WriteAllText((Join-Path $client 'defaults.cfg'), "$defaults`r`n")
 
 # GPL: the complete source of this build ships beside it. git when the checkout is one, else the

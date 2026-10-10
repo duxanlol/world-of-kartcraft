@@ -75,6 +75,7 @@ if not exist "kart-data\kart.json" (
     if defined SERVER if not "%SERVER%"=="%DEF_SERVER%" echo SERVER=%SERVER%
     if defined CTR_DISC echo CTR_DISC=%CTR_DISC%
     if defined UPDATE_URL if not "%UPDATE_URL%"=="%DEF_UPDATE_URL%" echo UPDATE_URL=%UPDATE_URL%
+    if defined ACCOUNT_SEEN echo ACCOUNT_SEEN=1
 ) > "%CFG%"
 
 set "WOW_DATA=%WOW_DIR%\Data"
@@ -82,6 +83,12 @@ set "WOW_KART_DATA=%~dp0kart-data"
 if /i "%~1"=="demo" (
     start "" "%~dp0kartcraft-demo.exe"
     exit /b 0
+)
+if defined REGISTER_URL if not defined ACCOUNT_SEEN (
+    echo.
+    echo No account yet? Make one at %REGISTER_URL%
+    >> "%CFG%" echo ACCOUNT_SEEN=1
+    pause
 )
 set "WOW_HOST=%SERVER%"
 start "" "%~dp0WorldOfKartcraft.exe"

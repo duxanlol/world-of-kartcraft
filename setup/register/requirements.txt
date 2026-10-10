@@ -1,0 +1,5 @@
+flask==3.0.3
+gunicorn==22.0.0
+captcha==0.6.0
+pillow==10.4.0
+pymysql==1.1.1

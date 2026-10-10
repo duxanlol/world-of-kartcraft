@@ -1,0 +1,38 @@
+# The account sign-up page, beside a running Kartcraft server (Docker project world-of-kartcraft):
+# Caddy serves it over HTTPS with a Let's Encrypt certificate for SITE_ADDRESS (ports 80 and 443
+# must reach this host). Settings go in .env beside this file (see README.md); never commit it.
+#
+#   docker compose -p kartcraft-register up -d --build
+name: kartcraft-register
+services:
+  register:
+    build: .
+    restart: unless-stopped
+    environment:
+      - DB_HOST=database
+      - DB_USER=${DB_USER:-register}
+      - DB_PASSWORD=${DB_PASSWORD:?set DB_PASSWORD in .env}
+      - REALM_ADDRESS=${REALM_ADDRESS:-}
+      - PER_IP_PER_DAY=${PER_IP_PER_DAY:-3}
+      - PER_DAY=${PER_DAY:-100}
+    networks: [server, web]
+  caddy:
+    image: caddy:2.8.4-alpine
+    restart: unless-stopped
+    ports:
+      - 80:80
+      - 443:443
+    environment:
+      - SITE_ADDRESS=${SITE_ADDRESS:?set SITE_ADDRESS in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    networks: [web]
+networks:
+  # The game server's network, where its database answers as `database`.
+  server:
+    name: ${SERVER_NETWORK:-world-of-kartcraft_default}
+    external: true
+  web:
+volumes:
+  caddy-data:

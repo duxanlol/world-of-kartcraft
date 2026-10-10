@@ -55,3 +55,6 @@ __pycache__/
 /dist/WorldOfKartcraft/
 /dist/WorldOfKartcraft.zip
 /dist/updates/
+
+# The sign-up page's settings on the server host: its database password.
+/setup/register/.env

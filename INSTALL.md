@@ -144,7 +144,8 @@ image. You run the server and send them a ready-built client folder.
   The realm address column holds at most 32 characters, so use the VM's static IP, not a long
   cloud DNS name.
 
-**Accounts.** `account.bat` makes an account for a friend, an ordinary player (`-Gm` for an admin).
+**Accounts.** Players can make their own on a sign-up page with a captcha and no email
+(`setup/register/`, see its README), which runs beside the server. Or `account.bat` makes an account for a friend, an ordinary player (`-Gm` for an admin).
 It works on the local server, or on a remote one over SSH: give it
 `-Remote user@host -Key C:\path\to\key`, or save those two values as the two lines of
 `.setup\remote`.
