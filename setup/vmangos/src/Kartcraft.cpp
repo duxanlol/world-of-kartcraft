@@ -1105,13 +1105,34 @@ namespace Kartcraft
             // Not from a dungeon, a raid or a battleground: a pop would teleport them out of it.
             if (player->InBattleGround() || player->GetMap()->Instanceable())
                 mask = 0;
-            // Not while racing: a pop would teleport them off the course.
-            for (auto const& r : s_races)
-                for (Racer const& x : r.second.racers)
-                    if (x.guid == guid && !x.finished)
-                        mask = 0;
             if (!mask)
                 return true;
+            // A race still waiting to start is left for the queue; one under way is not: a pop
+            // would teleport them off the course, so they are told why instead.
+            for (auto it = s_races.begin(); it != s_races.end();)
+            {
+                Race& r = it->second;
+                auto x = std::find_if(r.racers.begin(), r.racers.end(), [guid](Racer const& m) { return m.guid == guid; });
+                if (x == r.racers.end() || x->finished)
+                {
+                    it = std::next(it);
+                    continue;
+                }
+                if (r.start)
+                {
+                    SendLine(player, "KARTCRAFT\tR\tQx\tracing");
+                    return true;
+                }
+                r.racers.erase(x);
+                SendLine(player, "KARTCRAFT\tR\tL\t" + std::to_string(it->first) + "\t");
+                if (r.racers.empty())
+                    it = s_races.erase(it);
+                else
+                {
+                    SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(it->first) + "\t" + Roster(r));
+                    it = std::next(it);
+                }
+            }
             if (mine != s_queue.end())
                 mine->courses = mask;
             else
@@ -1202,6 +1223,20 @@ namespace Kartcraft
             Course const* course = FindCourse(f[2]);
             if (!course || player->GetMapId() != course->map || DistanceTo(player, course->points[0]) > START_RADIUS)
                 return;
+            // A race already waiting on this course takes them in: who arrives after the offer
+            // (sent once, to those near) still races with the host rather than alone.
+            for (auto& [openId, open] : s_races)
+            {
+                bool in = std::any_of(open.racers.begin(), open.racers.end(),
+                    [player](Racer const& x) { return x.guid == player->GetObjectGuid(); });
+                if (open.course == course && !open.start && (in || open.racers.size() < MAX_RACERS))
+                {
+                    if (!in)
+                        open.racers.push_back({ player->GetObjectGuid(), player->GetName() });
+                    SendRace(open, "KARTCRAFT\tR\tL\t" + std::to_string(openId) + "\t" + Roster(open));
+                    return;
+                }
+            }
             uint32 raceId = s_nextRace++;
             Race& r = s_races[raceId];
             r.course = course;

@@ -167,8 +167,13 @@ pub(crate) struct Finder {
     /// (racers waiting for our courses, seconds we have waited) from the server.
     pub(crate) status: Option<(u32, u32)>,
     pub(crate) check: Option<ReadyCheck>,
+    /// Why the queue was refused, and until when (local s) it shows.
+    pub(crate) notice: Option<(&'static str, f32)>,
     beat_at: f32,
 }
+
+/// What the finder shows when the server refuses the queue to a racer.
+pub(crate) const RACING_NOTICE: &str = "You're in a race: finish it, or leave it with F6, first.";
 
 #[derive(Resource, Default)]
 pub(crate) struct Races {
@@ -184,6 +189,15 @@ pub(crate) struct Races {
 }
 
 impl Races {
+    /// Before queueing: `Err` while a race is under way; else the id of the race we were
+    /// waiting in to start, now left (the caller tells the server).
+    pub(crate) fn take_lobby(&mut self) -> Result<Option<u32>, ()> {
+        match &self.race {
+            Some(r) if r.go_at.is_some() && !r.done => Err(()),
+            _ => Ok(self.race.take().map(|r| r.id)),
+        }
+    }
+
     /// The next checkpoint of a race under way, Bevy world (ground height unknown: y 0).
     pub(crate) fn next_target(&self, now: f32) -> Option<Vec3> {
         let race = self.race.as_ref()?;
@@ -270,6 +284,9 @@ pub(crate) fn update(
             Some("Qx") => {
                 races.finder.queued = None;
                 races.finder.status = None;
+                if f.get(1).is_some_and(|why| why == "racing") {
+                    races.finder.notice = Some((RACING_NOTICE, now + 6.0));
+                }
             }
             Some("Pop") if f.len() >= 5 => {
                 races.finder.check = Some(ReadyCheck {
@@ -644,6 +661,11 @@ fn parse_status(f: &[String]) -> Option<(u32, u32)> {
 
 /// The Race Finder's banner: the ready check, else the queue, else nothing.
 pub(crate) fn finder_banner(finder: &Finder, now: f32) -> String {
+    if let Some((notice, until)) = finder.notice {
+        if now < until && finder.check.is_none() && finder.queued.is_none() {
+            return notice.into();
+        }
+    }
     if let Some(c) = &finder.check {
         return if c.accepted {
             "Race ready — waiting for the others...".into()
@@ -1074,6 +1096,32 @@ mod tests {
             finder_banner(&finder, 4.5),
             "Race ready: Elwynn Loop (3 racers) — F5 to accept, F6 to decline (16)"
         );
+    }
+
+    #[test]
+    fn queueing_leaves_a_waiting_race_but_not_one_under_way() {
+        let mut races = Races::default();
+        assert_eq!(races.take_lobby(), Ok(None));
+        races.race = Some(Active {
+            id: 4,
+            ..Default::default()
+        });
+        assert_eq!(races.take_lobby(), Ok(Some(4)));
+        assert!(races.race.is_none());
+        races.race = Some(Active {
+            id: 5,
+            go_at: Some(1.0),
+            ..Default::default()
+        });
+        assert_eq!(races.take_lobby(), Err(()));
+        assert!(races.race.is_some());
+
+        let finder = Finder {
+            notice: Some((RACING_NOTICE, 6.0)),
+            ..Default::default()
+        };
+        assert_eq!(finder_banner(&finder, 1.0), RACING_NOTICE);
+        assert_eq!(finder_banner(&finder, 7.0), "");
     }
 
     #[test]
