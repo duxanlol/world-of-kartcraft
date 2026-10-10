@@ -2655,6 +2655,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "course-gen"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "benilla-bytes",
+ "benilla-formats",
+ "benilla-m2",
+ "clap",
+ "glam 0.30.10",
+ "image",
+ "kart-driver",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cpal"
 version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4128,6 +4144,15 @@ dependencies = [
  "cpal 0.17.1",
  "kartcraft",
  "kira",
+]
+
+[[package]]
+name = "kart-driver"
+version = "0.2.0"
+dependencies = [
+ "ctr-kart",
+ "glam 0.30.10",
+ "serde_json",
 ]
 
 [[package]]

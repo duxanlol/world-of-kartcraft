@@ -57,3 +57,11 @@ server image is built from; rebuild the server image to take the change. `pack.p
 exits non-zero when the header or the patch is stale. The client needs nothing: it embeds the
 file at compile time (`crates/benilla-app/src/kart/race.rs`, `COURSES`), so a rebuild picks it up.
 The checkpoints a race uses still reach the client from the server at the start (`R\tC`).
+
+## Generated courses
+
+`course-gen` (crates/course-gen) lays courses over a zone's terrain from the player's install
+and writes only their checkpoints here: `course-gen export --candidates <run>/candidates.json
+--all` adds a run's finalists (key `<zone>-<place>-<place>`, replacing a course of the same key),
+and `course-gen batch --zones alliance,horde --out <dir>` runs zones and adds each one's
+finalists as it finishes, never replacing a key already in the file.

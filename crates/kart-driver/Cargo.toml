@@ -1,0 +1,16 @@
+[package]
+name = "kart-driver"
+version.workspace = true
+edition.workspace = true
+# Drives `ctr-kart` (GPL-3.0, ported from the CTR decompilation), so GPL-3.0 as well.
+license = "GPL-3.0-or-later"
+description = "A bot that test-drives a kart course over CTR's driving model and reports how it drove"
+
+[lints]
+workspace = true
+
+[dependencies]
+ctr-kart = { path = "../ctr-kart" }
+glam = "0.30"
+# The course file the `kart-drive` binary reads and the report it prints.
+serde_json = "1"
