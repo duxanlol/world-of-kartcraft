@@ -59,6 +59,8 @@ pub(crate) struct Active {
     /// When the gas went down during the countdown (local s), for the start boost.
     revved_at: Option<f32>,
     beeped: i32,
+    /// The standings, leader first, as last worked out.
+    order: Vec<String>,
 }
 
 #[derive(Resource, Default)]
@@ -86,6 +88,17 @@ impl Races {
         };
         let p = race.points[next];
         Some(wow_to_bevy([p[0], p[1], 0.0]))
+    }
+
+    /// The race whose weapons are live: one we are in and have not finished (the server lays
+    /// its crates at the start; they go when we leave or finish).
+    pub(crate) fn weapons_race(&self) -> Option<u32> {
+        self.race.as_ref().filter(|r| !r.done).map(|r| r.id)
+    }
+
+    /// The racers by name, leader first.
+    pub(crate) fn order(&self) -> &[String] {
+        self.race.as_ref().map_or(&[], |r| r.order.as_slice())
     }
 
     /// Whether the kart must hold on the line: a countdown is running.
@@ -371,6 +384,7 @@ pub(crate) fn update(
     running.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     order.extend(running.into_iter().map(|(r, _)| r.clone()));
     extras.place = order.iter().position(|r| *r == me).map(|i| i as u8 + 1);
+    race.order = order;
     extras.lap = (race.laps > 0).then(|| ((race.lap + 1).min(race.laps), race.laps));
     audio.music_rate = if race.laps > 1 && race.lap + 1 == race.laps && !race.done {
         // CTR's final lap: 20 BPM on its tempo (about 180).

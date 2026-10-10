@@ -80,6 +80,83 @@ pub enum Event {
     Bump {
         strength: i32,
     },
+    /// A hit took: the reaction starts next frame (a TNT landing on the head starts its throw).
+    Hit {
+        kind: HitKind,
+    },
+    /// A hit the mask or the post-shield invincibility shrugged off: the victim laughs (voice 2).
+    HitBlocked,
+    /// The shield took a hit and popped (SFX 0x58).
+    ShieldPopped,
+    /// The green shield ran out (SFX 0x58).
+    ShieldExpired,
+    /// The mask has faded away.
+    MaskEnded,
+    /// The thrown TNT sat down on the head: the fuse runs (SFX 0x51).
+    TntLanded,
+    /// Hopped off: the TNT flies up from the head and explodes where it lands.
+    TntThrownOff,
+    /// The TNT on the head went off: its fuse ran out, or the kart spun, slammed or was blasted
+    /// under it. Unless already blasted, the caller blasts this kart (a self-hit) and the 320 lu
+    /// blast catches whoever else is near.
+    TntExploded,
+}
+
+/// What hit the kart: `VehPickState_NewState`'s damage types 1 to 3, and a TNT crate touched
+/// (`RB_GenericMine.c:211-301`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HitKind {
+    /// Type 1: a beaker, the clock, a hazard.
+    SpinOut,
+    /// Type 2: bomb, missile, Nitro, TNT, warp orb, shield bomb, a mask or shield ram.
+    Blasted,
+    /// Type 3: a turbo ram, a minecart.
+    Squished,
+    /// A TNT crate driven into: thrown onto the head, where it counts down.
+    TntOnHead,
+}
+
+/// The power shield around the kart.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shield {
+    /// Juiced: blue, with no time limit.
+    pub blue: bool,
+    /// Frames left on a green one.
+    pub frames_left: Option<i32>,
+    /// Its alpha, 1 solid; a green one fades over its last 60 frames.
+    pub alpha: f32,
+}
+
+/// SpinFirst whirls, SpinLast recentres, SpinStop plays the steering back
+/// (`VehPhysProc.c:2766-3150`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SpinPhase {
+    First,
+    Last,
+    /// Animation frames left once the kart faces forward again.
+    Stop(i32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Tnt {
+    /// Above the kart's origin, lu, and rising at `vy` lu a frame while thrown on.
+    height: i32,
+    vy: i32,
+    /// `numFramesOnHead` once it sits, else `None` while still in the air.
+    fuse: Option<i32>,
+    jumps_left: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Mask {
+    ms: i32,
+    fading: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ShieldState {
+    blue: bool,
+    ms: i32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -201,6 +278,39 @@ fn diff(a: i32, b: i32) -> i32 {
     ((a - b + 2048) & 0xFFF) - 2048
 }
 
+/// An angle wrapped into [−2048, 2048), as the spin and tumble keep `turnAngleCurr`.
+fn wrap_signed(angle: i32) -> i32 {
+    ((angle + 2048) & 0xFFF) - 2048
+}
+
+/// The clock's top-speed cut for a kart in `rank` (0 = first): `DamagedSpeed * (20 − rank) >> 4`
+/// (`VehPhysGeneral.c:2098-2105`), 5120 for the leader down to 3328 for eighth.
+pub fn clock_slowdown(rank: u8) -> i32 {
+    (DAMAGED_SPEED * (20 - i32::from(rank.min(19)))) >> 4
+}
+
+/// Tumble frame `i` of `bakedGteMath[BLASTED]` as `Vector_BakeMatrixTable` builds it
+/// (`Vector.c:155-176`): two rolls about the nose over the 27 frames (`rot.z = i·0x2000/27`), a
+/// pitch wobble of `−sin(i·0x3000/27)/7`, and a squash and stretch of the width and length. The
+/// rotation is `ConvertRotToMatrix`'s X then Z; the scale is returned apart.
+fn tumble_frame(i: i32) -> (Mat3, Vec3) {
+    let n = BLAST_TUMBLE_FRAMES;
+    let roll = (i << 13) / n;
+    let wobble = (i * 0x3000) / n;
+    let sin = |a: i32| (rad(a).sin() * 4096.0) as i32;
+    let pitch = -sin(wobble) / 7;
+    let s = sin(roll);
+    let scale = Vec3::new(
+        (4096 + s / 4) as f32 / 4096.0,
+        1.0,
+        (4096 + s * 6 / 40) as f32 / 4096.0,
+    );
+    (
+        Mat3::from_rotation_x(rad(pitch)) * Mat3::from_rotation_z(rad(roll)),
+        scale,
+    )
+}
+
 fn atan2_units(y: f32, x: f32) -> i32 {
     wrap((y.atan2(x) * 4096.0 / std::f32::consts::TAU).round() as i32)
 }
@@ -306,6 +416,12 @@ pub struct Pose {
     pub steer: f32,
     pub grounded: bool,
     pub state: State,
+    /// The model's scale along its own X, Y, Z (1 = as built): a squished kart is flat (Y 0), a
+    /// blasted one squashes and stretches as it tumbles. Applied before `basis`.
+    pub scale: Vec3,
+    /// Where the model is drawn off `position`, lu: up its normal when squished, round the
+    /// tumble's pivot when blasted.
+    pub offset: Vec3,
 }
 
 pub struct Kart {
@@ -372,7 +488,30 @@ pub struct Kart {
     flags: u32,
     flags_prev: u32,
     buttons_prev: (bool, bool),
-    spin_visual: i32,
+    /// `jump_InitialVelY`: the vertical speed PROCESS_JUMP gives.
+    jump_vel: i32,
+    /// A hop started this frame (`ACTION_JUMP_STARTED` from the player's own hop).
+    hopped: bool,
+
+    /// The hit reaction to install at the start of the next frame (`funcPtrs[INIT]`).
+    pending: Option<HitKind>,
+    /// `NoInputTimer`, CTR-ms: the spin's and the tumble's lockout.
+    no_input: i32,
+    spin_phase: SpinPhase,
+    /// `KartStates.Spinning.driftSpinRate` and `spinDir`.
+    spin_turn: i32,
+    /// Blasted (`KS_BLASTED`), and whether the tumble plays backwards.
+    blasted: bool,
+    blast_backwards: bool,
+    squish: i32,
+    invincible: i32,
+    clock: i32,
+    clock_slowdown: i32,
+    mask: Option<Mask>,
+    shield: Option<ShieldState>,
+    tnt: Option<Tnt>,
+    /// `MixRNG_Scramble`'s 16-bit state, for the TNT's hop count and the tumble's direction.
+    rng: u16,
     /// `EngineSound_Player`'s smoothed pitch and volume states and the drift's rising whine.
     engine_pitch: i32,
     engine_volume: i32,
@@ -447,7 +586,22 @@ impl Kart {
             flags: 0,
             flags_prev: 0,
             buttons_prev: (false, false),
-            spin_visual: 0,
+            jump_vel: JUMP_FORCE,
+            hopped: false,
+            pending: None,
+            no_input: 0,
+            spin_phase: SpinPhase::First,
+            spin_turn: 0,
+            blasted: false,
+            blast_backwards: false,
+            squish: 0,
+            invincible: 0,
+            clock: 0,
+            clock_slowdown: 0,
+            mask: None,
+            shield: None,
+            tnt: None,
+            rng: 0,
             engine_pitch: 0,
             engine_volume: 0,
             engine_whine: 0,
@@ -501,7 +655,7 @@ impl Kart {
     /// How far the drawn kart is turned off its heading (the powerslide look, a spin-out's whirl),
     /// radians, + to the left.
     pub fn drawn_yaw_offset(&self) -> f32 {
-        rad(self.turn_angle + self.spin_visual)
+        rad(self.turn_angle)
     }
 
     /// The turbo flame's size while reserves burn, else 0: `clamp(5 + (fireLevel >> 6), 4, 8)`
@@ -545,6 +699,10 @@ impl Kart {
     /// eases back, and in a spin or a slam it snaps back at 32 a frame.
     fn camera_spin_tick(&mut self) {
         match self.state {
+            _ if self.blasted => {
+                self.camera_spin = approach_i(self.camera_spin, 32, 0);
+                self.camera_spin_rate = 0;
+            }
             State::Spinning(_) | State::Crashing(_) => {
                 self.camera_spin = approach_i(self.camera_spin, 32, 0);
                 self.camera_spin_rate = 0;
@@ -656,21 +814,248 @@ impl Kart {
         self.reserves = 0;
         self.state = State::Normal;
         self.turbo_meter = 0;
+        self.turn_angle = 0;
+        self.pending = None;
+        self.no_input = 0;
+        self.blasted = false;
+        self.squish = 0;
         self.moving = rot_axis_angle(Vec3::Y, heading);
         self.facing = self.moving;
     }
 
     pub fn pose(&self) -> Pose {
         let steer = (self.simp_turn as f32 / self.stats.turn_rate.max(1) as f32).clamp(-1.0, 1.0);
+        let mut basis = self.facing;
+        let mut scale = Vec3::ONE;
+        let mut offset = Vec3::ZERO;
+        if self.blasted {
+            // `VehStuckProc_Tumble_Animate`: the frame is the lockout's 32 ms count, wrapped.
+            let n = BLAST_TUMBLE_FRAMES;
+            let mut i = (self.no_input >> 5) % n;
+            if self.blast_backwards {
+                i = n - (i + 1);
+            }
+            let (tumble, s) = tumble_frame(i);
+            basis = self.facing * tumble;
+            scale = s;
+            offset = self.facing * ((Vec3::Y - tumble * Vec3::Y) * BLAST_PIVOT);
+        } else if self.squish != 0 {
+            // `VehPhysForce.c:1737-1740`: scale.y = 0, lifted up the drawn normal.
+            scale.y = 0.0;
+            offset = self.n2 * SQUISH_LIFT;
+        }
         Pose {
             position: self.pos,
-            basis: self.facing,
+            basis,
             velocity: self.vel * (30.0 / 256.0),
             heading: self.angle,
             steer,
             grounded: self.grounded(),
             state: self.state,
+            scale,
+            offset,
         }
+    }
+
+    /// Seeds the kart's `MixRNG_Scramble` stream (the TNT's hop count, the tumble's direction).
+    pub fn seed(&mut self, seed: u16) {
+        self.rng = seed;
+    }
+
+    /// `MixRNG_Scramble` (`MixRNG.c:3-10`).
+    fn scramble(&mut self) -> i32 {
+        self.rng = self.rng.wrapping_mul(0x6255).wrapping_add(0x3619);
+        i32::from(self.rng)
+    }
+
+    /// The reaction showing, and its frames of lockout left (0 while a spin recentres): a blast
+    /// over a squish over a spin over a TNT's fuse. A hit taken this frame shows already.
+    pub fn reaction(&self) -> Option<(HitKind, i32)> {
+        let frames = |ms: i32| (ms + MS - 1) / MS;
+        if let Some(kind) = self.pending {
+            return Some((kind, frames(self.no_input)));
+        }
+        if self.blasted {
+            return Some((HitKind::Blasted, frames(self.no_input)));
+        }
+        if self.squish != 0 {
+            return Some((HitKind::Squished, frames(self.squish)));
+        }
+        if let State::Spinning(_) = self.state {
+            let left = if self.spin_phase == SpinPhase::First {
+                self.no_input
+            } else {
+                0
+            };
+            return Some((HitKind::SpinOut, frames(left)));
+        }
+        self.tnt_fuse().map(|f| (HitKind::TntOnHead, f))
+    }
+
+    /// Under a mask (`ACTION_MASK_WEAPON`): while it lasts and while it fades.
+    pub fn masked(&self) -> bool {
+        self.mask.is_some()
+    }
+
+    pub fn shield(&self) -> Option<Shield> {
+        self.shield.map(|s| Shield {
+            blue: s.blue,
+            frames_left: (!s.blue).then_some(s.ms / MS),
+            alpha: if s.blue || s.ms >= SHIELD_FADE_MS {
+                1.0
+            } else {
+                // `RB_MaskShieldCloud.c:385-389`: alphaScale 0x400 (solid) to 0x1000 (gone).
+                let a = ((60 - (s.ms >> 5)) * 3072) / 60 + 0x400;
+                1.0 - (a - 0x400) as f32 / 3072.0
+            },
+        })
+    }
+
+    /// Frames until the TNT on the head goes off; the whole fuse while it is still being thrown
+    /// on.
+    pub fn tnt_fuse(&self) -> Option<i32> {
+        self.tnt.map(|t| TNT_FUSE_FRAMES - t.fuse.unwrap_or(0))
+    }
+
+    /// The TNT's height over the kart's origin, lu, for drawing it.
+    pub fn tnt_height(&self) -> Option<f32> {
+        self.tnt.map(|t| t.height as f32)
+    }
+
+    /// Under the clock: frames left.
+    pub fn clocked(&self) -> Option<i32> {
+        (self.clock != 0).then_some(self.clock / MS)
+    }
+
+    /// The model's height scale, 0 while squished, else 1.
+    pub fn squish_scale(&self) -> f32 {
+        if self.squish != 0 {
+            0.0
+        } else {
+            1.0
+        }
+    }
+
+    /// Whether ○ may fire a held item now (`VehPhysProc.c:804-861`): driving or drifting, no TNT
+    /// on the head, not under the clock. The shield fires past the clock: [`Kart::fire_shield`].
+    pub fn can_fire(&self) -> bool {
+        self.clock == 0 && self.can_fire_shield()
+    }
+
+    fn can_fire_shield(&self) -> bool {
+        matches!(self.state, State::Normal | State::Drifting) && !self.blasted && self.tnt.is_none()
+    }
+
+    /// A hit (`RB_Hazard_HurtDriver` → `VehPickState_NewState`, `VehPickState.c:48-381`). A mask
+    /// or the invincibility after a shield pop shrugs it off; a shield pops instead and leaves 21
+    /// invincible frames; a blast on a blasted kart does nothing; a spin on a spinning kart only
+    /// restarts its 30 frames. A hit that takes cancels the boost, and its reaction installs at
+    /// the start of the next frame. True when it took (for a TNT: it is on its way to the head).
+    pub fn hit(&mut self, kind: HitKind) -> bool {
+        if kind != HitKind::TntOnHead {
+            return self.damage(Some(kind));
+        }
+        // `RB_GenericMine.c:211-247`: a second TNT, or one on a squished kart, blasts it.
+        if self.tnt.take().is_some() || self.squish != 0 {
+            return self.damage(Some(HitKind::Blasted));
+        }
+        // `:261-301`: damage type 0 through the same gate, then the crate jumps on (vy 48).
+        if !self.damage(None) {
+            return false;
+        }
+        self.tnt = Some(Tnt {
+            height: 0,
+            vy: TNT_THROW_VY,
+            fuse: None,
+            jumps_left: 0,
+        });
+        self.events.push(Event::Hit {
+            kind: HitKind::TntOnHead,
+        });
+        // `ThTick_SetAndExec`: the throw's first frame runs at once.
+        self.tnt_tick();
+        true
+    }
+
+    fn damage(&mut self, kind: Option<HitKind>) -> bool {
+        if self.masked() || self.invincible != 0 {
+            self.events.push(Event::HitBlocked);
+            return false;
+        }
+        if self.shield.take().is_some() {
+            self.invincible = SHIELD_POP_INVINCIBLE_MS;
+            self.events.push(Event::ShieldPopped);
+            return false;
+        }
+        let Some(kind) = kind else {
+            return true;
+        };
+        match kind {
+            HitKind::Blasted => {
+                if self.blasted || self.pending == Some(HitKind::Blasted) {
+                    return false;
+                }
+                self.no_input = BLAST_MS;
+                self.squish = 0;
+                self.pending = Some(kind);
+            }
+            HitKind::Squished => {
+                self.squish = SQUISH_MS;
+                self.no_input = SQUISH_NO_INPUT_MS;
+                self.pending = Some(kind);
+            }
+            _ => {
+                self.no_input = SPIN_HIT_MS;
+                // Retail also drops `kartState` to normal here, so a spin re-hit mid-spin
+                // loses the spinning state's friction and fire lock; we keep them.
+                if !matches!(self.state, State::Spinning(_)) {
+                    self.pending = Some(kind);
+                }
+            }
+        }
+        self.reserves = 0;
+        self.turbo_outside = 0;
+        self.events.push(Event::Hit { kind });
+        true
+    }
+
+    /// The clock from another kart (`VehPickupItem.c:855-908`): a spin-out, and if it takes,
+    /// `clockReceive` (8 s, juiced 12 s) taking `slowdown` off the top speed, which retail sets by
+    /// race position: [`clock_slowdown`]. False when shrugged off.
+    pub fn clock(&mut self, juiced: bool, slowdown: i32) -> bool {
+        if !self.hit(HitKind::SpinOut) {
+            return false;
+        }
+        self.clock = if juiced { CLOCK_JUICED_MS } else { CLOCK_MS };
+        self.clock_slowdown = slowdown;
+        true
+    }
+
+    /// Aku Aku / Uka Uka (`VehPickupItem_MaskUseWeapon`): 8 s, juiced 12 s, plus its fade; a
+    /// second mask restarts the time. Invincible, +3900 top speed, walls are rails.
+    pub fn mask(&mut self, juiced: bool) {
+        self.mask = Some(Mask {
+            ms: if juiced { MASK_JUICED_MS } else { MASK_MS },
+            fading: false,
+        });
+    }
+
+    /// The power shield (`VehPickupItem.c:910-988`): green for 12 s, blue (juiced) until used.
+    pub fn shield_up(&mut self, juiced: bool) {
+        self.shield = Some(ShieldState {
+            blue: juiced,
+            ms: SHIELD_MS,
+        });
+    }
+
+    /// ○ with the shield up (`VehPhysProc.c:822-829`): it leaves the kart as a projectile, which
+    /// the caller launches. False when there is no shield or the kart may not fire.
+    pub fn fire_shield(&mut self) -> bool {
+        if self.shield.is_none() || !self.can_fire_shield() {
+            return false;
+        }
+        self.shield = None;
+        true
     }
 
     /// CTR's start-line boost (`VehStuckProc.c`): a second of turbo as the race starts, with a
@@ -692,7 +1077,7 @@ impl Kart {
 
     /// `VehFire_Increment` (7.1); false when the state refuses it.
     fn fire_increment(&mut self, reserves: i32, kind: FireKind, fire: i32) -> bool {
-        if matches!(self.state, State::Spinning(_) | State::Crashing(_)) {
+        if self.blasted || matches!(self.state, State::Spinning(_) | State::Crashing(_)) {
             return false;
         }
         let cap = SINGLE_TURBO_SPEED + ((fire * (SACRED_FIRE_SPEED - SINGLE_TURBO_SPEED)) >> 8);
@@ -730,10 +1115,23 @@ impl Kart {
         let tapped_r1 = input.r1 && !self.buttons_prev.0;
         let tapped_l1 = input.l1 && !self.buttons_prev.1;
         self.buttons_prev = (input.r1, input.l1);
+        // `ACTION_MASK_WEAPON`: our own mask counts as the caller's.
+        let mods = &Modifiers {
+            mask: mods.mask || self.masked(),
+            ..*mods
+        };
+        self.hopped = false;
 
+        // INIT: a hit taken since the last frame installs its reaction.
+        match self.pending.take() {
+            Some(HitKind::Blasted) => self.tumble_init(),
+            Some(_) => self.spin_init(),
+            None => {}
+        }
         self.update_stage(input, tapped_r1 || tapped_l1);
         self.phys_linear(input, mods, tapped_r1, tapped_l1);
         match self.state {
+            _ if self.blasted => self.tumble_angular(),
             State::Drifting => self.powerslide_angular(),
             State::Spinning(_) => self.spin_angular(),
             _ => self.phys_angular(),
@@ -752,16 +1150,156 @@ impl Kart {
         self.n2 = ((self.n2 * w + target * (8.0 - w)) / 8.0)
             .try_normalize()
             .unwrap_or(Vec3::Y);
-        let yaw = wrap(self.angle + self.turn_angle + self.spin_visual);
+        let yaw = wrap(self.angle + self.turn_angle);
         self.facing = rot_axis_angle(self.n2, yaw);
         self.hang_time();
         self.engine_sound_tick();
         self.camera_spin_tick();
+        // ANIMATE: SpinStop hands back to driving once its animation is home.
+        if let (State::Spinning(_), SpinPhase::Stop(left)) = (self.state, &mut self.spin_phase) {
+            if self.turn_angle == 0 {
+                *left -= 1;
+            }
+        }
+        // The weapon threads, after the driver stages (`MainFrame.c:294-330`).
+        self.mask_tick();
+        self.shield_tick();
+        self.tnt_tick();
+    }
+
+    /// `RB_MaskWeapon_ThTick` and `_FadeAway`: the time runs out, then 16 frames of fade.
+    fn mask_tick(&mut self) {
+        let Some(m) = &mut self.mask else {
+            return;
+        };
+        if !m.fading {
+            if m.ms != 0 {
+                m.ms = (m.ms - MS).max(0);
+                return;
+            }
+            m.fading = true;
+        }
+        if m.ms < MASK_FADE_MS {
+            m.ms = (m.ms + MS).min(MASK_FADE_MS);
+        } else {
+            self.mask = None;
+            self.events.push(Event::MaskEnded);
+        }
+    }
+
+    /// `RB_ShieldDark_ThTick_Grow`'s timer: a green shield goes when its time is up.
+    fn shield_tick(&mut self) {
+        let Some(s) = &mut self.shield else {
+            return;
+        };
+        if s.blue {
+            return;
+        }
+        if s.ms == 0 {
+            self.shield = None;
+            self.events.push(Event::ShieldExpired);
+        } else {
+            s.ms -= MS;
+        }
+    }
+
+    /// `RB_TNT_ThTick_ThrowOnHead` and `_SitOnHead` (`RB_TNT.c:102-340`).
+    fn tnt_tick(&mut self) {
+        let Some(mut t) = self.tnt else {
+            return;
+        };
+        if t.fuse.is_none() {
+            t.height += t.vy;
+            if t.vy < 0 && t.height < TNT_HEAD_HEIGHT {
+                t.height = TNT_HEAD_HEIGHT;
+                t.fuse = Some(0);
+                t.jumps_left = TNT_JUMPS - self.scramble() % 2;
+                self.events.push(Event::TntLanded);
+            } else {
+                t.vy = (t.vy - TNT_GRAVITY).max(TNT_TERMINAL_VY);
+                self.tnt = Some(t);
+                return;
+            }
+        }
+        // Spun, slammed or blasted under it: it goes off at once.
+        if self.blasted || matches!(self.state, State::Spinning(_) | State::Crashing(_)) {
+            self.tnt = None;
+            self.events.push(Event::TntExploded);
+            return;
+        }
+        if self.hopped {
+            if t.jumps_left == 0 {
+                self.tnt = None;
+                self.events.push(Event::TntThrownOff);
+                return;
+            }
+            t.jumps_left -= 1;
+        }
+        let fuse = t.fuse.unwrap_or(0);
+        if fuse < TNT_FUSE_FRAMES {
+            t.fuse = Some(fuse + 1);
+            self.tnt = Some(t);
+        } else {
+            self.tnt = None;
+            self.events.push(Event::TntExploded);
+        }
+    }
+
+    /// `VehPhysProc_SpinFirst_Init` (`VehPhysProc.c:2859-2909`): whirl the way the kart was
+    /// turning, 300 a frame.
+    fn spin_init(&mut self) {
+        if self.state == State::Drifting {
+            self.events.push(Event::DriftEnd);
+        }
+        self.blasted = false;
+        self.state = State::Spinning(self.no_input);
+        self.spin_phase = SpinPhase::First;
+        self.turn_angle_vel = 0;
+        self.turbo_meter = 0;
+        self.spin_turn = if self.amp_turn < 0 {
+            -SPIN_RATE
+        } else {
+            SPIN_RATE
+        };
+        self.events.push(Event::SpinOut);
+    }
+
+    /// `VehStuckProc_Tumble_Init` (`VehStuckProc.c:1454-1504`): the tumble plays backwards on
+    /// `MixRNG & 4`.
+    fn tumble_init(&mut self) {
+        if self.state == State::Drifting {
+            self.events.push(Event::DriftEnd);
+        }
+        self.state = State::Normal;
+        self.blasted = true;
+        self.turbo_meter = 0;
+        self.blast_backwards = self.scramble() & 4 != 0;
+    }
+
+    /// `VehStuckProc_Tumble_PhysAngular`: the spin and the model's turn die away by an eighth a
+    /// frame.
+    fn tumble_angular(&mut self) {
+        self.frames_steering = 10000;
+        self.spin_rate -= self.spin_rate >> 3;
+        self.turn_angle_vel -= self.turn_angle_vel >> 3;
+        self.amp_turn = self.spin_rate;
+        self.turn_angle = wrap_signed(self.turn_angle + self.turn_angle_vel);
+        self.angle = wrap(self.angle + ((self.amp_turn * MS) >> 13));
+        self.moving = rot_axis_angle(self.n1, self.angle);
+        self.nudge = Vec3::ZERO;
     }
 
     /// UPDATE (2.3): drift entry, the powerslide's meter and boosts, the lockouts' ends.
     fn update_stage(&mut self, input: &Input, tapped: bool) {
         self.drift_entered_this_frame = false;
+        if self.blasted {
+            // `VehStuckProc_Tumble_Update`: straight back to driving when the lockout is out.
+            if self.no_input == 0 {
+                self.blasted = false;
+                self.turbo_meter = 0;
+            }
+            return;
+        }
         match self.state {
             State::Normal => {
                 let held = match self.drift_button {
@@ -778,11 +1316,29 @@ impl Kart {
                 }
             }
             State::Drifting => self.powerslide_update(input, tapped),
-            State::Crashing(left) | State::Spinning(left) if left <= 0 => {
+            State::Crashing(left) if left <= 0 => {
                 self.state = State::Normal;
                 self.turbo_meter = 0;
-                self.spin_visual = 0;
             }
+            State::Spinning(_) => match self.spin_phase {
+                // `VehPhysProc_SpinFirst_Update`: whirl while locked out and still moving.
+                SpinPhase::First => {
+                    if self.no_input == 0 || self.speed_approx.abs() <= SPIN_SLOW_SPEED {
+                        self.spin_phase = SpinPhase::Last;
+                    }
+                }
+                SpinPhase::Last => {
+                    if self.turn_angle.abs() < SPIN_STOP_ANGLE {
+                        self.spin_phase = SpinPhase::Stop(SPIN_STOP_ANIM_FRAMES);
+                    }
+                }
+                SpinPhase::Stop(left) => {
+                    if left <= 0 {
+                        self.state = State::Normal;
+                        self.turbo_meter = 0;
+                    }
+                }
+            },
             _ => {}
         }
     }
@@ -845,8 +1401,10 @@ impl Kart {
             Button::L1 => input.l1,
         };
         let lim = DRIFT_FRAMES_TILL_SPINOUT;
-        if self.drift_frames > lim || self.speed_approx < 0 {
-            self.spin_out();
+        if self.drift_frames > lim {
+            self.spin_out(SPIN_MS);
+        } else if self.speed_approx < 0 {
+            self.spin_out(REVERSE_SPIN_MS);
         } else if self.drift_frames < -lim
             || self.speed < self.stats.speed / 2
             || self.flags & (DRIVING_AGAINST_WALL | ACCEL_PREVENTION | BRAKE_WITH_ACCEL) != 0
@@ -864,14 +1422,11 @@ impl Kart {
         self.events.push(Event::DriftEnd);
     }
 
-    fn spin_out(&mut self) {
-        if self.state == State::Drifting {
-            self.events.push(Event::DriftEnd);
-        }
-        self.state = State::Spinning(SPIN_MS);
-        self.turbo_meter = 0;
+    /// A powerslide spun out (`VehPhysProc.c:2542-2552`): SpinFirst at once, `ms` locked out.
+    fn spin_out(&mut self, ms: i32) {
+        self.no_input = ms;
+        self.spin_init();
         self.reserves = 0;
-        self.events.push(Event::SpinOut);
     }
 
     /// PHYS_LINEAR (3.1, 3.2, 4.1): timers, the jump button, throttle, the steer command.
@@ -886,8 +1441,19 @@ impl Kart {
         tick(&mut self.jump_cooldown);
         self.jump_buffer = (self.jump_buffer - 1).max(0);
         self.failed_boost = (self.failed_boost - 1).max(0);
-        if let State::Crashing(t) | State::Spinning(t) = &mut self.state {
+        tick(&mut self.squish);
+        tick(&mut self.clock);
+        tick(&mut self.invincible);
+        if let State::Crashing(t) = &mut self.state {
             *t -= MS;
+        }
+        // SpinFirst and the tumble count their lockout down; SpinLast and SpinStop do not.
+        let spinning = matches!(self.state, State::Spinning(_));
+        if self.blasted || (spinning && self.spin_phase == SpinPhase::First) {
+            tick(&mut self.no_input);
+        }
+        if let State::Spinning(t) = &mut self.state {
+            *t = self.no_input;
         }
         self.flags &= CARRY;
 
@@ -926,11 +1492,19 @@ impl Kart {
             gas
         };
         let mut lockout = false;
-        if let State::Crashing(_) | State::Spinning(_) = self.state {
+        if self.blasted || matches!(self.state, State::Crashing(_) | State::Spinning(_)) {
             self.base_speed = 0;
             self.fire_speed = 0;
-            self.flags |= ACCEL_PREVENTION;
+            // SpinStop lets go of the brake (`VehPhysProc_SpinStop_PhysLinear`).
+            if !(spinning && matches!(self.spin_phase, SpinPhase::Stop(_))) {
+                self.flags |= ACCEL_PREVENTION;
+            }
             lockout = true;
+        }
+        if self.blasted {
+            // `VehStuckProc_Tumble_PhysLinear`: every grounded frame bounces it back up.
+            self.jump_forced = BLAST_FORCED_JUMP_MS;
+            self.jump_vel = BLAST_JUMP_BASE + 2 * self.no_input;
         }
 
         // The steer command (4.1); + is left.
@@ -974,7 +1548,18 @@ impl Kart {
                 - self.fire_speed_cap;
             bonus = bonus.min(cap.max(0));
         }
-        (b + bonus).min(MAX_BASE_SPEED)
+        // `VehPhysGeneral.c:2082-2105`: what the hits and the clock take off.
+        let mut subtract = 0;
+        if self.tnt.is_some() {
+            subtract = DAMAGED_SPEED >> 1;
+        }
+        if self.squish != 0 {
+            subtract = DAMAGED_SPEED;
+        }
+        if self.clock != 0 {
+            subtract = subtract.max(self.clock_slowdown);
+        }
+        (b + bonus - subtract).min(MAX_BASE_SPEED)
     }
 
     /// PHYS_ANGULAR in normal driving (4.2 to 4.6).
@@ -1183,10 +1768,52 @@ impl Kart {
         self.counter_steer();
     }
 
-    /// The spin-out: the model whirls while the kart slides to a stop.
+    /// The spin-out's PHYS_ANGULAR (`VehPhysProc.c:2805-2849`, `2945-3012`, `3031-3048`): the
+    /// model (`turnAngleCurr`) whirls 300 a frame over the slowing yaw, then winds in to face
+    /// forward, then eases home 128 a frame.
     fn spin_angular(&mut self) {
-        self.spin_visual = wrap(self.spin_visual + 256);
-        self.turn_angle = approach_i(self.turn_angle, 64, 0);
+        self.frames_steering = 10000;
+        if !matches!(self.spin_phase, SpinPhase::Stop(_)) {
+            self.spin_rate -= self.spin_rate >> 3;
+            self.amp_turn = self.spin_rate;
+        }
+        match self.spin_phase {
+            SpinPhase::First => {
+                self.turn_angle = wrap_signed(self.turn_angle + self.spin_turn);
+            }
+            SpinPhase::Last => {
+                let a = self.turn_angle;
+                let toward = |rate: i32| {
+                    let r = (-(a << 2)) >> 3;
+                    if rate > 0 {
+                        r.max(SPIN_MIN_RECENTER_RATE)
+                    } else {
+                        r.min(-SPIN_MIN_RECENTER_RATE)
+                    }
+                };
+                if a > 0 {
+                    if self.spin_turn < 0 && a < SPIN_RECENTER_ANGLE {
+                        self.spin_turn = toward(-1);
+                    }
+                    self.turn_angle = wrap_signed(a + self.spin_turn);
+                    if self.spin_turn < 0 && self.turn_angle < 0 {
+                        self.turn_angle = 0;
+                    }
+                } else if a < 0 {
+                    if self.spin_turn > 0 && a > -SPIN_RECENTER_ANGLE {
+                        self.spin_turn = toward(1);
+                    }
+                    self.turn_angle = wrap_signed(a + self.spin_turn);
+                    if self.spin_turn > 0 && self.turn_angle > 0 {
+                        self.turn_angle = 0;
+                    }
+                }
+            }
+            SpinPhase::Stop(_) => {
+                self.turn_angle = approach_i(self.turn_angle, (MS << 7) >> 5, 0);
+            }
+        }
+        self.angle = wrap(self.angle + ((self.amp_turn * MS) >> 13));
         self.moving = rot_axis_angle(self.n1, self.angle);
         self.nudge = Vec3::ZERO;
     }
@@ -1225,7 +1852,8 @@ impl Kart {
         let side = SIDE_SPEED_CLAMP as f32;
         l.x = l.x.clamp(l0.x.min(-side), l0.x.max(side));
         l.y = l.y.max(l0.y.min(-(TERMINAL_VELOCITY as f32)));
-        if self.flags_prev & TOUCH_GROUND != 0 {
+        // A blasted kart's friction acts in the air too (`VehPhysForce.c:429`).
+        if self.flags_prev & TOUCH_GROUND != 0 || self.blasted {
             self.friction(&mut l);
         }
         if l.z.abs() > 64.0 {
@@ -1240,7 +1868,9 @@ impl Kart {
             && ((self.base_speed > 0 && self.speed_approx < 0)
                 || (self.base_speed < 0 && self.speed_approx > 0));
         let (mut perp, mut fwd) = if self.flags & ACCEL_PREVENTION != 0 {
-            let f = if matches!(self.state, State::Spinning(_)) {
+            let f = if self.blasted {
+                (BRAKE_FRICTION * 3) >> 2
+            } else if matches!(self.state, State::Spinning(_)) {
                 BRAKE_FRICTION / 2
             } else {
                 BRAKE_FRICTION
@@ -1416,12 +2046,14 @@ impl Kart {
         } else {
             self.fwd_accel_impulse = 0;
         }
-        let lockout = matches!(self.state, State::Crashing(_) | State::Spinning(_));
+        let lockout = self.blasted || matches!(self.state, State::Crashing(_) | State::Spinning(_));
         if self.grounded() && self.jump_forced != 0 {
             self.process_jump(&mut mv);
         } else if !lockout && self.coyote != 0 && self.jump_buffer != 0 && self.jump_cooldown == 0 {
             self.jump_forced = JUMP_FORCED_MS;
+            self.jump_vel = JUMP_FORCE;
             self.process_jump(&mut mv);
+            self.hopped = true;
             self.events.push(Event::Hop);
         }
         // `VehPhysCrash_ConvertVecToSpeed`.
@@ -1474,7 +2106,7 @@ impl Kart {
         let a = slope(self.n4);
         let b = slope(if self.grounded() { self.n1 } else { self.n2 });
         let best = if a.abs() >= b.abs() { a } else { b };
-        let j = JUMP_FORCE as f32;
+        let j = self.jump_vel as f32;
         let vy = (best * best + j * j).sqrt() - best;
         mv.y = mv.y.max(vy.min(JUMP_VERTICAL_CAP as f32));
     }

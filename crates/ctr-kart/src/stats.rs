@@ -159,3 +159,60 @@ pub const SLAM_MS: i32 = 640;
 pub const KART_HIT_RADIUS: f32 = 64.0;
 /// `VEH_PHYS_CRASH_BOUNCE_Y_CLAMP`: a bump's upward speed at most.
 pub const BOUNCE_Y_CLAMP: f32 = 0x3200 as f32;
+
+// Hit reactions and the self-applied items (section 13 of `docs/ctr-physics-spec.md`).
+/// DamagedSpeed (MetaPhys 0x11): the top speed a squish takes; half of it under a TNT.
+pub const DAMAGED_SPEED: i32 = 4096;
+/// `VehPickState.c:24-30`: the `NoInputTimer` each damage type sets, CTR-ms.
+pub const SPIN_HIT_MS: i32 = 0x3C0;
+pub const BLAST_MS: i32 = 0x960;
+pub const SQUISH_NO_INPUT_MS: i32 = 0xF0;
+/// `squishTimer`: drawn flat and slowed, CTR-ms.
+pub const SQUISH_MS: i32 = 0xF00;
+/// `invincibleTimer` after a shield pops, CTR-ms.
+pub const SHIELD_POP_INVINCIBLE_MS: i32 = 0x2A0;
+/// A drift spun out by rolling backwards (`VehPhysProc.c:86`), CTR-ms.
+pub const REVERSE_SPIN_MS: i32 = 0x780;
+/// SpinFirst's whirl, angle units a frame, and the speed under which it gives way to SpinLast
+/// (`VehPhysProc.c:88-99`).
+pub const SPIN_RATE: i32 = 300;
+pub const SPIN_SLOW_SPEED: i32 = 0x2FF;
+/// SpinLast recentres inside this angle at half the remaining angle a frame, at least 32, and
+/// SpinStop takes over under 16.
+pub const SPIN_RECENTER_ANGLE: i32 = 400;
+pub const SPIN_MIN_RECENTER_RATE: i32 = 0x20;
+pub const SPIN_STOP_ANGLE: i32 = 16;
+/// SpinStop's return of the steering animation to centre (`VehPhysProc_SpinStop_Animate`): its
+/// length is the model's frame count, which the code does not hold. An estimate.
+pub const SPIN_STOP_ANIM_FRAMES: i32 = 8;
+/// The blasted kart's bounce, `jump_InitialVelY = 6000 + 2 * NoInputTimer`, re-armed every frame
+/// (`VehStuckProc.c:54-56`, `1376-1381`).
+pub const BLAST_JUMP_BASE: i32 = 6000;
+pub const BLAST_FORCED_JUMP_MS: i32 = 0x60;
+/// `bakedGteMath[BLASTED]`: 27 tumble frames, the kart turning about a pivot 32 lu over its origin
+/// (`Vector.c:155-232`, `regionsEXE.h:2246`).
+pub const BLAST_TUMBLE_FRAMES: i32 = 0x1B;
+pub const BLAST_PIVOT: f32 = 0x2000 as f32 / 256.0;
+/// A squished kart is drawn this far up its normal, lu (`VehPhysForce.c:123`, `1453-1458`).
+pub const SQUISH_LIFT: f32 = 0x13 as f32;
+/// Aku Aku / Uka Uka (`ovr_231.h:51-52`) and its fade, during which it still protects
+/// (`RB_MaskShieldCloud.c:19-81`, `180-202`), CTR-ms.
+pub const MASK_MS: i32 = 0x1E00;
+pub const MASK_JUICED_MS: i32 = 0x2D00;
+pub const MASK_FADE_MS: i32 = 0x200;
+/// The green shield's life and the fade over its last 60 frames (`VehPickupItem.c:130`,
+/// `RB_MaskShieldCloud.c:374-390`), CTR-ms.
+pub const SHIELD_MS: i32 = 0x2D00;
+pub const SHIELD_FADE_MS: i32 = 1920;
+/// `clockReceive` on a clocked kart (`VehPickupItem.c:132-133`), CTR-ms.
+pub const CLOCK_MS: i32 = 0x1E00;
+pub const CLOCK_JUICED_MS: i32 = 0x2D00;
+/// TNT on the head (`RB_TNT.c`): the throw onto the head (lu a frame, its gravity and terminal
+/// speed), Crash's head height (lu, the table at `:78`), the 90-frame fuse, and the hops to shed
+/// it, `8 − MixRNG % 2` more after the first.
+pub const TNT_THROW_VY: i32 = 0x30;
+pub const TNT_GRAVITY: i32 = 4;
+pub const TNT_TERMINAL_VY: i32 = -0x60;
+pub const TNT_HEAD_HEIGHT: i32 = 32;
+pub const TNT_FUSE_FRAMES: i32 = 0x5A;
+pub const TNT_JUMPS: i32 = 8;

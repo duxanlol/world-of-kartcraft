@@ -208,6 +208,16 @@ impl Session {
         self.shots = None;
     }
 
+    /// The session's lu origin, Bevy world: where [`to_lu`] measures from.
+    pub fn origin(&self) -> Vec3 {
+        self.origin
+    }
+
+    /// How far into the next tick the drawn frame is, 0 to 1, for drawing between ticks.
+    pub fn tick_fraction(&self) -> f32 {
+        (self.owed / ctr_kart::TICK).clamp(0.0, 1.0)
+    }
+
     /// Runs the ticks `dt` owes and returns what happened in them. `at` is where the kart was
     /// last drawn (Bevy world), for the collision's recentring.
     pub fn step(
@@ -218,6 +228,23 @@ impl Session {
         input: &Input,
         mods: &Modifiers,
         nearby: &[NearbyKart],
+    ) -> Vec<Event> {
+        self.step_with(collide, now, dt, input, mods, nearby, |_, _, _| {})
+    }
+
+    /// [`Session::step`], calling `after_tick` after each kart tick with the collision, the kart
+    /// and the lu origin: CTR runs its weapon threads after the driver stages
+    /// (`MainFrame.c:294-330`), so the weapons step in lockstep with the kart.
+    #[allow(clippy::too_many_arguments)]
+    pub fn step_with(
+        &mut self,
+        collide: &WorldCollision,
+        now: f32,
+        dt: f32,
+        input: &Input,
+        mods: &Modifiers,
+        nearby: &[NearbyKart],
+        mut after_tick: impl FnMut(&Collision, &mut Kart, Vec3),
     ) -> Vec<Event> {
         // A grid built around where we are now.
         if let Some(built) = &self.built {
@@ -262,6 +289,7 @@ impl Session {
         while self.owed >= ctr_kart::TICK {
             self.owed -= ctr_kart::TICK;
             kart.tick_among(&world, input, mods, &others);
+            after_tick(&world, kart, origin);
             if kart.grounded() {
                 let pose = kart.pose();
                 self.last_ground = Some((pose.position, pose.heading));
@@ -296,7 +324,11 @@ impl Session {
         let t = (self.owed / ctr_kart::TICK).clamp(0.0, 1.0);
         let (at_lu, rotation) = blend(&previous, &current, t);
         let origin = self.origin;
-        let at = from_lu(at_lu, origin);
+        // A hit's look: the tumble's squash and pivot, the squish's flat model lifted off the
+        // ground (`Pose::scale`, `Pose::offset`).
+        let offset = previous.offset.lerp(current.offset, t);
+        let scale = previous.scale.lerp(current.scale, t);
+        let at = from_lu(at_lu + offset, origin);
         let velocity = current.velocity / lu_per_yard();
 
         // CTR's chase camera, between its last two shots.
@@ -320,7 +352,7 @@ impl Session {
             transform: Transform {
                 translation: at,
                 rotation,
-                scale: Vec3::splat(crate::model_scale()),
+                scale: scale.max(Vec3::splat(0.01)) * crate::model_scale(),
             },
             yaw: yaw_of(current.heading),
             speed: Vec3::new(velocity.x, 0.0, velocity.z).length(),

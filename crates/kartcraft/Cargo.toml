@@ -12,7 +12,11 @@ workspace = true
 [dependencies]
 bevy.workspace = true
 benilla-world = { path = "../benilla-world", default-features = false }
+# WoW's coordinates, for the weapons' wire positions.
+benilla-assets = { path = "../benilla-assets", default-features = false }
 ctr-kart = { path = "../ctr-kart" }
+# CTR's items, roulette and projectiles (GPL-3.0, from the decompilation).
+ctr-weapons = { path = "../ctr-weapons" }
 # CTR's HUD, drawn from the player's `kart-data/hud.json`.
 ctr-assets = { path = "../ctr-assets" }
 serde = { version = "1", features = ["derive"] }

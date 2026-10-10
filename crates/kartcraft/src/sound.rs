@@ -1,8 +1,11 @@
 //! Kart sounds: the engine as a loop whose pitch follows the speed, a tyre skid looping through
 //! powerslides, the turbo's roar while reserves burn, and one-shots for the hop, landings, boosts,
-//! an early press's exhaust puff, a full meter and crashes. Each sound comes from
-//! `kart-data/audio/<name>.wav` when present (the player's own CTR audio, converted at setup),
-//! else it is synthesized here. Played 2D: the driver is the listener.
+//! an early press's exhaust puff, a full meter and crashes; and the weapons' sounds ([`Sfx`]): the
+//! roulette's loop and its stop, crates, fruit, launches, explosions, the TNT, the shield and the
+//! mask, with loops while a missile, warp orb or bomb is on its way. Each sound comes from
+//! `kart-data/audio/<name>.wav` when present (the player's own CTR audio, converted at setup);
+//! the driving sounds are else synthesized here, the weapons' else silent. Played 2D: the driver
+//! is the listener, and the weapons' cues carry a gain for their distance.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,6 +34,112 @@ pub enum Cue {
     Crash,
     /// A race countdown's beat; `true` for GO.
     Countdown(bool),
+    /// A weapon sound at a gain (its distance from us).
+    Sfx(Sfx, f32),
+}
+
+/// The weapons' sounds, CTR's OtherFX ids as `ctr-extract` names them (`docs/ctr-assets.md`,
+/// "Audio"; each sound's site in the decompilation is in `sounds.json`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Sfx {
+    /// 0x5E: the roulette lands; 0x41 with 10 Wumpa, also the fruit counter reaching 10.
+    RouletteStop,
+    RouletteJuiced,
+    /// 0x3C: any crate breaks.
+    CrateBreak,
+    /// 0x43: a loose fruit taken; 0x42: a fruit reaching the counter.
+    Wumpa,
+    WumpaCount,
+    /// 0x47 / 0x49.
+    BombLaunch,
+    BombExplode,
+    /// 0x4A / 0x4C.
+    MissileLaunch,
+    MissileExplode,
+    /// 0x52: TNT, Nitro or a beaker dropped.
+    MineDrop,
+    /// 0x50 / 0x51 / 0x3E / 0x3D: a TNT jumps on a head, sits down, honks, goes off.
+    TntLand,
+    TntJump,
+    TntHonk,
+    TntExplode,
+    /// 0x3F: a beaker or Nitro shatters.
+    Glass,
+    /// 0x57 / 0x58: the shield goes up; pops, runs out or is fired.
+    Shield,
+    ShieldPop,
+    /// 0x53 / 0x54.
+    Aku,
+    Uka,
+    /// 0x44.
+    Clock,
+    /// 0x4D / 0x4F: a warp orb launched; dying.
+    WarpLaunch,
+    WarpHit,
+}
+
+impl Sfx {
+    const ALL: [Sfx; 22] = [
+        Sfx::RouletteStop,
+        Sfx::RouletteJuiced,
+        Sfx::CrateBreak,
+        Sfx::Wumpa,
+        Sfx::WumpaCount,
+        Sfx::BombLaunch,
+        Sfx::BombExplode,
+        Sfx::MissileLaunch,
+        Sfx::MissileExplode,
+        Sfx::MineDrop,
+        Sfx::TntLand,
+        Sfx::TntJump,
+        Sfx::TntHonk,
+        Sfx::TntExplode,
+        Sfx::Glass,
+        Sfx::Shield,
+        Sfx::ShieldPop,
+        Sfx::Aku,
+        Sfx::Uka,
+        Sfx::Clock,
+        Sfx::WarpLaunch,
+        Sfx::WarpHit,
+    ];
+
+    fn file(self) -> &'static str {
+        match self {
+            Sfx::RouletteStop => "roulette_stop",
+            Sfx::RouletteJuiced => "roulette_juiced",
+            Sfx::CrateBreak => "crate_break",
+            Sfx::Wumpa => "wumpa",
+            Sfx::WumpaCount => "wumpa_count",
+            Sfx::BombLaunch => "bomb_launch",
+            Sfx::BombExplode => "bomb_explode",
+            Sfx::MissileLaunch => "missile_launch",
+            Sfx::MissileExplode => "missile_explode",
+            Sfx::MineDrop => "mine_drop",
+            Sfx::TntLand => "tnt_land",
+            Sfx::TntJump => "tnt_jump",
+            Sfx::TntHonk => "tnt_honk",
+            Sfx::TntExplode => "tnt_explode",
+            Sfx::Glass => "glass",
+            Sfx::Shield => "shield",
+            Sfx::ShieldPop => "shield_pop",
+            Sfx::Aku => "aku",
+            Sfx::Uka => "uka",
+            Sfx::Clock => "clock",
+            Sfx::WarpLaunch => "warp_launch",
+            Sfx::WarpHit => "warp_hit",
+        }
+    }
+}
+
+/// The weapons' loops this frame: the roulette spinning, and how loud (0 to 1, by distance) the
+/// nearest missile, warp orb and rolling bomb are.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WeaponLoops {
+    pub roulette: bool,
+    pub missile: f32,
+    pub warp: f32,
+    pub bomb: f32,
 }
 
 /// What the kart update hands the sounds each frame.
@@ -48,6 +157,7 @@ pub struct KartAudio {
     pub music: f32,
     /// The music's tempo against its own (CTR plays the final lap 20 BPM faster); 0 reads as 1.
     pub music_rate: f64,
+    pub weapons: WeaponLoops,
 }
 
 /// A landing this fast downward (speed units) or harder plays the heavy thump.
@@ -66,6 +176,12 @@ impl KartAudio {
             Event::MeterFull => Cue::MeterFull,
             Event::Turbo => Cue::Turbo,
             Event::Slam { .. } | Event::SpinOut => Cue::Crash,
+            Event::Hit {
+                kind: ctr_kart::HitKind::TntOnHead,
+            } => Cue::Sfx(Sfx::TntLand, 1.0),
+            Event::TntLanded => Cue::Sfx(Sfx::TntJump, 1.0),
+            Event::TntExploded => Cue::Sfx(Sfx::TntExplode, 1.0),
+            Event::ShieldPopped | Event::ShieldExpired => Cue::Sfx(Sfx::ShieldPop, 1.0),
             _ => return,
         };
         self.cues.push(cue);
@@ -222,6 +338,12 @@ struct Bank {
     puff: StaticSoundData,
     beep: StaticSoundData,
     crash: StaticSoundData,
+    /// The weapons' one-shots and loops, those the player's audio has.
+    sfx: std::collections::HashMap<Sfx, StaticSoundData>,
+    roulette: Option<StaticSoundData>,
+    missile: Option<StaticSoundData>,
+    warp: Option<StaticSoundData>,
+    bomb: Option<StaticSoundData>,
 }
 
 impl Bank {
@@ -234,6 +356,25 @@ impl Bank {
                 .inspect(|_| loaded += 1)
                 .unwrap_or_else(fallback)
         };
+        let file = |name: &str| {
+            root.as_ref()
+                .and_then(|r| StaticSoundData::from_file(r.join(format!("{name}.wav"))).ok())
+        };
+        let sfx: std::collections::HashMap<Sfx, StaticSoundData> = Sfx::ALL
+            .iter()
+            .filter_map(|&s| Some((s, file(s.file())?)))
+            .collect();
+        let (roulette, missile, warp, bomb) = (
+            file("roulette"),
+            file("missile_fly"),
+            file("warp_fly"),
+            file("bomb_roll"),
+        );
+        let weapons = sfx.len()
+            + [&roulette, &missile, &warp, &bomb]
+                .iter()
+                .filter(|l| l.is_some())
+                .count();
         let bank = Self {
             engine: one("engine", engine),
             skid: one("skid", skid),
@@ -249,8 +390,16 @@ impl Bank {
             puff: one("boost_early", puff),
             beep: one("meter_full", beep),
             crash: one("crash", crash),
+            sfx,
+            roulette,
+            missile,
+            warp,
+            bomb,
         };
-        info!("kart sound: {loaded} sounds from the player's audio, the rest synthesized");
+        info!(
+            "kart sound: {loaded} sounds from the player's audio, the rest synthesized; \
+             {weapons} weapon sounds"
+        );
         bank
     }
 }
@@ -261,11 +410,23 @@ struct Loops {
     engine: Option<StaticSoundHandle>,
     skid: Option<StaticSoundHandle>,
     roar: Option<StaticSoundHandle>,
+    roulette: Option<StaticSoundHandle>,
+    missile: Option<StaticSoundHandle>,
+    warp: Option<StaticSoundHandle>,
+    bomb: Option<StaticSoundHandle>,
 }
 
 impl Loops {
-    fn all(&mut self) -> [&mut Option<StaticSoundHandle>; 3] {
-        [&mut self.engine, &mut self.skid, &mut self.roar]
+    fn all(&mut self) -> [&mut Option<StaticSoundHandle>; 7] {
+        [
+            &mut self.engine,
+            &mut self.skid,
+            &mut self.roar,
+            &mut self.roulette,
+            &mut self.missile,
+            &mut self.warp,
+            &mut self.bomb,
+        ]
     }
 }
 
@@ -435,6 +596,10 @@ impl Sounds {
                 engine: start(&bank.engine),
                 skid: start(&bank.skid),
                 roar: start(&bank.roar),
+                roulette: bank.roulette.as_ref().and_then(&mut start),
+                missile: bank.missile.as_ref().and_then(&mut start),
+                warp: bank.warp.as_ref().and_then(&mut start),
+                bomb: bank.bomb.as_ref().and_then(&mut start),
             };
             self.driving = true;
         }
@@ -453,7 +618,15 @@ impl Sounds {
             (0.0, 1.0)
         };
         let roar = if audio.turbo { (0.4, 1.0) } else { (0.0, 1.0) };
-        for (handle, (level, rate)) in self.loops.all().into_iter().zip([engine, skid, roar]) {
+        let w = audio.weapons;
+        let weapons = [
+            (if w.roulette { 0.7 } else { 0.0 }, 1.0),
+            (0.7 * w.missile, 1.0),
+            (0.7 * w.warp, 1.0),
+            (0.6 * w.bomb, 1.0),
+        ];
+        let levels = [engine, skid, roar].into_iter().chain(weapons);
+        for (handle, (level, rate)) in self.loops.all().into_iter().zip(levels) {
             if let Some(h) = handle.as_mut() {
                 h.set_volume(db(level * sfx), tween(60));
                 h.set_playback_rate(rate, tween(60));
@@ -472,6 +645,10 @@ impl Sounds {
                 Cue::Turbo => (&bank.boost[2], 1.0),
                 Cue::Crash => (&bank.crash, 0.6),
                 Cue::Countdown(_) => (&bank.beep, 0.9),
+                Cue::Sfx(sfx, gain) => match bank.sfx.get(&sfx) {
+                    Some(data) => (data, gain.clamp(0.0, 1.0)),
+                    None => continue,
+                },
             };
             let mut data = data.clone().volume(db(gain * sfx));
             if let Cue::Countdown(go) = cue {

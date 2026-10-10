@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..1384577
+index 0000000..c4e524b
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,492 @@
+@@ -0,0 +1,1064 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -100,8 +100,13 @@ index 0000000..1384577
 +#include <string>
 +#include <vector>
 +
++#include <algorithm>
++#include <cstdio>
 +#include <cstdlib>
++#include <mutex>
 +#include <unordered_map>
++
++#include "GridMap.h"
 +
 +extern SkillRaceClassInfoMap SkillRaceClassInfoBySkill;
 +
@@ -350,6 +355,33 @@ index 0000000..1384577
 +        uint8 lap = 0;
 +        uint8 checkpoint = 0;
 +        bool finished = false;
++        uint8 place = 0; // finishing place, 1 = first
++        // Weapons: the item held (ITEM_NONE for none) and its shots left, when the crate that gave
++        // it was taken (ms), the Wumpa count, and until when a fired mask protects (ms, 0 none).
++        uint8 held = 15;
++        uint8 shots = 0;
++        uint32 claimed = 0;
++        uint8 wumpa = 0;
++        uint32 maskUntil = 0;
++    };
++
++    // A weapon crate ('Q'), a fruit crate ('F') or a single Wumpa fruit ('W') on a race's course.
++    struct Crate
++    {
++        char kind;
++        float x, y, z;
++        bool up = true;
++        uint32 respawnAt = 0; // ms; 0 while up, or never (a single fruit)
++    };
++
++    // A relayed shot: the item, when it was relayed (ms), whether it has hit anyone, and whether
++    // it was dropped behind (TNT, Nitro, beaker).
++    struct Shot
++    {
++        uint8 item;
++        uint32 at;
++        bool hit = false;
++        bool dropped = false;
 +    };
 +
 +    struct Race
@@ -360,10 +392,19 @@ index 0000000..1384577
 +        uint32 start = 0; // 0 until started
 +        uint8 finishers = 0;
 +        std::vector<Racer> racers;
++        // Weapons, live from the start: the crates, the shots relayed in the last SHOT_LIFETIME
++        // keyed by shooter low guid << 16 | shot, and the race's MixRNG state.
++        std::vector<Crate> crates;
++        std::unordered_map<uint64, Shot> shots;
++        uint16 rng = 0;
 +    };
 +
 +    static std::unordered_map<uint32, Race> s_races;
 +    static uint32 s_nextRace = 1;
++
++    // Party addon lines run on vmangos's single AsyncPacket thread, but a LANG_ADDON line sent as
++    // say, emote or yell runs on its map's thread: every Kartcraft line takes this lock.
++    static std::mutex s_mutex;
 +
 +    static void SendLine(Player* to, std::string const& text)
 +    {
@@ -418,6 +459,529 @@ index 0000000..1384577
 +                player->SetSkill(SKILL_KARTING, std::min(skill + worth, SKILL_MAX), SKILL_MAX);
 +                LearnUnlocked(player);
 +            }
++        }
++    }
++
++    // ── Weapons ────────────────────────────────────────────────────────────────────────────────
++    //
++    // docs/kartcraft-weapons-protocol.md. The server owns the crates, the roulette, what each
++    // racer holds and their Wumpa; clients simulate shots and the victim reports a hit. Item ids
++    // and rules are CTR's (docs/ctr-weapons-spec.md).
++
++    enum Item : uint8
++    {
++        ITEM_TURBO = 0, ITEM_BOMB = 1, ITEM_MISSILE = 2, ITEM_TNT = 3, ITEM_BEAKER = 4, ITEM_SPRING = 5,
++        ITEM_SHIELD = 6, ITEM_MASK = 7, ITEM_CLOCK = 8, ITEM_WARP = 9, ITEM_BOMB_3 = 10,
++        ITEM_MISSILE_3 = 11, ITEM_NONE = 15,
++    };
++
++    // A crate comes back 30 + 16 frames after it breaks (RB_Crate.c:48-75, 125).
++    constexpr uint32 CRATE_RESPAWN = 1533;
++    // How near a crate (yards, across the ground) a racer must be to take it.
++    constexpr float CRATE_RADIUS = 6.f;
++    // Shots are accepted 20 frames into the roulette (the earliest Fire stop, VehPhysProc.c:833).
++    constexpr uint32 ROLL_MIN = 600;
++    // A shot can be reported as a hit this long after it was relayed (ms).
++    constexpr uint32 SHOT_LIFETIME = 30 * IN_MILLISECONDS;
++    // CTR's projectile pool, and the W lines one sender may send a second.
++    constexpr size_t MAX_LIVE_SHOTS = 12;
++    constexpr uint32 MAX_WEAPON_LINES = 20;
++    // Wumpa: capped at 10, juiced at 10 (DRIVER_WUMPA_JUICED_COUNT).
++    constexpr uint8 MAX_WUMPA = 10;
++    // The mask protects 7680 ms, 11520 ms juiced (VehPickupItem.c:193-351).
++    constexpr uint32 MASK_TIME = 7680;
++    constexpr uint32 MASK_TIME_JUICED = 11520;
++    // A whole addon line stays under this (docs/ctr-weapons-assets-and-net.md, B1).
++    constexpr size_t MAX_LINE = 200;
++
++    // Per segment between consecutive checkpoints: a fruit crate a quarter of the way, a row of
++    // weapon crates across the path halfway (yards apart), and single fruit three quarters along.
++    constexpr float CRATE_ROW_SPACING = 4.f;
++    constexpr uint32 CRATE_ROW = 4;
++    constexpr uint32 SEGMENT_FRUIT = 3;
++    constexpr float FRUIT_SPACING = 4.f;
++
++    // The roulette tables (zGlobal_DATA.c:8108-8174). Race4 samples only its first 19 entries.
++    constexpr uint8 TABLE_RACE1[] = { 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 0, 6 };
++    constexpr uint8 TABLE_RACE2[] = {
++        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1, 1, 1, 10, 10, 10,
++        0, 0, 0, 0, 0, 6, 6, 6, 2, 2, 2, 11, 11, 9, 9, 9, 9, 9, 7, 7, 7, 7, 7, 7, 7, 8 };
++    constexpr uint8 TABLE_RACE3[] = { 4, 3, 1, 10, 10, 0, 0, 6, 2, 2, 11, 9, 9, 9, 7, 7, 7, 7, 7, 8 };
++    constexpr uint8 TABLE_RACE4[] = { 0, 6, 2, 11, 9, 9, 9, 9, 9, 7, 7, 7, 7, 7, 7, 7, 7, 8, 8 };
++    constexpr uint8 TABLE_BOSS[] = { 4, 3, 1, 10, 10, 0, 0, 6, 2, 11, 9, 9, 9, 7, 7, 7, 7, 7, 8, 8 };
++
++    enum ItemSet { SET_RACE1, SET_RACE2, SET_RACE3, SET_RACE4, SET_BOSS, SET_FALLBACK };
++
++    struct CrateSpot { char kind; float x, y, z; };
++    // A course's crate layout, built once from its checkpoints and the ground.
++    static std::unordered_map<Course const*, std::vector<CrateSpot>> s_layouts;
++
++    struct LineRate { uint32 window = 0; uint32 count = 0; };
++    static std::unordered_map<uint32, LineRate> s_weaponRate; // player guid low -> this second
++
++    // MixRNG_Scramble: CTR's 16-bit LCG (MixRNG.c:3-10).
++    static uint16 Scramble(Race& race)
++    {
++        race.rng = uint16((uint32(race.rng) * 0x6255 + 0x3619) & 0xFFFF);
++        return race.rng;
++    }
++
++    static std::string Fixed(float value, int decimals)
++    {
++        char buf[32];
++        std::snprintf(buf, sizeof(buf), "%.*f", decimals, value);
++        return buf;
++    }
++
++    static float GroundZ(TerrainInfo const* terrain, float x, float y, float fallback)
++    {
++        if (!terrain)
++            return fallback;
++        // The terrain first, then a vmap floor just above it (a bridge, a road over a model).
++        float ground = terrain->GetHeightStatic(x, y, MAX_HEIGHT, false);
++        if (ground <= INVALID_HEIGHT)
++            return fallback;
++        float floor = terrain->GetHeightStatic(x, y, ground + 2.f, true, 6.f);
++        return floor > INVALID_HEIGHT ? floor : ground;
++    }
++
++    static std::vector<CrateSpot> const& Layout(Course const& course, TerrainInfo const* terrain, float fallbackZ)
++    {
++        auto cached = s_layouts.find(&course);
++        if (cached != s_layouts.end())
++            return cached->second;
++        std::vector<CrateSpot> spots;
++        bool grounded = true;
++        auto place = [&](char kind, float x, float y)
++        {
++            float z = GroundZ(terrain, x, y, INVALID_HEIGHT_VALUE);
++            if (z <= INVALID_HEIGHT)
++            {
++                grounded = false;
++                z = fallbackZ;
++            }
++            spots.push_back({ kind, x, y, z });
++        };
++        size_t n = course.points.size();
++        size_t segments = course.laps ? n : n - 1;
++        for (size_t i = 0; i < segments; ++i)
++        {
++            auto const& a = course.points[i];
++            auto const& b = course.points[(i + 1) % n];
++            float dx = b.first - a.first, dy = b.second - a.second;
++            float length = std::sqrt(dx * dx + dy * dy);
++            if (length < 1.f)
++                continue;
++            float ux = dx / length, uy = dy / length; // along the path
++            float px = -uy, py = ux;                  // across it
++            auto at = [&](float t, float across, float along)
++            {
++                return std::make_pair(a.first + dx * t + px * across + ux * along,
++                    a.second + dy * t + py * across + uy * along);
++            };
++            auto fruitCrate = at(0.25f, 0.f, 0.f);
++            place('F', fruitCrate.first, fruitCrate.second);
++            for (uint32 k = 0; k < CRATE_ROW; ++k)
++            {
++                auto crate = at(0.5f, (k - (CRATE_ROW - 1) / 2.f) * CRATE_ROW_SPACING, 0.f);
++                place('Q', crate.first, crate.second);
++            }
++            for (uint32 k = 0; k < SEGMENT_FRUIT; ++k)
++            {
++                auto fruit = at(0.75f, 0.f, (k - (SEGMENT_FRUIT - 1) / 2.f) * FRUIT_SPACING);
++                place('W', fruit.first, fruit.second);
++            }
++        }
++        if (!grounded)
++        {
++            // Some ground was missing: use the layout this once and look again next race.
++            static std::vector<CrateSpot> s_once;
++            s_once = std::move(spots);
++            return s_once;
++        }
++        return s_layouts[&course] = std::move(spots);
++    }
++
++    static Racer* FindRacer(Race& race, uint32 guidLow)
++    {
++        for (Racer& r : race.racers)
++            if (r.guid.GetCounter() == guidLow)
++                return &r;
++        return nullptr;
++    }
++
++    // Race order: finishers by place, then by checkpoints passed, then by distance to the next.
++    static std::vector<Racer*> Standings(Race& race)
++    {
++        Course const& c = *race.course;
++        uint32 n = uint32(c.points.size());
++        struct Key { Racer* racer; uint32 progress; float remaining; };
++        std::vector<Key> keys;
++        for (Racer& r : race.racers)
++        {
++            float remaining = 1e9f;
++            uint32 next = c.laps ? (r.checkpoint + 1) % n : std::min<uint32>(r.checkpoint + 1, n - 1);
++            if (Player* p = ObjectAccessor::FindPlayer(r.guid))
++                remaining = DistanceTo(p, c.points[next]);
++            keys.push_back({ &r, uint32(r.lap) * n + r.checkpoint, remaining });
++        }
++        std::stable_sort(keys.begin(), keys.end(), [](Key const& a, Key const& b)
++        {
++            if (a.racer->finished != b.racer->finished)
++                return a.racer->finished;
++            if (a.racer->finished)
++                return a.racer->place < b.racer->place;
++            if (a.progress != b.progress)
++                return a.progress > b.progress;
++            return a.remaining < b.remaining;
++        });
++        std::vector<Racer*> order;
++        for (Key const& k : keys)
++            order.push_back(k.racer);
++        return order;
++    }
++
++    static bool LiveShot(Shot const& shot, uint32 now)
++    {
++        return WorldTimer::getMSTimeDiff(shot.at, now) <= SHOT_LIFETIME;
++    }
++
++    static bool IsProjectile(uint8 item)
++    {
++        switch (item)
++        {
++            case ITEM_BOMB: case ITEM_MISSILE: case ITEM_TNT: case ITEM_BEAKER:
++            case ITEM_WARP: case ITEM_BOMB_3: case ITEM_MISSILE_3:
++                return true;
++        }
++        return false;
++    }
++
++    // A projectile still in CTR's pool: relayed recently and not ended by a single-target hit
++    // (missile, warp orb) or by a hit on a dropped item.
++    static bool InPool(Shot const& shot, uint32 now)
++    {
++        return IsProjectile(shot.item) && LiveShot(shot, now) && !shot.hit;
++    }
++
++    // VehPhysGeneral_SetHeldItem (VehPhysGeneral.c:1651-1962), race mode, no boss overrides.
++    static uint8 Roll(Race& race, Racer& me, uint32 now)
++    {
++        std::vector<Racer*> order = Standings(race);
++        uint32 rank = uint32(std::find(order.begin(), order.end(), &me) - order.begin());
++        uint32 mode = uint32(race.racers.size());
++        int set = SET_FALLBACK;
++        switch (mode)
++        {
++            case 8: set = rank == 1 ? SET_RACE2 : int(rank / 2); break;
++            case 6: set = rank == 0 ? SET_RACE1 : rank == 5 ? SET_RACE4 : int((rank - 1) / 2 + 1); break;
++            case 5: set = rank >= 4 ? SET_RACE4 : int(rank); break;
++            case 4: set = int(std::min<uint32>(rank, SET_RACE4)); break;
++            case 3:
++                if (rank == 0)
++                    set = SET_RACE1;
++                else if (rank == 1)
++                    set = (Scramble(race) & 1) ? SET_RACE2 : SET_RACE3;
++                else
++                    set = SET_RACE4;
++                break;
++            case 2: set = rank == 0 ? SET_RACE1 : SET_BOSS; break;
++        }
++        // Race4 on the first lap is downgraded to Race3. A sprint is all one lap, so there the
++        // catch-up items come once the first third of its checkpoints is behind (Kartcraft's own
++        // rule: CTR has no sprints).
++        bool firstLap = race.course->laps ? me.lap == 0
++                                          : size_t(me.checkpoint) * 3 < race.course->points.size();
++        if (set == SET_RACE4 && firstLap)
++            set = SET_RACE3;
++
++        uint32 rng = (Scramble(race) >> 3) % 200;
++        uint8 item;
++        switch (set)
++        {
++            case SET_RACE1: item = TABLE_RACE1[rng * 20 / 200]; break;
++            case SET_RACE2: item = TABLE_RACE2[rng * 52 / 200]; break;
++            case SET_RACE3: item = TABLE_RACE3[rng * 20 / 200]; break;
++            case SET_RACE4: item = TABLE_RACE4[rng * 19 / 200]; break;
++            case SET_BOSS: item = TABLE_BOSS[rng * 20 / 200]; break;
++            default: item = uint8(Scramble(race) % 12); break;
++        }
++
++        if (item == ITEM_SPRING)
++            item = ITEM_TURBO;
++        // One warp orb at a time: another becomes Missile x3 while one is held or flying.
++        if (item == ITEM_WARP)
++        {
++            bool held = false;
++            for (Racer const& r : race.racers)
++                held |= &r != &me && r.held == ITEM_WARP && r.shots;
++            for (auto const& s : race.shots)
++                held |= s.second.item == ITEM_WARP && InPool(s.second, now);
++            if (held)
++                item = ITEM_MISSILE_3;
++        }
++        // With 3 or more players at most 2 may hold Missile x3; a third gets Missile x1.
++        if (item == ITEM_MISSILE_3 && race.racers.size() >= 3)
++        {
++            uint32 holders = 0;
++            for (Racer const& r : race.racers)
++                holders += &r != &me && r.held == ITEM_MISSILE_3 && r.shots;
++            if (holders >= 2)
++                item = ITEM_MISSILE;
++        }
++        return item;
++    }
++
++    static void SendLayout(Race const& race)
++    {
++        std::string const head = "KARTCRAFT\tW\tL\t";
++        std::string line;
++        size_t first = 0;
++        auto flush = [&](size_t next)
++        {
++            if (!line.empty())
++                SendRace(race, head + std::to_string(first) + "\t" + line);
++            line.clear();
++            first = next;
++        };
++        for (size_t i = 0; i < race.crates.size(); ++i)
++        {
++            Crate const& c = race.crates[i];
++            std::string crate = std::string(1, c.kind) + "," + Fixed(c.x, 2) + "," + Fixed(c.y, 2) + "," + Fixed(c.z, 2);
++            size_t length = head.size() + std::to_string(first).size() + 1 + line.size() + (line.empty() ? 0 : 1) + crate.size();
++            if (!line.empty() && length >= MAX_LINE)
++                flush(i);
++            line += (line.empty() ? "" : ";") + crate;
++        }
++        flush(race.crates.size());
++    }
++
++    // At the start: the crates go up and every racer is told where they are.
++    static void StartWeapons(Race& race, Player* host, uint32 now)
++    {
++        race.crates.clear();
++        race.shots.clear();
++        race.rng = uint16(now ^ (now >> 16));
++        TerrainInfo const* terrain = host->GetMapId() == race.course->map ? host->GetTerrain() : nullptr;
++        for (CrateSpot const& s : Layout(*race.course, terrain, host->GetPositionZ()))
++        {
++            Crate c;
++            c.kind = s.kind;
++            c.x = s.x;
++            c.y = s.y;
++            c.z = s.z;
++            race.crates.push_back(c);
++        }
++        for (Racer& r : race.racers)
++        {
++            r.held = ITEM_NONE;
++            r.shots = 0;
++            r.claimed = 0;
++            r.wumpa = 0;
++            r.maskUntil = 0;
++        }
++        SendLayout(race);
++    }
++
++    // A racer left: their shots go with them.
++    static void DropShots(Race& race, uint32 guidLow)
++    {
++        for (auto s = race.shots.begin(); s != race.shots.end();)
++            s = uint32(s->first >> 16) == guidLow ? race.shots.erase(s) : std::next(s);
++    }
++
++    // Crates due back come up; old shots are forgotten. Run on every Kartcraft line: a racer's
++    // kart sends its state ten times a second, so a respawn is late by at most about 100 ms.
++    static void TickWeapons(uint32 now)
++    {
++        for (auto& entry : s_races)
++        {
++            Race& race = entry.second;
++            for (size_t i = 0; i < race.crates.size(); ++i)
++            {
++                Crate& c = race.crates[i];
++                if (!c.up && c.respawnAt && int32(now - c.respawnAt) >= 0)
++                {
++                    c.up = true;
++                    c.respawnAt = 0;
++                    SendRace(race, "KARTCRAFT\tW\tU\t" + std::to_string(i));
++                }
++            }
++            for (auto s = race.shots.begin(); s != race.shots.end();)
++                s = LiveShot(s->second, now) ? std::next(s) : race.shots.erase(s);
++        }
++    }
++
++    static bool ParseFloat(std::string const& text, float& out)
++    {
++        char* end = nullptr;
++        out = std::strtof(text.c_str(), &end);
++        return end != text.c_str() && *end == '\0' && std::isfinite(out);
++    }
++
++    static void HandleWeapon(Player* player, std::string const& body)
++    {
++        uint32 now = WorldTimer::getMSTime();
++        LineRate& rate = s_weaponRate[player->GetGUIDLow()];
++        if (!rate.window || WorldTimer::getMSTimeDiff(rate.window, now) >= IN_MILLISECONDS)
++        {
++            rate.window = now;
++            rate.count = 0;
++        }
++        if (++rate.count > MAX_WEAPON_LINES || !player->HasAura(SPELL_SUMMON_KART))
++            return;
++
++        std::vector<std::string> f;
++        for (size_t at = 0, tab; at <= body.size(); at = tab + 1)
++        {
++            tab = body.find('\t', at);
++            if (tab == std::string::npos)
++                tab = body.size();
++            f.push_back(body.substr(at, tab - at));
++        }
++        if (f.size() < 3)
++            return;
++
++        // The sender's race: one that has passed GO with them in it.
++        Race* race = nullptr;
++        Racer* me = nullptr;
++        for (auto& entry : s_races)
++        {
++            Race& r = entry.second;
++            if (!r.start || int32(now - r.start) < 0 || r.crates.empty())
++                continue;
++            if (Racer* x = FindRacer(r, player->GetGUIDLow()))
++            {
++                race = &r;
++                me = x;
++            }
++        }
++        if (!race || player->GetMapId() != race->course->map)
++            return;
++        std::string const& verb = f[1];
++        std::string const guid = std::to_string(player->GetGUIDLow());
++
++        if (verb == "C" && !me->finished)
++        {
++            char* end = nullptr;
++            unsigned long index = std::strtoul(f[2].c_str(), &end, 10);
++            if (end == f[2].c_str() || *end || index >= race->crates.size())
++                return;
++            Crate& crate = race->crates[index];
++            if (!crate.up || DistanceTo(player, { crate.x, crate.y }) > CRATE_RADIUS)
++                return;
++            crate.up = false;
++            crate.respawnAt = crate.kind == 'W' ? 0 : now + CRATE_RESPAWN;
++            SendRace(*race, "KARTCRAFT\tW\tX\t" + std::to_string(index) + "\t" + guid);
++            if (crate.kind == 'Q')
++            {
++                // A racer still holding an item breaks the crate for nothing (RB_Crate.c:152-226).
++                if (me->held != ITEM_NONE || me->shots)
++                    return;
++                uint8 item = Roll(*race, *me, now);
++                me->held = item;
++                me->shots = item == ITEM_BOMB_3 || item == ITEM_MISSILE_3 ? 3 : 1;
++                me->claimed = now;
++                SendLine(player, "KARTCRAFT\tW\tI\t" + std::to_string(item) + "\t" + std::to_string(me->shots));
++            }
++            else
++            {
++                uint32 gain = crate.kind == 'F' ? Scramble(*race) % 4 + 5 : 1;
++                me->wumpa = uint8(std::min<uint32>(me->wumpa + gain, MAX_WUMPA));
++                SendLine(player, "KARTCRAFT\tW\tF\t" + std::to_string(me->wumpa));
++            }
++        }
++        else if (verb == "S" && f.size() >= 6 && !me->finished)
++        {
++            char* end = nullptr;
++            unsigned long shot = std::strtoul(f[2].c_str(), &end, 10);
++            if (end == f[2].c_str() || *end || shot < 1 || shot > 0xFFFF)
++                return;
++            if (me->held == ITEM_NONE || !me->shots || WorldTimer::getMSTimeDiff(me->claimed, now) < ROLL_MIN)
++                return;
++            std::vector<std::string> pos;
++            for (size_t at = 0, comma; at <= f[3].size(); at = comma + 1)
++            {
++                comma = f[3].find(',', at);
++                if (comma == std::string::npos)
++                    comma = f[3].size();
++                pos.push_back(f[3].substr(at, comma - at));
++            }
++            float x, y, z, yaw;
++            if (pos.size() != 4 || !ParseFloat(pos[0], x) || !ParseFloat(pos[1], y) || !ParseFloat(pos[2], z) ||
++                !ParseFloat(pos[3], yaw))
++                return;
++            uint32 target = uint32(std::strtoul(f[4].c_str(), nullptr, 10));
++            std::string flags;
++            for (char c : f[5])
++                if ((c == 'b' || c == 'd') && flags.find(c) == std::string::npos)
++                    flags += c;
++
++            uint8 item = me->held;
++            if (IsProjectile(item))
++            {
++                size_t live = 0;
++                for (auto const& s : race->shots)
++                    live += InPool(s.second, now);
++                if (live >= MAX_LIVE_SHOTS)
++                    return;
++            }
++            bool juiced = me->wumpa >= MAX_WUMPA;
++            if (--me->shots == 0)
++                me->held = ITEM_NONE;
++            if (item == ITEM_MASK)
++                me->maskUntil = now + (juiced ? MASK_TIME_JUICED : MASK_TIME);
++            if (item == ITEM_WARP)
++            {
++                // The leader, or the next racer when the shooter leads (RB_Warpball.c:127-198).
++                target = 0;
++                for (Racer* r : Standings(*race))
++                    if (r != me && !r->finished)
++                    {
++                        target = r->guid.GetCounter();
++                        break;
++                    }
++            }
++            Shot& record = race->shots[(uint64(player->GetGUIDLow()) << 16) | shot];
++            record = Shot();
++            record.item = item;
++            record.at = now;
++            record.dropped = flags.find('d') != std::string::npos;
++            SendRace(*race, "KARTCRAFT\tW\tS\t" + guid + "\t" + std::to_string(item) + "\t" + (juiced ? "1" : "0") +
++                "\t" + std::to_string(shot) + "\t" + Fixed(x, 2) + "," + Fixed(y, 2) + "," + Fixed(z, 2) + "," +
++                Fixed(yaw, 3) + "\t" + std::to_string(target) + "\t" + flags);
++        }
++        else if (verb == "H" && f.size() >= 5)
++        {
++            uint32 shooter = uint32(std::strtoul(f[2].c_str(), nullptr, 10));
++            char* end = nullptr;
++            unsigned long shot = std::strtoul(f[3].c_str(), &end, 10);
++            if (end == f[3].c_str() || *end || shot > 0xFFFF || f[4].size() != 1)
++                return;
++            char kind = f[4][0];
++            if (kind != 'S' && kind != 'B' && kind != 'Q' && kind != 'T')
++                return;
++            bool self = shooter == player->GetGUIDLow() && shot == 0;
++            if (!self)
++            {
++                auto found = race->shots.find((uint64(shooter) << 16) | shot);
++                if (found == race->shots.end() || !LiveShot(found->second, now))
++                    return;
++                Shot& s = found->second;
++                bool single = s.item == ITEM_MISSILE || s.item == ITEM_MISSILE_3 || s.item == ITEM_WARP;
++                if (single && s.hit)
++                    return;
++                if (single || s.dropped)
++                    s.hit = true;
++            }
++            // Spin-out and squish cost 1, a blast 3; a TNT landing on the head costs nothing until
++            // it goes off; none while masked (RB_Player.c:153-161).
++            uint32 loss = kind == 'B' ? 3 : kind == 'T' ? 0 : 1;
++            if (me->maskUntil && int32(now - me->maskUntil) < 0)
++                loss = 0;
++            me->wumpa = uint8(me->wumpa > loss ? me->wumpa - loss : 0);
++            SendRace(*race, "KARTCRAFT\tW\tH\t" + guid + "\t" + std::to_string(shooter) + "\t" + std::to_string(shot) +
++                "\t" + std::string(1, kind) + "\t" + std::to_string(me->wumpa));
 +        }
 +    }
 +
@@ -483,6 +1047,7 @@ index 0000000..1384577
 +            SendRace(r, "KARTCRAFT\tR\tC\t" + std::to_string(id) + "\t" + r.course->key + "\t" +
 +                std::to_string(r.course->laps) + "\t" + points);
 +            SendRace(r, "KARTCRAFT\tR\tG\t" + std::to_string(id) + "\t" + std::to_string(COUNTDOWN) + "\t" + Roster(r));
++            StartWeapons(r, player, now);
 +        }
 +        else if (verb == "K" && race != s_races.end() && f.size() > 3)
 +        {
@@ -513,6 +1078,7 @@ index 0000000..1384577
 +            {
 +                me->finished = true;
 +                uint32 place = ++r.finishers;
++                me->place = uint8(place);
 +                uint32 ms = WorldTimer::getMSTimeDiff(r.start, now);
 +                SendRace(r, "KARTCRAFT\tR\tF\t" + std::to_string(id) + "\t" + me->name + "\t" +
 +                    std::to_string(place) + "\t" + std::to_string(ms));
@@ -528,7 +1094,9 @@ index 0000000..1384577
 +            for (auto x = r.racers.begin(); x != r.racers.end(); ++x)
 +                if (x->guid == player->GetObjectGuid())
 +                {
++                    // Their item, Wumpa and mask go with the racer; their shots go too.
 +                    r.racers.erase(x);
++                    DropShots(r, player->GetGUIDLow());
 +                    break;
 +                }
 +            if (r.racers.empty())
@@ -544,6 +1112,8 @@ index 0000000..1384577
 +        if (message.compare(0, prefix.size(), prefix) != 0)
 +            return false;
 +        std::string body = message.substr(prefix.size());
++        std::lock_guard<std::mutex> lock(s_mutex);
++        TickWeapons(WorldTimer::getMSTime());
 +        if (body.compare(0, 2, "L\t") == 0)
 +        {
 +            float points = float(std::atof(body.c_str() + 2));
@@ -554,6 +1124,8 @@ index 0000000..1384577
 +            RelayState(player, message);
 +        else if (body.compare(0, 2, "R\t") == 0)
 +            HandleRace(player, body);
++        else if (body.compare(0, 2, "W\t") == 0)
++            HandleWeapon(player, body);
 +        return true;
 +    }
 +

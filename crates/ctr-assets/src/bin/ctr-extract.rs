@@ -1,9 +1,10 @@
-//! `ctr-extract <disc.bin> <out_dir> [--kart <name>] [--audio] [--effects] [--music] [--hud] [--all]`
+//! `ctr-extract <disc.bin> <out_dir> [--kart <name>] [--audio] [--effects] [--weapons] [--music] [--hud] [--all]`
 //!
 //! Reads the user's own Crash Team Racing (NTSC-U) disc image and writes `<out_dir>/kart.json`
 //! (the chosen racer's kart, default `crash`). `--audio` also writes the kart sound effects to
 //! `<out_dir>/audio/*.wav`; `--effects` writes `<out_dir>/effects.json` (turbo flames, exhaust
-//! smoke, skid marks, particles). `--all` writes `<out_dir>/kart-<name>.json` for every kart, the audio
+//! smoke, skid marks, particles); `--weapons` writes `<out_dir>/weapons.json` (weapon, crate and
+//! Wumpa models). `--all` writes `<out_dir>/kart-<name>.json` for every kart, the audio, the weapons
 //! and the effects. The disc image is only read.
 
 use std::path::{Path, PathBuf};
@@ -14,7 +15,7 @@ use ctr_assets::disc::Disc;
 use ctr_assets::kart::{self, KARTS};
 
 fn usage() -> ExitCode {
-    eprintln!("usage: ctr-extract <disc.bin|disc.iso> <out_dir> [--kart <name>] [--audio] [--effects] [--music] [--hud] [--all]");
+    eprintln!("usage: ctr-extract <disc.bin|disc.iso> <out_dir> [--kart <name>] [--audio] [--effects] [--weapons] [--music] [--hud] [--all]");
     eprintln!("karts: {}", KARTS.join(", "));
     ExitCode::from(2)
 }
@@ -33,6 +34,7 @@ fn run(
     all: bool,
     audio: bool,
     effects: bool,
+    weapons: bool,
     music: bool,
     hud: bool,
 ) -> Result<(), String> {
@@ -70,6 +72,21 @@ fn run(
         let data = serde_json::to_vec(&fx).map_err(|e| e.to_string())?;
         std::fs::write(&path, data).map_err(|e| format!("{}: {e}", path.display()))?;
         println!("wrote {} ({} textures)", path.display(), fx.textures.len());
+    }
+    if weapons || all {
+        let w = ctr_assets::weapons::build(&mut bf).map_err(|e| e.to_string())?;
+        let path = out.join("weapons.json");
+        let data = serde_json::to_vec(&w).map_err(|e| e.to_string())?;
+        std::fs::write(&path, data).map_err(|e| format!("{}: {e}", path.display()))?;
+        for (key, m) in &w.models {
+            println!("weapon {key:16} {:3} frames", m.frames.len());
+        }
+        println!(
+            "wrote {} ({} models, {} textures)",
+            path.display(),
+            w.models.len(),
+            w.textures.len()
+        );
     }
     if audio || all {
         let dir = out.join("audio");
@@ -112,6 +129,7 @@ fn main() -> ExitCode {
     let mut all = false;
     let mut audio = false;
     let mut effects = false;
+    let mut weapons = false;
     let mut music = false;
     let mut hud = false;
     let mut args = std::env::args().skip(1);
@@ -124,6 +142,7 @@ fn main() -> ExitCode {
             "--all" => all = true,
             "--audio" => audio = true,
             "--effects" => effects = true,
+            "--weapons" => weapons = true,
             "--music" => music = true,
             "--hud" => hud = true,
             "-h" | "--help" => return usage(),
@@ -137,7 +156,9 @@ fn main() -> ExitCode {
         eprintln!("unknown kart {kart_name}");
         return usage();
     }
-    match run(disc, out, &kart_name, all, audio, effects, music, hud) {
+    match run(
+        disc, out, &kart_name, all, audio, effects, weapons, music, hud,
+    ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("ctr-extract: {e}");

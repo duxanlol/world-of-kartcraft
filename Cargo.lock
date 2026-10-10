@@ -2852,6 +2852,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctr-weapons"
+version = "0.2.0"
+dependencies = [
+ "ctr-kart",
+ "glam 0.30.10",
+]
+
+[[package]]
 name = "ctrlc"
 version = "3.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4126,10 +4134,12 @@ dependencies = [
 name = "kartcraft"
 version = "0.2.0"
 dependencies = [
+ "benilla-assets",
  "benilla-world",
  "bevy",
  "ctr-assets",
  "ctr-kart",
+ "ctr-weapons",
  "kira",
  "serde",
  "serde_json",

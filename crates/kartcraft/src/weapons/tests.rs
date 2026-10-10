@@ -1,0 +1,267 @@
+use super::wire::{CrateSpot, Shot};
+use super::*;
+
+/// Where the session's lu are measured from, Bevy world.
+const ORIGIN: Vec3 = Vec3::new(-120.0, 60.0, 8900.0);
+const ME: KartId = 7;
+const THEM: KartId = 9;
+
+fn flat() -> Collision {
+    let r = 40_000.0;
+    Collision::new(
+        [
+            [[-r, 0.0, -r], [-r, 0.0, r], [r, 0.0, r]],
+            [[-r, 0.0, -r], [r, 0.0, r], [r, 0.0, -r]],
+        ],
+        // Coarse enough that the grid keeps two faces this big.
+        4096.0,
+    )
+}
+
+/// Our kart settled on the plane at the origin, facing +Z, and the weapons with another racer
+/// 60 yards off.
+fn setup() -> (Weapons, Collision, Kart) {
+    let world = flat();
+    let mut kart = Kart::new(ctr_kart::Class::Balanced, Vec3::Y * 4.0, 0);
+    for _ in 0..10 {
+        kart.tick(
+            &world,
+            &ctr_kart::Input::default(),
+            &ctr_kart::Modifiers::default(),
+        );
+    }
+    let mut w = Weapons {
+        me: ME,
+        ..Default::default()
+    };
+    w.other(THEM, ORIGIN + Vec3::X * 60.0, 0.0, 0, "cortex", false);
+    (w, world, kart)
+}
+
+fn tick(w: &mut Weapons, world: &Collision, kart: &mut Kart, n: usize) {
+    for _ in 0..n {
+        kart.events.clear();
+        kart.tick(
+            world,
+            &ctr_kart::Input::default(),
+            &ctr_kart::Modifiers::default(),
+        );
+        w.tick(world, kart, ORIGIN);
+    }
+}
+
+fn shot(shooter: KartId, item: Item, shot: u16, at: Vec3) -> Down {
+    Down::Shot(Shot {
+        shooter,
+        item,
+        juiced: false,
+        shot,
+        aim: Aim {
+            at: bevy_to_wow(at),
+            yaw: yaw_of(0),
+            ..Default::default()
+        },
+    })
+}
+
+#[test]
+fn a_crate_is_claimed_once_rolled_and_fired_from_the_relay() {
+    let (mut w, world, mut kart) = setup();
+    let here = from_lu(kart.pose().position, ORIGIN);
+    w.receive(Down::Layout {
+        first: 0,
+        crates: vec![CrateSpot {
+            kind: CrateKind::Weapon,
+            at: bevy_to_wow(here),
+        }],
+    });
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(std::mem::take(&mut w.outbox), vec![(ME, Up::Claim(0))]);
+    tick(&mut w, &world, &mut kart, 5);
+    assert!(w.outbox.is_empty(), "asked once while the server answers");
+
+    // The server: taken by us, then the roll.
+    w.receive(Down::Taken { index: 0, by: ME });
+    tick(&mut w, &world, &mut kart, 1);
+    assert!(!w.crates()[0].up);
+    assert_eq!(w.held(), HeldView::Spinning);
+    assert_eq!(w.hud_item(), Some((0x10, 0)));
+    w.receive(Down::Item {
+        item: Item::Missile,
+        shots: 1,
+    });
+    tick(&mut w, &world, &mut kart, usize::from(ROLL_FRAMES) + 1);
+    assert_eq!(w.held(), HeldView::Item(Item::Missile));
+    assert_eq!(w.hud_item(), Some((Item::Missile.id(), 0)));
+
+    // ○: a `W S` from where we are, nothing launched until the relay.
+    w.press(true, false);
+    tick(&mut w, &world, &mut kart, 1);
+    let here = from_lu(kart.pose().position, ORIGIN);
+    let out = std::mem::take(&mut w.outbox);
+    let [(ME, Up::Fire { shot: 1, aim })] = out[..] else {
+        panic!("{out:?}");
+    };
+    assert!(!aim.backward && !aim.dropped);
+    assert!((wow_to_bevy(aim.at) - here).length() < 0.05);
+    assert_eq!(w.shots().count(), 0);
+    w.receive(shot(ME, Item::Missile, 1, here));
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(w.shots().count(), 1);
+
+    // The crate comes back and regrows.
+    w.receive(Down::Back { index: 0 });
+    tick(&mut w, &world, &mut kart, 1);
+    assert!(w.crates()[0].up && w.crate_scale(&w.crates()[0]) < 1.0);
+    tick(&mut w, &world, &mut kart, CRATE_GROW as usize);
+    assert_eq!(w.crate_scale(&w.crates()[0]), 1.0);
+}
+
+#[test]
+fn a_crate_while_holding_gives_no_roulette() {
+    let (mut w, world, mut kart) = setup();
+    w.receive(Down::Item {
+        item: Item::Bomb3,
+        shots: 3,
+    });
+    tick(&mut w, &world, &mut kart, usize::from(ROLL_FRAMES) + 1);
+    assert_eq!(w.held(), HeldView::Item(Item::Bomb3));
+    assert_eq!(w.hud_item(), Some((Item::Bomb3.id(), 3)));
+    w.receive(Down::Layout {
+        first: 0,
+        crates: vec![CrateSpot {
+            kind: CrateKind::Weapon,
+            at: [0.0; 3],
+        }],
+    });
+    w.receive(Down::Taken { index: 0, by: ME });
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(w.held(), HeldView::Item(Item::Bomb3));
+}
+
+#[test]
+fn a_mine_we_drive_into_is_ours_to_report() {
+    let (mut w, world, mut kart) = setup();
+    let here = from_lu(kart.pose().position, ORIGIN);
+    // Their TNT dropped where we stand: it jumps onto our head, and we say so.
+    w.receive(shot(THEM, Item::Tnt, 4, here));
+    tick(&mut w, &world, &mut kart, 2);
+    assert_eq!(
+        std::mem::take(&mut w.outbox),
+        vec![(
+            ME,
+            Up::Hit {
+                shooter: THEM,
+                shot: 4,
+                kind: HitKind::TntOnHead
+            }
+        )]
+    );
+    assert!(kart.tnt_fuse().is_some());
+    // The server relays it with our Wumpa.
+    w.receive(Down::Wumpa(6));
+    w.receive(Down::Hit {
+        victim: ME,
+        shooter: THEM,
+        shot: 4,
+        kind: HitKind::TntOnHead,
+        wumpa: 6,
+    });
+    tick(&mut w, &world, &mut kart, 40);
+    assert_eq!(w.wumpa(), 6);
+    assert!(w.our_look().tnt.is_some());
+    // Its fuse runs out on our head: a self-inflicted blast.
+    tick(&mut w, &world, &mut kart, 90);
+    assert!(w.outbox.contains(&(
+        ME,
+        Up::Hit {
+            shooter: ME,
+            shot: 0,
+            kind: HitKind::Blasted
+        }
+    )));
+}
+
+#[test]
+fn hits_on_others_wait_for_the_server() {
+    let (mut w, world, mut kart) = setup();
+    let them = ORIGIN + Vec3::X * 60.0;
+    // From a kart's height off the ground, as a shot leaves a kart.
+    w.receive(shot(ME, Item::Missile, 2, them + Vec3::new(0.0, 0.5, 30.0)));
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(w.shots().count(), 1);
+    // Their client says they were hit: the missile ends here too, and they tumble.
+    w.receive(Down::Hit {
+        victim: THEM,
+        shooter: ME,
+        shot: 2,
+        kind: HitKind::Blasted,
+        wumpa: 0,
+    });
+    tick(&mut w, &world, &mut kart, 2);
+    assert_eq!(w.shots().count(), 0);
+    assert!(w.outbox.is_empty(), "never ours to report");
+    let r = w.reaction(THEM).expect("tumbling");
+    assert!(r.rotation.angle_between(Quat::IDENTITY) > 0.01 || r.scale != Vec3::ONE);
+}
+
+#[test]
+fn online_a_second_press_neither_detonates_nor_fires_the_shield() {
+    let (mut w, world, mut kart) = setup();
+    let here = from_lu(kart.pose().position, ORIGIN);
+    w.receive(Down::Item {
+        item: Item::Shield,
+        shots: 1,
+    });
+    tick(&mut w, &world, &mut kart, usize::from(ROLL_FRAMES) + 1);
+    w.press(true, false);
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(w.outbox.len(), 1);
+    w.outbox.clear();
+    w.receive(shot(ME, Item::Shield, 1, here));
+    tick(&mut w, &world, &mut kart, 2);
+    assert!(kart.shield().is_some());
+    w.press(true, false);
+    tick(&mut w, &world, &mut kart, 1);
+    assert!(w.outbox.is_empty() && kart.shield().is_some());
+    // The demo's referee takes `W Z`.
+    w.extended = true;
+    w.press(true, false);
+    tick(&mut w, &world, &mut kart, 1);
+    assert!(matches!(
+        w.outbox[..],
+        [(ME, Up::ShieldShot { shot: 2, .. })]
+    ));
+    assert!(kart.shield().is_none());
+}
+
+#[test]
+fn positions_and_facings_survive_the_wire() {
+    // lu from the session, Bevy world, WoW world at the wire's 2 decimals, and back.
+    for lu in [
+        Vec3::ZERO,
+        Vec3::new(1234.5, -80.0, -9876.25),
+        Vec3::new(-40.0, 300.0, 15.0),
+    ] {
+        let wow = bevy_to_wow(from_lu(lu, ORIGIN)).map(|v| (v * 100.0).round() / 100.0);
+        let back = to_lu(wow_to_bevy(wow), ORIGIN);
+        // Half a hundredth of a yard is under a fifth of a lu.
+        assert!((back - lu).length() < 0.4, "{lu} → {back}");
+    }
+    for heading in [0, 1, 1024, 2047, 2048, 3000, 4095] {
+        let yaw = (yaw_of(heading) * 1000.0).round() / 1000.0;
+        assert_eq!(heading_of(yaw), heading, "{heading}");
+    }
+}
+
+#[test]
+fn ctr_hit_kinds_carry_over_to_the_kart() {
+    for (kind, kart) in [
+        (HitKind::SpinOut, ctr_kart::HitKind::SpinOut),
+        (HitKind::Blasted, ctr_kart::HitKind::Blasted),
+        (HitKind::Squished, ctr_kart::HitKind::Squished),
+        (HitKind::TntOnHead, ctr_kart::HitKind::TntOnHead),
+    ] {
+        assert_eq!(kart_hit(kind), kart);
+    }
+}

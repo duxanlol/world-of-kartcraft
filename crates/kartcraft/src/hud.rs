@@ -1,9 +1,10 @@
 //! CTR's race HUD over the game while we drive, drawn by `ctr_assets::hud_draw` from the player's
 //! `kart-data/hud.json`: the speedometer with its needle, the powerslide's turbo meter (green,
 //! red in the boost window), the hang-time meter while a hop is in the air, the Wumpa count, and
-//! in a race the lap and the place. The 512×216 canvas (CTR's framebuffer, 4:3 pixels) is drawn
-//! into one texture each frame and shown as three crops: the left elements pinned to the left
-//! edge, the middle to the centre and the right to the right edge, at the window's height.
+//! in a race the lap, the place and the held item (its roulette while it spins). The 512×216
+//! canvas (CTR's framebuffer, 4:3 pixels) is drawn into one texture each frame and shown as three
+//! crops: the left elements pinned to the left edge, the middle to the centre and the right to
+//! the right edge, at the window's height.
 
 use std::sync::OnceLock;
 
@@ -42,6 +43,9 @@ pub struct HudExtras {
     pub ranks: Vec<String>,
     /// Wumpa fruit held (10 is juiced).
     pub wumpa: u8,
+    /// The item slot: `(heldItemID, count)` in CTR's ids, 0x10 the roulette; a count above 0
+    /// draws the digit (`UI/UI_Weapon.c`).
+    pub item: Option<(u8, u8)>,
 }
 
 #[derive(Component)]
@@ -161,6 +165,7 @@ pub fn draw(
         juiced: extras.wumpa >= 10,
         lap: extras.lap,
         place: extras.place,
+        item: extras.item,
         ranks: extras.ranks,
         time_seconds: now,
         ..Default::default()

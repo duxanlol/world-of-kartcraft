@@ -3,13 +3,15 @@
 //! [`kartcraft::Session`]. While we drive, the kart's pose is our position, facing and camera
 //! (read by `player::controller`), our character holds the saddle pose in the kart's seat
 //! ([`seat`]) and the kart is drawn under it (`kartcraft::model`). Banked turbo chains feed the
-//! Karting profession ([`profession`]) and the score on screen ([`score`]).
+//! Karting profession ([`profession`]) and the score on screen ([`score`]). In a race CTR's
+//! weapons are live ([`weapons`]): crates, items, shots and hits through the server.
 
 mod profession;
 mod race;
 mod remote;
 mod score;
 mod sound;
+mod weapons;
 
 use benilla_world::collision::WorldCollision;
 use benilla_world::schedule::WorldStage;
@@ -132,10 +134,11 @@ fn update(
     mut audio: ResMut<sound::KartAudio>,
     profession: profession::Profession,
     mut score: ResMut<score::KartScore>,
-    (remotes, mut extras, races): (
+    (remotes, mut extras, races, mut arms): (
         Res<remote::RemoteKarts>,
         ResMut<kartcraft::hud::HudExtras>,
         Res<race::Races>,
+        ResMut<kartcraft::weapons::Weapons>,
     ),
 ) {
     let now = time.elapsed_secs();
@@ -261,7 +264,18 @@ fn update(
     if server_kart {
         profession.dpad(controls.dpad);
     }
-    extras.wumpa = if auras.juice { 10 } else { 0 };
+    // ○ fires the held item; the autopilot fires now and then while it holds one.
+    let holding = matches!(
+        arms.held(),
+        kartcraft::weapons::HeldView::Item(_) | kartcraft::weapons::HeldView::Spinning
+    );
+    let fire = controls.fire
+        || (input::autopilot_on() && holding && input::autofire(now, time.delta_secs()));
+    arms.press(fire, controls.reverse);
+    arms.camera = view.camera;
+    // Wumpa from the race's fruit, or all ten under Wumpa Juice.
+    let wumpa = if auras.juice { 10 } else { arms.wumpa() };
+    extras.wumpa = wumpa;
     drive.revving = controls.accelerate;
     // A race's countdown holds the kart on the line (the gas only revs it).
     let controls = if races.holding(now) {
@@ -273,7 +287,7 @@ fn update(
         controls
     };
     let mods = Modifiers {
-        wumpa: if auras.juice { 10 } else { 0 },
+        wumpa,
         mask: auras.aku,
         super_engine: auras.engine,
     };
@@ -288,14 +302,17 @@ fn update(
         }
     }
     let dt = time.delta_secs();
-    let events = host.session.step(
+    let events = host.session.step_with(
         &collide,
         now,
         dt,
         &kartcraft::kart_input(&controls),
         &mods,
         &remotes.nearby(drive.pos, BUMP_RANGE),
+        |world, kart, origin| arms.tick(world, kart, origin),
     );
+    arms.blend = host.session.tick_fraction();
+    arms.feed(&mut audio);
     for event in &events {
         audio.observe(event);
         host.chain.observe(now, event);
@@ -387,6 +404,8 @@ pub(crate) fn plugin(app: &mut App) {
         model_size: 1.25,
         look_drop: 70.0,
         hud_bottom_inset: 0.075,
+        // A WoW character's head stands above a CTR racer's in the seat.
+        head_lift: 0.5,
     });
     app.init_resource::<Host>()
         .init_resource::<KartDrive>()
@@ -398,12 +417,16 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<kartcraft::hud::KartHud>()
         .init_resource::<kartcraft::hud::HudExtras>()
         .init_resource::<kartcraft::effects::KartEffects>()
+        .init_resource::<kartcraft::weapons::Weapons>()
+        .init_resource::<kartcraft::weapons::look::WeaponLook>()
+        .init_resource::<weapons::WeaponLink>()
         .net_handler(
             benilla_protocol::SessionEventKind::XpGain,
             score::on_xp_gain,
         )
         .net_handler(benilla_protocol::SessionEventKind::Chat, remote::on_chat)
         .net_handler(benilla_protocol::SessionEventKind::Chat, race::on_chat)
+        .net_handler(benilla_protocol::SessionEventKind::Chat, weapons::on_chat)
         .init_resource::<race::Races>()
         .init_resource::<race::RaceText>()
         .add_systems(
@@ -412,7 +435,10 @@ pub(crate) fn plugin(app: &mut App) {
                 score::spawn,
                 kartcraft::hud::spawn,
                 race::spawn_text,
-                |_: Commands| model::preload(),
+                |_: Commands| {
+                    model::preload();
+                    kartcraft::weapons::look::preload();
+                },
             ),
         )
         .add_systems(
@@ -422,6 +448,7 @@ pub(crate) fn plugin(app: &mut App) {
                 race_name,
                 update,
                 race::update,
+                weapons::update,
                 race::beams,
                 race::draw_text,
                 model::update,
@@ -442,6 +469,7 @@ pub(crate) fn plugin(app: &mut App) {
                 kartcraft::effects::attach,
                 kartcraft::effects::tick,
                 kartcraft::effects::draw,
+                kartcraft::weapons::look::draw,
                 seat,
                 sound::remote_engines,
             )

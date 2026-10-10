@@ -170,6 +170,9 @@ pub struct Frame {
 pub struct Anim {
     pub name: String,
     pub frames: Vec<Frame>,
+    /// Length in game frames: `num_frames & 0x7FFF`. With bit 15 set only every other frame
+    /// is stored and the game interpolates between stored frames at 30 fps.
+    pub game_frames: usize,
 }
 
 /// One LOD mesh of a model.
@@ -416,7 +419,8 @@ fn parse_anim(b: Bytes, at: usize, num_verts: usize) -> Result<Anim> {
     let raw_frames = b.u16(at + 0x10)?;
     let frame_size = b.i16(at + 0x12)? as usize;
     let ptr_deltas = b.u32(at + 0x14)? as usize;
-    let mut num_frames = (raw_frames & 0x7FFF) as usize;
+    let game_frames = (raw_frames & 0x7FFF) as usize;
+    let mut num_frames = game_frames;
     if raw_frames & 0x8000 != 0 {
         num_frames = num_frames / 2 + 1;
     }
@@ -432,7 +436,11 @@ fn parse_anim(b: Bytes, at: usize, num_verts: usize) -> Result<Anim> {
     let frames = (0..num_frames)
         .map(|i| parse_frame(b, at + 0x18 + i * frame_size, num_verts, deltas.as_deref()))
         .collect::<Result<_>>()?;
-    Ok(Anim { name, frames })
+    Ok(Anim {
+        name,
+        frames,
+        game_frames,
+    })
 }
 
 fn parse_frame(b: Bytes, at: usize, num_verts: usize, deltas: Option<&[u32]>) -> Result<Frame> {

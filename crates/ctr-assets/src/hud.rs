@@ -319,6 +319,10 @@ pub fn build(bf: &mut BigFile) -> Result<HudFile> {
             rank_icons.push(b.sprite(&format!("rank_{}", ic.name), &ic));
         }
     }
+    // Missile/warp orb lock-on square: ptrIcons[UI_TRACKER_LOCK_ICON = 0x2D] "target".
+    let lock_on = icon(0x2D)
+        .map(|ic| b.sprite("lock_on_target", &ic))
+        .ok_or_else(|| Error("shared.mpk has no icon 0x2D (target)".into()))?;
 
     // Meshes: big rank digits (mesh i = rank i+1, chosen by the instance depth 0x100 + rank)
     // and the Wumpa fruit.
@@ -392,6 +396,11 @@ pub fn build(bf: &mut BigFile) -> Result<HudFile> {
             "note": "item sprites are exported upright (the game stores them rotated and draws them with a quarter turn); they are drawn with 50% semi-transparency for STP texels (TRANS_50_DECAL)",
             "sprites": item_sprites,
             "rules": "icon = ptrIcons[heldItemID + 5]; with >= 10 wumpa, TNT/potion/shield use the juiced icons; villains get the Uka mask; while the roulette spins a random racing item is shown each frame; a quantity digit (small font, white) is drawn at (232, 5) when holding 3 missiles/bombs; the icon flickers (every other frame) while noItemTimer runs; with >= 10 wumpa a red 'juiced_shine' sprite pulses behind it at (286, 9), scale 0.6"
+        },
+        "lock_on": {
+            "source": "UI_RaceHud.c:48 UI_TRACKER_LOCK_ICON = 0x2D; UI_TrackerSelf (UI_RaceHud.c:217), UI_TrackerBG (UI_Icon.c:184)",
+            "sprite": lock_on,
+            "rule": "drawn on the targeted driver's own view, centred on their kart's screen position, while a missile or warp orb tracks them; colour red (0xFF), white on the frames the lock-on beep (OtherFX 0x56) plays: every 5 / 10 / 30 frames for a tracker distance (sqrt(distanceToTarget) / 0x32) up to 100 / 200 / beyond; the square zooms in over 8 frames on a new lock (trackerAnim, UI_TRACKER_TIMER_NEW_TARGET_FRAMES); the sprite is one quarter of the frame: UI_TrackerBG draws it 4 times, mirrored in x and/or y about the centre, as one tinted (vertex colour x texel) semi-transparent 50/50 square (transparency 1 = PSX blend mode 0); side arrows (orange for a missile, blue for a warp orb) close in with the distance"
         },
         "lap": {
             "source": "UI_RaceHud.c UI_DrawLapCount; hud_1P_P1[LAP_COUNT] = (484, 8)",

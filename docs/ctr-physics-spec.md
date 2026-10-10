@@ -1044,3 +1044,109 @@ fn powerslide_update(d: &mut Driver, inp: &Input) {
 7. **Pressing timing**: an early press (meter not yet red) fails. Not pressing before the meter fills cancels further boosts. There is no "late press backfire"; the failure exhaust is for early presses.
 8. **Collision differences**: CTR classifies ground/wall per quad flag. WoW needs a slope threshold. Turbo pads, kill planes, mask-grab respawn, the anti-gravity and low-gravity quads, and the V-shift guard are level-feature dependent and optional.
 9. **The UPDATE stage runs before PHYS_LINEAR**, so drift entry and boost presses are evaluated against last frame's derived flags but this frame's `buttonsTapped`. Keep this order to reproduce timing windows exactly.
+
+---
+
+## 13. Hit reactions and the self-applied items
+
+The victim's side of the weapons in `docs/ctr-weapons-spec.md` (sections 3 and 4), as `ctr-kart`
+ports it. Paths are under the decompilation's `game/`. Timers are CTR-ms (32 a frame) unless
+marked frames.
+
+### 13.1 The gate (`Vehicle/VehPickState.c:48-114`)
+
+`RB_Hazard_HurtDriver` → `VehPickState_NewState(victim, type, …)`, in order:
+
+1. A mask (`ACTION_MASK_WEAPON`, set while the mask's thread lives, fade included,
+   `VehPhysProc.c:719-764`) or `invincibleTimer != 0`: ignored, the victim laughs, returns 0.
+2. A shield: it pops, `invincibleTimer = 0x2A0` (672 = 21 frames), returns 0. One hit absorbed.
+3. Type 0 (a TNT asking to sit on the head): returns 1, nothing else.
+4. Otherwise the type's reaction below, then for every one: `reserves = 0`,
+   `turbo_outsideTimer = 0` (the boost is cancelled). The reaction's INIT runs at the start of
+   the **next** frame (`funcPtrs[DRIVER_FUNC_INIT]`, the first driver slot).
+
+| Type | `NoInputTimer` | Notes | Cite |
+|---|---|---|---|
+| 1 spin-out | `0x3C0` (30 frames) | already `KS_SPINNING`: only the timer is reset | `VehPickState.c:238-246` |
+| 2 blasted | `0x960` (75 frames) | ignored when `KS_BLASTED` or the tumble INIT is pending; clears `squishTimer` | `:151-184` |
+| 3 squished | `0xF0` (7.5 frames) | `squishTimer = 0xF00` (120 frames); SpinFirst re-inits even mid-spin | `:227-236` |
+
+Retail's common tail also sets `kartState = KS_NORMAL`, so a spin re-hit mid-spin leaves the spin
+functions running in a "normal" state (no friction halving, fire allowed). The port keeps the
+spinning state: a quirk, not a mechanism.
+
+### 13.2 Spin-out (`Vehicle/VehPhysProc.c:2766-3150`)
+
+`KS_SPINNING` through three phases. In all of them `baseSpeed = fireSpeed = 0`; steering is
+ignored (`numFramesSpentSteering = 10000`); the drawn model is `angle + turnAngleCurr`.
+
+| Phase | PHYS_LINEAR | PHYS_ANGULAR | Leaves when (UPDATE) |
+|---|---|---|---|
+| SpinFirst | `NoInputTimer −= ms`; `ACCEL_PREVENTION` (friction `BrakeFriction/2` = 130) | `rotationSpinRate −= rate>>3`; `ampTurnState = rate`; `turnAngleCurr += ±300` wrapped to ±2048 (sign of `ampTurnState` at init) | `NoInputTimer == 0` or `\|speedApprox\| ≤ 0x2FF` |
+| SpinLast | `ACCEL_PREVENTION` | same decay; keeps whirling until the angle comes round within 400 of 0, then the rate is `−angle·4>>3`, at least 32, clamped at 0 | `\|turnAngleCurr\| < 16` |
+| SpinStop | no brake (coasting friction) | `turnAngleCurr` eases to 0 by 128 a frame; yaw keeps the last `ampTurnState` | the steering animation is home (`SpinStop_Animate`), then Driving_Init |
+
+A drift's spin-out enters SpinFirst directly with 30 frames, or 60 (`0x780`) when it rolled
+backwards (`:2542-2552`). SpinFirst_Init costs one Wumpa (`:2868-2871`), the caller's to apply.
+
+### 13.3 Blasted (`Vehicle/VehStuckProc.c:1349-1504`)
+
+`KS_BLASTED`. Each frame: `NoInputTimer −= ms`; `baseSpeed = 0`; `ACCEL_PREVENTION`;
+`jump_ForcedMS = 0x60`; `jump_InitialVelY = 6000 + 2·NoInputTimer` (10800 at the start, 6000 at
+the end; a hop is 4596). JUMP_FRICTION re-runs PROCESS_JUMP on every grounded frame while
+`jump_ForcedMS != 0` (`VehPhysGeneral.c:1350-1365`), so the kart bounces. Friction is
+`BrakeFriction·3/4` = 195 and applies in the air too (`VehPhysForce.c:429`, `455-468`). The
+angular stage lets `rotationSpinRate` and the model's turn die away by an eighth a frame. UPDATE
+returns to Driving the frame after `NoInputTimer` reaches 0: 75 frames. VehFire refuses boosts
+while blasted. It costs three Wumpa (`:1466-1469`), the caller's to apply.
+
+**The tumble's look** is procedural: `bakedGteMath[BLASTED]`, 27 entries built by
+`Vector_BakeMatrixTable` (`Vector.c:155-232`): entry `i` rolls `i·0x2000/27` (two turns about the
+nose over the cycle), pitches `−sin(i·0x3000/27)/7`, scales X by `1 + sin(roll)/4` and Z by
+`1 + 6·sin(roll)/40`, and is offset so the kart turns about a point `0x2000` (32 lu) above its
+origin. The frame shown is `(NoInputTimer >> 5) % 27`, run backwards on `MixRNG & 4`
+(`VehStuckProc.c:1433-1451`). The port composes `ConvertRotToMatrix`'s X then Z rotation on the
+facing frame; the handedness of the roll is not checked against a capture.
+
+### 13.4 Squished, the clock, the speed cuts (`VehPhysGeneral.c:2082-2105`)
+
+`subtract`: TNT on the head `DamagedSpeed>>1` = 2048; squish (or burn, rain-cloud slow)
+`DamagedSpeed` = 4096; under the clock at least `DamagedSpeed·(20 − rank)>>4` (5120 for 1st down to
+3328 for 8th). `B = min(B − subtract, 0x6400)`. A squished kart is drawn with `scale.y = 0`, lifted
+19 lu up its smoothed normal (`VehPhysForce.c:1453-1458`, `1737-1740`). The clock
+(`VehPickupItem.c:855-908`) is a type-1 hit; if it takes, `clockReceive = 0x1E00` (juiced
+`0x2D00`). `squishTimer` and `clockReceive` count down in PHYS_LINEAR (`VehPhysProc.c:326-376`).
+
+### 13.5 TNT on the head (`231/RB_TNT.c`, `231/RB_GenericMine.c:211-301`)
+
+Touching a TNT: with a TNT already on the head, or squished, the kart is blasted (type 2) and the
+old TNT removed. Otherwise a type-0 hurt; if it passes, the TNT is thrown on: height 0, vy 48 lu a
+frame, gravity 4, terminal −96, its first step at once. It sits once falling below the head
+(Crash's 32 lu, the table at `RB_TNT.c:78`): about 25 frames. Then `jumpsRemaining =
+8 − MixRNG % 2`; each frame a hop starts (`ACTION_JUMP_STARTED`), it decrements, and a hop at 0
+throws it off: **8 or 9 hops**. `numFramesOnHead` counts to 90; on the next frame it goes off and
+blasts the carrier (`:194-239`). Spinning, crashing or blasted under it sets it off at once
+(`:122-159`). While it is on (and in flight): top speed −2048 and no firing (`VehPhysProc.c:809`).
+The port counts the player's own hops only (forced re-jumps never start one); `MixRNG_Scramble` is
+the kart's own LCG (`MixRNG.c:3-10`), seeded by the caller.
+
+### 13.6 Mask, shield, turbo (the user's own kart)
+
+| Item | Effect | Cite |
+|---|---|---|
+| Mask | `duration` 7680 / juiced 11520 counts down; at 0 a 16-frame fade (0 → 0x200) during which the thread, and so `ACTION_MASK_WEAPON`, lives on. Another mask restarts it. Invincible, `+MaskSpeed` (3900), no turn or terrain penalties. | `VehPickupItem.c:193-351`, `231/RB_MaskShieldCloud.c:19-81`, `180-202` |
+| Shield | green: `duration = 0x2D00`, −32 a frame, removed the frame after it reaches 0 (361 frames), alpha fading over the last 1920; blue (juiced): no limit. One hit absorbed (13.1). ○ fires it whenever the kart is NORMAL or DRIFTING with no TNT, even under the clock. | `VehPickupItem.c:910-988`, `RB_MaskShieldCloud.c:374-463`, `VehPhysProc.c:822-829` |
+| Turbo | `VehFire_Increment(2400, FREEZE \| TURBO_ITEM, 0x80 / juiced 0x100)`: 75 frames, cap +3072 / +4096 | `VehPickupItem.c:605-619` |
+
+○ fires an item only when `kartState` is NORMAL, DRIFTING or ANTIVSHIFT, with no TNT on the head
+and no `clockReceive` (`VehPhysProc.c:804-861`).
+
+### 13.7 Not settled
+
+- SpinStop's length is the drive animation's frame count (model data); the port uses 8 frames
+  once the model faces forward.
+- The TNT's landing also waits for its shrink to 0x800 (8 frames; always done by the ~25-frame
+  throw) and uses the character's own head height; the port uses Crash's.
+- The squish's recovery bounce (`bakedGteMath[SQUISH_RECOVER]`, 15 frames of data) is not ported;
+  the model snaps back to full height.
+- In battle, leaving the tumble gives `invincibleTimer = 2880`; races only here.

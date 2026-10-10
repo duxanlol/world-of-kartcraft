@@ -342,3 +342,312 @@ fn karts_bump_apart_and_the_heavier_one_wins() {
     kart.tick_among(&w, &GAS, &NONE, &[far]);
     assert!(!kart.events.iter().any(|e| matches!(e, Event::Bump { .. })));
 }
+
+/// A kart at the class's top speed on a long floor.
+fn cruising(w: &Collision) -> Kart {
+    let mut kart = Kart::new(Class::Balanced, Vec3::ZERO, 0);
+    run(&mut kart, w, GAS, 90);
+    kart.events.clear();
+    kart
+}
+
+fn saw(kart: &Kart, event: Event) -> bool {
+    kart.events.contains(&event)
+}
+
+#[test]
+fn a_spin_out_locks_out_thirty_frames_brakes_and_recentres() {
+    let w = world(floor(40000.0));
+    let mut kart = cruising(&w);
+    kart.fire_turbo(false);
+    assert!(kart.reserves() > 0);
+    assert!(kart.hit(HitKind::SpinOut));
+    // The boost is gone at once; the spin installs next frame.
+    assert_eq!(kart.reserves(), 0);
+    assert!(saw(
+        &kart,
+        Event::Hit {
+            kind: HitKind::SpinOut
+        }
+    ));
+    assert_eq!(kart.reaction(), Some((HitKind::SpinOut, 30)));
+    let heading = kart.pose().heading;
+    let start = kart.speed();
+    let mut whirled = 0.0f32;
+    for frame in 1..=30 {
+        kart.tick(&w, &GAS, &NONE);
+        assert!(matches!(kart.state, State::Spinning(_)), "frame {frame}");
+        assert!(!kart.can_fire());
+        whirled = whirled.max(kart.drawn_yaw_offset().abs());
+    }
+    assert!(saw(&kart, Event::SpinOut));
+    assert_eq!(kart.reaction(), Some((HitKind::SpinOut, 0)));
+    // Gas held, yet braked at BrakeFriction / 2 = 130 a frame.
+    assert!(kart.speed() < start - 3000, "{} from {start}", kart.speed());
+    assert!(whirled > 2.0, "the model whirls: {whirled}");
+    // Then it winds back to face forward and drives on, on its old heading.
+    let mut frames = 30;
+    while matches!(kart.state, State::Spinning(_)) {
+        kart.tick(&w, &GAS, &NONE);
+        frames += 1;
+        assert!(frames < 120, "never recentred");
+    }
+    assert_eq!(kart.drawn_yaw_offset(), 0.0);
+    assert_eq!(kart.pose().heading, heading);
+    assert!(kart.reaction().is_none());
+    // A spin on a spinning kart only restarts its 30 frames.
+    let mut again = cruising(&w);
+    again.hit(HitKind::SpinOut);
+    run(&mut again, &w, GAS, 10);
+    assert!(again.hit(HitKind::SpinOut));
+    assert_eq!(again.reaction(), Some((HitKind::SpinOut, 30)));
+    assert!(again.pending.is_none());
+}
+
+#[test]
+fn a_blast_bounces_for_seventy_five_frames_and_a_second_one_is_ignored() {
+    let w = world(floor(40000.0));
+    let mut kart = cruising(&w);
+    kart.fire_turbo(true);
+    assert!(kart.hit(HitKind::Blasted));
+    assert_eq!(kart.reserves(), 0);
+    // A second blast on the way in, and then mid-tumble, does nothing.
+    assert!(!kart.hit(HitKind::Blasted));
+    let mut peak = 0.0f32;
+    let mut landings = 0;
+    for frame in 1..=75 {
+        kart.events.clear();
+        kart.tick(&w, &GAS, &NONE);
+        assert!(
+            matches!(kart.reaction(), Some((HitKind::Blasted, _))),
+            "frame {frame}"
+        );
+        assert!(!kart.can_fire());
+        assert!(!kart.hit(HitKind::Blasted));
+        peak = peak.max(kart.pose().position.y);
+        landings += kart
+            .events
+            .iter()
+            .filter(|e| matches!(e, Event::Land { .. }))
+            .count();
+        // Drawn tumbling round its pivot.
+        assert!(kart.pose().offset.length() <= 2.0 * BLAST_PIVOT + 0.01);
+    }
+    assert_eq!(kart.reaction(), Some((HitKind::Blasted, 0)));
+    // `6000 + 2·2400` = 10800 up at first, more than twice a hop: it flies high, more than once.
+    assert!(peak > 100.0, "apex {peak} lu");
+    assert!(landings >= 2, "{landings} landings");
+    kart.tick(&w, &GAS, &NONE);
+    assert!(kart.reaction().is_none());
+    assert!(kart.can_fire());
+    assert_eq!(kart.pose().scale, Vec3::ONE);
+}
+
+#[test]
+fn a_squish_spins_and_flattens_and_slows_for_four_seconds() {
+    let w = world(floor(40000.0));
+    let mut kart = cruising(&w);
+    assert!(kart.hit(HitKind::Squished));
+    assert_eq!(kart.reaction(), Some((HitKind::Squished, 8)));
+    kart.tick(&w, &GAS, &NONE);
+    assert!(matches!(kart.state, State::Spinning(_)));
+    assert_eq!(kart.squish_scale(), 0.0);
+    assert_eq!(kart.pose().scale.y, 0.0);
+    assert_eq!(kart.reaction(), Some((HitKind::Squished, 119)));
+    // 240 ms of lockout, then it recentres and drives on, still flat and 4096 slower.
+    run(&mut kart, &w, GAS, 100);
+    assert_eq!(kart.state, State::Normal);
+    assert!(matches!(kart.reaction(), Some((HitKind::Squished, _))));
+    assert_eq!(kart.target_speed(&NONE), 13140 - 4096);
+    run(&mut kart, &w, GAS, 18);
+    assert!(kart.reaction().is_some());
+    kart.tick(&w, &GAS, &NONE);
+    assert!(kart.reaction().is_none());
+    assert_eq!(kart.squish_scale(), 1.0);
+}
+
+/// Puts a TNT on a cruising kart seeded `seed` and drives until it sits on the head.
+fn tnt_on_head(w: &Collision, seed: u16) -> Kart {
+    let mut kart = cruising(w);
+    kart.seed(seed);
+    assert!(kart.hit(HitKind::TntOnHead));
+    assert!(!kart.can_fire());
+    for _ in 0..40 {
+        if saw(&kart, Event::TntLanded) {
+            break;
+        }
+        kart.tick(w, &GAS, &NONE);
+    }
+    assert!(saw(&kart, Event::TntLanded), "{:?}", kart.events);
+    assert_eq!(kart.tnt_fuse(), Some(TNT_FUSE_FRAMES - 1));
+    kart.events.clear();
+    kart
+}
+
+/// Hops as fast as the kart allows; the hops it took to throw the TNT off, if it did.
+fn shake(kart: &mut Kart, w: &Collision) -> Option<usize> {
+    let mut hops = 0;
+    for frame in 0..TNT_FUSE_FRAMES {
+        let input = Input {
+            r1: frame % 2 == 0,
+            ..GAS
+        };
+        kart.tick(w, &input, &NONE);
+        hops += kart.events.iter().filter(|e| **e == Event::Hop).count();
+        if kart.events.contains(&Event::TntThrownOff) {
+            return Some(hops);
+        }
+        assert!(!kart.events.contains(&Event::TntExploded));
+        kart.events.clear();
+    }
+    None
+}
+
+#[test]
+fn a_tnt_takes_eight_or_nine_hops_to_shake_off() {
+    let w = world(floor(40000.0));
+    // MixRNG from 0 gives 0x3619, odd: 7 more hops after the first.
+    let mut kart = tnt_on_head(&w, 0);
+    assert_eq!(kart.tnt.unwrap().jumps_left, 7);
+    // Carrying it costs DamagedSpeed / 2.
+    assert_eq!(kart.target_speed(&NONE), 13140 - 2048);
+    assert_eq!(shake(&mut kart, &w), Some(8));
+    assert!(kart.tnt_fuse().is_none());
+    assert!(kart.can_fire());
+
+    // From 1, 0x986E, even: 8 more.
+    let mut kart = tnt_on_head(&w, 1);
+    assert_eq!(kart.tnt.unwrap().jumps_left, 8);
+    assert_eq!(shake(&mut kart, &w), Some(9));
+}
+
+#[test]
+fn a_tnt_left_on_the_head_goes_off_after_ninety_frames() {
+    let w = world(floor(40000.0));
+    let mut kart = tnt_on_head(&w, 0);
+    for frame in 2..=TNT_FUSE_FRAMES {
+        kart.tick(&w, &GAS, &NONE);
+        assert_eq!(
+            kart.tnt_fuse(),
+            Some(TNT_FUSE_FRAMES - frame),
+            "frame {frame}"
+        );
+        assert!(!saw(&kart, Event::TntExploded));
+    }
+    kart.tick(&w, &GAS, &NONE);
+    assert!(saw(&kart, Event::TntExploded));
+    assert!(kart.tnt_fuse().is_none());
+    // The caller's self-hit.
+    assert!(kart.hit(HitKind::Blasted));
+
+    // Blasted with it on: it goes off as the tumble starts.
+    let mut kart = tnt_on_head(&w, 0);
+    kart.hit(HitKind::Blasted);
+    kart.tick(&w, &GAS, &NONE);
+    assert!(saw(&kart, Event::TntExploded));
+    // A second TNT blasts the kart and takes the first away.
+    let mut kart = tnt_on_head(&w, 0);
+    assert!(kart.hit(HitKind::TntOnHead));
+    assert_eq!(kart.pending, Some(HitKind::Blasted));
+    assert!(kart.tnt_fuse().is_none());
+}
+
+#[test]
+fn a_shield_takes_one_hit_then_gives_twenty_one_invincible_frames() {
+    let w = world(floor(40000.0));
+    let mut kart = cruising(&w);
+    kart.shield_up(false);
+    assert_eq!(kart.shield().unwrap().frames_left, Some(360));
+    assert!(!kart.hit(HitKind::Blasted));
+    assert!(saw(&kart, Event::ShieldPopped));
+    assert!(kart.shield().is_none());
+    assert!(kart.reaction().is_none());
+    for frame in 1..=20 {
+        kart.tick(&w, &GAS, &NONE);
+        assert!(!kart.hit(HitKind::SpinOut), "frame {frame}");
+    }
+    assert!(saw(&kart, Event::HitBlocked));
+    kart.tick(&w, &GAS, &NONE);
+    assert!(kart.hit(HitKind::SpinOut));
+
+    // Green lasts 12 s; blue until used, and fired it is gone.
+    let mut kart = cruising(&w);
+    kart.shield_up(false);
+    run(&mut kart, &w, GAS, 360);
+    assert!(kart.shield().is_some_and(|s| s.alpha < 0.1));
+    kart.tick(&w, &GAS, &NONE);
+    assert!(kart.shield().is_none());
+    assert!(saw(&kart, Event::ShieldExpired));
+    kart.shield_up(true);
+    run(&mut kart, &w, Input::default(), 1000);
+    assert_eq!(kart.shield().map(|s| s.frames_left), Some(None));
+    assert!(kart.fire_shield());
+    assert!(kart.shield().is_none());
+    assert!(!kart.fire_shield());
+}
+
+#[test]
+fn a_mask_ignores_hits_speeds_the_kart_and_fades_after_eight_or_twelve_seconds() {
+    let w = world(floor(50000.0));
+    for (juiced, frames) in [(false, 240), (true, 360)] {
+        let mut kart = cruising(&w);
+        kart.mask(juiced);
+        let plain = kart.target_speed(&NONE);
+        run(&mut kart, &w, GAS, 1);
+        assert!(kart.masked());
+        assert!(!kart.hit(HitKind::Blasted));
+        assert!(!kart.hit(HitKind::TntOnHead));
+        assert!(saw(&kart, Event::HitBlocked));
+        assert!(kart.reaction().is_none());
+        let masked = Modifiers { mask: true, ..NONE };
+        assert_eq!(kart.target_speed(&masked), plain + MASK_SPEED);
+        run(&mut kart, &w, GAS, frames - 1);
+        assert!(kart.masked());
+        // Then 16 frames of fade, still protected.
+        run(&mut kart, &w, GAS, 16);
+        assert!(kart.masked());
+        kart.tick(&w, &GAS, &NONE);
+        assert!(!kart.masked(), "juiced {juiced}");
+        assert!(saw(&kart, Event::MaskEnded));
+        assert!(kart.hit(HitKind::SpinOut));
+    }
+}
+
+#[test]
+fn the_clock_spins_and_slows_by_race_position() {
+    let w = world(floor(40000.0));
+    assert_eq!(clock_slowdown(0), 5120);
+    assert_eq!(clock_slowdown(7), 3328);
+    let mut kart = cruising(&w);
+    assert!(kart.clock(false, clock_slowdown(0)));
+    assert_eq!(kart.clocked(), Some(240));
+    run(&mut kart, &w, GAS, 100);
+    assert_eq!(kart.state, State::Normal);
+    assert!(!kart.can_fire());
+    assert_eq!(kart.target_speed(&NONE), 13140 - 5120);
+    run(&mut kart, &w, GAS, 140);
+    assert!(kart.clocked().is_none());
+    assert!(kart.can_fire());
+    // A masked kart is not clocked.
+    let mut kart = cruising(&w);
+    kart.mask(false);
+    assert!(!kart.clock(true, 5120));
+    assert!(kart.clocked().is_none());
+}
+
+#[test]
+fn the_turbo_item_is_seventy_five_frames_at_fire_level_128_or_256() {
+    let w = world(floor(40000.0));
+    let mut kart = cruising(&w);
+    kart.fire_turbo(false);
+    assert_eq!(kart.reserves(), 2400);
+    assert_eq!(kart.fire_speed_cap, 3072);
+    let mut kart = cruising(&w);
+    kart.fire_turbo(true);
+    assert_eq!(kart.reserves(), 2400);
+    assert_eq!(kart.fire_speed_cap, 4096);
+    run(&mut kart, &w, GAS, 74);
+    assert!(kart.reserves() > 0);
+    kart.tick(&w, &GAS, &NONE);
+    assert_eq!(kart.reserves(), 0);
+}

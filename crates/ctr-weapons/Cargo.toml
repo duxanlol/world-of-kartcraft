@@ -1,0 +1,15 @@
+[package]
+name = "ctr-weapons"
+version.workspace = true
+edition.workspace = true
+# Ported from the CTR decompilation (CTR-tools/ctr-native, GPL-3.0), so this crate is GPL-3.0.
+license = "GPL-3.0-or-later"
+description = "Crash Team Racing's items, roulette and projectiles, ported from the decompilation, over any triangle soup"
+
+[lints]
+workspace = true
+
+[dependencies]
+ctr-kart = { path = "../ctr-kart" }
+# Bevy 0.18's own glam, the same as ctr-kart's.
+glam = "0.30"

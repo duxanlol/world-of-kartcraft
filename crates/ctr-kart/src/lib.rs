@@ -8,5 +8,8 @@ pub mod kart;
 pub mod stats;
 
 pub use collision::Collision;
-pub use kart::{CameraInput, Event, Input, Kart, Modifiers, OtherKart, Pose, State, MS, TICK};
+pub use kart::{
+    clock_slowdown, CameraInput, Event, HitKind, Input, Kart, Modifiers, OtherKart, Pose, Shield,
+    State, MS, TICK,
+};
 pub use stats::Class;

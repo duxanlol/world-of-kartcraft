@@ -98,7 +98,7 @@ pub(crate) fn parse_state(body: &str) -> Option<Relayed> {
 /// One remote kart.
 pub(crate) struct Remote {
     pub(crate) kart: Entity,
-    guid: u64,
+    pub(crate) guid: u64,
     /// (time received, position, facing yaw), oldest first.
     samples: VecDeque<(f32, Vec3, f32)>,
     last_apply: f64,
@@ -130,6 +130,11 @@ impl RemoteKarts {
                 weight: 256,
             })
             .collect()
+    }
+
+    /// Whose kart a driver's is (`crash`, `cortex`, ...), as they last relayed it.
+    pub(crate) fn racer(&self, guid: u64) -> &str {
+        self.states.get(&guid).map_or("", |(s, _)| s.racer.as_str())
     }
 
     #[cfg(test)]
@@ -231,6 +236,7 @@ pub(crate) fn update(
         ),
         With<KartRoot>,
     >,
+    weapons: Res<kartcraft::weapons::Weapons>,
 ) {
     let now = time.elapsed_secs();
     let dt = time.delta_secs();
@@ -305,11 +311,17 @@ pub(crate) fn update(
         let fwd = Vec3::new(-drawn.sin(), 0.0, -drawn.cos());
         let z = (fwd - n * fwd.dot(n)).normalize_or(fwd);
         let rotation = Quat::from_mat3(&Mat3::from_cols(n.cross(z), n, z));
-        let kart = Transform {
+        let mut kart = Transform {
             translation: at,
             rotation,
             scale: Vec3::splat(kartcraft::model_scale()),
         };
+        // A blast's tumble or a squish, shown from the hit the server relayed.
+        if let Some(r) = weapons.reaction(super::weapons::low_guid(remote.guid)) {
+            kart.translation += rotation * r.offset;
+            kart.rotation = rotation * r.rotation;
+            kart.scale *= r.scale.max(Vec3::splat(0.01));
+        }
         let speed = Vec3::new(velocity.x, 0.0, velocity.z).length();
         let forward_speed = velocity.dot(heading);
         let radius = WHEEL_RADIUS * kartcraft::kart_scale() / kartcraft::METERS_PER_YARD;
@@ -333,7 +345,7 @@ pub(crate) fn update(
         }
         // The driver in the seat, as ours.
         body.translation = kart.transform_point(kartcraft::model::seat());
-        body.rotation = rotation * super::driver_lean(state.steer);
+        body.rotation = kart.rotation * super::driver_lean(state.steer);
     }
     // Karts whose drivers left the kart or our sight.
     let gone: Vec<Entity> = karts

@@ -1,7 +1,7 @@
 //! World of Kartcraft's kart over the benilla world, shared by the client and the offline demo:
 //! the driving [`session`] (CTR's driving model from `ctr-kart` over the streamed world's
-//! collision), the [`input`] it reads and the kart's [`model`], converted from the player's own
-//! CTR disc into `kart-data/kart.json`.
+//! collision), the [`input`] it reads, the kart's [`model`], converted from the player's own
+//! CTR disc into `kart-data/kart.json`, and CTR's [`weapons`].
 
 pub mod camera;
 pub mod chain;
@@ -11,6 +11,7 @@ pub mod input;
 pub mod model;
 pub mod session;
 pub mod sound;
+pub mod weapons;
 
 use bevy::prelude::*;
 pub use ctr_kart::{Class, Event, Input, Kart, Modifiers, State};
@@ -47,12 +48,14 @@ pub fn model_scale() -> f32 {
 /// How the host frames the kart: how much bigger than its physics the model is drawn (a WoW
 /// character is taller than the CTR racer the kart was built for), how far below CTR's aim the
 /// chase camera looks (lu; WoW's action bars cover the bottom of the screen, where CTR puts the
-/// kart), and how much of the window's bottom (a fraction) the HUD keeps clear of.
+/// kart), how much of the window's bottom (a fraction) the HUD keeps clear of, and how far above
+/// CTR's racer's head (meters, the model's frame) the driver's head is, where a TNT sits.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Framing {
     pub model_size: f32,
     pub look_drop: f32,
     pub hud_bottom_inset: f32,
+    pub head_lift: f32,
 }
 
 impl Framing {
@@ -61,6 +64,7 @@ impl Framing {
         model_size: 1.0,
         look_drop: 0.0,
         hud_bottom_inset: 0.0,
+        head_lift: 0.0,
     };
 }
 
@@ -130,6 +134,11 @@ pub fn kart_input(c: &input::Controls) -> Input {
         l1: c.hop_alt,
     }
 }
+
+/// Meters per CTR world unit in the models the converter writes (`docs/ctr-assets.md`,
+/// "Coordinates and units": a model unit is 1/64 m and racers are drawn at 0.8, so 1/51.2 m), for
+/// placing things against the drawn kart (a mask's orbit, a TNT on the head).
+pub const METERS_PER_UNIT: f32 = 1.0 / 51.2;
 
 #[cfg(test)]
 mod tests {

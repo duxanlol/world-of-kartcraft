@@ -6,17 +6,21 @@ seating a WoW character, and decoded textures. No game data is in the repository
 the converter on the player's machine. The disc image is only read.
 
 ```sh
-cargo run -p ctr-assets --release --bin ctr-extract -- "<disc>.bin" <out_dir> [--kart <name>] [--audio] [--effects] [--hud] [--music] [--all]
+cargo run -p ctr-assets --release --bin ctr-extract -- "<disc>.bin" <out_dir> [--kart <name>] [--audio] [--effects] [--weapons] [--hud] [--music] [--all]
 ```
 
 - writes `<out_dir>/kart.json` (default kart: `crash`);
 - `--kart` picks another racer's kart: `crash cortex tiny coco polar pura pinstripe roo joe pen fake`;
-- `--audio` also writes the kart sound effects to `<out_dir>/audio/` (see [Audio](#audio));
+- `--audio` also writes the kart, weapon and pickup sound effects to `<out_dir>/audio/` (see
+  [Audio](#audio));
 - `--effects` writes `<out_dir>/effects.json` (turbo flames, exhaust smoke, skid marks,
   particles; see [Effects](#effects));
+- `--weapons` writes `<out_dir>/weapons.json` (weapon, crate and Wumpa fruit models; see
+  [Weapons](#weapons));
 - `--hud` writes `<out_dir>/hud.json` (the 1P race HUD; see [HUD](#hud));
 - `--music` renders the race music to `<out_dir>/music/` (see [Music](#music));
-- `--all` writes `<out_dir>/kart-<name>.json` for every kart, the audio, effects, HUD and music.
+- `--all` writes `<out_dir>/kart-<name>.json` for every kart, the audio, effects, weapons, HUD
+  and music.
 
 Raw `.bin` (2352-byte sectors) and cooked `.iso` (2048) images both work; the `.cue` is not
 needed. Extraction takes well under a second; each file is ~0.3 MB.
@@ -224,7 +228,7 @@ cargo run -p ctr-assets --release --example render_kart -- kart-data/kart.json k
 `cargo test -p ctr-assets` runs the parser unit tests (ISO 9660 records and sector layout,
 bigfile TOC, command fields, strip assembly, delta decompression, bit reader, TIM/VRM
 4bpp/8bpp decode and transparency, classification). With `CTR_DISC=<disc>.bin` set,
-`tests/disc.rs` also extracts every kart and the audio from the real disc and checks the
+`tests/disc.rs` also extracts every kart, the audio and the weapons from the real disc and checks the
 results. The ADPCM decoder, loop handling, WAV writer, HOWL table/bank parser and the
 distortion factors (against the game's tables) have unit tests.
 
@@ -292,6 +296,29 @@ The three boost files come from one sample. The game's "distortion" is a pitch f
 Instrument volumes (`OtherFX.volume`, e.g. hop 127, turbo 102, crash 153, engine 153) are
 **not** baked in. They are listed in `sounds.json` for mixing; the game plays at
 `vol_FX * instrument_volume * event_volume >> 10`.
+
+Weapon and pickup sounds are OtherFX ids played at full event volume with no distortion
+(`OtherFX_Play` / `PlaySound3D`); each row's decomp site is in `sounds.json`:
+
+| file | OtherFX | rate | length | event |
+|---|---|---|---|---|
+| `roulette.wav` (loop) | 0x5D | 12371 Hz | 0.51 s | item roulette spinning (`RB_Crate.c:202`) |
+| `roulette_stop.wav` | 0x5E | 6944 Hz | 0.64 s | roulette lands (`VehPhysProc.c:21`) |
+| `roulette_juiced.wav` | 0x41 | 11025 Hz | 0.92 s | roulette lands with ≥ 10 Wumpa (`VehPhysProc.c:22`) |
+| `crate_break.wav` | 0x3C | 9991 Hz | 0.68 s | any crate breaks (`RB_Crate.c:150`) |
+| `wumpa.wav` | 0x43 | 15999 Hz | 0.22 s | loose fruit picked up (`RB_Fruit.c:60`) |
+| `wumpa_count.wav` | 0x42 | 11025 Hz | 0.17 s | fruit reaches the HUD counter (`UI_RenderFrame.c:235`) |
+| `bomb_launch.wav` / `bomb_roll.wav` (loop) / `bomb_explode.wav` | 0x47 / 0x48 / 0x49 | 9991 / 8742 / 8000 Hz | 0.61 / 0.60 / 1.34 s | `VehPickupItem.c:151`, `RB_MovingExplosive.c:50`, `:379` |
+| `missile_launch.wav` / `missile_fly.wav` (loop) / `missile_explode.wav` | 0x4A / 0x4B / 0x4C | 11025 / 12995 / 8000 Hz | 1.04 / 0.81 / 1.06 s | `VehPickupItem.c:152`, `RB_MovingExplosive.c:43`, `:392` |
+| `missile_lock.wav` | 0x56 | 8000 Hz | 0.15 s | lock-on beep (`UI_RaceHud.c:31`) |
+| `mine_drop.wav` | 0x52 | 12995 Hz | 0.46 s | TNT / Nitro / potion dropped (`VehPickupItem.c:153`) |
+| `tnt_land.wav` / `tnt_jump.wav` / `tnt_honk.wav` | 0x50 / 0x51 / 0x3E | 11025 / 14998 / 8990 Hz | 0.65 / 0.36 / 0.15 s | TNT on a head, each shake-off hop, countdown tick (`RB_GenericMine.c:284`, `RB_TNT.c:289`, `:208`) |
+| `tnt_explode.wav` | 0x3D | 14998 Hz | 2.17 s | TNT and Nitro explode (`RB_TNT.c:32`) |
+| `glass.wav` | 0x3F | 11994 Hz | 1.14 s | potion or Nitro shatters (`RB_GenericMine.c:397`) |
+| `shield.wav` / `shield_pop.wav` / `shield_roll.wav` (loop) | 0x57 / 0x58 / 0x59 | 11025 Hz | 0.58 / 0.57 / 0.69 s | `VehPickupItem.c:154`, `RB_MaskShieldCloud.c:261`, `RB_MovingExplosive.c:56` |
+| `aku.wav` / `uka.wav` | 0x53 / 0x54 | 13997 Hz | 1.38 / 0.64 s | mask pickup, `STATIC_AKUAKU/UKAUKA + 0x1A` (`VehPickupItem.c:284`, `:305`) |
+| `clock.wav` | 0x44 | 11025 Hz | 1.55 s | `VehPickupItem.c:155` |
+| `warp_launch.wav` / `warp_fly.wav` (loop) / `warp_hit.wav` | 0x4D / 0x4E / 0x4F | 11025 / 12995 / 11025 Hz | 0.80 / 0.83 / 0.40 s | `VehPickupItem.c:156`, `RB_Warpball.c:605`, `:66` |
 
 Not produced: **`boost_early.wav`**. A too-early boost (`PowerSlide_Update` sets
 `failedBoostExhaustTimer`) only changes the exhaust particles in `VehEmitter.c` and plays no
@@ -486,6 +513,75 @@ The first command renders the 8 flame frames (side and rear, PSX blend modes), a
 over its life in both blend modes, and every effect texture. The second renders the kart
 with both flames attached at fire size 8 and the exhaust anchors (white markers).
 
+## Weapons
+
+`--weapons` writes `<out_dir>/weapons.json`: the weapon, crate and Wumpa fruit models with
+every stored animation frame and their textures, plus the pickup timing constants.
+
+- **Weapons** come from `shared.mpk` / `shared.vrm`, looked up by name and checked against
+  their `gGT->modelPtr` id.
+- **The "?" crate, fruit crate and Wumpa fruit** exist only in the track level files. They
+  are read from Crash Cove 1P (`levels\tracks\coco1\1P`, bigfile 112 `data.vrm` /
+  113 `data.lev`), with its VRM loaded on top of `shared.vrm`; every track carries the same
+  three models. The level header holds `num_models @0x14` and `ptr_models @0x18`.
+- **Frames** use the `_hi` mesh (`meshes[0]`) and the effects conversion (`mesh_frame`), so
+  units, blend modes, colours and texture alpha are exactly as in [Effects](#schema):
+  meters at instance scale 1.0 (0x1000, `INSTANCE.c:31`), +Y up.
+
+### Schema
+
+```jsonc
+{
+  "format": "ctr-weapons", "version": 1,
+  "units": { … },
+  "textures": [ { "name", "width", "height", "rgba": [ … ] } ],
+  "models": {
+    "<key>": {
+      "source", "model", "model_id", "mesh",
+      "animation_name": "thrust" | null,
+      "frames": [ { "name", "surfaces": [ … ] } ],   // as effects.json turbo_flame.frames
+      "game_frames": 10,          // = frames.len(), unless stored at half rate (frames.len() = game_frames / 2 + 1)
+      "frame_rate_fps": 30, "animation": "…",
+      "instance_scale": 1.0,      // the game's spawn scale (0x1000 = 1.0)
+      "bounds": { "min": [x,y,z], "max": [x,y,z] }   // over all frames, at scale 1.0
+    }
+  },
+  "constants": { "roulette", "crate_respawn", "fruit_crate_wumpa", "loose_fruit",
+                 "wumpa_juiced", "item_choice" }
+}
+```
+
+| key | model (id) | frames | notes |
+|---|---|---|---|
+| `crate_question` | level `crate_question` (0x08) | 1 | weapon crate, ~2.1 m cube standing on y 0 |
+| `crate_fruit` | level `crate_fruit` (0x07) | 1 | gives 5–8 Wumpa |
+| `fruit` | level `fruit` (0x02) | 1 | untextured Gouraud; its 32 `spin` frames are byte-identical on the disc, so one is exported |
+| `bomb` | `bomb` (0x3B) | 1 | |
+| `missile` | `rocket` (0x29) | 10 `thrust` | body near the origin, nose +Z; the flame and sparks trail to −6.8 m |
+| `tnt` / `nitro` | `crate_tnt` (0x27) / `crate_nitro` (0x06) | 1 | Nitro is the juiced TNT |
+| `crate_explosion` | `crate_explosion` (0x26) | 12 `break`, once | crate debris |
+| `beaker_green` / `beaker_red` | `beakergreen` (0x47) / `beakerred` (0x46) | 15 `bubble` | green is the normal potion, red the juiced one (`VehPickupItem.c:1314/1327`) |
+| `cloud` | `cloud` (0x42) | 23 `billow` | potion rain cloud |
+| `shockwave_red` / `shockwave_green` | (0x44 / 0x45) | 17 `wave`, once | TNT ring / other blasts |
+| `shield_dark`, `shield_green`, `shield_blue`, `shield_highlight` | `shielddark` (0x5A), `shield_green` (0x5E), `shield` (0x56), `highlight` (0x5D) | 1 | scale 0x700; dark base + colour layer (green normal, blue juiced) + highlight |
+| `aku` / `uka` | `akumouth` (0x39) / `ukamouth` (0x3A) | 7 `speak` (13 game frames) | |
+| `akubeam` / `ukabeam` | (0x3E / 0x40) | 24 `turn` | |
+| `warpball` | `warpball` (0x36) | 16 `warp` | |
+| `warpedburst` | `warpedburst` (0x2B) | 30 `burst`, once | bomb/missile/orb explosion |
+
+The clock has no model (a screen effect plus `clock.wav`). The HUD's item icons, the
+spinning `fruitdisp` and the missile lock-on square (`lock_on` layout element, icon 0x2D) are
+in `hud.json`.
+
+### Verifying
+
+```sh
+cargo run -p ctr-assets --release --example render_weapons -- kart-data/weapons.json kart-data/render-weapons
+```
+
+writes one PNG per model: up to 8 evenly spaced frames from the front-left and the
+back-right (orthographic, z-buffered, PSX blend modes).
+
 ## HUD
 
 `--hud` writes `<out_dir>/hud.json`: CTR's 1-player race HUD in speedometer mode.
@@ -516,7 +612,7 @@ with both flames attached at fire size 8 and the exhaust anchors (white markers)
                 "positions3d": [[x, y, z], …] } ],                     // unprojected (+y up), to spin the fruit
   "elements": { "portraits": { name: sprite }, "rank_icons_3p4p": [ … ],
                 "layout": { "rank_list", "weapon", "lap", "wumpa", "rank",
-                            "speedometer", "slide_meter", "jump_meter", "mode_note" } }
+                            "lock_on", "speedometer", "slide_meter", "jump_meter", "mode_note" } }
 }
 ```
 

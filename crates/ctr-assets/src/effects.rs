@@ -17,7 +17,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::big::{self, BigFile};
-use crate::ctr::{Model, ModelMesh, TexLayout};
+use crate::ctr::{Frame, Model, ModelMesh, TexLayout};
 use crate::kart::Texture;
 use crate::mpk;
 use crate::vram::Vram;
@@ -87,8 +87,8 @@ pub fn blend_name(abr: u8) -> &'static str {
 
 /// Texture atlas shared by all effects; deduplicates page/CLUT/rect crops.
 #[derive(Default)]
-struct Textures {
-    list: Vec<Texture>,
+pub(crate) struct Textures {
+    pub(crate) list: Vec<Texture>,
     keys: Vec<(u16, u16, u32, u32, u32, u32)>,
 }
 
@@ -129,7 +129,18 @@ impl Textures {
 
 /// Converts a static effect model to surfaces in meters (model units are world units here).
 fn mesh_frame(name: &str, mesh: &ModelMesh, vram: &Vram, tex: &mut Textures) -> Result<MeshFrame> {
-    let tris = mesh.triangles(&mesh.frame)?;
+    mesh_frame_at(name, mesh, &mesh.frame, vram, tex)
+}
+
+/// [`mesh_frame`] for one vertex frame of the mesh (a frame of one of its animations).
+pub(crate) fn mesh_frame_at(
+    name: &str,
+    mesh: &ModelMesh,
+    frame: &Frame,
+    vram: &Vram,
+    tex: &mut Textures,
+) -> Result<MeshFrame> {
+    let tris = mesh.triangles(frame)?;
     // UV bounds per page+CLUT.
     let mut rects: Vec<((u16, u16), [u32; 4])> = Vec::new();
     for t in &tris {

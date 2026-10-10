@@ -1,7 +1,8 @@
 //! Converts the user's own Crash Team Racing (PS1, NTSC-U, SCUS-94426) disc image into
 //! `kart.json` (a racer's kart without its driver, its wheels and textures, ready to draw) and
 //! the kart sound effects as WAV, its visual effects (`effects.json`), the 1P race HUD
-//! (`hud.json`) and the race music (rendered from the CSEQ sequences).
+//! (`hud.json`), its weapons, crates and Wumpa fruit (`weapons.json`) and the race music
+//! (rendered from the CSEQ sequences).
 //! No game data is part of this crate; everything is read from the disc at setup time.
 //!
 //! Format knowledge (the file layouts, re-implemented here in Rust) comes from:
@@ -27,6 +28,7 @@ pub mod kart;
 pub mod mpk;
 pub mod music;
 pub mod vram;
+pub mod weapons;
 
 use std::fmt;
 

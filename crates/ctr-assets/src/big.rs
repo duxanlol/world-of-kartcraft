@@ -9,6 +9,12 @@ use crate::{Error, Result};
 /// NTSC-U (SCUS-94426) retail bigfile indices (CTR-tools `big_usa_release.txt`, CTR-native
 /// `namespace_Load.h`).
 pub mod index {
+    /// `levels\tracks\coco1\1P\data.vrm` (Crash Cove, 1 player: the track's textures,
+    /// including the weapon/fruit crate art).
+    pub const CRASH_COVE_1P_VRM: usize = 112;
+    /// `levels\tracks\coco1\1P\data.lev` (its level file: `crate_question`, `crate_fruit`,
+    /// `fruit` models among the track's own).
+    pub const CRASH_COVE_1P_LEV: usize = 113;
     /// `models\racers\hi\<name>.ctr`, + character id.
     pub const RACER_HI: usize = 242;
     /// `packs\shared.vrm` (wheel sprites, shared HUD textures, racer textures).

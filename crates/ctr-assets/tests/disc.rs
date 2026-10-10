@@ -88,12 +88,63 @@ fn extracts_kart_audio() {
         let secs = r.samples as f64 / r.rate as f64;
         assert!((0.1..3.0).contains(&secs), "{}: {secs} s", r.file);
         assert!(r.peak > 8000, "{}: peak {}", r.file, r.peak);
-        let looped = matches!(r.file, "engine.wav" | "skid.wav" | "turbo.wav");
+        let looped = matches!(
+            r.file,
+            "engine.wav"
+                | "skid.wav"
+                | "turbo.wav"
+                | "roulette.wav"
+                | "bomb_roll.wav"
+                | "missile_fly.wav"
+                | "shield_roll.wav"
+                | "warp_fly.wav"
+        );
         assert_eq!(r.looped, looped, "{}", r.file);
         assert!(dir.join(r.file).is_file());
     }
     assert!(dir.join("sounds.json").is_file());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn extracts_weapons() {
+    let Some(mut disc) = disc() else {
+        eprintln!("CTR_DISC not set; skipping");
+        return;
+    };
+    let mut bf = BigFile::open(&mut disc).expect("BIGFILE.BIG");
+    let w = ctr_assets::weapons::build(&mut bf).expect("weapons");
+    assert_eq!(w.models.len(), 23);
+    for (key, m) in &w.models {
+        assert!(!m.frames.is_empty(), "{key}");
+        for f in &m.frames {
+            let tris: usize = f.surfaces.iter().map(|s| s.indices.len() / 3).sum();
+            assert!(tris >= 16, "{key}: {tris} triangles");
+            for s in &f.surfaces {
+                assert!(s.indices.iter().all(|&i| (i as usize) < s.vertices.len()));
+                assert!(s.texture.is_none_or(|t| t < w.textures.len()), "{key}");
+            }
+        }
+    }
+    // Animated models keep every stored frame; the fruit's identical spin frames collapse.
+    for (key, n) in [("missile", 10), ("warpball", 16), ("aku", 7), ("fruit", 1)] {
+        assert_eq!(w.models[key].frames.len(), n, "{key}");
+    }
+    // The crates are textured from the level VRM and stand on y = 0, ~2.1 m on a side.
+    for key in ["crate_question", "crate_fruit", "tnt", "nitro"] {
+        let f = &w.models[key].frames[0];
+        assert!(f.surfaces.iter().all(|s| s.texture.is_some()), "{key}");
+        let lo = w.models[key].bounds["min"][1].as_f64().unwrap();
+        let hi = w.models[key].bounds["max"][1].as_f64().unwrap();
+        assert!(
+            lo.abs() < 0.05 && (hi - 2.12).abs() < 0.1,
+            "{key}: {lo}..{hi}"
+        );
+    }
+    for t in &w.textures {
+        assert_eq!(t.rgba.len() as u32, t.width * t.height * 4);
+        assert!(t.rgba.chunks(4).any(|p| p[3] > 0), "{} is empty", t.name);
+    }
 }
 
 #[test]

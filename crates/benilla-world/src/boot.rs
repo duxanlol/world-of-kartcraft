@@ -7,7 +7,18 @@ use bevy::prelude::*;
 use crate::thread_qos;
 
 /// `DefaultPlugins` with benilla's engine tuning applied, around the caller's primary window.
-pub fn tuned_default_plugins(primary_window: Window) -> PluginGroupBuilder {
+pub fn tuned_default_plugins(mut primary_window: Window) -> PluginGroupBuilder {
+    // `WOW_WINDOW_AT=x,y` (physical pixels): where the window opens, e.g. on another monitor.
+    if let Some((x, y)) = std::env::var("WOW_WINDOW_AT")
+        .ok()
+        .and_then(|v| {
+            v.split_once(',')
+                .map(|(x, y)| (x.trim().parse(), y.trim().parse()))
+        })
+        .and_then(|(x, y)| Some((x.ok()?, y.ok()?)))
+    {
+        primary_window.position = bevy::window::WindowPosition::At(IVec2::new(x, y));
+    }
     DefaultPlugins
         .set(WindowPlugin {
             primary_window: Some(primary_window),

@@ -9,6 +9,12 @@
 //! it turns red for a turbo, up to three per slide. R puts the kart back at the start, K swaps the
 //! chase camera for a far one, 1–4 toggle Wumpa Juice, fire a Turbo, toggle Super Engine and
 //! toggle Aku Aku.
+//!
+//! A weapons sandbox stands around the start: a ring of "?" crates, fruit crates and Wumpa fruit
+//! with a row of "?" crates ahead, and two dummy karts to shoot at. E (○/B) fires the held item,
+//! backwards with S/↓ (the stick back) held. A local [`Referee`] rules as the Kartcraft server
+//! does, so the weapons run as they do online. `WOW_KART_WEAPON_TEST=<item id>` hands that item
+//! over and over and fires it, for unattended looks.
 
 mod audio;
 
@@ -21,8 +27,22 @@ use bevy::input::gamepad::Gamepad;
 use bevy::prelude::*;
 use bevy::render::view::Hdr;
 use kartcraft::chain::{Chain, Outcome};
+use kartcraft::model::{KartSpawner, KartStatus, KartWheels};
 use kartcraft::sound::{KartAudio, Sounds};
-use kartcraft::{effects, hud, input, model, Event, KartView, Modifiers, Session, State};
+use kartcraft::weapons::referee::{Addressed, Referee};
+use kartcraft::weapons::wire::{CrateKind, CrateSpot};
+use kartcraft::weapons::{HeldView, Item, Weapons};
+use kartcraft::{effects, hud, input, model, weapons, Event, KartView, Modifiers, Session, State};
+
+/// Our racer in the sandbox, and the dummies: id, racer, and where they stand off the start
+/// (yards right, yards ahead).
+const ME: u32 = 1;
+const DUMMIES: [(u32, &str, f32, f32); 2] = [(2, "cortex", -2.0, 16.0), (3, "tiny", 6.0, 26.0)];
+/// The crate ring round the start (yards, spots), and the row of four "?" crates 4 yards apart
+/// across the way off to the left ahead, as the server lays a row.
+const RING: f32 = 34.0;
+const RING_SPOTS: usize = 24;
+const ROW_AHEAD: f32 = 10.0;
 
 fn main() -> benilla_world::AppExit {
     benilla_world::worldview::run_with(
@@ -87,10 +107,128 @@ struct Demo {
     best: f32,
     /// `WOW_KART_AUTOPILOT`: a scripted drive for unattended runs.
     autopilot: bool,
+    /// The sandbox's referee, and the dummies: id, racer, origin (Bevy world) and yaw.
+    referee: Option<Referee>,
+    dummies: Vec<Dummy>,
+}
+
+/// `WOW_KART_WEAPON_TEST=<CTR item id>`: the item handed over and over.
+fn weapon_test() -> Option<Item> {
+    static TEST: std::sync::OnceLock<Option<Item>> = std::sync::OnceLock::new();
+    *TEST.get_or_init(|| {
+        let id: u8 = std::env::var("WOW_KART_WEAPON_TEST").ok()?.parse().ok()?;
+        Item::from_id(id).filter(|i| *i != Item::None)
+    })
+}
+
+/// The ground under `p` (Bevy world), else `p`.
+fn ground(collide: &WorldCollision, p: Vec3) -> Vec3 {
+    collide
+        .ray_body(Vec3::new(p.x, p.y + 60.0, p.z), Dir3::NEG_Y, 160.0)
+        .map_or(p, |hit| Vec3::new(p.x, p.y + 60.0 - hit.distance, p.z))
+}
+
+/// A dummy: id, racer, origin (Bevy world) and yaw.
+type Dummy = (u32, &'static str, Vec3, f32);
+
+/// The sandbox round the start `at` facing `yaw`: a referee over its crates, their layout, and
+/// the dummies.
+fn sandbox(collide: &WorldCollision, at: Vec3, yaw: f32) -> (Referee, Vec<Addressed>, Vec<Dummy>) {
+    let ahead = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
+    let right = Vec3::new(-ahead.z, 0.0, ahead.x);
+    let mut spots = Vec::new();
+    let mut spot = |kind, p: Vec3| {
+        spots.push(CrateSpot {
+            kind,
+            at: bevy_to_wow(ground(collide, p)),
+        });
+    };
+    // The row stands off to the left, leaving the line to the dummies clear.
+    for i in 0..4 {
+        spot(
+            CrateKind::Weapon,
+            at + ahead * ROW_AHEAD + right * (i as f32 * 4.0 - 22.0),
+        );
+    }
+    for i in 0..RING_SPOTS {
+        let a = (i as f32 + 0.5) / RING_SPOTS as f32 * std::f32::consts::TAU;
+        let kind = [CrateKind::Weapon, CrateKind::Fruit, CrateKind::Wumpa][i % 3];
+        spot(kind, at + (ahead * a.cos() + right * a.sin()) * RING);
+    }
+    let (referee, layout) = Referee::new(spots, 100);
+    let dummies = DUMMIES
+        .iter()
+        .map(|&(id, racer, r, f)| (id, racer, ground(collide, at + right * r + ahead * f), yaw))
+        .collect();
+    (referee, layout, dummies)
+}
+
+/// The referee's lines for us (or for everyone) into the weapons.
+fn deliver(weapons: &mut Weapons, lines: Vec<Addressed>) {
+    for (to, down) in lines {
+        if to.is_none_or(|to| to == ME) {
+            weapons.receive(down);
+        }
+    }
+}
+
+/// The dummies' karts: spawned once, placed each frame with their hits' look.
+#[derive(Resource, Default)]
+struct DummyKarts(Vec<(u32, Entity)>);
+
+fn dummies(
+    demo: Res<Demo>,
+    weapons: Res<Weapons>,
+    mut karts: ResMut<DummyKarts>,
+    mut spawner: KartSpawner,
+    mut parts: Query<(
+        &mut Transform,
+        &mut Visibility,
+        &mut KartWheels,
+        &mut KartStatus,
+    )>,
+) {
+    for &(id, racer, _, _) in &demo.dummies {
+        if !karts.0.iter().any(|k| k.0 == id) {
+            if let Some(e) = spawner.spawn(racer) {
+                karts.0.push((id, e));
+            }
+        }
+    }
+    for &(id, kart) in &karts.0 {
+        let Ok((mut t, mut vis, mut wheels, mut status)) = parts.get_mut(kart) else {
+            continue;
+        };
+        let Some(&(_, _, at, yaw)) = demo.dummies.iter().find(|d| d.0 == id) else {
+            *vis = Visibility::Hidden;
+            continue;
+        };
+        let rotation = Quat::from_rotation_y(yaw + std::f32::consts::PI);
+        let mut kart = Transform {
+            translation: at,
+            rotation,
+            scale: Vec3::splat(kartcraft::model_scale()),
+        };
+        if let Some(r) = weapons.reaction(id) {
+            kart.translation += rotation * r.offset;
+            kart.rotation = rotation * r.rotation;
+            kart.scale *= r.scale.max(Vec3::splat(0.01));
+        }
+        *t = kart;
+        *vis = Visibility::Visible;
+        *wheels = KartWheels::default();
+        *status = KartStatus {
+            grounded: true,
+            ..Default::default()
+        };
+    }
 }
 
 fn scene(app: &mut App) {
     app.init_resource::<Demo>()
+        .init_resource::<Weapons>()
+        .init_resource::<weapons::look::WeaponLook>()
+        .init_resource::<DummyKarts>()
         .init_resource::<KartView>()
         .init_resource::<KartAudio>()
         .init_resource::<effects::KartEffects>()
@@ -101,21 +239,29 @@ fn scene(app: &mut App) {
             Startup,
             (spawn_camera, spawn_hud, hud::spawn).after(benilla_assets::AssetSet::Open),
         )
-        .add_systems(Startup, |mut demo: ResMut<Demo>| {
-            demo.autopilot = std::env::var_os("WOW_KART_AUTOPILOT").is_some();
-            demo.far_camera = std::env::var("WOW_KART_CAM").is_ok_and(|v| v == "far");
-            model::preload();
-        })
+        .add_systems(
+            Startup,
+            |mut demo: ResMut<Demo>, mut weapons: ResMut<Weapons>| {
+                demo.autopilot = std::env::var_os("WOW_KART_AUTOPILOT").is_some();
+                demo.far_camera = std::env::var("WOW_KART_CAM").is_ok_and(|v| v == "far");
+                weapons.me = ME;
+                weapons.extended = true;
+                model::preload();
+                weapons::look::preload();
+            },
+        )
         .add_systems(
             Update,
             (
                 input::log_pads,
                 drive,
                 model::update,
+                dummies,
                 model::animate_wheels,
                 effects::attach,
                 effects::tick,
                 effects::draw,
+                weapons::look::draw,
                 hud,
                 hud::draw,
                 sound,
@@ -197,10 +343,12 @@ fn drive(
     mut audio: ResMut<KartAudio>,
     mut extras: ResMut<hud::HudExtras>,
     mut camera: Query<&mut Transform, With<DemoCam>>,
+    mut weapons: ResMut<Weapons>,
 ) {
     let now = time.elapsed_secs();
     let dt = time.delta_secs();
     let demo = &mut *demo;
+    let weapons = &mut *weapons;
 
     if !demo.session.active() || keys.just_pressed(KeyCode::KeyR) {
         // Wait for the ground at the start to stream in, then put the kart on it.
@@ -227,13 +375,50 @@ fn drive(
             }
         }
         demo.chain = Chain::default();
+        // The sandbox round the start.
+        let (referee, layout, dummies) = sandbox(&collide, ground, start_yaw());
+        weapons.clear();
+        demo.referee = Some(referee);
+        demo.dummies = dummies;
+        if let Some(r) = demo.referee.as_mut() {
+            r.order = demo.dummies.iter().map(|d| d.0).chain([ME]).collect();
+            r.force = weapon_test();
+        }
+        deliver(weapons, layout);
     }
 
-    let controls = if demo.autopilot {
+    let mut controls = if demo.autopilot {
         input::autopilot(now, view.meter)
+    } else if weapon_test().is_some() {
+        // Unattended: the kart stands at the start, facing the dummies, whatever pad is about.
+        input::Controls::default()
     } else {
         input::read(&keys, &pads)
     };
+    // The autopilot fires now and then while it holds an item (a shield or a bomb it keeps).
+    let holding = matches!(weapons.held(), HeldView::Item(_) | HeldView::Spinning);
+    if (demo.autopilot || weapon_test().is_some()) && holding && input::autofire(now, dt) {
+        controls.fire = true;
+    }
+    weapons.press(controls.fire, controls.reverse);
+    weapons.camera = view.camera;
+    // The dummies, and the referee's own frame: crates back, and the weapon test's item.
+    weapons.begin_others();
+    for (i, &(id, racer, at, yaw)) in demo.dummies.iter().enumerate() {
+        weapons.other(id, at, yaw, i as u8, racer, true);
+    }
+    weapons.end_others();
+    weapons.rank = demo.dummies.len() as u8;
+    if let Some(referee) = demo.referee.as_mut() {
+        let mut lines = referee.tick(now);
+        if let Some(item) = weapon_test() {
+            let idle = weapons.held() == HeldView::Empty && weapons.our_look().shield.is_none();
+            if idle && !referee.holds(ME) {
+                lines.extend(referee.grant(ME, item, now));
+            }
+        }
+        deliver(weapons, lines);
+    }
     // The autopilot fires a turbo item early in each lap of its loop.
     let cycle = now % 8.0;
     let auto_turbo = demo.autopilot && cycle >= 1.0 && cycle - dt < 1.0;
@@ -250,9 +435,11 @@ fn drive(
     if keys.just_pressed(KeyCode::KeyK) {
         demo.far_camera = !demo.far_camera;
     }
-    extras.wumpa = if demo.juice { 10 } else { 0 };
+    let wumpa = if demo.juice { 10 } else { weapons.wumpa() };
+    extras.wumpa = wumpa;
+    extras.item = weapons.hud_item();
     let mods = Modifiers {
-        wumpa: if demo.juice { 10 } else { 0 },
+        wumpa,
         mask: demo.aku,
         super_engine: demo.engine,
     };
@@ -261,14 +448,32 @@ fn drive(
             kart.fire_turbo(demo.juice);
         }
     }
-    let events = demo.session.step(
+    let events = demo.session.step_with(
         &collide,
         now,
         dt,
         &kartcraft::kart_input(&controls),
         &mods,
         &[],
+        |world, kart, origin| weapons.tick(world, kart, origin),
     );
+    weapons.blend = demo.session.tick_fraction();
+    // Our lines (and the dummies') to the referee, its answers back.
+    if let Some(referee) = demo.referee.as_mut() {
+        let lines: Vec<Addressed> = std::mem::take(&mut weapons.outbox)
+            .into_iter()
+            .flat_map(|(from, up)| {
+                let at = demo
+                    .dummies
+                    .iter()
+                    .find(|d| d.0 == from)
+                    .map_or(view.transform.translation, |d| d.2);
+                referee.handle(from, up, bevy_to_wow(at), now)
+            })
+            .collect();
+        deliver(weapons, lines);
+    }
+    weapons.feed(&mut audio);
     for e in &events {
         demo.chain.observe(now, e);
         audio.observe(e);
@@ -385,8 +590,10 @@ fn hud(
              W/S gas, brake/reverse   A/D steer\n\
              Space hop, hold to powerslide   Shift boost (meter red)\n\
              R restart   K camera   1 Juice  2 Turbo  3 Engine  4 Aku Aku\n\
+             E fire the item (hold S: backwards; again: detonate the bomb, fire the shield)\n\
+             ? crates give an item, fruit crates and fruit Wumpa; two dummy karts stand ahead\n\
              Pad (PS5 or Xbox): Cross/A gas, Square/X brake, R1 slide, L1 boost,
-             D-pad: up Juice, right Turbo, down Engine, left Aku Aku
+             Circle/B fire, D-pad: up Juice, right Turbo, down Engine, left Aku Aku
              H hides this",
                 kartcraft::class().name(),
                 view.speed,

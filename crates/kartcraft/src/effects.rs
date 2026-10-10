@@ -54,10 +54,10 @@ const SKID_WIDTH: f32 = 0.39;
 const SKID_FRAMES: usize = 8;
 
 #[derive(serde::Deserialize)]
-struct Texture {
-    width: u32,
-    height: u32,
-    rgba: Vec<u8>,
+pub(crate) struct Texture {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) rgba: Vec<u8>,
 }
 
 #[derive(serde::Deserialize)]
@@ -132,7 +132,7 @@ fn effects() -> Option<&'static Loaded> {
 
 /// `invert`: for a multiply standing in for the PSX subtract, `1 − strength·texel`, with the
 /// transparent texels white (no change).
-fn image(t: &Texture, invert: Option<f32>) -> Image {
+pub(crate) fn image(t: &Texture, invert: Option<f32>) -> Image {
     let mut rgba = t.rgba.clone();
     if let Some(strength) = invert {
         for px in rgba.chunks_mut(4) {
@@ -162,7 +162,7 @@ fn image(t: &Texture, invert: Option<f32>) -> Image {
     image
 }
 
-fn unlit(texture: Option<Handle<Image>>, alpha_mode: AlphaMode) -> StandardMaterial {
+pub(crate) fn unlit(texture: Option<Handle<Image>>, alpha_mode: AlphaMode) -> StandardMaterial {
     StandardMaterial {
         base_color_texture: texture,
         unlit: true,

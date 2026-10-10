@@ -1,7 +1,7 @@
 //! The kart's controls: a PlayStation pad laid out as CTR's (✕ accelerates, □ brakes and reverses,
-//! R1 and L1 hop, powerslide and boost), an Xbox pad by position (A as ✕,
-//! X brakes and reverses as □, the shoulders hop and powerslide as R1/L1, the left stick steers),
-//! or the keyboard for want of one. While we drive these keys belong to the kart;
+//! R1 and L1 hop, powerslide and boost, ○ fires the held item), an Xbox pad by position (A as ✕,
+//! X brakes and reverses as □, B fires as ○, the shoulders hop and powerslide as R1/L1, the left
+//! stick steers), or the keyboard for want of one. While we drive these keys belong to the kart;
 //! the D-pad's abilities and `J`/`K` are read by the update.
 
 use bevy::input::gamepad::{Gamepad, GamepadAxis, GamepadButton};
@@ -20,6 +20,9 @@ pub struct Controls {
     pub hop: bool,
     /// The other shoulder during a powerslide fires its turbo; CTR takes either.
     pub hop_alt: bool,
+    /// ○ pressed this frame: fire the held item, stop the roulette (`VehPhysProc.c:801-905`);
+    /// with `reverse` held a bomb or missile goes backwards (`VehPickupItem.c:829-835`).
+    pub fire: bool,
     /// D-pad presses this frame (up, right, down, left), for the abilities.
     pub dpad: [bool; 4],
     /// Whether a pad supplied these.
@@ -27,7 +30,7 @@ pub struct Controls {
 }
 
 /// The first connected pad's controls, else the keyboard's (arrows or WASD, Space to hop,
-/// Shift for the second shoulder, digits 1–4 for the abilities).
+/// Shift for the second shoulder, E to fire, digits 1–4 for the abilities).
 pub fn read(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>) -> Controls {
     if let Some(pad) = pads.iter().next() {
         // The triggers accelerate and brake too, for those who drive a racing game that way.
@@ -43,6 +46,7 @@ pub fn read(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>) -> Controls {
             reverse: pad.get(GamepadAxis::LeftStickY).unwrap_or(0.0) < -0.6,
             hop: pad.pressed(GamepadButton::RightTrigger),
             hop_alt: pad.pressed(GamepadButton::LeftTrigger),
+            fire: pad.just_pressed(GamepadButton::East),
             dpad: [
                 pad.just_pressed(GamepadButton::DPadUp),
                 pad.just_pressed(GamepadButton::DPadRight),
@@ -62,6 +66,7 @@ pub fn read(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>) -> Controls {
         reverse: any(&[KeyCode::ArrowDown, KeyCode::KeyS]),
         hop: keys.pressed(KeyCode::Space),
         hop_alt: any(&[KeyCode::ShiftLeft, KeyCode::ShiftRight]),
+        fire: keys.just_pressed(KeyCode::KeyE),
         dpad: [
             keys.just_pressed(KeyCode::Digit1),
             keys.just_pressed(KeyCode::Digit2),
@@ -109,3 +114,13 @@ pub fn autopilot(t: f32, meter: Option<(f32, bool)>) -> Controls {
         ..Default::default()
     }
 }
+
+/// The autopilot's ○: a press every [`AUTOFIRE_SECS`], on the frame `t` crosses into a new
+/// period (`dt` the frame's length), so a held item goes off now and then and a roulette is
+/// stopped early.
+pub fn autofire(t: f32, dt: f32) -> bool {
+    (t / AUTOFIRE_SECS).floor() != ((t - dt) / AUTOFIRE_SECS).floor()
+}
+
+/// Seconds between the autopilot's presses of ○.
+const AUTOFIRE_SECS: f32 = 1.5;

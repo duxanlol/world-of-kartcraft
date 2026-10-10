@@ -1,5 +1,5 @@
 //! CTR sound effects: the HOWL sound bank (`SOUNDS\KART.HWL`), PS-ADPCM decoding and WAV
-//! output for the kart sounds the client plays.
+//! output for the kart, weapon and pickup sounds the client plays.
 //!
 //! ```text
 //! HowlHeader { char magic[4] = "HOWL"; u32 version (0x80); u32; u32;
@@ -273,7 +273,7 @@ pub fn wav_channels(pcm: &[i16], channels: u16, rate: u32, looped: bool) -> Vec<
 }
 
 // ---------------------------------------------------------------------------------------------
-// Kart sound selection
+// Kart, weapon and pickup sound selection
 // ---------------------------------------------------------------------------------------------
 
 /// Which HOWL table an output file comes from.
@@ -302,7 +302,19 @@ pub struct SoundSpec {
 /// `EngineAudio_Recalculate(engine * 4 + driverID, ...)`).
 pub const ENGINE_BALANCED_P1: usize = 0;
 
-pub const SOUNDS: [SoundSpec; 11] = [
+/// A weapon/pickup OtherFX row: played at full event volume with no distortion.
+const fn weapon(file: &'static str, id: usize, loop_: bool, reference: &'static str) -> SoundSpec {
+    SoundSpec {
+        file,
+        source: Source::Other(id),
+        loop_,
+        distort: 0x80,
+        volume: 0xFF,
+        reference,
+    }
+}
+
+pub const SOUNDS: [SoundSpec; 39] = [
     SoundSpec {
         file: "engine.wav",
         source: Source::Engine(ENGINE_BALANCED_P1),
@@ -391,6 +403,39 @@ pub const SOUNDS: [SoundSpec; 11] = [
         volume: 0xFF,
         reference: "COLL.c wall scrub impact: OtherFX_Play_LowLevel(6, 1, volume max) (+ voice line 6, rumble)",
     },
+    // Crates, Wumpa and the item roulette.
+    weapon("roulette.wav", 0x5D, true, "RB_Crate.c:202 OtherFX_Play(0x5d, 0) when a weapon crate starts the roll; stopped by OtherFX_Stop2(0x5d) (UI_RenderFrame.c:875)"),
+    weapon("roulette_stop.wav", 0x5E, false, "VehPhysProc.c:21 ITEM_ROLL_NORMAL_FX = 0x5E: the roulette lands on an item"),
+    weapon("roulette_juiced.wav", 0x41, false, "VehPhysProc.c:22 ITEM_ROLL_JUICED_FX = 0x41: the roulette lands with >= 10 Wumpa"),
+    weapon("crate_break.wav", 0x3C, false, "RB_Crate.c:150 PlaySound3D(0x3c, crateInst): any crate breaks"),
+    weapon("wumpa.wav", 0x43, false, "RB_Fruit.c:60 PlaySound3D(0x43, fruitInst): a loose Wumpa fruit is picked up"),
+    weapon("wumpa_count.wav", 0x42, false, "UI_RenderFrame.c:235 OtherFX_Play(0x42, 1): a collected Wumpa reaches the HUD counter"),
+    // Bowling bomb.
+    weapon("bomb_launch.wav", 0x47, false, "VehPickupItem.c:151 SOUND_BOMB_LAUNCH = 0x47"),
+    weapon("bomb_roll.wav", 0x48, true, "RB_MovingExplosive.c:50 PlaySound3D_Flags(.., 0x48, inst) while the bomb rolls"),
+    weapon("bomb_explode.wav", 0x49, false, "RB_MovingExplosive.c:379 PlaySound3D(0x49, inst)"),
+    // Homing missile.
+    weapon("missile_launch.wav", 0x4A, false, "VehPickupItem.c:152 SOUND_MISSILE_LAUNCH = 0x4A"),
+    weapon("missile_fly.wav", 0x4B, true, "RB_MovingExplosive.c:43 PlaySound3D_Flags(.., 0x4b, inst) while the missile flies"),
+    weapon("missile_explode.wav", 0x4C, false, "RB_MovingExplosive.c:392 PlaySound3D(0x4c, inst)"),
+    weapon("missile_lock.wav", 0x56, false, "UI_RaceHud.c:31 UI_TRACKER_BEEP_SFX = 0x56: lock-on beep for the targeted driver, every 5/10/30 frames by distance"),
+    // TNT, Nitro and the potion.
+    weapon("mine_drop.wav", 0x52, false, "VehPickupItem.c:153 SOUND_MINE_DROP = 0x52: TNT, Nitro or a potion is dropped"),
+    weapon("tnt_land.wav", 0x50, false, "RB_GenericMine.c:284 PlaySound3D(0x50, inst): TNT lands on a driver's head"),
+    weapon("tnt_jump.wav", 0x51, false, "RB_TNT.c:289 PlaySound3D(0x51, inst): each hop that shakes TNT off"),
+    weapon("tnt_honk.wav", 0x3E, false, "RB_TNT.c:208 PlaySound3D(0x3e, inst): the TNT countdown tick"),
+    weapon("tnt_explode.wav", 0x3D, false, "RB_TNT.c:32 / RB_GenericMine.c:404 PlaySound3D(0x3d, inst): TNT and Nitro explode"),
+    weapon("glass.wav", 0x3F, false, "RB_GenericMine.c:397 PlaySound3D(0x3f, inst): a potion or Nitro shatters"),
+    // Shield, masks, clock, warp orb.
+    weapon("shield.wav", 0x57, false, "VehPickupItem.c:154 SOUND_SHIELD = 0x57: the shield goes up"),
+    weapon("shield_pop.wav", 0x58, false, "RB_MaskShieldCloud.c:261 PlaySound3D(0x58, instDark): the shield pops"),
+    weapon("shield_roll.wav", 0x59, true, "RB_MovingExplosive.c:56 PlaySound3D_Flags(.., 0x59, inst): a thrown shield rolls"),
+    weapon("aku.wav", 0x53, false, "VehPickupItem.c:284 OtherFX_Play_Echo(STATIC_AKUAKU + 0x1A = 0x53, ..): Aku Aku mask"),
+    weapon("uka.wav", 0x54, false, "VehPickupItem.c:305 OtherFX_Play_Echo(STATIC_UKAUKA + 0x1A = 0x54, ..): Uka Uka mask"),
+    weapon("clock.wav", 0x44, false, "VehPickupItem.c:155 SOUND_CLOCK = 0x44"),
+    weapon("warp_launch.wav", 0x4D, false, "VehPickupItem.c:156 SOUND_WARPBALL = 0x4D"),
+    weapon("warp_fly.wav", 0x4E, true, "RB_Warpball.c:605 PlaySound3D_Flags(.., 0x4e, inst) while the warp orb flies"),
+    weapon("warp_hit.wav", 0x4F, false, "RB_Warpball.c:66 PlaySound3D(0x4f, inst): the warp orb hits"),
 ];
 
 /// OtherFX distortion pitch factor (`distortConst_OtherFX[d] / 0x10000`).
