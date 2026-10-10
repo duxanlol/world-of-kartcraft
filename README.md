@@ -21,6 +21,24 @@ read out of the [CTR decompilation](https://github.com/CTR-tools/ctr-native)
 ([`docs/ctr-physics-spec.md`](docs/ctr-physics-spec.md)), and looks like CTR's kart because setup
 pulls it off your own disc ([`docs/ctr-assets.md`](docs/ctr-assets.md)).
 
+## Just want to play?
+
+You don't need to build anything. On Windows 10 or 11, with your own WoW 1.12.1 client and CTR
+disc image (US, `.bin` or `.iso`):
+
+1. **Make an account** at **https://kartcraft-5d37.austriaeast.cloudapp.azure.com**. No email
+   needed.
+2. **Download `WorldOfKartcraft.zip`** from the
+   [latest release](https://github.com/duxanlol/world-of-kartcraft/releases/latest) and unzip it
+   anywhere.
+3. **Double-click `Play Kartcraft.bat`.** The first time, it asks for your WoW folder and your CTR
+   image. Then log in, make a character and press **J**.
+
+It updates itself every time you start it. The release notes cover the controls, races and
+common problems.
+
+The rest of this page is for building the game from source or running your own server.
+
 ## What you need
 
 - **Windows** or **Linux**.
@@ -36,7 +54,7 @@ pulls it off your own disc ([`docs/ctr-assets.md`](docs/ctr-assets.md)).
 Windows: install [Git](https://git-scm.com), then in a terminal:
 
 ```bat
-git clone <this repository> C:\kartcraft
+git clone https://github.com/duxanlol/world-of-kartcraft C:\kartcraft
 cd C:\kartcraft
 setup.bat
 ```
@@ -44,7 +62,7 @@ setup.bat
 Linux:
 
 ```sh
-git clone <this repository> kartcraft
+git clone https://github.com/duxanlol/world-of-kartcraft kartcraft
 cd kartcraft
 setup/setup.sh
 ```
