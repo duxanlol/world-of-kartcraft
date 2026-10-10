@@ -59,7 +59,9 @@ namespace Kartcraft
     static std::unordered_map<uint32, uint32> s_lastState; // player guid low -> ms
 
     // Kart state is relayed to players this close (yards), at most this often per driver (ms).
-    constexpr float STATE_RANGE = 150.f;
+    // As far as Kartcraft's servers show the world (Visibility.Distance.Continents = 250), so a
+    // kart in sight is a kart that moves.
+    constexpr float STATE_RANGE = 250.f;
     constexpr uint32 STATE_INTERVAL = 50;
     // A state line longer than this is not a kart's.
     constexpr size_t MAX_STATE_LENGTH = 120;

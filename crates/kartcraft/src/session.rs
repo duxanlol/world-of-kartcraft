@@ -18,6 +18,9 @@ const RECENTRE: f32 = 50.0;
 const REFRESH_SECS: f32 = 3.0;
 /// The collision grid's cell, lu.
 const CELL_LU: f32 = 160.0;
+/// How far above the kart (lu) the look for any ground below starts, so ground a little above
+/// it (a kart that has sunk into a bank) counts.
+const VOID_PROBE_LU: f32 = 200.0;
 /// Seconds off the ground before a falling kart is put back where it last stood.
 const RESCUE_AFTER: f32 = 3.0;
 /// CTR's wheel radius, lu, for the wheels' roll.
@@ -132,6 +135,18 @@ fn spawn_builder() -> std::io::Result<Builder> {
             }
         })?;
     Ok((send, built))
+}
+
+/// Nothing at all below the kart: the world there has not streamed in (or not into this grid
+/// yet), and a kart is faster than the streaming. It waits where it was, `before` the tick,
+/// rather than falling through; a cliff has ground below and is driven off as ever.
+fn hold_at_void(world: &Collision, kart: &mut Kart, before: Vec3) -> bool {
+    let probe = kart.pose().position + Vec3::Y * VOID_PROBE_LU;
+    let void = !kart.grounded() && world.ground(probe, f32::MAX).is_none();
+    if void {
+        kart.halt_at(before);
+    }
+    void
 }
 
 /// The pose to draw: the last two ticks blended by how far into the next one we are.
@@ -288,8 +303,10 @@ impl Session {
         let mut events = std::mem::take(&mut kart.events);
         while self.owed >= ctr_kart::TICK {
             self.owed -= ctr_kart::TICK;
+            let before = kart.pose().position;
             kart.tick_among(&world, input, mods, &others);
             after_tick(&world, kart, origin);
+            hold_at_void(&world, kart, before);
             if kart.grounded() {
                 let pose = kart.pose();
                 self.last_ground = Some((pose.position, pose.heading));
@@ -381,4 +398,73 @@ pub struct NearbyKart {
     pub position: Vec3,
     pub velocity: Vec3,
     pub weight: i32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A flat floor at height `y`, `half` lu across each way from the origin, in 100 lu tiles
+    /// (the grid leaves out faces too large to drive on, as terrain's never are).
+    fn floor(y: f32, half: f32) -> Vec<Tri> {
+        let n = (half / 50.0) as i32;
+        let mut tris = Vec::new();
+        for i in -n..n {
+            for j in -n..n {
+                let (x0, z0) = (i as f32 * 50.0, j as f32 * 50.0);
+                let (x1, z1) = (x0 + 50.0, z0 + 50.0);
+                let (a, b, c, d) = ([x0, y, z0], [x1, y, z0], [x1, y, z1], [x0, y, z1]);
+                tris.push([a, c, b]);
+                tris.push([a, d, c]);
+            }
+        }
+        tris
+    }
+
+    /// Drives straight on the gas for `secs`, holding at the void as the session does; returns
+    /// how many ticks were held.
+    fn drive(world: &Collision, kart: &mut Kart, secs: usize) -> usize {
+        let gas = Input {
+            gas: true,
+            ..Default::default()
+        };
+        let mut held = 0;
+        for _ in 0..30 * secs {
+            let before = kart.pose().position;
+            kart.tick(world, &gas, &Modifiers::default());
+            held += usize::from(hold_at_void(world, kart, before));
+        }
+        held
+    }
+
+    #[test]
+    fn a_kart_waits_at_the_edge_of_the_loaded_world_instead_of_falling() {
+        let world = Collision::new(floor(0.0, 2000.0), CELL_LU);
+        let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 0.0, 0.0), 0);
+        drive(&world, &mut kart, 1);
+        assert!(kart.grounded(), "it drives on the floor first");
+        let held = drive(&world, &mut kart, 20);
+        let at = kart.pose().position;
+        assert!(held > 0, "the kart reached the edge in 20 s");
+        assert!(at.y > -50.0, "it did not fall: {at:?}");
+        assert!(
+            at.x.abs() < 2100.0 && at.z.abs() < 2100.0,
+            "it stayed at the edge: {at:?}"
+        );
+    }
+
+    #[test]
+    fn a_kart_still_drives_off_a_ledge_with_ground_below() {
+        let mut tris = floor(0.0, 4000.0);
+        tris.extend(floor(400.0, 1000.0));
+        let world = Collision::new(tris, CELL_LU);
+        let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 400.0, 0.0), 0);
+        assert_eq!(
+            drive(&world, &mut kart, 3),
+            0,
+            "ground below is not the void"
+        );
+        let at = kart.pose().position;
+        assert!(at.y < 100.0, "it dropped to the floor below: {at:?}");
+    }
 }

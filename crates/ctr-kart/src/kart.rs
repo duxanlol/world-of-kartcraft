@@ -803,6 +803,15 @@ impl Kart {
     }
 
     /// Moves the kart without changing its motion (a respawn or a teleport).
+    /// Stops the kart at `position`, keeping its heading and whatever state it is in: the world
+    /// past it has not loaded yet (Kartcraft's own; a CTR track is always whole).
+    pub fn halt_at(&mut self, position: Vec3) {
+        self.pos = position;
+        self.vel = Vec3::ZERO;
+        self.speed = 0;
+        self.speed_approx = 0;
+    }
+
     pub fn place(&mut self, position: Vec3, heading: i32) {
         let heading = wrap(heading);
         self.pos = position;
