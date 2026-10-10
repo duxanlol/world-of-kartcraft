@@ -13,7 +13,6 @@ use kartcraft::weapons::Weapons;
 use super::profession::Profession;
 use super::race::Races;
 use super::remote::RemoteKarts;
-use super::KartDrive;
 
 /// A guid as the weapons name racers: its low 32 bits (players' high bits are 0).
 pub(crate) fn low_guid(guid: u64) -> u32 {
@@ -46,7 +45,6 @@ pub(crate) fn on_chat(In(ev): In<SessionEvent>, mut weapons: ResMut<Weapons>) {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update(
     time: Res<Time>,
-    drive: Res<KartDrive>,
     races: Res<Races>,
     guid: Res<crate::net::SelfGuid>,
     names: Option<Res<crate::names::NameCache>>,
@@ -56,7 +54,10 @@ pub(crate) fn update(
     mut extras: ResMut<kartcraft::hud::HudExtras>,
     profession: Profession,
 ) {
-    let race = races.weapons_race().filter(|_| drive.active);
+    // Not tied to the kart running: a Race Finder race's crates come while the teleport to the
+    // start has the kart stopped, and rebinding when it moves again would clear them. Leaving
+    // the kart still ends the race (`race.rs`), and with it the weapons.
+    let race = races.weapons_race();
     if race != link.race {
         if weapons.live() {
             info!("kart weapons: race over, weapons cleared");
