@@ -476,7 +476,8 @@ fn racewait_asks_the_server_for_the_finders_wait() {
     sent(&mut s);
 
     // The seconds, stripped of anything else; bare, it asks for the wait in force.
-    s.run("SlashCmdList[\"BENILLA_RACEWAIT\"](\" 5s\")").unwrap();
+    s.run("SlashCmdList[\"BENILLA_RACEWAIT\"](\" 5s\")")
+        .unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tFillWait\t5"]);
     s.run("SlashCmdList[\"BENILLA_RACEWAIT\"](\"\")").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tFillWait\t"]);
