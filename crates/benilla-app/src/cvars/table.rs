@@ -746,6 +746,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "1",
         "Kartcraft's own — the kart's camera; 1.12 has no kart",
     ),
+    // CTR's far chase camera (`FarCam4x3`, its L2), else the near one, CTR's default.
+    ours(
+        "KartFarCamera",
+        "0",
+        "Kartcraft's own — the chase camera's distance; 1.12 has no kart",
+    ),
     // CTR's race music, a share of `MusicVolume`.
     ours(
         "KartMusic",

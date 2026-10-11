@@ -1,8 +1,9 @@
 //! The kart's key bindings: the layer's `Bindings.xml` under World of Kartcraft, rebindable in Key
 //! Bindings as an addon's are. The driving controls are an overlay plane
 //! ([`crate::bindings::BindingOverlay`]): their default keys are the ones WoW walks and casts with
-//! (W, A, S, D, the arrows, Space, 1–4), which still walk and cast out of the kart; while we drive
-//! they are the kart's alone. Summon Kart is an ordinary binding, read by its press.
+//! (W, A, S, D, the arrows, Space, 1–4, C and X), which still walk, cast, open the character pane
+//! and sit out of the kart; while we drive they are the kart's alone. Summon Kart is an ordinary
+//! binding, read by its press.
 
 use kartcraft::input::Keys;
 
@@ -15,6 +16,9 @@ pub(super) const STEER_RIGHT: &str = "KARTCRAFT_STEERRIGHT";
 pub(super) const HOP: &str = "KARTCRAFT_HOP";
 pub(super) const BOOST: &str = "KARTCRAFT_BOOST";
 pub(super) const FIRE: &str = "KARTCRAFT_FIRE";
+/// CTR's L2 and R2: the chase camera's near/far swap (pressed) and its look-back (held).
+pub(super) const CAMERA: &str = "KARTCRAFT_CAMERA";
+pub(super) const LOOK_BACK: &str = "KARTCRAFT_LOOKBACK";
 /// The D-pad's abilities in its order (up, right, down, left): Wumpa Juice, Turbo Boost, Super
 /// Engine, Aku Aku (`profession::DPAD`).
 pub(super) const ABILITIES: [&str; 4] = [
@@ -35,6 +39,8 @@ const DRIVING: &[&str] = &[
     HOP,
     BOOST,
     FIRE,
+    CAMERA,
+    LOOK_BACK,
     ABILITIES[0],
     ABILITIES[1],
     ABILITIES[2],
@@ -56,6 +62,8 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("SPACE", HOP),
     ("SHIFT-", BOOST),
     ("E", FIRE),
+    ("C", CAMERA),
+    ("X", LOOK_BACK),
     ("1", ABILITIES[0]),
     ("2", ABILITIES[1]),
     ("3", ABILITIES[2]),
@@ -79,6 +87,8 @@ pub(super) fn keys(overlay: &BindingOverlay) -> Keys {
         boost: overlay.held(BOOST),
         fire: overlay.just_pressed(FIRE),
         abilities: ABILITIES.map(|a| overlay.just_pressed(a)),
+        camera: overlay.just_pressed(CAMERA),
+        look_back: overlay.held(LOOK_BACK),
     }
 }
 
@@ -115,6 +125,8 @@ mod tests {
         assert_eq!(keys(HOP), ["SPACE"]);
         assert_eq!(keys(BOOST), ["SHIFT-"]);
         assert_eq!(keys(FIRE), ["E"]);
+        assert_eq!(keys(CAMERA), ["C"]);
+        assert_eq!(keys(LOOK_BACK), ["X"]);
         for (i, a) in ABILITIES.iter().enumerate() {
             assert_eq!(keys(a), [format!("{}", i + 1)]);
         }
@@ -122,6 +134,8 @@ mod tests {
         assert!(keys("MOVEFORWARD").contains(&"W".to_string()));
         assert!(keys("JUMP").contains(&"SPACE".to_string()));
         assert_eq!(keys("ACTIONBUTTON1"), ["1"]);
+        assert_eq!(keys("TOGGLECHARACTER0"), ["C"]);
+        assert_eq!(keys("SITORSTAND"), ["X"]);
         // The ordinary ones take a key only where the stock defaults leave it free.
         for (key, command) in [("J", SUMMON), ("I", "KARTCRAFT_RACEFINDER")] {
             let stock_holds = stock.iter().any(|(k, _)| k == key);

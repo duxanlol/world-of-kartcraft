@@ -138,9 +138,10 @@ fn start(
 #[allow(clippy::too_many_arguments)]
 fn update(
     time: Res<Time>,
-    (mut overlay, binds): (
+    (mut overlay, binds, mut cvars): (
         ResMut<crate::bindings::BindingOverlay>,
         Res<crate::bindings::BindingsState>,
+        ResMut<crate::cvars::Cvars>,
     ),
     pads: Query<&Gamepad>,
     ui: Res<crate::ui_script::UiKeyboardCapture>,
@@ -307,6 +308,13 @@ fn update(
     if server_kart {
         profession.dpad(controls.dpad);
     }
+    // CTR's L2 swaps the chase camera's distance, here the setting, so it persists; its R2 held
+    // looks back (`kartcraft::camera`).
+    let far = settings.far_camera ^ controls.camera;
+    if controls.camera {
+        cvars.set("KartFarCamera", if far { "1" } else { "0" });
+    }
+    host.session.set_camera(far, controls.look_back);
     // ○ fires the held item; the autopilot fires now and then while it holds one, and again
     // with its bomb rolling or its shield up.
     let holding = matches!(

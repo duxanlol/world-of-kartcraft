@@ -2,7 +2,8 @@
 //! R1 and L1 hop, powerslide and boost, ○ fires the held item), an Xbox pad by position (A as ✕,
 //! X brakes and reverses as □, B fires as ○, the shoulders hop and powerslide as R1/L1, the left
 //! stick steers), or the keyboard for want of one, through [`Keys`]: the host's rebindable keys, or
-//! the fixed layout. The D-pad's abilities are read by the host.
+//! the fixed layout. The D-pad's abilities are read by the host. Select swaps the camera's
+//! distance and the right stick's click looks back, CTR's L2 and R2.
 
 use bevy::input::gamepad::{Gamepad, GamepadAxis, GamepadButton};
 use bevy::prelude::*;
@@ -25,6 +26,10 @@ pub struct Controls {
     pub fire: bool,
     /// D-pad presses this frame (up, right, down, left), for the abilities.
     pub dpad: [bool; 4],
+    /// Pressed this frame: the chase camera's near/far swap (CTR's L2).
+    pub camera: bool,
+    /// Held: the chase camera looks back (CTR's R2).
+    pub look_back: bool,
     /// Whether a pad supplied these.
     pub pad: bool,
 }
@@ -45,11 +50,15 @@ pub struct Keys {
     pub fire: bool,
     /// Pressed this frame, the D-pad's four abilities (up, right, down, left).
     pub abilities: [bool; 4],
+    /// Pressed this frame: the camera's near/far swap.
+    pub camera: bool,
+    /// Held: the camera looks back.
+    pub look_back: bool,
 }
 
 impl Keys {
     /// The fixed layout: arrows or WASD, Space to hop, Shift for the second shoulder, E to fire,
-    /// digits 1–4 for the abilities.
+    /// digits 1–4 for the abilities, C to swap the camera's distance, X held to look back.
     pub fn from_keyboard(keys: &ButtonInput<KeyCode>) -> Keys {
         let any = |k: &[KeyCode]| keys.any_pressed(k.iter().copied());
         Keys {
@@ -66,6 +75,8 @@ impl Keys {
                 keys.just_pressed(KeyCode::Digit3),
                 keys.just_pressed(KeyCode::Digit4),
             ],
+            camera: keys.just_pressed(KeyCode::KeyC),
+            look_back: keys.pressed(KeyCode::KeyX),
         }
     }
 }
@@ -95,6 +106,8 @@ fn merge(pad: Controls, keys: Controls) -> Controls {
         hop_alt: pad.hop_alt || keys.hop_alt,
         fire: pad.fire || keys.fire,
         dpad: std::array::from_fn(|i| pad.dpad[i] || keys.dpad[i]),
+        camera: pad.camera || keys.camera,
+        look_back: pad.look_back || keys.look_back,
         pad: stick,
     }
 }
@@ -121,6 +134,10 @@ fn from_pad(pad: &Gamepad) -> Controls {
             pad.just_pressed(GamepadButton::DPadDown),
             pad.just_pressed(GamepadButton::DPadLeft),
         ],
+        // CTR swaps the camera with L2 and looks back with R2, but the triggers here are the gas
+        // and the brake (above); Select and the right stick's click are free on either pad.
+        camera: pad.just_pressed(GamepadButton::Select),
+        look_back: pad.pressed(GamepadButton::RightThumb),
         pad: true,
     }
 }
@@ -136,6 +153,8 @@ fn from_keys(keys: &Keys) -> Controls {
         hop_alt: keys.boost,
         fire: keys.fire,
         dpad: keys.abilities,
+        camera: keys.camera,
+        look_back: keys.look_back,
         pad: false,
     }
 }
@@ -228,5 +247,22 @@ mod tests {
         assert_eq!(both.steer, 0.6);
         assert!(both.hop && both.accelerate);
         assert!(both.pad);
+    }
+
+    #[test]
+    fn the_camera_s_swap_and_look_back_come_from_the_keys_or_the_pad() {
+        let keys = from_keys(&Keys {
+            camera: true,
+            look_back: true,
+            ..Default::default()
+        });
+        assert!(keys.camera && keys.look_back);
+        let pad = Controls {
+            look_back: true,
+            pad: true,
+            ..Default::default()
+        };
+        let both = merge(pad, Controls::default());
+        assert!(both.look_back && !both.camera);
     }
 }

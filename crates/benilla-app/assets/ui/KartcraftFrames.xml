@@ -23,7 +23,8 @@
 
         The settings are CVars, which the kart reads (kart/settings.rs) and the client keeps in
         config.toml: the guide arrow (KartArrowShow, KartArrowSize, KartArrowX, KartArrowY, and
-        KartArrowMove while it is being placed), the camera (KartChaseCamera), the music
+        KartArrowMove while it is being placed), the camera (KartChaseCamera, and KartFarCamera
+        for CTR's far chase camera, which the camera binding also swaps), the music
         (KartMusic, KartMusicVolume), the minimap button (KartMinimapButton, KartMinimapAngle)
         and the ghost of the best run on a course (KartGhost).
 
@@ -45,6 +46,8 @@
         BINDING_NAME_KARTCRAFT_HOP = "Hop / Powerslide"
         BINDING_NAME_KARTCRAFT_BOOST = "Boost (Second Shoulder)"
         BINDING_NAME_KARTCRAFT_FIRE = "Fire Item"
+        BINDING_NAME_KARTCRAFT_CAMERA = "Toggle Camera Distance"
+        BINDING_NAME_KARTCRAFT_LOOKBACK = "Look Back"
         BINDING_NAME_KARTCRAFT_ABILITY1 = "Wumpa Juice"
         BINDING_NAME_KARTCRAFT_ABILITY2 = "Turbo Boost"
         BINDING_NAME_KARTCRAFT_ABILITY3 = "Super Engine"
@@ -887,6 +890,7 @@
             BenillaKartSettingsFrameArrowShow:SetChecked(BenillaKart_Flag("KartArrowShow"))
             BenillaKartSettingsFrameArrowSize:SetValue(tonumber(GetCVar("KartArrowSize")) or 1)
             BenillaKartSettingsFrameChaseCamera:SetChecked(BenillaKart_Flag("KartChaseCamera"))
+            BenillaKartSettingsFrameFarCamera:SetChecked(BenillaKart_Flag("KartFarCamera"))
             BenillaKartSettingsFrameMusic:SetChecked(BenillaKart_Flag("KartMusic"))
             BenillaKartSettingsFrameMusicVolume:SetValue(tonumber(GetCVar("KartMusicVolume")) or 1)
             BenillaKartSettingsFrameMinimapButton:SetChecked(BenillaKart_Flag("KartMinimapButton"))
@@ -1370,7 +1374,7 @@
     <!-- The settings: the guide arrow, the camera, the music, the minimap button and the ghost,
          each a CVar set as it is clicked, as the stock option boxes are. -->
     <Frame name="BenillaKartSettingsFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="320" y="420"/></Size>
+        <Size><AbsDimension x="320" y="456"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -1405,7 +1409,7 @@
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-168"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentMusicTitle" inherits="GameFontNormal" text="Music">
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-222"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-250"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
@@ -1433,21 +1437,24 @@
             <CheckButton name="$parentChaseCamera" inherits="BenillaKartSettingsCheckTemplate">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-182"/></Offset></Anchor></Anchors>
             </CheckButton>
+            <CheckButton name="$parentFarCamera" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-210"/></Offset></Anchor></Anchors>
+            </CheckButton>
             <CheckButton name="$parentMusic" inherits="BenillaKartSettingsCheckTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-236"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-264"/></Offset></Anchor></Anchors>
             </CheckButton>
             <Slider name="$parentMusicVolume" inherits="OptionsSliderTemplate">
                 <Size><AbsDimension x="240" y="17"/></Size>
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="38" y="-288"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="38" y="-316"/></Offset></Anchor></Anchors>
                 <Scripts>
                     <OnValueChanged>BenillaKartSettings_Slide(this, "KartMusicVolume")</OnValueChanged>
                 </Scripts>
             </Slider>
             <CheckButton name="$parentMinimapButton" inherits="BenillaKartSettingsCheckTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-316"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-344"/></Offset></Anchor></Anchors>
             </CheckButton>
             <CheckButton name="$parentGhost" inherits="BenillaKartSettingsCheckTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-344"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-372"/></Offset></Anchor></Anchors>
             </CheckButton>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>
@@ -1461,6 +1468,7 @@
                 local boxes = {
                     { "ArrowShow", "KartArrowShow", "Show the guide arrow in a race" },
                     { "ChaseCamera", "KartChaseCamera", "CTR chase camera (off: your WoW camera)" },
+                    { "FarCamera", "KartFarCamera", "Far chase camera (off: near)" },
                     { "Music", "KartMusic", "Play CTR race music" },
                     { "MinimapButton", "KartMinimapButton", "Show the minimap button" },
                     { "Ghost", "KartGhost", "Race the ghost of your best run" },

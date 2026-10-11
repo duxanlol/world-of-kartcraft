@@ -5,6 +5,8 @@
 //! - `KartArrowShow`, `KartArrowSize`, `KartArrowX`, `KartArrowY`: the race's guide arrow
 //!   ([`GuideHud`]); `KartArrowMove` is its placement mode, held for the session only.
 //! - `KartChaseCamera`: CTR's chase camera, else our own follow camera.
+//! - `KartFarCamera`: CTR's far chase camera (its L2), else the near one; the camera binding
+//!   (`KARTCRAFT_CAMERA`) flips it while driving, so it persists.
 //! - `KartMusic`, `KartMusicVolume`: CTR's race music, on top of the client's music volume.
 //! - `KartClass`, `KartRacer`: the garage's engine class (as the Karting skill allows it,
 //!   [`super::garage`]) and whose kart we drive; both apply at once, while driving too.
@@ -22,6 +24,8 @@ use super::race::GuideHud;
 pub(crate) struct KartSettings {
     /// Drive with CTR's chase camera rather than our follow camera.
     pub(crate) chase_camera: bool,
+    /// CTR's far chase camera rather than the near one.
+    pub(crate) far_camera: bool,
     pub(crate) music: bool,
     /// The music's share of the client's music volume, 0 to 1.
     pub(crate) music_volume: f32,
@@ -35,6 +39,7 @@ impl Default for KartSettings {
     fn default() -> Self {
         Self {
             chase_camera: true,
+            far_camera: false,
             music: true,
             music_volume: 1.0,
             class: super::garage::TIERS[0].0,
@@ -72,6 +77,7 @@ pub(crate) fn on_cvar(
         "kartarrowy" => hud.y = ev.num().clamp(0.0, 1.0),
         "kartarrowmove" => hud.editing = ev.flag(),
         "kartchasecamera" => settings.chase_camera = ev.flag(),
+        "kartfarcamera" => settings.far_camera = ev.flag(),
         "kartmusic" => settings.music = ev.flag(),
         "kartmusicvolume" => settings.music_volume = ev.num().clamp(0.0, 1.0),
         "kartghost" => settings.ghost = ev.flag(),
@@ -125,6 +131,7 @@ mod tests {
         assert_eq!(d("KartArrowMove") != 0.0, hud.editing);
         let settings = KartSettings::default();
         assert_eq!(d("KartChaseCamera") != 0.0, settings.chase_camera);
+        assert_eq!(d("KartFarCamera") != 0.0, settings.far_camera);
         assert_eq!(d("KartMusic") != 0.0, settings.music);
         assert_eq!(d("KartMusicVolume"), settings.music_volume);
         assert_eq!(d("KartGhost") != 0.0, settings.ghost);
@@ -184,6 +191,9 @@ mod tests {
         set(&mut app, "KartMusicVolume", "0.4");
         let settings = *app.world().resource::<KartSettings>();
         assert!(!settings.chase_camera && !settings.chase_camera());
+        assert!(!settings.far_camera);
+        set(&mut app, "KartFarCamera", "1");
+        assert!(app.world().resource::<KartSettings>().far_camera);
         assert_eq!(settings.music_level(), 0.4);
         set(&mut app, "KartMusic", "0");
         assert_eq!(app.world().resource::<KartSettings>().music_level(), 0.0);

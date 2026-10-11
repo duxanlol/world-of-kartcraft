@@ -718,6 +718,15 @@ fn the_settings_window_sets_the_kart_s_cvars() {
             .unwrap(),
         1.0
     );
+    // The far camera starts off: CTR starts on its near one.
+    assert!(!s
+        .eval::<bool>("return BenillaKartSettingsFrameFarCamera:GetChecked() == 1")
+        .unwrap());
+    assert_eq!(
+        s.eval::<String>("return BenillaKartSettingsFrameFarCameraText:GetText()")
+            .unwrap(),
+        "Far chase camera (off: near)"
+    );
     assert!(
         s.take_cvar_changes().is_empty(),
         "showing the window wrote a CVar"
@@ -729,6 +738,7 @@ fn the_settings_window_sets_the_kart_s_cvars() {
          BenillaKartSettingsFrameChaseCamera:Click() \
          BenillaKartSettingsFrameMusic:Click() \
          BenillaKartSettingsFrameGhost:Click() \
+         BenillaKartSettingsFrameFarCamera:Click() \
          BenillaKartSettingsFrameArrowSize:SetValue(1.5) \
          BenillaKartSettingsFrameMusicVolume:SetValue(0.25)",
     )
@@ -738,6 +748,7 @@ fn the_settings_window_sets_the_kart_s_cvars() {
         ("KartChaseCamera", "0"),
         ("KartMusic", "0"),
         ("KartGhost", "0"),
+        ("KartFarCamera", "1"),
         ("KartArrowSize", "1.5"),
         ("KartMusicVolume", "0.25"),
     ] {
@@ -990,7 +1001,7 @@ fn key_bindings_lists_the_kart_s_controls_and_they_run() {
     assert_eq!(
         names,
         "Accelerate,Brake / Reverse,Steer Left,Steer Right,Hop / Powerslide,\
-         Boost (Second Shoulder),Fire Item,Wumpa Juice,Turbo Boost,Super Engine,Aku Aku,\
+         Boost (Second Shoulder),Fire Item,Toggle Camera Distance,Look Back,Wumpa Juice,Turbo Boost,Super Engine,Aku Aku,\
          Summon / Dismiss Kart,Race Finder,Leave Race,Kartcraft Settings,Kart Garage"
     );
     s.run("RunBinding('KARTCRAFT_GARAGE')").unwrap();

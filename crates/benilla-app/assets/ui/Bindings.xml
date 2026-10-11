@@ -15,6 +15,8 @@
     <Binding name="KARTCRAFT_HOP">-- read by the kart while it drives</Binding>
     <Binding name="KARTCRAFT_BOOST">-- read by the kart while it drives</Binding>
     <Binding name="KARTCRAFT_FIRE">-- read by the kart while it drives</Binding>
+    <Binding name="KARTCRAFT_CAMERA">-- read by the kart while it drives</Binding>
+    <Binding name="KARTCRAFT_LOOKBACK">-- read by the kart while it drives</Binding>
     <Binding name="KARTCRAFT_ABILITY1">-- read by the kart while it drives</Binding>
     <Binding name="KARTCRAFT_ABILITY2">-- read by the kart while it drives</Binding>
     <Binding name="KARTCRAFT_ABILITY3">-- read by the kart while it drives</Binding>

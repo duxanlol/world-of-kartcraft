@@ -7,7 +7,8 @@
 //! keyboard (W/↑ gas, S/↓ brake and reverse, A/D or ←/→ steer, Space hop and powerslide, Shift
 //! boost). In a powerslide the turbo meter by the speedometer fills; press the other shoulder (Shift) when
 //! it turns red for a turbo, up to three per slide. R puts the kart back at the start, K swaps the
-//! chase camera for a far one, 1–4 toggle Wumpa Juice, fire a Turbo, toggle Super Engine and
+//! chase camera for a far one, C (Select) swaps CTR's near and far chase cameras, X (R3) held looks
+//! back, 1–4 toggle Wumpa Juice, fire a Turbo, toggle Super Engine and
 //! toggle Aku Aku.
 //!
 //! A weapons sandbox stands around the start: a ring of "?" crates, fruit crates and Wumpa fruit
@@ -99,6 +100,8 @@ struct Demo {
     /// The start, Bevy world, once the ground under it has streamed in.
     start: Option<Vec3>,
     far_camera: bool,
+    /// CTR's far zoom table for the chase camera (C, Select).
+    ctr_far: bool,
     juice: bool,
     engine: bool,
     aku: bool,
@@ -431,6 +434,10 @@ fn drive(
     if controls.dpad[3] {
         demo.aku = !demo.aku;
     }
+    if controls.camera {
+        demo.ctr_far = !demo.ctr_far;
+    }
+    demo.session.set_camera(demo.ctr_far, controls.look_back);
     if keys.just_pressed(KeyCode::KeyK) {
         demo.far_camera = !demo.far_camera;
     }
