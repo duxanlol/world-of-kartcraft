@@ -21,6 +21,8 @@ const CELL_LU: f32 = 160.0;
 /// How far above the kart (lu) the look for any ground below starts, so ground a little above
 /// it (a kart that has sunk into a bank) counts.
 const VOID_PROBE_LU: f32 = 200.0;
+/// How far down (lu) the look for anything below the kart goes: deeper than any fall.
+const VOID_DEPTH_LU: f32 = 1.0e6;
 /// Seconds off the ground before a falling kart is put back where it last stood.
 const RESCUE_AFTER: f32 = 3.0;
 /// CTR's wheel radius, lu, for the wheels' roll.
@@ -142,10 +144,12 @@ fn spawn_builder() -> std::io::Result<Builder> {
 
 /// Nothing at all below the kart: the world there has not streamed in (or not into this grid
 /// yet), and a kart is faster than the streaming. It waits where it was, `before` the tick,
-/// rather than falling through; a cliff has ground below and is driven off as ever.
+/// rather than falling through. Any face below is world, ground or not: past a cliff's edge or
+/// over a slope too steep to stand on there is only that steep face, and the kart falls onto it
+/// and slides down as CTR's walls have it. Asking for ground alone held it there in mid-air.
 fn hold_at_void(world: &Collision, kart: &mut Kart, before: Vec3) -> bool {
     let probe = kart.pose().position + Vec3::Y * VOID_PROBE_LU;
-    let void = !kart.grounded() && world.ground(probe, f32::MAX).is_none();
+    let void = !kart.grounded() && world.ray(probe, Vec3::NEG_Y, VOID_DEPTH_LU).is_none();
     if void {
         kart.halt_at(before);
     }
@@ -536,5 +540,89 @@ mod tests {
             "let go, it rolls back down: {:?}",
             kart.pose().position
         );
+    }
+
+    /// A height field `h(x, z)` in 50 lu tiles over `half` lu each way, as WoW's terrain is: one
+    /// surface over each point, so under a steep stretch there is only that stretch.
+    fn field(h: impl Fn(f32, f32) -> f32, half: f32) -> Vec<Tri> {
+        let n = (half / 50.0) as i32;
+        let mut tris = Vec::new();
+        for i in -n..n {
+            for j in -n..n {
+                let (x0, z0) = (i as f32 * 50.0, j as f32 * 50.0);
+                let (x1, z1) = (x0 + 50.0, z0 + 50.0);
+                let p = |x: f32, z: f32| [x, h(x, z), z];
+                let (a, b, c, d) = (p(x0, z0), p(x1, z0), p(x1, z1), p(x0, z1));
+                tris.push([a, c, b]);
+                tris.push([a, d, c]);
+            }
+        }
+        tris
+    }
+
+    #[test]
+    fn a_kart_drives_off_a_sheer_drop_instead_of_waiting_at_its_edge() {
+        // A plateau 800 lu up for z < 0, a cliff face down to the valley floor at z = 300 (70
+        // degrees): past the edge there is only the face below, too steep to be ground.
+        let height = |_: f32, z: f32| (800.0 - z * 800.0 / 300.0).clamp(0.0, 800.0);
+        let world = Collision::new(field(height, 3000.0), CELL_LU);
+        let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 800.0, -600.0), 0);
+        let gas = Input {
+            gas: true,
+            ..Default::default()
+        };
+        // Until it is well into the valley, short of the loaded world's own far edge.
+        let mut held_at = None;
+        for _ in 0..30 * 6 {
+            let before = kart.pose().position;
+            kart.tick(&world, &gas, &Modifiers::default());
+            if hold_at_void(&world, &mut kart, before) {
+                held_at.get_or_insert(before);
+            }
+            if kart.pose().position.z > 1500.0 {
+                break;
+            }
+        }
+        let at = kart.pose().position;
+        assert_eq!(held_at, None, "held at the cliff's edge");
+        assert!(
+            at.y < 100.0 && at.z > 1500.0,
+            "down in the valley and on: {at:?}"
+        );
+    }
+
+    #[test]
+    fn a_kart_over_a_slope_too_steep_to_stand_on_comes_down_instead_of_hanging() {
+        // A 60 degree slope (steeper than CTR's ground, 50) rising towards +z, and the kart in the
+        // air a little above it, as a hop or a fall onto a steep hill leaves it.
+        let rise = 60f32.to_radians().tan();
+        let world = Collision::new(field(|_, z| z * rise, 2000.0), CELL_LU);
+        let start = Vec3::new(0.0, 100.0, 0.0);
+        let mut kart = Kart::new(Class::Balanced, start, 0);
+        // Until it is well down the slope, short of the loaded world's own edge.
+        let mut held_at = None;
+        for _ in 0..30 * 3 {
+            let before = kart.pose().position;
+            kart.tick(&world, &Input::default(), &Modifiers::default());
+            if hold_at_void(&world, &mut kart, before) {
+                held_at.get_or_insert(before);
+            }
+            if kart.pose().position.z < -1200.0 {
+                break;
+            }
+        }
+        let at = kart.pose().position;
+        assert_eq!(held_at, None, "held in the air over the slope");
+        assert!(at.y < start.y - 500.0, "it slid down the slope: {at:?}");
+    }
+
+    #[test]
+    fn a_kart_still_waits_where_nothing_has_streamed_in() {
+        // Nothing of any kind under the far half: the world there has not loaded.
+        let world = Collision::new(field(|_, _| 0.0, 1000.0), CELL_LU);
+        let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 0.0, 600.0), 0);
+        let held = drive(&world, &mut kart, 10);
+        let at = kart.pose().position;
+        assert!(held > 0 && at.y > -50.0, "it waits at the edge: {at:?}");
     }
 }
