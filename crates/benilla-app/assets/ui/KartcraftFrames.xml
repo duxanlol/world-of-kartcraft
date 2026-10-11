@@ -759,6 +759,16 @@
                     tonumber(line[3]) or 0))
             elseif verb == "Un" then
                 BenillaKart_Say("Unstuck: no course starts within 300 yards.")
+            elseif verb == "M" then
+                if line[3] == "1" then
+                    BenillaKartRaceMode = 1
+                    BenillaKart_Say("Race mode on: nobody can target or attack you, and you can't attack anyone.")
+                else
+                    BenillaKartRaceMode = nil
+                    BenillaKart_Say("Race mode off.")
+                end
+            elseif verb == "Mx" then
+                BenillaKart_Say("Race mode: not while you're in combat.")
             elseif verb == "X" then
                 -- Out of every race and the queue (/leaverace, the minimap button's menu).
                 f.check, f.queued, f.waiting, f.waited = nil, nil, nil, nil
@@ -797,6 +807,12 @@
         -- else at the nearest course's start. The server decides, and says when it will not.
         function BenillaKart_Unstuck()
             BenillaKart_Send("U")
+        end
+
+        -- Race mode, the race shield at will: nobody can select or attack us, nor we anyone, for
+        -- waiting in the queue in peace. The server answers with its state (refused in combat).
+        function BenillaKart_RaceModeToggle()
+            if BenillaKartRaceMode then BenillaKart_Send("M\t0") else BenillaKart_Send("M\t1") end
         end
 
         -- A line of Kartcraft news in the chat, as the system's lines are.
@@ -969,6 +985,8 @@
             local entries = {
                 { text = "World of Kartcraft", isTitle = 1 },
                 { text = "Race Finder", func = BenillaKartFinder_Toggle },
+                { text = "Race mode", func = BenillaKart_RaceModeToggle, checkable = 1, checked = BenillaKartRaceMode,
+                  tooltipTitle = "Race mode", tooltipText = "Nobody can target or attack you, and you can't attack anyone: for waiting in the queue." },
                 { text = "Track browser", func = BenillaKartTrackBrowser_Toggle },
                 { text = "Leave race", func = BenillaKart_LeaveRace },
                 { text = "Unstuck", func = BenillaKart_Unstuck },
@@ -980,7 +998,7 @@
             table.insert(entries, { text = "Kartcraft settings...", func = BenillaKartSettings_Toggle })
             table.insert(entries, { text = "Hide minimap button", func = BenillaKartMinimap_Hide })
             for i = 1, table.getn(entries) do
-                entries[i].notCheckable = 1
+                if not entries[i].checkable then entries[i].notCheckable = 1 end
                 UIDropDownMenu_AddButton(entries[i])
             end
         end
