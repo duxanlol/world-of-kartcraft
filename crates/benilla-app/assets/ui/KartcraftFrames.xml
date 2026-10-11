@@ -171,7 +171,7 @@
             if BenillaKartFinderFrame:IsVisible() then
                 BenillaKartFinderFrame:Hide()
             else
-                BenillaKartFinderFrame:Show()
+                BenillaKart_Open(BenillaKartFinderFrame)
             end
         end
 
@@ -330,7 +330,7 @@
                 if StaticPopup_Hide then StaticPopup_Hide("BENILLA_KART_READY") end
             elseif verb == "Finder" then
                 -- The Race Marshal's "Open the Race Finder".
-                BenillaKartFinderFrame:Show()
+                BenillaKart_Open(BenillaKartFinderFrame)
             elseif verb == "X" then
                 -- Out of every race and the queue (/leaverace, the minimap button's menu).
                 f.check, f.queued, f.waiting, f.waited = nil, nil, nil, nil
@@ -358,6 +358,13 @@
 
         -- A widget the player drags with the left button; its place is kept between sessions,
         -- as a user-placed frame's is (layout-local.txt).
+        -- Our windows open as a stock non-centre panel does: refused while a centre panel (the
+        -- game menu, the options window) holds the screen (`UIParent.lua:654-656`).
+        function BenillaKart_Open(frame)
+            if CanOpenPanels and not CanOpenPanels() then return end
+            frame:Show()
+        end
+
         function BenillaKart_Movable(frame)
             frame:SetMovable(1)
             frame:RegisterForDrag("LeftButton")
@@ -555,7 +562,7 @@
             if BenillaKartSettingsFrame:IsVisible() then
                 BenillaKartSettingsFrame:Hide()
             else
-                BenillaKartSettingsFrame:Show()
+                BenillaKart_Open(BenillaKartSettingsFrame)
             end
         end
 
@@ -730,7 +737,7 @@
             if BenillaKartGarageFrame:IsVisible() then
                 BenillaKartGarageFrame:Hide()
             else
-                BenillaKartGarageFrame:Show()
+                BenillaKart_Open(BenillaKartGarageFrame)
             end
         end
 
@@ -864,6 +871,18 @@
             <EdgeSize><AbsValue val="32"/></EdgeSize>
         </Backdrop>
         <Layers>
+            <Layer level="BACKGROUND">
+                <!-- The dialog tile is 0.6 alpha (UI-DialogBox-Background): with this 0.7 under it
+                     the window is 0.88 opaque, as BenillaOptionsFrame, so the HUD below it (the
+                     race banner, LOW) does not read through. Inset 15, inside the border's ink. -->
+                <Texture name="$parentGroundDim">
+                    <Anchors>
+                        <Anchor point="TOPLEFT"><Offset><AbsDimension x="15" y="-15"/></Offset></Anchor>
+                        <Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-15" y="15"/></Offset></Anchor>
+                    </Anchors>
+                    <Color r="0" g="0" b="0" a="0.7"/>
+                </Texture>
+            </Layer>
             <Layer level="ARTWORK">
                 <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
                     <Size><AbsDimension x="256" y="64"/></Size>
@@ -1035,6 +1054,18 @@
             <EdgeSize><AbsValue val="32"/></EdgeSize>
         </Backdrop>
         <Layers>
+            <Layer level="BACKGROUND">
+                <!-- The dialog tile is 0.6 alpha (UI-DialogBox-Background): with this 0.7 under it
+                     the window is 0.88 opaque, as BenillaOptionsFrame, so the HUD below it (the
+                     race banner, LOW) does not read through. Inset 15, inside the border's ink. -->
+                <Texture name="$parentGroundDim">
+                    <Anchors>
+                        <Anchor point="TOPLEFT"><Offset><AbsDimension x="15" y="-15"/></Offset></Anchor>
+                        <Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-15" y="15"/></Offset></Anchor>
+                    </Anchors>
+                    <Color r="0" g="0" b="0" a="0.7"/>
+                </Texture>
+            </Layer>
             <Layer level="ARTWORK">
                 <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
                     <Size><AbsDimension x="256" y="64"/></Size>
@@ -1157,6 +1188,18 @@
             <EdgeSize><AbsValue val="32"/></EdgeSize>
         </Backdrop>
         <Layers>
+            <Layer level="BACKGROUND">
+                <!-- The dialog tile is 0.6 alpha (UI-DialogBox-Background): with this 0.7 under it
+                     the window is 0.88 opaque, as BenillaOptionsFrame, so the HUD below it (the
+                     race banner, LOW) does not read through. Inset 15, inside the border's ink. -->
+                <Texture name="$parentGroundDim">
+                    <Anchors>
+                        <Anchor point="TOPLEFT"><Offset><AbsDimension x="15" y="-15"/></Offset></Anchor>
+                        <Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-15" y="15"/></Offset></Anchor>
+                    </Anchors>
+                    <Color r="0" g="0" b="0" a="0.7"/>
+                </Texture>
+            </Layer>
             <Layer level="ARTWORK">
                 <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
                     <Size><AbsDimension x="256" y="64"/></Size>

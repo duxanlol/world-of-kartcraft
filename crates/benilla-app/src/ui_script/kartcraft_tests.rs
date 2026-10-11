@@ -981,3 +981,126 @@ fn key_bindings_lists_the_kart_s_controls_and_they_run() {
         .unwrap());
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
+
+/// The race banner is HUD text at LOW: it draws before every DIALOG window, and the windows' own
+/// ground (the 0.6-alpha dialog tile under a 0.7 dim) keeps it from reading through.
+#[test]
+fn the_race_banner_draws_under_the_kart_windows() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    s.fire_event(
+        "BENILLA_KART_RACE",
+        vec![
+            ScriptValue::Str("Road to Stormwind starts here".into()),
+            ScriptValue::Str(String::new()),
+        ],
+    );
+    s.tick(0.0);
+    for window in [
+        "BenillaKartGarageFrame",
+        "BenillaKartFinderFrame",
+        "BenillaKartSettingsFrame",
+    ] {
+        s.run(&format!("{window}:Show()")).unwrap();
+        s.tick(0.0);
+        s.resolve();
+        let list = s.extract();
+        let at = |pred: &dyn Fn(&benilla_ui::script::ExtractedQuad) -> bool| {
+            list.iter()
+                .position(pred)
+                .unwrap_or_else(|| panic!("{window}: an entry is not drawn"))
+        };
+        let banner = at(&|q| {
+            matches!(&q.content, benilla_ui::script::QuadContent::Text { text: Some(t), .. }
+                if t.starts_with("Road to Stormwind"))
+        });
+        let ground = at(&|q| {
+            matches!(q.content, benilla_ui::script::QuadContent::Frame)
+                && s.target_owner_name(q.target).as_deref() == Some(window)
+        });
+        assert!(
+            banner < ground,
+            "{window}: the banner draws before the window"
+        );
+        assert_eq!(
+            benilla_ui::order::unpack(list[banner].z).strata,
+            benilla_ui::order::Strata::Low.index()
+        );
+        // The dim: a colour texture over the window's backdrop, before its art.
+        let dim = at(&|q| {
+            matches!(
+                q.content,
+                benilla_ui::script::QuadContent::Texture {
+                    path: None,
+                    color: Some(_),
+                    ..
+                }
+            ) && s.target_owner_name(q.target).as_deref() == Some(window)
+        });
+        let benilla_ui::script::QuadContent::Texture { color: Some(c), .. } = list[dim].content
+        else {
+            unreachable!()
+        };
+        let a = f64::from(c[3]);
+        // 1 - (1 - 0.6) * (1 - a): the window's ground covers the HUD at 0.88.
+        assert!(1.0 - 0.4 * (1.0 - a) >= 0.88 - 1e-6, "{window}: ground {a}");
+        s.run(&format!("{window}:Hide()")).unwrap();
+    }
+}
+
+/// The game menu closes the kart windows as it closes any UISpecialFrames window, from ESC or the
+/// micro button (`UIParent.lua:1465-1497`), and while it holds the centre they do not open over
+/// it, as a stock panel does not (`UIParent.lua:654-656`).
+#[test]
+fn the_game_menu_closes_the_kart_windows_and_they_do_not_open_over_it() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let visible = |s: &UiScript, frame: &str| -> bool {
+        s.eval(&format!("return {frame}:IsVisible() == 1")).unwrap()
+    };
+
+    // ESC with the garage open closes the garage and stops there.
+    s.run("BenillaKartGarage_Toggle()").unwrap();
+    assert!(visible(&s, "BenillaKartGarageFrame"));
+    s.run("ToggleGameMenu()").unwrap();
+    assert!(
+        !visible(&s, "BenillaKartGarageFrame"),
+        "ESC closed the garage"
+    );
+    assert!(!visible(&s, "GameMenuFrame"), "…and did not open the menu");
+
+    // The micro button's click closes the finder and opens the menu.
+    s.run("BenillaKartFinder_Toggle()").unwrap();
+    assert!(visible(&s, "BenillaKartFinderFrame"));
+    s.run("ToggleGameMenu(1)").unwrap();
+    assert!(!visible(&s, "BenillaKartFinderFrame"));
+    assert!(visible(&s, "GameMenuFrame"));
+
+    // With the menu up, no binding, button or Race Marshal opens one over it.
+    s.run(
+        "BenillaKartGarage_Toggle() BenillaKartSettings_Toggle() BenillaKartFinder_Toggle() \
+         BenillaKartMinimapButton:Click()",
+    )
+    .unwrap();
+    from_server(&mut s, "R	Finder");
+    for window in [
+        "BenillaKartGarageFrame",
+        "BenillaKartSettingsFrame",
+        "BenillaKartFinderFrame",
+    ] {
+        assert!(!visible(&s, window), "{window} opened over the game menu");
+    }
+
+    // The menu's ESC closes it, and the garage opens again.
+    s.run("ToggleGameMenu()").unwrap();
+    assert!(!visible(&s, "GameMenuFrame"));
+    s.run("BenillaKartGarage_Toggle()").unwrap();
+    assert!(visible(&s, "BenillaKartGarageFrame"));
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
