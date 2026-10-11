@@ -1056,42 +1056,17 @@ fn checkpoint_arrow_meshes() -> (Mesh, Mesh) {
     (face, outline)
 }
 
-/// Which way, on screen, an arrow at `from` points to `to`: radians anticlockwise from screen
-/// right, for a camera with this `clip_from_world` and viewport aspect (width over height).
-/// `None` with `from` behind the camera. A `to` behind the camera is taken where the line to it
-/// leaves the view, so the arrow still turns the right way; one straight down the line of sight
-/// reads as straight on, up the screen.
-fn screen_angle(clip_from_world: Mat4, aspect: f32, from: Vec3, to: Vec3) -> Option<f32> {
-    const NEAR_W: f32 = 1e-3;
-    let a = clip_from_world * from.extend(1.0);
-    let mut b = clip_from_world * to.extend(1.0);
-    if a.w <= NEAR_W {
-        return None;
-    }
-    if b.w <= NEAR_W {
-        // Clip coordinates run linearly along the line: stop it just in front of the eye.
-        b = a + (b - a) * ((a.w - NEAR_W) / (a.w - b.w));
-    }
-    let (na, nb) = (a.xy() / a.w, b.xy() / b.w);
-    // NDC spans the width and the height alike: scale x by the aspect for screen pixels.
-    let d = Vec2::new((nb.x - na.x) * aspect, nb.y - na.y);
-    if d.length_squared() < 1e-12 {
-        return Some(std::f32::consts::FRAC_PI_2);
-    }
-    Some(d.y.atan2(d.x))
-}
-
-/// The projection the arrow's angle is read through, with aspect 1. A perspective's field of
-/// view and aspect scale screen pixels alike across and down, so the angle between two points
-/// does not depend on them: this square one stands in for the camera's own.
-fn angle_projection() -> Mat4 {
-    Mat4::perspective_infinite_reverse_rh(1.0, 1.0, 0.1)
-}
-
-/// The checkpoint arrow's rotation: square to the screen (the camera's own rotation), its +Y
-/// tip turned to `angle` on it (as [`screen_angle`] gives it).
-fn checkpoint_arrow_rotation(camera: Quat, angle: f32) -> Quat {
-    camera * Quat::from_rotation_z(angle - std::f32::consts::FRAC_PI_2)
+/// The checkpoint arrow's rotation: its +Y tip along the line from `from` to `to` in the world,
+/// so it can only point at the checkpoint after, and turned about that line so its face (+Z)
+/// looks as nearly at the eye as the line allows. Seen straight along the line it foreshortens,
+/// as any arrow pointing at or away from the viewer does; it never points anywhere else.
+fn checkpoint_arrow_rotation(from: Vec3, to: Vec3, eye: Vec3) -> Quat {
+    let tip = (to - from).try_normalize().unwrap_or(Vec3::Y);
+    let to_eye = eye - from;
+    let face = (to_eye - tip * to_eye.dot(tip))
+        .try_normalize()
+        .unwrap_or_else(|| tip.any_orthonormal_vector());
+    Quat::from_mat3(&Mat3::from_cols(tip.cross(face), tip, face))
 }
 
 /// The checkpoints that show an arrow and the checkpoint each points on to: the next one's, then
@@ -1171,9 +1146,8 @@ fn ground_at(collide: &WorldCollision, p: [f32; 2], fallback: f32) -> Vec3 {
 /// Stands a beam at each checkpoint of the race we are in, the next one bright, and floats an
 /// arrow in the next checkpoint and the one after, each pointing on to the checkpoint after it.
 ///
-/// The arrow is a flat 2D sign square to the screen, its tip turned to where the checkpoint after
-/// it lies on screen: a billboard reads the same from every side, where a level arrow goes thin
-/// edge-on and foreshortens to nothing seen from in front or behind.
+/// The arrow is a flat 2D sign whose tip lies along the line to the checkpoint after, turned about
+/// that line to face the camera: it always points the true way, and reads from every side.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn beams(
     mut commands: Commands,
@@ -1235,32 +1209,24 @@ pub(crate) fn beams(
         }
     }
 
-    // The arrows: placed through the camera, so none without one. An arrow not wanted is gone
-    // rather than hidden, and one wanted again is spawned where it goes. The camera is the one last
-    // propagated, a frame behind at most.
+    // The arrows: turned to face the camera, so none without one. An arrow not wanted is gone
+    // rather than hidden, and one wanted again is spawned where it goes.
     let legs = arrow_legs(race);
-    let view = camera.single().ok().map(|at| {
-        (
-            angle_projection() * at.to_matrix().inverse(),
-            1.0,
-            at.rotation(),
-        )
-    });
+    let eye = camera.single().ok().map(GlobalTransform::translation);
     let phase = std::f32::consts::TAU * CP_ARROW_HZ * time.elapsed_secs();
     let place = |slot: usize, fallback: f32| {
         let (i, on) = *legs.get(slot)?;
-        let (clip_from_world, aspect, rotation) = view?;
+        let eye = eye?;
         let ground = ground_at(&collide, race.points[i], fallback);
         let at = ground + Vec3::Y * CP_ARROW_HEIGHT;
         let to = ground_at(&collide, race.points[on], ground.y) + Vec3::Y * CP_ARROW_HEIGHT;
-        let angle = screen_angle(clip_from_world, aspect, at, to)?;
         let size = if slot == 0 {
             CP_ARROW_SIZE
         } else {
             CP_ARROW_SIZE * CP_ARROW_SECOND
         };
         let placed = Transform::from_translation(at + Vec3::Y * (CP_ARROW_BOB * phase.sin()))
-            .with_rotation(checkpoint_arrow_rotation(rotation, angle))
+            .with_rotation(checkpoint_arrow_rotation(at, to, eye))
             .with_scale(Vec3::splat(
                 size * (1.0 + CP_ARROW_PULSE * (2.0 * phase).sin()),
             ));
@@ -1682,70 +1648,34 @@ mod tests {
     }
 
     #[test]
-    fn the_checkpoint_arrow_turns_to_the_next_checkpoint_on_screen() {
-        use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
-        // A camera at the origin looking down −Z on a 16:9 screen.
-        let aspect = 16.0 / 9.0;
-        let clip = Mat4::perspective_rh(1.0, aspect, 0.1, 1000.0);
-        let bevy = Mat4::perspective_infinite_reverse_rh(1.0, aspect, 0.1);
-        let angle = |from: Vec3, to: Vec3| screen_angle(clip, aspect, from, to).unwrap();
-        let at = Vec3::new(0.0, 0.0, -50.0);
-        let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
-        assert!(close(angle(at, at + Vec3::X * 10.0), 0.0), "right");
-        assert!(close(angle(at, at - Vec3::X * 10.0), PI), "left");
-        assert!(close(angle(at, at + Vec3::Y * 10.0), FRAC_PI_2), "up");
-        // Square on screen, not in NDC: the aspect is undone.
-        assert!(close(angle(at, at + Vec3::new(10.0, 10.0, 0.0)), FRAC_PI_4));
-        // Straight on down the line of sight reads as up the screen.
-        assert!(close(angle(at, at * 2.0), FRAC_PI_2));
-        // Behind the camera off to the right still turns right, not flipped by the projection.
-        let back = angle(at, Vec3::new(30.0, 0.0, 20.0));
-        assert!(back.abs() < 1e-3, "{back}");
-        // Bevy's reversed-Z projection turns it the same.
-        let up = screen_angle(bevy, aspect, at, Vec3::new(0.0, 30.0, 20.0)).unwrap();
-        assert!(close(up, FRAC_PI_2), "{up}");
-        // An arrow behind the camera has no angle.
-        assert!(screen_angle(clip, aspect, -at, Vec3::ZERO).is_none());
-        // Through a turned and moved camera the same: the next checkpoint's side of the screen.
-        let cam =
-            Transform::from_xyz(5.0, 3.0, 8.0).looking_at(Vec3::new(40.0, 2.0, -30.0), Vec3::Y);
-        let clip_from_world = clip * cam.to_matrix().inverse();
-        let here = Vec3::new(40.0, 2.0, -30.0);
-        let right = here + cam.rotation * Vec3::X * 12.0;
-        let a = screen_angle(clip_from_world, aspect, here, right).unwrap();
-        assert!(a.abs() < 1e-3, "{a}");
-        // Any field of view and aspect turn it as the square stand-in does.
-        let view = cam.to_matrix().inverse();
+    fn the_checkpoint_arrow_points_along_the_line_to_the_next_and_faces_the_eye() {
         let pairs = [
-            (here, Vec3::new(10.0, 0.0, -80.0)),
-            (here, Vec3::new(-20.0, 15.0, 30.0)),
-            (Vec3::new(10.0, 1.0, -20.0), Vec3::new(60.0, 4.0, -25.0)),
+            (Vec3::new(0.0, 5.0, 0.0), Vec3::new(100.0, 5.0, 0.0)),
+            (Vec3::new(10.0, 5.0, -20.0), Vec3::new(-60.0, 12.0, 80.0)),
+            (Vec3::new(-5.0, 2.0, 7.0), Vec3::new(-5.0, 30.0, 7.5)),
         ];
-        for (fov, aspect) in [(0.6f32, 4.0 / 3.0), (1.2, 21.0 / 9.0), (0.9, 0.5)] {
-            let theirs = Mat4::perspective_infinite_reverse_rh(fov, aspect, 0.1) * view;
-            for (from, to) in pairs {
-                let want = screen_angle(theirs, aspect, from, to).unwrap();
-                let got = screen_angle(angle_projection() * view, 1.0, from, to).unwrap();
-                assert!(close(want, got), "{fov} {aspect}: {want} {got}");
+        let eyes = [
+            Vec3::new(0.0, 10.0, 50.0),
+            Vec3::new(-80.0, 3.0, -10.0),
+            Vec3::new(200.0, 40.0, 0.0),
+            Vec3::new(30.0, -5.0, 90.0),
+        ];
+        for (from, to) in pairs {
+            let want = (to - from).normalize();
+            for eye in eyes {
+                let r = checkpoint_arrow_rotation(from, to, eye);
+                // The tip is the true direction, wherever the eye is.
+                assert!((r * Vec3::Y).abs_diff_eq(want, 1e-4), "{from} {to} {eye}");
+                // The face is square to the line and turned towards the eye.
+                let face = r * Vec3::Z;
+                assert!(face.dot(want).abs() < 1e-4);
+                assert!(face.dot(eye - from) >= 0.0, "{from} {to} {eye}");
+                assert!(r.is_normalized());
             }
         }
-    }
-
-    #[test]
-    fn the_checkpoint_arrow_tip_lies_along_its_screen_angle_square_to_the_screen() {
-        let cam = Transform::from_xyz(0.0, 4.0, 0.0)
-            .looking_at(Vec3::new(30.0, 0.0, -40.0), Vec3::Y)
-            .rotation;
-        for angle in [0.0f32, 0.7, 2.0, -1.2, 3.1] {
-            let r = checkpoint_arrow_rotation(cam, angle);
-            let tip = cam.inverse() * (r * Vec3::Y);
-            assert!(
-                tip.abs_diff_eq(Vec3::new(angle.cos(), angle.sin(), 0.0), 1e-5),
-                "{angle}: {tip}"
-            );
-            // Its face looks back at the camera.
-            assert!((cam.inverse() * (r * Vec3::Z)).abs_diff_eq(Vec3::Z, 1e-5));
-        }
+        // An eye straight down the line still gives a proper rotation along it.
+        let r = checkpoint_arrow_rotation(Vec3::ZERO, Vec3::X, Vec3::X * 50.0);
+        assert!((r * Vec3::Y).abs_diff_eq(Vec3::X, 1e-4) && r.is_normalized());
     }
 
     #[test]
