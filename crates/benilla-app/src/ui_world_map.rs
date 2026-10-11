@@ -355,6 +355,8 @@ struct LandmarkKey {
     /// The guard-directions marker `(continent, pos, icon)`, the position as raw `f32` bits: it is
     /// copied from the packet, so a bit compare is exact.
     marker: Option<(u32, [u32; 3], u32)>,
+    /// The Race Marshals shown ([`crate::kart::marshals`]).
+    marshals: bool,
 }
 
 impl LandmarkKey {
@@ -365,11 +367,13 @@ impl LandmarkKey {
         states: u64,
         explored: &[u32],
         marker: Option<(u32, [u32; 3], u32)>,
+        marshals: bool,
     ) -> bool {
         self.selection == selection
             && self.map == map
             && self.states == states
             && self.marker == marker
+            && self.marshals == marshals
             && self.explored == explored
     }
 }
@@ -558,7 +562,11 @@ fn feed_world_map(
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     areas: Option<Res<crate::area::AreaTableRes>>,
     death_net: Res<crate::death::DeathNet>,
-    poi_marker: Res<crate::poi_marker::PoiMarker>,
+    // The guard's directions and the Race Marshals, the landmarks the DBC rows do not hold.
+    (poi_marker, marshals): (
+        Res<crate::poi_marker::PoiMarker>,
+        Res<crate::kart::marshals::RaceMarshals>,
+    ),
     group: Res<crate::ui_party::GroupState>,
     guids: Res<crate::net::GuidIndex>,
     unit_pos: Query<&GlobalTransform, With<crate::net::NetEntity>>,
@@ -630,6 +638,7 @@ fn feed_world_map(
     });
 
     // The landmarks (`GetNumMapLandmarks`), rebuilt only when a `LandmarkKey` input moves.
+    let shown = marshals.shown;
     let marker = poi_marker
         .on_map(map.0)
         .map(|m| (m.continent_id, m.pos.map(f32::to_bits), m.icon));
@@ -638,7 +647,7 @@ fn feed_world_map(
         .get(&script)
         .landmarks
         .as_ref()
-        .is_some_and(|k| k.matches(selection, map.0, states_gen, &explored, marker));
+        .is_some_and(|k| k.matches(selection, map.0, states_gen, &explored, marker, shown));
     if !unchanged {
         let level = MapLevel::of(selection);
         let mut landmarks = Vec::new();
@@ -663,6 +672,20 @@ fn feed_world_map(
                 });
             }
         }
+        // Kartcraft's Race Marshals after the DBC rows: no exploration gate, as a course's start
+        // is worth finding unexplored.
+        for poi in marshals.on_map(map.0) {
+            if let Some(uv) = project(poi.continent_id, poi.pos[0], poi.pos[1]) {
+                if !is_degenerate(uv) {
+                    landmarks.push(WorldMapLandmarkView {
+                        name: poi.name.clone(),
+                        description: poi.description.clone(),
+                        texture_index: poi.icon,
+                        uv,
+                    });
+                }
+            }
+        }
         // Then the guard-directions marker, last (`0x4a69c7`): no gate and no icon substitution,
         // only the degenerate-projection test.
         if let Some(poi) = poi_marker.on_map(map.0) {
@@ -683,6 +706,7 @@ fn feed_world_map(
             states: states_gen,
             explored: explored.clone(),
             marker,
+            marshals: shown,
         });
         script.set_world_map_landmarks(landmarks);
     }
