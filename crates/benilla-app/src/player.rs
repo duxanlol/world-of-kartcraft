@@ -236,8 +236,9 @@ impl Plugin for PlayerPlugin {
                 (
                     view_subject::publish_view_subject,
                     // The spyglass zoom (aura 76), before `control`, which reads it to hold the
-                    // rig in first person.
-                    scoped_view::apply_scoped_view,
+                    // rig in first person; after the kart's drive, whose chase camera's field of
+                    // view it applies.
+                    scoped_view::apply_scoped_view.after(crate::kart::KartDriveSet),
                 )
                     .in_set(WorldStage::Input)
                     .before(control)

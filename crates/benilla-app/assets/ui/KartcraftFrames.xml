@@ -3,7 +3,8 @@
         World of Kartcraft's windows, in the stock widgets and fonts: a minimap button as an
         addon's is (a click opens the Race Finder, a right-click its menu), the Race Finder
         (/racefinder), its ready check as a stock popup, the race's banner, results and chain score
-        at the top of the screen, and the settings window (/kartcraft).
+        at the top of the screen, the settings window (/kartcraft) and its camera window
+        (/kartcam).
 
         The finder is a plain addon over the addon channel, as a 1.12 group-finder addon is: it
         sends the server's verbs with SendAddonMessage ("KARTCRAFT", "R\t<verb>...") and reads its
@@ -1064,6 +1065,7 @@
             end
             table.insert(entries, { text = "Kart garage...", func = BenillaKartGarage_Toggle })
             table.insert(entries, { text = "Kartcraft settings...", func = BenillaKartSettings_Toggle })
+            table.insert(entries, { text = "Kart camera...", func = BenillaKartCamera_Toggle })
             table.insert(entries, { text = "Hide minimap button", func = BenillaKartMinimap_Hide })
             for i = 1, table.getn(entries) do
                 if not entries[i].checkable then entries[i].notCheckable = 1 end
@@ -1158,6 +1160,228 @@
             BenillaKartArrowMover.reopen = 1
             BenillaKartSettingsFrame:Hide()
             BenillaKartArrowMover:Show()
+        end
+
+        -- ── The camera window: every number that shapes the chase camera, a CVar each ──
+
+        -- The kart's level units (CTR's) in a yard, to show lengths in yards.
+        BENILLA_KART_LU_PER_YARD = 36.576
+
+        -- Each slider: its frame's suffix, its CVar, its label, its range and step (the host
+        -- clamps to the same range, kart/settings.rs), the decimals it writes and how it reads.
+        BENILLA_KART_CAMERA_SLIDERS = {
+            { "Distance", "KartCamDistance", "Distance at speed", 64, 640, 1, 0, "yd" },
+            { "SlowDistance", "KartCamSlowDistance", "Distance when slow", 64, 640, 1, 0, "yd" },
+            { "Height", "KartCamHeight", "Height", 0, 256, 1, 0, "yd" },
+            { "Pitch", "KartCamPitch", "Camera angle (looks down by)", -10, 45, 0.25, 2, "deg" },
+            { "LookHeight", "KartCamLookHeight", "Look-at height", 0, 256, 1, 0, "yd" },
+            { "LookAhead", "KartCamLookAhead", "Look ahead", 0, 160, 1, 0, "yd" },
+            { "AimDrop", "KartCamAimDrop", "Aim lower", 0, 160, 1, 0, "yd" },
+            { "Fov", "KartCamFov", "Field of view", 30, 110, 1, 2, "deg" },
+            { "SideOffset", "KartCamSideOffset", "Side offset", -128, 128, 1, 0, "side" },
+            { "FarExtra", "KartCamFarExtra", "Far camera: further back by", 0, 320, 1, 0, "yd" },
+            { "Follow", "KartCamFollow", "Following travel: turn with the kart", 0, 1, 0.05, 2, "pct" },
+            { "Swing", "KartCamSwing", "Powerslide swing", 0, 1, 0.05, 2, "pct" },
+            { "TurnSmoothing", "KartCamTurnSmoothing", "Turn smoothing", 0, 1, 0.002, 3, "s" },
+            { "YawOffset", "KartCamYawOffset", "Angle round the kart", -180, 180, 1, 2, "orbit" },
+            { "Tilt", "KartCamTilt", "Tilt with slopes", 0, 1, 0.05, 2, "pct" },
+            { "TiltSmoothing", "KartCamTiltSmoothing", "Tilt smoothing", 0, 1.5, 0.002, 3, "s" },
+            { "Clearance", "KartCamClearance", "Least height over the ground", 0, 192, 1, 0, "yd" },
+            { "Bank", "KartCamBank", "Bank with the ground", 0, 1, 0.05, 2, "pct" },
+            { "Turbo", "KartCamTurbo", "Turbo push-back", 0, 192, 1, 0, "yd" },
+        }
+
+        -- Its switches: suffix, CVar, label.
+        BENILLA_KART_CAMERA_BOXES = {
+            { "ChaseCamera", "KartChaseCamera", "CTR chase camera (off: your WoW camera)" },
+            { "FarCamera", "KartFarCamera", "Far camera (off: near)" },
+            { "Travel", "KartCamTravel", "Follow the direction of travel (off: the kart, as CTR)" },
+            { "WallPull", "KartCamWallPull", "Pull in short of walls" },
+        }
+
+        -- A preset: `base`'s values with `changes` over them.
+        function BenillaKartCamera_Preset(key, text, base, changes)
+            local values = {}
+            for cvar, value in pairs(base or {}) do values[cvar] = value end
+            for cvar, value in pairs(changes) do values[cvar] = value end
+            return { key = key, text = text, values = values }
+        end
+
+        -- The presets, kartcraft::camera::CameraTuning's KARTCRAFT (the CVars' defaults), SMOOTH
+        -- and CTR as the camera CVars' values.
+        BENILLA_KART_CAMERA_PRESETS = {}
+        do
+            local kartcraft = BenillaKartCamera_Preset("kartcraft", "Kartcraft", nil, {
+                KartCamDistance = "224", KartCamSlowDistance = "179", KartCamHeight = "64",
+                KartCamLookHeight = "112", KartCamPitch = "8.7890625", KartCamLookAhead = "32",
+                KartCamClearance = "64", KartCamFarExtra = "64", KartCamFov = "45",
+                KartCamAimDrop = "70", KartCamSwing = "1", KartCamTravel = "0",
+                KartCamFollow = "0.35", KartCamTurnSmoothing = "0", KartCamYawOffset = "0",
+                KartCamSideOffset = "0", KartCamTilt = "1", KartCamTiltSmoothing = "0.316",
+                KartCamBank = "0.5", KartCamTurbo = "96", KartCamWallPull = "1",
+            })
+            BENILLA_KART_CAMERA_PRESETS = {
+                kartcraft,
+                BenillaKartCamera_Preset("smooth", "Smooth follow", kartcraft.values, {
+                    KartCamTravel = "1", KartCamTurnSmoothing = "0.116",
+                }),
+                BenillaKartCamera_Preset("ctr", "CTR classic", kartcraft.values, {
+                    KartCamFov = "73.74", KartCamAimDrop = "0", KartCamTilt = "0",
+                    KartCamWallPull = "0",
+                }),
+            }
+        end
+
+        function BenillaKartCamera_Toggle()
+            if BenillaKartCameraFrame:IsVisible() then
+                BenillaKartCameraFrame:Hide()
+            else
+                BenillaKart_Open(BenillaKartCameraFrame)
+            end
+        end
+
+        function BenillaKartCamera_Number(cvar)
+            return tonumber(GetCVar(cvar)) or 0
+        end
+
+        -- A value as it reads: lengths in yards, angles in degrees, shares in percent.
+        function BenillaKartCamera_Format(unit, v)
+            if unit == "yd" then
+                return format("%.1f yd", v / BENILLA_KART_LU_PER_YARD)
+            elseif unit == "deg" then
+                return format("%.1f\194\176", v)
+            elseif unit == "pct" then
+                return format("%d%%", floor(v * 100 + 0.5))
+            elseif unit == "s" then
+                if v <= 0 then return "none" end
+                return format("%.2f s", v)
+            elseif unit == "side" then
+                if v == 0 then return "none" end
+                local yd = format("%.1f yd", math.abs(v) / BENILLA_KART_LU_PER_YARD)
+                if v > 0 then return yd .. " right" end
+                return yd .. " left"
+            elseif unit == "orbit" then
+                if v == 0 then return "behind" end
+                if v > 0 then return format("%d\194\176 right", floor(v + 0.5)) end
+                return format("%d\194\176 left", floor(-v + 0.5))
+            end
+            return tostring(v)
+        end
+
+        -- A slider's label with its CVar's value.
+        function BenillaKartCamera_Label(slider)
+            local s = slider.knob
+            getglobal(slider:GetName() .. "Text"):SetText(s[3] .. ": " ..
+                BenillaKartCamera_Format(s[8], BenillaKartCamera_Number(s[2])))
+        end
+
+        -- The preset the CVars are, nil for Custom.
+        function BenillaKartCamera_PresetOf()
+            for i = 1, table.getn(BENILLA_KART_CAMERA_PRESETS) do
+                local preset = BENILLA_KART_CAMERA_PRESETS[i]
+                local same = 1
+                for cvar, value in pairs(preset.values) do
+                    if math.abs(BenillaKartCamera_Number(cvar) - tonumber(value)) > 0.0001 then
+                        same = nil
+                    end
+                end
+                if same then return preset end
+            end
+        end
+
+        function BenillaKartCamera_ShowPreset()
+            local preset = BenillaKartCamera_PresetOf()
+            local dd = BenillaKartCameraFramePreset
+            dd.selectedValue = preset and preset.key or "custom"
+            UIDropDownMenu_SetText(preset and preset.text or "Custom", dd)
+        end
+
+        -- Every camera CVar to a preset's value.
+        function BenillaKartCamera_Apply(key)
+            for i = 1, table.getn(BENILLA_KART_CAMERA_PRESETS) do
+                local preset = BENILLA_KART_CAMERA_PRESETS[i]
+                if preset.key == key then
+                    for cvar, value in pairs(preset.values) do
+                        if GetCVar(cvar) ~= value then SetCVar(cvar, value) end
+                    end
+                end
+            end
+            if BenillaKartCameraFrame:IsVisible() then BenillaKartCamera_Refresh() end
+        end
+
+        -- The preset dropdown's list: the presets, and Custom, which only says the values are
+        -- none of them.
+        function BenillaKartCamera_PresetMenu()
+            local current = BenillaKartCamera_PresetOf()
+            for i = 1, table.getn(BENILLA_KART_CAMERA_PRESETS) do
+                local preset = BENILLA_KART_CAMERA_PRESETS[i]
+                local info = {}
+                info.text = preset.text
+                info.value = preset.key
+                info.func = BenillaKartCamera_PresetClick
+                if current == preset then info.checked = 1 end
+                UIDropDownMenu_AddButton(info)
+            end
+            local info = {}
+            info.text = "Custom"
+            info.value = "custom"
+            info.disabled = 1
+            if not current then info.checked = 1 end
+            UIDropDownMenu_AddButton(info)
+        end
+
+        -- `this` is the list button.
+        function BenillaKartCamera_PresetClick()
+            BenillaKartCamera_Apply(this.value)
+        end
+
+        -- The controls from the CVars; `refreshing` keeps a slider's echo from writing back.
+        function BenillaKartCamera_Refresh()
+            local frame = BenillaKartCameraFrame
+            frame.refreshing = 1
+            for i = 1, table.getn(BENILLA_KART_CAMERA_SLIDERS) do
+                local s = BENILLA_KART_CAMERA_SLIDERS[i]
+                local slider = getglobal(frame:GetName() .. s[1])
+                slider:SetValue(BenillaKartCamera_Number(s[2]))
+                BenillaKartCamera_Label(slider)
+            end
+            for i = 1, table.getn(BENILLA_KART_CAMERA_BOXES) do
+                local b = BENILLA_KART_CAMERA_BOXES[i]
+                getglobal(frame:GetName() .. b[1]):SetChecked(BenillaKart_Flag(b[2]))
+            end
+            frame.refreshing = nil
+            BenillaKartCamera_ShowPreset()
+        end
+
+        -- A slider moved: its CVar, at once, so the camera changes while driving.
+        function BenillaKartCamera_Slide(slider)
+            local s = slider.knob
+            if not s or BenillaKartCameraFrame.refreshing then return end
+            BenillaKartSettings_Set(s[2], slider:GetValue(), s[7])
+            BenillaKartCamera_Label(slider)
+            BenillaKartCamera_ShowPreset()
+        end
+
+        -- Each slider's range, ends and label, and each box's CVar and label, set without
+        -- writing a CVar.
+        function BenillaKartCamera_Setup(frame)
+            frame.refreshing = 1
+            for i = 1, table.getn(BENILLA_KART_CAMERA_SLIDERS) do
+                local s = BENILLA_KART_CAMERA_SLIDERS[i]
+                local slider = getglobal(frame:GetName() .. s[1])
+                slider:SetMinMaxValues(s[4], s[5])
+                slider:SetValueStep(s[6])
+                getglobal(slider:GetName() .. "Low"):SetText(BenillaKartCamera_Format(s[8], s[4]))
+                getglobal(slider:GetName() .. "High"):SetText(BenillaKartCamera_Format(s[8], s[5]))
+                slider.knob = s
+            end
+            for i = 1, table.getn(BENILLA_KART_CAMERA_BOXES) do
+                local b = BENILLA_KART_CAMERA_BOXES[i]
+                local box = getglobal(frame:GetName() .. b[1])
+                box.cvar = b[2]
+                getglobal(box:GetName() .. "Text"):SetText(b[3])
+            end
+            frame.refreshing = nil
         end
 
         -- ── The guide arrow's box: dragged where the arrow goes, the wheel sizes it ──
@@ -1395,6 +1619,8 @@
             SlashCmdList["BENILLA_LEAVERACE"] = function() BenillaKart_LeaveRace() end
             SLASH_BENILLA_KARTCRAFT1 = "/kartcraft"
             SlashCmdList["BENILLA_KARTCRAFT"] = function() BenillaKartSettings_Toggle() end
+            SLASH_BENILLA_KARTCAM1 = "/kartcam"
+            SlashCmdList["BENILLA_KARTCAM"] = function() BenillaKartCamera_Toggle() end
             SLASH_BENILLA_TRACKS1 = "/tracks"
             SlashCmdList["BENILLA_TRACKS"] = function() BenillaKartTrackBrowser_Toggle() end
             SLASH_BENILLA_UNSTUCK1 = "/unstuck"
@@ -1701,6 +1927,11 @@
             <CheckButton name="$parentFarCamera" inherits="BenillaKartSettingsCheckTemplate">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-210"/></Offset></Anchor></Anchors>
             </CheckButton>
+            <Button name="$parentCamera" inherits="UIPanelButtonTemplate" text="Camera...">
+                <Size><AbsDimension x="100" y="22"/></Size>
+                <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-162"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartCamera_Toggle()</OnClick></Scripts>
+            </Button>
             <CheckButton name="$parentMusic" inherits="BenillaKartSettingsCheckTemplate">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-264"/></Offset></Anchor></Anchors>
             </CheckButton>
@@ -1747,6 +1978,182 @@
             <OnShow>
                 PlaySound("igMainMenuOpen")
                 BenillaKartSettings_Refresh()
+            </OnShow>
+            <OnHide>PlaySound("igMainMenuClose")</OnHide>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+
+    <CheckButton name="BenillaKartCameraCheckTemplate" inherits="OptionsCheckButtonTemplate" virtual="true">
+        <Scripts>
+            <OnClick>
+                BenillaKartSettings_Check(this, this.cvar)
+                BenillaKartCamera_ShowPreset()
+            </OnClick>
+        </Scripts>
+    </CheckButton>
+
+    <Slider name="BenillaKartCameraSliderTemplate" inherits="OptionsSliderTemplate" virtual="true">
+        <Size><AbsDimension x="250" y="17"/></Size>
+        <Scripts>
+            <OnValueChanged>BenillaKartCamera_Slide(this)</OnValueChanged>
+        </Scripts>
+    </Slider>
+
+    <!-- The camera window (/kartcam): a preset, then every number that shapes the chase camera
+         as a slider, grouped as where it stands, how it turns, how it meets hills and what moves
+         it, each a CVar set as it moves so the camera changes while driving. -->
+    <Frame name="BenillaKartCameraFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
+        <Size><AbsDimension x="600" y="610"/></Size>
+        <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="20"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
+            <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
+            <TileSize><AbsValue val="32"/></TileSize>
+            <EdgeSize><AbsValue val="32"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="BACKGROUND">
+                <!-- The dialog tile is 0.6 alpha (UI-DialogBox-Background): with this 0.7 under it
+                     the window is 0.88 opaque, as BenillaOptionsFrame, so the HUD below it (the
+                     race banner, LOW) does not read through. Inset 15, inside the border's ink. -->
+                <Texture name="$parentGroundDim">
+                    <Anchors>
+                        <Anchor point="TOPLEFT"><Offset><AbsDimension x="15" y="-15"/></Offset></Anchor>
+                        <Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-15" y="15"/></Offset></Anchor>
+                    </Anchors>
+                    <Color r="0" g="0" b="0" a="0.7"/>
+                </Texture>
+            </Layer>
+            <Layer level="ARTWORK">
+                <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
+                    <Size><AbsDimension x="256" y="64"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
+                </Texture>
+                <FontString inherits="GameFontNormal" text="Kart Camera">
+                    <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentPresetTitle" inherits="GameFontNormal" text="Preset">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-42"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentPositionTitle" inherits="GameFontNormal" text="Position">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-92"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentTurningTitle" inherits="GameFontNormal" text="Turning">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="316" y="-92"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentHillsTitle" inherits="GameFontNormal" text="Hills">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="316" y="-302"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentEffectsTitle" inherits="GameFontNormal" text="Effects">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="316" y="-442"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <Frame name="$parentPreset" inherits="UIDropDownMenuTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="68" y="-34"/></Offset></Anchor></Anchors>
+            </Frame>
+            <CheckButton name="$parentChaseCamera" inherits="BenillaKartCameraCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="310" y="-32"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentFarCamera" inherits="BenillaKartCameraCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="310" y="-58"/></Offset></Anchor></Anchors>
+            </CheckButton>
+
+            <!-- Position: where the eye stands and where it looks. -->
+            <Slider name="$parentDistance" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="34" y="-122"/></Offset></Anchor></Anchors>
+            </Slider>
+            <Slider name="$parentSlowDistance" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="34" y="-162"/></Offset></Anchor></Anchors>
+            </Slider>
+            <Slider name="$parentHeight" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="34" y="-202"/></Offset></Anchor></Anchors>
+            </Slider>
+            <Slider name="$parentPitch" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="34" y="-242"/></Offset></Anchor></Anchors>
+            </Slider>
+            <Slider name="$parentLookHeight" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="34" y="-282"/></Offset></Anchor></Anchors>
+            </Slider>
+            <Slider name="$parentLookAhead" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="34" y="-322"/></Offset></Anchor></Anchors>
+            </Slider>
+            <Slider name="$parentAimDrop" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="34" y="-362"/></Offset></Anchor></Anchors>
+            </Slider>
+            <Slider name="$parentFov" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="34" y="-402"/></Offset></Anchor></Anchors>
+            </Slider>
+            <Slider name="$parentSideOffset" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="34" y="-442"/></Offset></Anchor></Anchors>
+            </Slider>
+            <Slider name="$parentFarExtra" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="34" y="-482"/></Offset></Anchor></Anchors>
+            </Slider>
+
+            <!-- Turning: what the eye follows, and how quickly. -->
+            <CheckButton name="$parentTravel" inherits="BenillaKartCameraCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="310" y="-104"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <Slider name="$parentFollow" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="326" y="-152"/></Offset></Anchor></Anchors>
+            </Slider>
+            <Slider name="$parentSwing" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="326" y="-192"/></Offset></Anchor></Anchors>
+            </Slider>
+            <Slider name="$parentTurnSmoothing" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="326" y="-232"/></Offset></Anchor></Anchors>
+            </Slider>
+            <Slider name="$parentYawOffset" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="326" y="-272"/></Offset></Anchor></Anchors>
+            </Slider>
+
+            <!-- Hills: the tilt with the ground's grade, and the ground clearance. -->
+            <Slider name="$parentTilt" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="326" y="-332"/></Offset></Anchor></Anchors>
+            </Slider>
+            <Slider name="$parentTiltSmoothing" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="326" y="-372"/></Offset></Anchor></Anchors>
+            </Slider>
+            <Slider name="$parentClearance" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="326" y="-412"/></Offset></Anchor></Anchors>
+            </Slider>
+
+            <!-- Effects: the bank, the turbo's push-back, the walls. -->
+            <Slider name="$parentBank" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="326" y="-472"/></Offset></Anchor></Anchors>
+            </Slider>
+            <Slider name="$parentTurbo" inherits="BenillaKartCameraSliderTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="326" y="-512"/></Offset></Anchor></Anchors>
+            </Slider>
+            <CheckButton name="$parentWallPull" inherits="BenillaKartCameraCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="310" y="-536"/></Offset></Anchor></Anchors>
+            </CheckButton>
+
+            <Button name="$parentReset" inherits="UIPanelButtonTemplate" text="Reset to Kartcraft">
+                <Size><AbsDimension x="160" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="18"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartCamera_Apply("kartcraft")</OnClick></Scripts>
+            </Button>
+            <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-24" y="18"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartCameraFrame:Hide()</OnClick></Scripts>
+            </Button>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                BenillaKartCamera_Setup(this)
+                UIDropDownMenu_SetWidth(130, BenillaKartCameraFramePreset)
+                UIDropDownMenu_Initialize(BenillaKartCameraFramePreset, BenillaKartCamera_PresetMenu)
+                if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
+                BenillaKart_Movable(this)
+            </OnLoad>
+            <OnShow>
+                PlaySound("igMainMenuOpen")
+                BenillaKartCamera_Refresh()
             </OnShow>
             <OnHide>PlaySound("igMainMenuClose")</OnHide>
             <OnDragStart>this:StartMoving()</OnDragStart>

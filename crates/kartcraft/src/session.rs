@@ -45,6 +45,8 @@ pub struct KartView {
     pub speed: f32,
     /// The chase camera, Bevy world.
     pub camera: Option<Transform>,
+    /// The chase camera's vertical field of view, radians.
+    pub fov: f32,
     /// Front-wheel steer, −1 (right) to 1 (left).
     pub steer: f32,
     /// The wheels' roll, radians.
@@ -218,7 +220,7 @@ impl Session {
         self.kart = Some(kart);
         self.world = Some(Arc::new(world));
         self.owed = 0.0;
-        self.camera = Default::default();
+        self.camera.reset();
         self.last_ground = None;
         self.falling = 0.0;
         self.shots = None;
@@ -231,7 +233,7 @@ impl Session {
         self.world = None;
         self.previous = None;
         self.current = None;
-        self.camera = Default::default();
+        self.camera.reset();
         self.last_ground = None;
         self.falling = 0.0;
         self.shots = None;
@@ -253,6 +255,11 @@ impl Session {
     pub fn set_camera(&mut self, far: bool, look_back: bool) {
         self.camera.far = far;
         self.camera.look_back = look_back;
+    }
+
+    /// What shapes the chase camera from the next tick on ([`crate::camera::CameraTuning`]).
+    pub fn tune_camera(&mut self, tuning: crate::camera::CameraTuning) {
+        self.camera.tuning = tuning;
     }
 
     /// How far into the next tick the drawn frame is, 0 to 1, for drawing between ticks.
@@ -383,7 +390,7 @@ impl Session {
         let chase = self.shots.map(|(a, b)| {
             let eye = from_lu(a.eye.lerp(b.eye, t), origin);
             let look = from_lu(
-                a.look.lerp(b.look, t) - Vec3::Y * crate::framing().look_drop,
+                a.look.lerp(b.look, t) - Vec3::Y * self.camera.tuning.aim_drop,
                 origin,
             );
             let roll = a.roll + (b.roll - a.roll) * t;
@@ -405,6 +412,7 @@ impl Session {
             yaw: yaw_of(current.heading),
             speed: Vec3::new(velocity.x, 0.0, velocity.z).length(),
             camera: chase,
+            fov: self.camera.tuning.fov_radians(),
             steer: current.steer,
             wheel_spin: self.wheel_spin,
             grounded: current.grounded,

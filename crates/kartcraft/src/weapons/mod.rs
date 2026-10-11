@@ -196,6 +196,8 @@ pub struct Weapons {
     pub blend: f32,
     /// The camera we drive with, for the missile's lock-on.
     pub camera: Option<Transform>,
+    /// Its vertical field of view, radians; 0 is CTR's ([`crate::camera::FOV_Y`]).
+    pub camera_fov: f32,
     field: Field,
     held: Held,
     /// The server's Wumpa total, and the count the HUD has credited so far.
@@ -1013,7 +1015,12 @@ impl Weapons {
     pub fn lock_on(&self) -> Option<KartId> {
         let cam = self.camera?;
         let to_view = cam.compute_affine().inverse();
-        let tan_y = (crate::camera::FOV_Y * 0.5).tan() * 0.9;
+        let fov = if self.camera_fov > 0.0 {
+            self.camera_fov
+        } else {
+            crate::camera::FOV_Y
+        };
+        let tan_y = (fov * 0.5).tan() * 0.9;
         let tan_x = tan_y * 16.0 / 9.0;
         self.others
             .iter()

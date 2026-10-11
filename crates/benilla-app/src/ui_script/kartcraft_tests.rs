@@ -638,6 +638,7 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
             "Unstuck",
             "Kart garage...",
             "Kartcraft settings...",
+            "Kart camera...",
             "Hide minimap button",
         ]
     );
@@ -808,6 +809,200 @@ fn the_settings_window_sets_the_kart_s_cvars() {
     ] {
         assert_eq!(s.cvar(name).as_deref(), Some(value), "{name}");
     }
+}
+
+/// The chase camera's tuning as the VM's camera CVars say, read as the host reads them.
+fn camera_tuning(s: &UiScript) -> kartcraft::camera::CameraTuning {
+    use crate::kart::settings::{camera_field, CAMERA_KNOBS};
+    let value = |name: &str| s.cvar(name).unwrap_or_else(|| panic!("{name} is a CVar"));
+    let mut t = kartcraft::camera::CameraTuning::default();
+    for k in &CAMERA_KNOBS {
+        *camera_field(&mut t, k.cvar).unwrap() = value(k.cvar).parse().unwrap();
+    }
+    t.travel = value("KartCamTravel") != "0";
+    t.wall_pull = value("KartCamWallPull") != "0";
+    t
+}
+
+#[test]
+fn the_camera_window_tunes_the_chase_camera() {
+    use kartcraft::camera::CameraTuning;
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    s.take_cvar_changes();
+    let shown = |s: &UiScript| -> bool {
+        s.eval("return BenillaKartCameraFrame:IsVisible() == 1")
+            .unwrap()
+    };
+    let preset = |s: &UiScript| -> String {
+        s.eval("return BenillaKartCameraFramePresetText:GetText()")
+            .unwrap()
+    };
+    let label = |s: &UiScript, name: &str| -> String {
+        s.eval(&format!(
+            "return BenillaKartCameraFrame{name}Text:GetText()"
+        ))
+        .unwrap()
+    };
+
+    // /kartcam opens it at the CVars' values, Kartcraft's, and opening it writes nothing.
+    assert_eq!(
+        s.eval::<String>("return SLASH_BENILLA_KARTCAM1").unwrap(),
+        "/kartcam"
+    );
+    s.run("SlashCmdList['BENILLA_KARTCAM']('')").unwrap();
+    s.tick(0.0);
+    assert!(shown(&s));
+    assert_eq!(preset(&s), "Kartcraft");
+    assert_eq!(camera_tuning(&s), CameraTuning::KARTCRAFT);
+    assert_eq!(label(&s, "Distance"), "Distance at speed: 6.1 yd");
+    assert_eq!(label(&s, "Fov"), "Field of view: 45.0\u{b0}");
+    assert_eq!(label(&s, "Swing"), "Powerslide swing: 100%");
+    assert_eq!(label(&s, "TurnSmoothing"), "Turn smoothing: none");
+    assert_eq!(label(&s, "YawOffset"), "Angle round the kart: behind");
+    assert_eq!(
+        s.eval::<f64>("return BenillaKartCameraFrameDistance:GetValue()")
+            .unwrap(),
+        224.0
+    );
+    for (name, on) in [
+        ("ChaseCamera", true),
+        ("FarCamera", false),
+        ("Travel", false),
+        ("WallPull", true),
+    ] {
+        assert_eq!(
+            s.eval::<bool>(&format!(
+                "return BenillaKartCameraFrame{name}:GetChecked() == 1"
+            ))
+            .unwrap(),
+            on,
+            "{name}"
+        );
+    }
+    assert!(
+        s.take_cvar_changes().is_empty(),
+        "showing the window wrote a CVar"
+    );
+    // Each slider spans the range the host clamps to.
+    let ranges: Vec<(String, f64, f64)> = s
+        .eval::<String>(
+            "local out = '' \
+             for i = 1, table.getn(BENILLA_KART_CAMERA_SLIDERS) do \
+               local k = BENILLA_KART_CAMERA_SLIDERS[i] \
+               local lo, hi = getglobal('BenillaKartCameraFrame' .. k[1]):GetMinMaxValues() \
+               out = out .. k[2] .. ' ' .. lo .. ' ' .. hi .. '\\n' \
+             end return out",
+        )
+        .unwrap()
+        .lines()
+        .map(|line| {
+            let f: Vec<&str> = line.split(' ').collect();
+            (
+                f[0].to_string(),
+                f[1].parse().unwrap(),
+                f[2].parse().unwrap(),
+            )
+        })
+        .collect();
+    let knobs = &crate::kart::settings::CAMERA_KNOBS;
+    assert_eq!(ranges.len(), knobs.len());
+    for k in knobs {
+        let (_, lo, hi) = ranges
+            .iter()
+            .find(|r| r.0 == k.cvar)
+            .unwrap_or_else(|| panic!("{} has no slider", k.cvar));
+        assert_eq!((*lo as f32, *hi as f32), (k.min, k.max), "{}", k.cvar);
+    }
+
+    // A preset from the dropdown writes every camera CVar, which the host hears.
+    let choose = |s: &mut UiScript, text: &str| {
+        s.run("BenillaKartCameraFramePresetButton:Click()").unwrap();
+        s.tick(0.0);
+        pick(s, text);
+    };
+    choose(&mut s, "CTR classic");
+    assert_eq!(camera_tuning(&s), CameraTuning::CTR);
+    assert_eq!(preset(&s), "CTR classic");
+    assert_eq!(label(&s, "Fov"), "Field of view: 73.7\u{b0}");
+    assert!(!s
+        .eval::<bool>("return BenillaKartCameraFrameWallPull:GetChecked() == 1")
+        .unwrap());
+    let changes = s.take_cvar_changes();
+    assert!(
+        changes
+            .iter()
+            .any(|(n, v)| n.eq_ignore_ascii_case("KartCamFov") && v == "73.74"),
+        "the host hears the preset: {changes:?}"
+    );
+    choose(&mut s, "Smooth follow");
+    assert_eq!(camera_tuning(&s), CameraTuning::SMOOTH);
+    assert_eq!(preset(&s), "Smooth follow");
+    assert!(s
+        .eval::<bool>("return BenillaKartCameraFrameTravel:GetChecked() == 1")
+        .unwrap());
+
+    // A slider writes its CVar at once and the preset reads Custom; so does a box.
+    s.run("BenillaKartCameraFrameDistance:SetValue(300)")
+        .unwrap();
+    assert_eq!(s.cvar("KartCamDistance").as_deref(), Some("300"));
+    assert_eq!(label(&s, "Distance"), "Distance at speed: 8.2 yd");
+    assert_eq!(preset(&s), "Custom");
+    s.run("BenillaKartCameraFramePitch:SetValue(20) BenillaKartCameraFrameYawOffset:SetValue(-30)")
+        .unwrap();
+    assert_eq!(s.cvar("KartCamPitch").as_deref(), Some("20"));
+    assert_eq!(
+        label(&s, "YawOffset"),
+        "Angle round the kart: 30\u{b0} left"
+    );
+    assert_eq!(camera_tuning(&s).pitch, 20.0);
+    s.run("BenillaKartCameraFrameTravel:Click() BenillaKartCameraFrameFarCamera:Click()")
+        .unwrap();
+    assert_eq!(s.cvar("KartCamTravel").as_deref(), Some("0"));
+    assert_eq!(s.cvar("KartFarCamera").as_deref(), Some("1"));
+
+    // Reset puts every camera CVar back to Kartcraft's; near or far is the player's own.
+    s.run("BenillaKartCameraFrameReset:Click()").unwrap();
+    assert_eq!(camera_tuning(&s), CameraTuning::KARTCRAFT);
+    assert_eq!(preset(&s), "Kartcraft");
+    assert_eq!(
+        s.eval::<f64>("return BenillaKartCameraFramePitch:GetValue()")
+            .unwrap(),
+        8.75,
+        "the slider sits on its step nearest CTR's 8.79"
+    );
+    assert_eq!(s.cvar("KartFarCamera").as_deref(), Some("1"));
+
+    // Escape closes it, as it closes any UISpecialFrames window, and the menu does not open.
+    s.run("ToggleGameMenu()").unwrap();
+    assert!(!shown(&s));
+    assert!(!s
+        .eval::<bool>("return GameMenuFrame:IsVisible() == 1")
+        .unwrap());
+
+    // The settings window's button and the minimap button's menu open it.
+    s.run("BenillaKartSettings_Toggle() BenillaKartSettingsFrameCamera:Click()")
+        .unwrap();
+    assert!(shown(&s));
+    s.run("BenillaKartCameraFrame:Hide() BenillaKartSettingsFrame:Hide()")
+        .unwrap();
+    menu(&mut s);
+    pick(&mut s, "Kart camera...");
+    assert!(shown(&s));
+    s.run("BenillaKartCameraFrame:Hide()").unwrap();
+
+    // Not over the game menu.
+    s.run("ToggleGameMenu(1)").unwrap();
+    assert!(s
+        .eval::<bool>("return GameMenuFrame:IsVisible() == 1")
+        .unwrap());
+    s.run("SlashCmdList['BENILLA_KARTCAM']('') BenillaKartCamera_Toggle()")
+        .unwrap();
+    assert!(!shown(&s), "opened over the game menu");
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
 /// The garage's event as the client sends it, at `skill`, with three racers' karts.
@@ -1042,6 +1237,7 @@ fn the_race_banner_draws_under_the_kart_windows() {
         "BenillaKartGarageFrame",
         "BenillaKartFinderFrame",
         "BenillaKartSettingsFrame",
+        "BenillaKartCameraFrame",
     ] {
         s.run(&format!("{window}:Show()")).unwrap();
         s.tick(0.0);

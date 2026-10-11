@@ -769,6 +769,114 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "1",
         "Kartcraft's own — the time trial's ghost; 1.12 has no kart",
     ),
+    // The chase camera's shape, the camera window's (`/kartcam`), each a field of
+    // `kartcraft::camera::CameraTuning` at its Kartcraft value (`kart::settings::CAMERA_KNOBS`):
+    // lengths in lu, angles in degrees, smoothing in seconds, shares 0 to 1.
+    ours(
+        "KartCamDistance",
+        "224",
+        "Kartcraft's own — the chase camera's distance at speed; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamSlowDistance",
+        "179",
+        "Kartcraft's own — the chase camera's distance at a crawl; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamHeight",
+        "64",
+        "Kartcraft's own — the chase camera's height; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamLookHeight",
+        "112",
+        "Kartcraft's own — the chase camera's look-at height; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamPitch",
+        "8.7890625",
+        "Kartcraft's own — the chase camera's pitch; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamLookAhead",
+        "32",
+        "Kartcraft's own — the chase camera's look-ahead; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamClearance",
+        "64",
+        "Kartcraft's own — the chase camera's least height over the ground; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamFarExtra",
+        "64",
+        "Kartcraft's own — the far chase camera's extra distance; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamFov",
+        "45",
+        "Kartcraft's own — the chase camera's field of view; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamAimDrop",
+        "70",
+        "Kartcraft's own — how much lower the chase camera aims; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamSwing",
+        "1",
+        "Kartcraft's own — how much the chase camera swings with a powerslide; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamTravel",
+        "0",
+        "Kartcraft's own — the chase camera follows the kart's travel; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamFollow",
+        "0.35",
+        "Kartcraft's own — how much the chase camera turns with the kart; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamTurnSmoothing",
+        "0",
+        "Kartcraft's own — the chase camera's turn smoothing; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamYawOffset",
+        "0",
+        "Kartcraft's own — the chase camera's angle round the kart; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamSideOffset",
+        "0",
+        "Kartcraft's own — the chase camera's side offset; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamTilt",
+        "1",
+        "Kartcraft's own — the chase camera's slope tilt; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamTiltSmoothing",
+        "0.316",
+        "Kartcraft's own — the chase camera's slope tilt smoothing; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamBank",
+        "0.5",
+        "Kartcraft's own — the chase camera's bank with the ground; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamTurbo",
+        "96",
+        "Kartcraft's own — the chase camera's turbo push-back; 1.12 has no kart",
+    ),
+    ours(
+        "KartCamWallPull",
+        "1",
+        "Kartcraft's own — the chase camera's pull-in at walls; 1.12 has no kart",
+    ),
     // The garage: the engine class picked (Turning, the one every new kart driver has; the Karting
     // skill opens the others, `kart::garage`) and whose kart it is.
     ours(

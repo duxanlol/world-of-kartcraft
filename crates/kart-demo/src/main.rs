@@ -438,6 +438,12 @@ fn drive(
         demo.ctr_far = !demo.ctr_far;
     }
     demo.session.set_camera(demo.ctr_far, controls.look_back);
+    // Kartcraft's camera in CTR's own frame: CTR's frustum (the demo's projection) and its aim.
+    demo.session.tune_camera(kartcraft::camera::CameraTuning {
+        fov: kartcraft::camera::FOV_Y.to_degrees(),
+        aim_drop: 0.0,
+        ..Default::default()
+    });
     if keys.just_pressed(KeyCode::KeyK) {
         demo.far_camera = !demo.far_camera;
     }

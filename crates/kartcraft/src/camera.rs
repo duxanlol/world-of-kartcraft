@@ -6,13 +6,18 @@
 //! the ground's lean, and keeps at least 64 lu (far: 96) over the ground under it. Look-back (R2)
 //! turns both yaws half a turn. Vertical FOV 73.74°, CTR's 4:3 frustum kept vertically for a wide
 //! screen.
+//!
+//! Every one of those numbers is a [`CameraTuning`] field the player sets while driving:
+//! [`CameraTuning::CTR`] is CTR's camera exactly, [`CameraTuning::KARTCRAFT`] (the default) the
+//! one fitted to WoW's world, its deviations named on it.
 
 use bevy::math::{Quat, Vec3};
 use ctr_kart::{CameraInput, Collision};
 
 /// One of CTR's 1P 4:3 zoom tables (`NearCam4x3`, `FarCam4x3`, `zGlobal_DATA.c:983-1008`): the
 /// boom from the slowest speed to the fastest, the look-at's height and the eye's height base,
-/// which is also its least clearance over the ground (lu).
+/// which is also its least clearance over the ground (lu). The far one is also how the far
+/// camera stands to any tuning's near one ([`CameraTuning`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Zoom {
     dist_min: f32,
@@ -37,7 +42,7 @@ const FAR: Zoom = Zoom {
 const PITCH: i32 = 100;
 /// Look-back's half turn (4096ths, `CAM.c:1073-1098`).
 const REVERSE: i32 = 0x800;
-/// The vertical field of view, radians (73.74°).
+/// CTR's vertical field of view, radians (73.74°).
 pub const FOV_Y: f32 = 1.2870;
 /// Where the ground's grade is read along the heading, from behind the kart to ahead of it (lu).
 const GRADE_SAMPLES: [f32; 17] = [
@@ -46,26 +51,177 @@ const GRADE_SAMPLES: [f32; 17] = [
 ];
 /// The steepest grade heeded (rise per run, about 37°).
 const GRADE_MAX: f32 = 0.75;
-/// Each of the tilt's two filter stages' share of the gap per tick: 0.1 at 30 Hz is a 0.32 s
-/// time constant each, so the tilt reaches 63% of a new grade in about 0.7 s and starts moving
-/// smoothly rather than with a jump.
-const TILT_FOLLOW: f32 = 0.1;
 /// The tilt's pivot over the kart's origin (lu): the kart's middle, which keeps its place on the
 /// screen however the rig tilts.
 const PIVOT_H: f32 = 32.0;
+/// How far the look-at moves toward or away from the kart a tick (lu, `CAM.c:1251-1271`).
+const AHEAD_STEP: f32 = 8.0;
+/// The turbo push-back grows 8 lu a tick and comes back 2 (lu·256, `CAM.c:1159-1196`).
+const TURBO_GROW: i32 = 2048;
+const TURBO_DECAY: i32 = 512;
 
-/// How much of the body's turn and powerslide swing off the travel direction the eye takes:
-/// 1, all of it, is CTR's eye on heading + swing.
-const BODY_SHARE: f32 = 1.0;
-/// The share of the gap to its aim the eye's yaw closes each 30 Hz tick: 1, at once, is CTR's
-/// rigid eye.
-const YAW_FOLLOW: f32 = 1.0;
-
-/// An angle difference in 4096ths into −2048..2048.
-fn wrap(a: i32) -> i32 {
-    (a + 2048).rem_euclid(4096) - 2048
+/// Everything that shapes the chase camera, read every tick, so a change applies while driving.
+/// Lengths in lu, angles in degrees, smoothing as a time constant in seconds (0: none).
+///
+/// The far camera stands to the near one as CTR's `FarCam4x3` to its `NearCam4x3`: its boom runs
+/// from the near one's racing distance at a crawl to [`Self::far_extra`] beyond it at speed (CTR
+/// 224 to 288), its lift and clearance are half as much again (64 to 96), and it looks 6/7 as
+/// high (112 to 96).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CameraTuning {
+    /// The boom at racing speed (CTR `distMax` 224).
+    pub distance: f32,
+    /// The boom at a crawl (CTR `distMin` 179); it stretches to [`Self::distance`] by 600 lu/s.
+    pub slow_distance: f32,
+    /// The eye's lift over the boom's end (CTR `vertDistance` 64).
+    pub height: f32,
+    /// The look-at's height over the kart's origin (CTR `angle[2]` 112).
+    pub look_height: f32,
+    /// The boom's pitch, degrees up (CTR 100/4096 of a turn, 8.79°).
+    pub pitch: f32,
+    /// How far ahead along the drawn nose the look-at sits (CTR `damagePitchOffset` 32).
+    pub look_ahead: f32,
+    /// The eye's least height over the ground under it (CTR `vertDistance` 64).
+    pub clearance: f32,
+    /// The far camera's boom beyond the near one's at speed (CTR 288 − 224).
+    pub far_extra: f32,
+    /// The vertical field of view, degrees (CTR 73.74).
+    pub fov: f32,
+    /// How far below the shot's look-at the drawn view aims (CTR none).
+    pub aim_drop: f32,
+    /// The share of the powerslide's swing (`rotCurr.w`, up to 33.75° out of the slide) the eye
+    /// turns by (CTR 1).
+    pub swing: f32,
+    /// The eye aims along the kart's travel over the ground rather than its body (CTR: its body,
+    /// heading + swing).
+    pub travel: bool,
+    /// Following the travel, the share of the body's turn and swing off it the eye takes on top
+    /// (1 is the body's again).
+    pub follow: f32,
+    /// The yaw's easing after its aim, a time constant in seconds (CTR 0: rigid).
+    pub turn_smoothing: f32,
+    /// The boom turned round the kart, degrees counter-clockwise seen from above (CTR 0: behind).
+    pub yaw_offset: f32,
+    /// The whole rig moved to the right of the way the kart faces (CTR 0).
+    pub side_offset: f32,
+    /// The share of the ground's grade the rig tilts with (CTR 0: world-up offsets, spec 2.5).
+    pub tilt: f32,
+    /// Each of the tilt's two filter stages' time constant, seconds.
+    pub tilt_smoothing: f32,
+    /// The screen's roll as a share of the ground's lean under the kart (CTR `angle[0]` 0.5),
+    /// the rig's slide toward the lean going with it.
+    pub bank: f32,
+    /// The turbo push-back's reach (CTR 96).
+    pub turbo_push: f32,
+    /// The eye comes in short of a wall between it and the kart (CTR has no wall test).
+    pub wall_pull: bool,
 }
 
+impl CameraTuning {
+    /// CTR's own chase camera (`docs/ctr-camera-spec.md`): the eye rigid on the heading plus the
+    /// powerslide's swing, world-up offsets on a hill, no wall test, its 73.74° frustum.
+    pub const CTR: CameraTuning = CameraTuning {
+        distance: NEAR.dist_max,
+        slow_distance: NEAR.dist_min,
+        height: NEAR.vert,
+        look_height: NEAR.look_h,
+        pitch: PITCH as f32 * 360.0 / 4096.0,
+        look_ahead: 32.0,
+        clearance: NEAR.vert,
+        far_extra: FAR.dist_max - NEAR.dist_max,
+        fov: 73.74,
+        aim_drop: 0.0,
+        swing: 1.0,
+        travel: false,
+        follow: 0.35,
+        turn_smoothing: 0.0,
+        yaw_offset: 0.0,
+        side_offset: 0.0,
+        tilt: 0.0,
+        tilt_smoothing: 0.316,
+        bank: 0.5,
+        turbo_push: (0x6000 >> 8) as f32,
+        wall_pull: false,
+    };
+
+    /// Kartcraft's: CTR's camera, turning as CTR's does, over WoW's world. Deviations: the rig
+    /// tilts with the ground's grade (its two stages 0.316 s each, 63% of a new grade in about
+    /// 0.7 s), as CTR's world-up offsets fit its gentle tracks but on a WoW hill the road ahead
+    /// fills the screen or drops out of it; the eye comes in short of a wall, as WoW's pillars
+    /// and trees stand behind the kart where CTR's tracks keep walls away; and the view aims 70 lu
+    /// lower at the client's own 45° field of view, so the kart clears WoW's action bars along
+    /// the bottom of the screen, where CTR puts it.
+    pub const KARTCRAFT: CameraTuning = CameraTuning {
+        fov: 45.0,
+        aim_drop: 70.0,
+        tilt: 1.0,
+        wall_pull: true,
+        ..CameraTuning::CTR
+    };
+
+    /// Kartcraft's with the eye on the kart's travel: 35% of the body's turn and swing on top,
+    /// easing after it (0.116 s, a quarter of the gap a tick), so through a slide it looks mostly
+    /// where the kart is going rather than where its body points.
+    pub const SMOOTH: CameraTuning = CameraTuning {
+        travel: true,
+        follow: 0.35,
+        turn_smoothing: 0.116,
+        ..CameraTuning::KARTCRAFT
+    };
+
+    fn rig(&self, far: bool) -> Rig {
+        if far {
+            Rig {
+                dist_min: self.distance,
+                dist_max: self.distance + self.far_extra,
+                look_h: self.look_height * FAR.look_h / NEAR.look_h,
+                vert: self.height * FAR.vert / NEAR.vert,
+                clearance: self.clearance * FAR.vert / NEAR.vert,
+            }
+        } else {
+            Rig {
+                dist_min: self.slow_distance,
+                dist_max: self.distance,
+                look_h: self.look_height,
+                vert: self.height,
+                clearance: self.clearance,
+            }
+        }
+    }
+
+    /// The vertical field of view, radians.
+    pub fn fov_radians(&self) -> f32 {
+        self.fov.to_radians()
+    }
+}
+
+impl Default for CameraTuning {
+    fn default() -> Self {
+        Self::KARTCRAFT
+    }
+}
+
+/// One tick's zoom from a [`CameraTuning`] (lu): the boom's reach from a crawl to speed, the
+/// look-at's height, the eye's lift and its least clearance.
+struct Rig {
+    dist_min: f32,
+    dist_max: f32,
+    look_h: f32,
+    vert: f32,
+    clearance: f32,
+}
+
+/// The share of the gap a filter with time constant `tau` (s) closes in one 30 Hz tick; all of
+/// it with none.
+fn share(tau: f32) -> f32 {
+    if tau <= 0.0 {
+        1.0
+    } else {
+        1.0 - (-ctr_kart::TICK / tau).exp()
+    }
+}
+
+/// An angle difference in 4096ths into −2048..2048.
 fn wrapf(a: f32) -> f32 {
     (a + 2048.0).rem_euclid(4096.0) - 2048.0
 }
@@ -98,6 +254,8 @@ pub struct Shot {
 
 #[derive(Default)]
 pub struct ChaseCamera {
+    /// What shapes the camera, read every tick.
+    pub tuning: CameraTuning,
     /// CTR's L2 toggle (`nearOrFar`): the far zoom table.
     pub far: bool,
     /// CTR's R2 held: the camera looks back.
@@ -108,7 +266,7 @@ pub struct ChaseCamera {
     /// The kart's roll filtered.
     roll: i32,
     /// `damagePitchOffset`: how far ahead the look-at sits (−32 normally).
-    ahead: i32,
+    ahead: f32,
     /// The turbo push-back (lu·256) and its timer (CTR-ms).
     turbo: i32,
     turbo_timer: i32,
@@ -153,9 +311,18 @@ fn grade(world: &Collision, at: Vec3, heading: i32) -> Option<f32> {
 }
 
 impl ChaseCamera {
+    /// A fresh camera (a new drive) with this one's tuning.
+    pub fn reset(&mut self) {
+        *self = ChaseCamera {
+            tuning: self.tuning,
+            ..Default::default()
+        };
+    }
+
     /// One 30 Hz frame for `k`, over `world`'s ground.
     pub fn tick(&mut self, k: &CameraInput, world: &Collision) -> Shot {
-        let zoom = if self.far { FAR } else { NEAR };
+        let tuning = self.tuning;
+        let zoom = tuning.rig(self.far);
         // 3.4: look-back turning on or off is DIRECTION_CHANGED, an instant cut that restarts
         // the speed filter.
         let cut = self.started && self.look_back != self.looked_back;
@@ -171,7 +338,7 @@ impl ChaseCamera {
             self.speed = (240 * self.speed + 16 * x) >> 8;
         }
         if !self.started {
-            self.ahead = -32;
+            self.ahead = -tuning.look_ahead;
         }
         let t = ((self.speed - 1024) as f32 / 4096.0).clamp(0.0, 1.0);
         let mut d = zoom.dist_min + t * (zoom.dist_max - zoom.dist_min);
@@ -180,58 +347,73 @@ impl ChaseCamera {
         if k.turbo {
             self.turbo_timer = self.turbo_timer.max(k.fire_speed_cap >> 4);
         }
+        let cap = (tuning.turbo_push.max(0.0) * 256.0) as i32;
         if self.turbo_timer == 0 {
-            self.turbo = (self.turbo - 512).max(0);
+            self.turbo = (self.turbo - TURBO_DECAY).max(0);
         } else {
-            self.turbo = (self.turbo + 2048).min(0x6000);
+            self.turbo = (self.turbo + TURBO_GROW).min(cap);
             self.turbo_timer = (self.turbo_timer - 32).max(0);
         }
+        self.turbo = self.turbo.min(cap);
         d += (self.turbo >> 8) as f32;
 
         // 2.3: the eye trails the heading plus the powerslide's swing (and look-back's half turn).
-        // The aim can follow the kart's travel over the ground with only [`BODY_SHARE`] of the
-        // body's turn and swing, easing after it ([`YAW_FOLLOW`] of the gap a tick); both at 1,
-        // as here, it is CTR's rigid eye. Look-back's half turn is an instant cut either way.
-        let body = k.heading + k.spin;
-        let aim = match k.travel {
-            Some(travel) => travel as f32 + wrap(body - travel) as f32 * BODY_SHARE,
-            None => body as f32,
+        // CTR's eye is rigid on that. A tuning may take only `swing` of the swing, aim along the
+        // kart's travel over the ground with `follow` of the body's turn and swing on top, ease
+        // after the aim, and turn the boom round the kart by `yaw_offset`. Look-back's half turn
+        // stays an instant cut.
+        let body = k.heading as f32 + k.spin as f32 * tuning.swing;
+        let aim = match k.travel.filter(|_| tuning.travel) {
+            Some(travel) => travel as f32 + wrapf(body - travel as f32) * tuning.follow,
+            None => body,
         };
         self.yaw = if self.started {
-            self.yaw + wrapf(aim - self.yaw) * YAW_FOLLOW
+            self.yaw + wrapf(aim - self.yaw) * share(tuning.turn_smoothing)
         } else {
             aim
         };
         let rev = if self.look_back { REVERSE } else { 0 };
-        let a_eye = self.yaw.round() as i32 + rev;
+        let offset = tuning.yaw_offset * 4096.0 / 360.0;
+        let a_eye = (self.yaw + offset).round() as i32 + rev;
         let (f, r) = (fwd(a_eye), right(a_eye));
-        let (sp, cp) = (rad(PITCH).sin(), rad(PITCH).cos());
+        let pitch = tuning.pitch.to_radians();
+        let (sp, cp) = (pitch.sin(), pitch.cos());
         let roll2 = rad(2 * self.roll);
-        let side = r * (64.0 * roll2.sin()) + f * (64.0 * sp * roll2.cos());
+        // The rig slides toward the lean as far as it banks: CTR's 64 lu at its half share.
+        let slide = 64.0 * tuning.bank / CameraTuning::CTR.bank;
+        // And the whole rig stands `side_offset` to the right of the way the kart faces.
+        let side = r * (slide * roll2.sin())
+            + f * (64.0 * sp * roll2.cos())
+            + right(self.yaw.round() as i32) * tuning.side_offset;
         let base = Vec3::new(k.position.x + side.x, k.position.y, k.position.z + side.z);
         let mut eye = base - f * (cp * d) + Vec3::Y * (sp * d + zoom.vert);
 
         // 2.4: it looks just ahead of the drawn nose, over the kart.
         self.ahead = if k.spinning {
-            (self.ahead + 8).min(0)
+            (self.ahead + AHEAD_STEP).min(0.0)
         } else {
-            (self.ahead - 8).max(-32)
+            (self.ahead - AHEAD_STEP).max(-tuning.look_ahead)
         };
         let g = fwd(a_eye + k.turn_angle);
-        let ahead = -(self.ahead as f32);
+        let ahead = -self.ahead;
         let mut look = base + g * (cp * ahead) + Vec3::Y * (zoom.look_h - sp * ahead);
 
-        // Deviation: CTR's camera keeps world-up offsets (spec 2.5), fine on its gentle tracks;
-        // on a WoW hill the road ahead fills the screen or drops out of it. The whole rig tilts
-        // about the kart's middle with the ground's grade along the heading, read over several
-        // samples, clamped and filtered slowly, so the camera sits over a slope as it sits over
-        // flat road and the kart keeps its place on the screen.
-        let target = grade(world, k.position, k.heading).map_or(self.tilt[1], f32::atan);
+        // CTR's camera keeps world-up offsets (spec 2.5), fine on its gentle tracks; on a WoW
+        // hill the road ahead fills the screen or drops out of it. A tuning may tilt the whole
+        // rig about the kart's middle with `tilt` of the ground's grade along the heading, read
+        // over several samples, clamped and filtered, so the camera sits over a slope as it sits
+        // over flat road and the kart keeps its place on the screen.
+        let target = if tuning.tilt > 0.0 {
+            grade(world, k.position, k.heading).map_or(self.tilt[1], |g| g.atan() * tuning.tilt)
+        } else {
+            0.0
+        };
         if !self.started {
             self.tilt = [target; 2];
         }
-        self.tilt[0] += (target - self.tilt[0]) * TILT_FOLLOW;
-        self.tilt[1] += (self.tilt[0] - self.tilt[1]) * TILT_FOLLOW;
+        let follow = share(tuning.tilt_smoothing);
+        self.tilt[0] += (target - self.tilt[0]) * follow;
+        self.tilt[1] += (self.tilt[0] - self.tilt[1]) * follow;
         // About the heading's right, a positive angle lifts its forward.
         let tilt = Quat::from_axis_angle(right(k.heading), self.tilt[1]);
         let pivot = k.position + Vec3::Y * PIVOT_H;
@@ -244,7 +426,7 @@ impl ChaseCamera {
         // 5: never closer than vertDistance over the ground under the eye.
         match world.ground(eye + Vec3::Y * 256.0, 2304.0) {
             Some(hit) => {
-                eye.y = eye.y.max(hit.point.y + zoom.vert);
+                eye.y = eye.y.max(hit.point.y + zoom.clearance);
                 if self.blend > 0 {
                     let n = self.blend as f32;
                     eye.y = ((8.0 - n) * eye.y + n * (k.position.y + self.start_height)) / 8.0;
@@ -263,18 +445,22 @@ impl ChaseCamera {
                 }
             }
         }
-        // Deviation: CTR's camera has no wall test (its tracks keep walls out from behind the
-        // kart); WoW's pillars and trees do not, so the eye comes in short of what blocks it.
+        // CTR's camera has no wall test (its tracks keep walls out from behind the kart); WoW's
+        // pillars and trees do not, so a tuning may bring the eye in short of what blocks it.
         let to_eye = eye - look;
         let reach = to_eye.length();
-        if let Some(hit) = world.ray(look, to_eye, reach) {
-            eye = look + to_eye * ((hit.distance - 12.0).max(24.0) / reach);
+        if tuning.wall_pull {
+            if let Some(hit) = world.ray(look, to_eye, reach) {
+                eye = look + to_eye * ((hit.distance - 12.0).max(24.0) / reach);
+            }
         }
         self.started = true;
+        // The screen's roll, `(angle[0] * rollS) >> 8` with `angle[0]` the bank in 256ths.
+        let bank = (tuning.bank * 256.0).round() as i32;
         Shot {
             eye,
             look,
-            roll: rad(self.roll / 2),
+            roll: rad((bank * self.roll) >> 8),
             cut,
         }
     }
@@ -575,5 +761,259 @@ mod tests {
         cam.look_back = false;
         let again = cam.tick(&input(13000), &world);
         assert!(again.cut && (again.eye.z + 211.6).abs() < 2.0, "{again:?}");
+    }
+
+    fn ctr() -> ChaseCamera {
+        ChaseCamera {
+            tuning: CameraTuning::CTR,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_default_tuning_turns_as_ctr_and_smooth_follow_eases_a_quarter_a_tick() {
+        let t = CameraTuning::default();
+        assert_eq!(t, CameraTuning::KARTCRAFT);
+        assert_eq!(ChaseCamera::default().tuning, t);
+        // CTR's turning: on the body, all of the swing, rigid, straight behind.
+        assert!(!t.travel && t.swing == 1.0 && share(t.turn_smoothing) == 1.0);
+        assert_eq!((t.yaw_offset, t.side_offset), (0.0, 0.0));
+        // A tenth of each tilt stage's gap a tick; smooth follow's yaw a quarter.
+        assert!((share(t.tilt_smoothing) - 0.1).abs() < 0.001);
+        assert!((share(CameraTuning::SMOOTH.turn_smoothing) - 0.25).abs() < 0.001);
+        // CTR's zoom tables and pitch, as numbers.
+        assert_eq!(
+            (t.distance, t.slow_distance, t.height, t.look_height),
+            (224.0, 179.0, 64.0, 112.0)
+        );
+        assert_eq!(
+            (t.far_extra, t.turbo_push, t.look_ahead),
+            (64.0, 96.0, 32.0)
+        );
+        assert!((t.pitch - 8.789).abs() < 0.001);
+        assert!((CameraTuning::CTR.fov_radians() - FOV_Y).abs() < 1e-4);
+    }
+
+    #[test]
+    fn ctr_classic_keeps_the_eye_rigid_on_heading_and_swing() {
+        // The slide that the Kartcraft camera follows only 35% of: CTR's eye looks along heading
+        // + swing, 584/4096 of a turn, on the very first ticks and every one after.
+        let (mut cam, world) = (ctr(), flat());
+        let mut slide = input(13000);
+        slide.travel = Some(0);
+        slide.heading = 200;
+        slide.spin = 384;
+        let rigid = 584.0 * 360.0 / 4096.0;
+        for _ in 0..3 {
+            let off = view_deg(&cam.tick(&slide, &world));
+            assert!((off - rigid).abs() < 0.5, "{off} vs {rigid}");
+        }
+        // A quarter turn at once is taken at once.
+        slide.heading = 1024;
+        slide.spin = 0;
+        slide.travel = Some(1024);
+        let off = view_deg(&cam.tick(&slide, &world));
+        assert!((off - 90.0).abs() < 0.5, "{off}");
+    }
+
+    #[test]
+    fn ctr_classic_keeps_world_up_offsets_on_a_hill_and_the_full_far_table() {
+        // Downhill behind the kart, so the ground clamp stays out of it: the view pitches as on
+        // flat road.
+        let level = settle(&mut ctr(), &slope(0.0));
+        let hill = settle(&mut ctr(), &slope(0.35));
+        assert!((pitch(&hill) - pitch(&level)).abs() < 0.01, "{hill:?}");
+        assert!((hill.eye.y - level.eye.y).abs() < 0.01, "{hill:?}");
+        // FarCam4x3 as the Kartcraft one has it.
+        let far = settle(&mut ChaseCamera { far: true, ..ctr() }, &flat());
+        assert!((far.eye.z + 274.8).abs() < 2.0 && (far.eye.y - 140.0).abs() < 3.0);
+        assert!((far.look.y - 91.1).abs() < 1.0, "{far:?}");
+    }
+
+    #[test]
+    fn a_change_of_tuning_applies_on_the_next_tick() {
+        // Ground out to 1920 lu, under the longer boom.
+        let world = slope(0.0);
+        let mut cam = ChaseCamera::default();
+        let before = settle(&mut cam, &world);
+        cam.tuning.distance = 300.0;
+        cam.tuning.height = 100.0;
+        cam.tuning.look_height = 50.0;
+        let after = cam.tick(&input(13000), &world);
+        // 76 lu more boom at the pitch, 36 more lift; the look-at 62 lower.
+        assert!(
+            (after.eye.z - (before.eye.z - 76.0 * 0.98826)).abs() < 1.0,
+            "{after:?}"
+        );
+        assert!((after.eye.y - (before.eye.y + 36.0 + 76.0 * 0.1528)).abs() < 1.0);
+        assert!((after.look.y - (before.look.y - 62.0)).abs() < 0.5);
+
+        // A level boom straight behind, no look-ahead.
+        cam.tuning.pitch = 0.0;
+        cam.tuning.look_ahead = 0.0;
+        let mut shot = cam.tick(&input(13000), &world);
+        for _ in 0..8 {
+            shot = cam.tick(&input(13000), &world);
+        }
+        assert!(
+            (shot.eye.y - 100.0).abs() < 0.5 && shot.look.z.abs() < 0.5,
+            "{shot:?}"
+        );
+    }
+
+    #[test]
+    fn turbo_push_back_and_wall_pull_in_turn_off() {
+        let world = flat();
+        let mut cam = ChaseCamera::default();
+        cam.tuning.turbo_push = 0.0;
+        let before = settle(&mut cam, &world).eye.z;
+        let mut kick = input(13000);
+        kick.turbo = true;
+        kick.fire_speed_cap = 4096;
+        cam.tick(&kick, &world);
+        for _ in 0..12 {
+            let z = cam.tick(&input(13000), &world).eye.z;
+            assert!((z - before).abs() < 0.01, "{z} vs {before}");
+        }
+
+        // A wall 100 lu behind the kart, across the road: pulled in short of it, or not.
+        let s = 5000.0;
+        let wall = Collision::new(
+            [
+                [[-s, 0.0, -s], [-s, 0.0, s], [s, 0.0, s]],
+                [[-s, 0.0, -s], [s, 0.0, s], [s, 0.0, -s]],
+                [[-s, -10.0, -100.0], [s, -10.0, -100.0], [s, 1000.0, -100.0]],
+                [
+                    [-s, -10.0, -100.0],
+                    [s, 1000.0, -100.0],
+                    [-s, 1000.0, -100.0],
+                ],
+            ],
+            160.0,
+        );
+        let pulled = settle(&mut ChaseCamera::default(), &wall);
+        assert!(pulled.eye.z > -100.0, "{pulled:?}");
+        let mut through = ChaseCamera::default();
+        through.tuning.wall_pull = false;
+        let through = settle(&mut through, &wall);
+        assert!(through.eye.z < -200.0, "{through:?}");
+    }
+
+    #[test]
+    fn bank_scales_the_screen_s_roll() {
+        let world = flat();
+        let mut lean = input(13000);
+        lean.roll = 200;
+        let roll = |bank: f32| {
+            let mut cam = ChaseCamera::default();
+            cam.tuning.bank = bank;
+            let mut shot = cam.tick(&lean, &world);
+            for _ in 0..90 {
+                shot = cam.tick(&lean, &world);
+            }
+            shot.roll
+        };
+        // CTR's half: the filtered lean (settling 7 short of 200) over two.
+        assert!((roll(0.5) - rad(96)).abs() < rad(2), "{}", roll(0.5));
+        assert!((roll(1.0) - 2.0 * roll(0.5)).abs() < rad(2));
+        assert_eq!(roll(0.0), 0.0);
+    }
+
+    fn smooth() -> ChaseCamera {
+        ChaseCamera {
+            tuning: CameraTuning::SMOOTH,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn smooth_follow_looks_mostly_where_the_kart_is_going_and_eases_into_a_turn() {
+        // The full slide: 35% of its 51.3° off the travel.
+        let (mut cam, world) = (smooth(), flat());
+        let mut slide = input(13000);
+        slide.travel = Some(0);
+        slide.heading = 200;
+        slide.spin = 384;
+        let mut shot = cam.tick(&slide, &world);
+        for _ in 0..60 {
+            shot = cam.tick(&slide, &world);
+        }
+        let off = view_deg(&shot);
+        assert!(
+            (off - 0.35 * 51.33).abs() < 1.0,
+            "{off} degrees off the travel"
+        );
+
+        // A quarter turn at once: a quarter of it the first tick, all of it within a second.
+        let mut k = input(13000);
+        k.travel = Some(0);
+        let mut cam = smooth();
+        for _ in 0..30 {
+            cam.tick(&k, &world);
+        }
+        k.heading = 1024;
+        k.travel = Some(1024);
+        let first = view_deg(&cam.tick(&k, &world));
+        assert!((first - 22.5).abs() < 1.0, "first tick: {first}");
+        let mut last = first;
+        for _ in 0..30 {
+            last = view_deg(&cam.tick(&k, &world));
+        }
+        assert!((last - 90.0).abs() < 1.0, "after a second: {last}");
+    }
+
+    #[test]
+    fn the_swing_share_and_the_yaw_and_side_offsets_turn_and_move_the_boom() {
+        let world = flat();
+        let mut slide = input(13000);
+        slide.heading = 200;
+        slide.spin = 384;
+        let view = |t: CameraTuning| {
+            let mut cam = ChaseCamera {
+                tuning: t,
+                ..Default::default()
+            };
+            cam.tick(&slide, &world)
+        };
+        let deg = |a: f32| a * 360.0 / 4096.0;
+        // None of the swing: the eye on the heading alone.
+        let no_swing = view(CameraTuning {
+            swing: 0.0,
+            ..CameraTuning::KARTCRAFT
+        });
+        assert!((view_deg(&no_swing) - deg(200.0)).abs() < 0.5);
+        // Half of it.
+        let half = view(CameraTuning {
+            swing: 0.5,
+            ..CameraTuning::KARTCRAFT
+        });
+        assert!((view_deg(&half) - deg(392.0)).abs() < 0.5);
+
+        // Turned 30° round the kart, still looking at it.
+        let straight = input(13000);
+        let mut cam = ChaseCamera::default();
+        cam.tuning.yaw_offset = 30.0;
+        cam.tuning.look_ahead = 0.0;
+        let shot = cam.tick(&straight, &world);
+        assert!((view_deg(&shot) - 30.0).abs() < 0.5, "{shot:?}");
+        assert!(
+            shot.eye.x < -100.0,
+            "behind and to the kart's right: {shot:?}"
+        );
+
+        // Moved 40 lu to the kart's right (heading 0 faces +Z, its right is −X), eye and look.
+        let base = ChaseCamera::default().tick(&straight, &world);
+        let mut cam = ChaseCamera::default();
+        cam.tuning.side_offset = 40.0;
+        let moved = cam.tick(&straight, &world);
+        assert!(
+            (moved.eye.x - (base.eye.x - 40.0)).abs() < 0.01,
+            "{moved:?}"
+        );
+        assert!(
+            (moved.look.x - (base.look.x - 40.0)).abs() < 0.01,
+            "{moved:?}"
+        );
+        assert!((view_deg(&moved) - view_deg(&base)).abs() < 0.01);
     }
 }

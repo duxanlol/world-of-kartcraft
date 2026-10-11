@@ -12,12 +12,78 @@
 //!   [`super::garage`]) and whose kart we drive; both apply at once, while driving too.
 //! - `KartGhost`: the ghost of our best run on the course races us ([`super::ghost`]); the runs
 //!   are recorded and kept either way.
+//! - `KartCam*`: the chase camera's shape, the camera window's (`/kartcam`), one CVar a
+//!   [`kartcraft::camera::CameraTuning`] field ([`CAMERA_KNOBS`]), read every tick while driving.
 //!
 //! `KartMinimapButton` and `KartMinimapAngle` are the layer's alone.
 
 use bevy::prelude::*;
+use kartcraft::camera::CameraTuning;
 
 use super::race::GuideHud;
+
+/// One of the camera window's sliders: its CVar and the range a value is clamped to (the
+/// window's own slider spans it).
+pub(crate) struct CameraKnob {
+    pub(crate) cvar: &'static str,
+    pub(crate) min: f32,
+    pub(crate) max: f32,
+}
+
+const fn knob(cvar: &'static str, min: f32, max: f32) -> CameraKnob {
+    CameraKnob { cvar, min, max }
+}
+
+/// The chase camera's numeric CVars, lengths in lu, angles in degrees, smoothing in seconds,
+/// shares 0 to 1 ([`CameraTuning`] has each field's meaning and CTR's value); `KartCamTravel` and
+/// `KartCamWallPull` are its switches.
+pub(crate) const CAMERA_KNOBS: [CameraKnob; 19] = [
+    knob("KartCamDistance", 64.0, 640.0),
+    knob("KartCamSlowDistance", 64.0, 640.0),
+    knob("KartCamHeight", 0.0, 256.0),
+    knob("KartCamLookHeight", 0.0, 256.0),
+    knob("KartCamPitch", -10.0, 45.0),
+    knob("KartCamLookAhead", 0.0, 160.0),
+    knob("KartCamClearance", 0.0, 192.0),
+    knob("KartCamFarExtra", 0.0, 320.0),
+    knob("KartCamFov", 30.0, 110.0),
+    knob("KartCamAimDrop", 0.0, 160.0),
+    knob("KartCamSwing", 0.0, 1.0),
+    knob("KartCamFollow", 0.0, 1.0),
+    knob("KartCamTurnSmoothing", 0.0, 1.0),
+    knob("KartCamYawOffset", -180.0, 180.0),
+    knob("KartCamSideOffset", -128.0, 128.0),
+    knob("KartCamTilt", 0.0, 1.0),
+    knob("KartCamTiltSmoothing", 0.0, 1.5),
+    knob("KartCamBank", 0.0, 1.0),
+    knob("KartCamTurbo", 0.0, 192.0),
+];
+
+/// The tuning field a [`CAMERA_KNOBS`] CVar sets.
+pub(crate) fn camera_field<'a>(t: &'a mut CameraTuning, cvar: &str) -> Option<&'a mut f32> {
+    Some(match cvar {
+        "KartCamDistance" => &mut t.distance,
+        "KartCamSlowDistance" => &mut t.slow_distance,
+        "KartCamHeight" => &mut t.height,
+        "KartCamLookHeight" => &mut t.look_height,
+        "KartCamPitch" => &mut t.pitch,
+        "KartCamLookAhead" => &mut t.look_ahead,
+        "KartCamClearance" => &mut t.clearance,
+        "KartCamFarExtra" => &mut t.far_extra,
+        "KartCamFov" => &mut t.fov,
+        "KartCamAimDrop" => &mut t.aim_drop,
+        "KartCamSwing" => &mut t.swing,
+        "KartCamFollow" => &mut t.follow,
+        "KartCamTurnSmoothing" => &mut t.turn_smoothing,
+        "KartCamYawOffset" => &mut t.yaw_offset,
+        "KartCamSideOffset" => &mut t.side_offset,
+        "KartCamTilt" => &mut t.tilt,
+        "KartCamTiltSmoothing" => &mut t.tilt_smoothing,
+        "KartCamBank" => &mut t.bank,
+        "KartCamTurbo" => &mut t.turbo_push,
+        _ => return None,
+    })
+}
 
 /// The kart's own settings, as their CVars say.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
@@ -33,6 +99,8 @@ pub(crate) struct KartSettings {
     pub(crate) class: kartcraft::Class,
     /// Race the ghost of our best run on the course.
     pub(crate) ghost: bool,
+    /// The chase camera's shape.
+    pub(crate) camera: CameraTuning,
 }
 
 impl Default for KartSettings {
@@ -44,6 +112,7 @@ impl Default for KartSettings {
             music_volume: 1.0,
             class: super::garage::TIERS[0].0,
             ghost: true,
+            camera: CameraTuning::default(),
         }
     }
 }
@@ -81,6 +150,19 @@ pub(crate) fn on_cvar(
         "kartmusic" => settings.music = ev.flag(),
         "kartmusicvolume" => settings.music_volume = ev.num().clamp(0.0, 1.0),
         "kartghost" => settings.ghost = ev.flag(),
+        "kartcamwallpull" => settings.camera.wall_pull = ev.flag(),
+        "kartcamtravel" => settings.camera.travel = ev.flag(),
+        key if key.starts_with("kartcam") => {
+            let Some(k) = CAMERA_KNOBS
+                .iter()
+                .find(|k| k.cvar.eq_ignore_ascii_case(key))
+            else {
+                return;
+            };
+            if let Some(field) = camera_field(&mut settings.camera, k.cvar) {
+                *field = ev.num().clamp(k.min, k.max);
+            }
+        }
         "kartclass" => {
             settings.class = kartcraft::class_named(&ev.new).unwrap_or(super::garage::TIERS[0].0)
         }
@@ -200,5 +282,62 @@ mod tests {
         assert!(app.world().resource::<KartSettings>().ghost);
         set(&mut app, "KartGhost", "0");
         assert!(!app.world().resource::<KartSettings>().ghost);
+    }
+
+    fn registered(name: &str) -> &'static str {
+        REGISTERED
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("{name} is registered"))
+            .default
+    }
+
+    #[test]
+    fn the_camera_cvars_default_to_kartcraft_s_tuning_inside_their_ranges() {
+        let mut from_cvars = CameraTuning::CTR;
+        for k in &CAMERA_KNOBS {
+            let value: f32 = registered(k.cvar).parse().unwrap();
+            assert!(k.min <= value && value <= k.max, "{}", k.cvar);
+            *camera_field(&mut from_cvars, k.cvar).unwrap() = value;
+            // CTR's own value is in range too, so CTR classic is a setting.
+            let mut ctr = CameraTuning::CTR;
+            let ctr = *camera_field(&mut ctr, k.cvar).unwrap();
+            assert!(k.min <= ctr && ctr <= k.max, "{} CTR {ctr}", k.cvar);
+        }
+        from_cvars.wall_pull = registered("KartCamWallPull") != "0";
+        from_cvars.travel = registered("KartCamTravel") != "0";
+        assert_eq!(from_cvars, CameraTuning::KARTCRAFT);
+        assert_eq!(KartSettings::default().camera, CameraTuning::KARTCRAFT);
+    }
+
+    #[test]
+    fn each_camera_cvar_reaches_the_tuning_clamped() {
+        let mut app = app();
+        for (i, k) in CAMERA_KNOBS.iter().enumerate() {
+            // A value inside the range, distinct per knob, in the observer's lowercase too.
+            let value = k.min + (k.max - k.min) * (i as f32 + 1.0) / 20.0;
+            let name = if i % 2 == 0 {
+                k.cvar.to_string()
+            } else {
+                k.cvar.to_ascii_lowercase()
+            };
+            set(&mut app, &name, &value.to_string());
+            let mut tuning = app.world().resource::<KartSettings>().camera;
+            assert_eq!(*camera_field(&mut tuning, k.cvar).unwrap(), value, "{name}");
+            set(&mut app, k.cvar, "100000");
+            let mut tuning = app.world().resource::<KartSettings>().camera;
+            assert_eq!(*camera_field(&mut tuning, k.cvar).unwrap(), k.max, "{name}");
+        }
+        set(&mut app, "KartCamWallPull", "0");
+        assert!(!app.world().resource::<KartSettings>().camera.wall_pull);
+        set(&mut app, "kartcamwallpull", "1");
+        assert!(app.world().resource::<KartSettings>().camera.wall_pull);
+        set(&mut app, "KartCamTravel", "1");
+        assert!(app.world().resource::<KartSettings>().camera.travel);
+        set(&mut app, "kartcamtravel", "0");
+        assert!(!app.world().resource::<KartSettings>().camera.travel);
+        // Nothing else moved the far or chase camera.
+        let settings = app.world().resource::<KartSettings>();
+        assert!(settings.chase_camera && !settings.far_camera);
     }
 }

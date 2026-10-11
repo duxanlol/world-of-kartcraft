@@ -44,6 +44,7 @@ pub(super) fn apply_scoped_view(
     spells: Option<Res<Spells>>,
     mut scoped: ResMut<ScopedView>,
     mut projections: Query<&mut Projection, With<WorldCamera>>,
+    kart: Option<Res<crate::kart::KartDrive>>,
 ) {
     let catalog = spells.as_ref().map(|s| &s.catalog);
     scoped.zoom = self_q
@@ -67,7 +68,9 @@ pub(super) fn apply_scoped_view(
     let Ok(mut projection) = projections.single_mut() else {
         return;
     };
-    let want = CAM_FOVY * scoped.zoom.unwrap_or(1.0);
+    // Kartcraft's chase camera, while it drives the view, has its own (`KartCamFov`).
+    let normal = kart.and_then(|k| k.camera_fov()).unwrap_or(CAM_FOVY);
+    let want = normal * scoped.zoom.unwrap_or(1.0);
     if let Projection::Perspective(PerspectiveProjection { fov, .. }) = &mut *projection {
         if (*fov - want).abs() > f32::EPSILON {
             *fov = want;
