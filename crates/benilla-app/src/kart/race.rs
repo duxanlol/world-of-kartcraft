@@ -273,6 +273,16 @@ impl Active {
         self.grace_until = self.grace_until.max(now + KART_GRACE_SECS);
     }
 
+    /// A frame with our kart aura read: `None` is no object of ours, a worldport's loading screen.
+    /// The server puts a driver back in the kart only once the new map has them (and the summon
+    /// has its cast time), so the grace starts again from the moment we land: a Race Finder race
+    /// on another continent loads for longer than the grace the countdown gave.
+    fn landing(&mut self, kart_aura: Option<bool>, now: f32) {
+        if kart_aura.is_none() {
+            self.grace_until = self.grace_until.max(now + KART_GRACE_SECS);
+        }
+    }
+
     /// The checkpoint to reach next; `None` before there is a course, and once a sprint's finish
     /// is passed (its result is on its way: the finish is reported once).
     fn next(&self) -> Option<usize> {
@@ -619,8 +629,12 @@ pub(crate) fn update(
     // Out of the kart, out of the race; but not while the kart aura stays on us, as it does
     // through the Race Finder's teleport to the start.
     if !drive.active {
+        let kart_aura = profession.kart_aura();
+        if let Some(race) = races.race.as_mut() {
+            race.landing(kart_aura, now);
+        }
         let grace_until = races.race.as_ref().map_or(0.0, |r| r.grace_until);
-        if left_without_kart(profession.kart_aura(), now, grace_until) {
+        if left_without_kart(kart_aura, now, grace_until) {
             if let Some(race) = races.race.take() {
                 profession.send(format!("KARTCRAFT\tR\tQ\t{}", race.id));
             }
@@ -1617,6 +1631,30 @@ mod tests {
         assert!(left_without_kart(
             Some(false),
             100.0 + KART_GRACE_SECS,
+            race.grace_until
+        ));
+    }
+
+    #[test]
+    fn a_far_grid_teleport_keeps_the_race_while_the_kart_comes_back_after_the_load() {
+        // The countdown as the teleport starts, then a loading screen far longer than the grace.
+        let mut race = course();
+        race.count_down(100.0, 28000.0);
+        let mut t = 100.0;
+        while t < 125.0 {
+            race.landing(None, t);
+            assert!(!left_without_kart(None, t, race.grace_until));
+            t += 0.5;
+        }
+        // Landed at 125: no kart yet (the server summons it after we arrive), still racing.
+        race.landing(Some(false), 125.0);
+        assert!(!left_without_kart(Some(false), 128.0, race.grace_until));
+        // In the kart again: racing; never back in it: out, a grace after landing.
+        race.landing(Some(true), 128.5);
+        assert!(!left_without_kart(Some(true), 140.0, race.grace_until));
+        assert!(left_without_kart(
+            Some(false),
+            125.0 + KART_GRACE_SECS,
             race.grace_until
         ));
     }
