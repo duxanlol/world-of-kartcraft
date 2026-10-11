@@ -611,6 +611,7 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
             "World of Kartcraft",
             "Race Finder",
             "Leave race",
+            "Unstuck",
             "Kart garage...",
             "Kartcraft settings...",
             "Hide minimap button",
@@ -1102,5 +1103,32 @@ fn the_game_menu_closes_the_kart_windows_and_they_do_not_open_over_it() {
     assert!(!visible(&s, "GameMenuFrame"));
     s.run("BenillaKartGarage_Toggle()").unwrap();
     assert!(visible(&s, "BenillaKartGarageFrame"));
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
+#[test]
+fn unstuck_asks_the_server_and_says_why_it_waits() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    s.run("SlashCmdList['BENILLA_UNSTUCK']('')").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tU"]);
+    // The server's two refusals reach the chat.
+    s.run(
+        "BenillaKartSaid = {} local said = BenillaKart_Say \
+         BenillaKart_Say = function(t) table.insert(BenillaKartSaid, t) said(t) end",
+    )
+    .unwrap();
+    from_server(&mut s, "R\tUx\t17");
+    from_server(&mut s, "R\tUn");
+    assert_eq!(
+        s.eval::<Vec<String>>("return BenillaKartSaid").unwrap(),
+        [
+            "Unstuck: you can use it again in 17 seconds.",
+            "Unstuck: there is no course on this continent.",
+        ]
+    );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }

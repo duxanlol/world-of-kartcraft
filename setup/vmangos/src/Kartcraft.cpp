@@ -1268,6 +1268,19 @@ namespace Kartcraft
         player->CastSpell(player, SPELL_SUMMON_KART, true);
     }
 
+    // To (x, y) on `map`, on the ground there, facing `o`; in the kart first if `kart`. No terrain
+    // data there: better left where they are, to drive over, than dropped from the sky.
+    static bool TeleportOnto(Player* player, uint32 map, float x, float y, float o, bool kart)
+    {
+        float ground = sTerrainMgr.LoadTerrain(map)->GetHeightStatic(x, y, 500.f);
+        if (ground <= INVALID_HEIGHT)
+            return false;
+        if (kart)
+            SummonKart(player);
+        player->TeleportTo(map, x, y, ground + 0.5f, o);
+        return true;
+    }
+
     static bool TeleportToGrid(Player* player, Course const& c, size_t slot)
     {
         // Their situation may have changed since they said yes: then they stay where they are.
@@ -1282,14 +1295,7 @@ namespace Kartcraft
         float side = GRID_SPACING * (slot % 2 ? 0.5f : -0.5f);
         float x = sx - dx * back - dy * side;
         float y = sy - dy * back + dx * side;
-        float ground = sTerrainMgr.LoadTerrain(c.map)->GetHeightStatic(x, y, 500.f);
-        // No terrain data there: better left where they are, to drive over, than dropped from the sky.
-        if (ground <= INVALID_HEIGHT)
-            return false;
-        float z = ground + 0.5f;
-        SummonKart(player);
-        player->TeleportTo(c.map, x, y, z, std::atan2(dy, dx));
-        return true;
+        return TeleportOnto(player, c.map, x, y, std::atan2(dy, dx), true);
     }
 
     // Where the Race Finder took each racer from, so they can go back when their race is over, as
@@ -1620,6 +1626,67 @@ namespace Kartcraft
 
     // `marshal`: the line comes from a Race Marshal's menu (MarshalSelect), which the player used
     // standing at the start: the start's distance and the kart are not asked for.
+    // "R\tU": a kart stuck in the world (sunk into a hill, wedged in a crease) put back on a course:
+    // in a race under way at the last checkpoint it passed, facing the next, so the race goes on;
+    // else at the start of the nearest course on its map. Once every UNSTUCK_COOLDOWN and never
+    // what CanBeRacedOff refuses (dead, fighting, flying, in an instance), so it is neither a way
+    // out of a fight nor a free road across the world. "R\tUx\t<secs>" says how long to wait,
+    // "R\tUn" that no course is on this map.
+    constexpr uint32 UNSTUCK_COOLDOWN = 30 * IN_MILLISECONDS;
+    static std::unordered_map<uint32, uint32> s_unstuck; // guid low -> when last used (ms)
+
+    static void Unstuck(Player* player, uint32 now)
+    {
+        if (!CanBeRacedOff(player))
+            return;
+        auto used = s_unstuck.find(player->GetGUIDLow());
+        if (used != s_unstuck.end() && WorldTimer::getMSTimeDiff(used->second, now) < UNSTUCK_COOLDOWN)
+        {
+            uint32 left = UNSTUCK_COOLDOWN - WorldTimer::getMSTimeDiff(used->second, now);
+            SendLine(player, "KARTCRAFT\tR\tUx\t" + std::to_string((left + 999) / IN_MILLISECONDS));
+            return;
+        }
+        for (auto const& entry : s_races)
+        {
+            Race const& r = entry.second;
+            if (!r.start || int32(now - r.start) < 0)
+                continue;
+            for (Racer const& x : r.racers)
+            {
+                if (x.guid != player->GetObjectGuid() || x.finished)
+                    continue;
+                Course const& c = *r.course;
+                size_t n = c.points.size();
+                auto const& at = c.points[std::min<size_t>(x.checkpoint, n - 1)];
+                auto const& next = c.points[c.laps ? (x.checkpoint + 1) % n : std::min<size_t>(x.checkpoint + 1, n - 1)];
+                float o = std::atan2(next.second - at.second, next.first - at.first);
+                if (TeleportOnto(player, c.map, at.first, at.second, o, false))
+                    s_unstuck[player->GetGUIDLow()] = now;
+                return;
+            }
+        }
+        Course const* nearest = nullptr;
+        float best = 0.f;
+        for (Course const& c : COURSES)
+        {
+            if (c.map != player->GetMapId() || c.points.size() < 2)
+                continue;
+            float d = DistanceTo(player, c.points[0]);
+            if (!nearest || d < best)
+            {
+                nearest = &c;
+                best = d;
+            }
+        }
+        if (!nearest)
+        {
+            SendLine(player, "KARTCRAFT\tR\tUn");
+            return;
+        }
+        if (TeleportToGrid(player, *nearest, 0))
+            s_unstuck[player->GetGUIDLow()] = now;
+    }
+
     static void HandleRace(Player* player, std::string const& body, bool marshal)
     {
         uint32 now = WorldTimer::getMSTime();
@@ -1634,6 +1701,12 @@ namespace Kartcraft
             if (tab == std::string::npos)
                 tab = body.size();
             f.push_back(body.substr(at, tab - at));
+        }
+        // Unstuck works in the kart or out of it.
+        if (f.size() >= 2 && f[1] == "U")
+        {
+            Unstuck(player, now);
+            return;
         }
         // The finder's verbs work on foot; the rest need the kart, but for a marshal's and for
         // leaving: a racer the marshal put in on foot may leave before the kart's aura lands.
