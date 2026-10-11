@@ -18,12 +18,19 @@
 //!   they open, and the racers whose karts the kart data holds, one `key<TAB>name` a line; at load
 //!   and whenever the skill moves.
 //!
+//! - `BENILLA_KART_TRACKMAP(name, laps, points)`: the race map's track when it changes, its
+//!   checkpoints `x,y;x,y;...` (WoW x, y); an empty name when there is no race.
+//! - `BENILLA_KART_RACERS(list)`: the racers on it, one `name<TAB>x<TAB>y<TAB>place<TAB>me<TAB>near`
+//!   a line (`me`, `near` 1 or 0), at most RACERS_HZ times a second and only when one moved.
+//!
 //! The Race Finder itself talks to the server over the addon channel, in Lua.
 
 use benilla_ui::script::{ScriptValue, UiScript};
 use bevy::prelude::*;
 
-use crate::kart::{class_list, racer_list, KartOverlay, ScoreLines, COURSES, ZONES};
+use crate::kart::{
+    class_list, racer_list, KartOverlay, RaceMap, RacerDot, ScoreLines, COURSES, ZONES,
+};
 use crate::ui_script::VmMemo;
 
 /// What this VM was last sent, so an unchanged frame sends nothing.
@@ -34,9 +41,17 @@ pub(crate) struct Sent {
     courses: bool,
     /// The skill the garage was last sent at.
     garage: Option<Option<u16>>,
+    /// The race map's track and racers as last sent, and when the racers were.
+    track: Option<Option<RaceMap>>,
+    racers: Option<String>,
+    racers_at: f32,
 }
 
+/// How often (per second) the race map's racers may move: often enough to follow a kart.
+const RACERS_HZ: f32 = 10.0;
+
 pub(crate) fn feed(
+    time: Res<Time>,
     overlay: Res<KartOverlay>,
     script: Option<NonSendMut<UiScript>>,
     mut sent: Local<VmMemo<Sent>>,
@@ -53,6 +68,24 @@ pub(crate) fn feed(
         script.fire_event("BENILLA_KART_COURSES", vec![ScriptValue::Str(zone_list())]);
         script.fire_event("BENILLA_KART_TRACKS", vec![ScriptValue::Str(track_list())]);
         sent.courses = true;
+    }
+    // The race map: its track when it changes, its racers at most RACERS_HZ a second.
+    if sent.track.as_ref() != Some(&overlay.track) {
+        script.fire_event("BENILLA_KART_TRACKMAP", track_args(overlay.track.as_ref()));
+        sent.track = Some(overlay.track.clone());
+        sent.racers = None;
+    }
+    let now = time.elapsed_secs();
+    if now - sent.racers_at >= 1.0 / RACERS_HZ {
+        let racers = racer_lines(&overlay.racers);
+        if sent.racers.as_ref() != Some(&racers) {
+            script.fire_event(
+                "BENILLA_KART_RACERS",
+                vec![ScriptValue::Str(racers.clone())],
+            );
+            sent.racers = Some(racers);
+            sent.racers_at = now;
+        }
     }
     let race = (overlay.banner.clone(), overlay.results.clone());
     if sent.race.as_ref() != Some(&race) {
@@ -133,6 +166,42 @@ fn track_list() -> String {
                 c.laps,
                 clean(&c.description()),
                 points.join(";")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The race map's track as its event carries it; no race is an empty name.
+fn track_args(track: Option<&RaceMap>) -> Vec<ScriptValue> {
+    let Some(t) = track else {
+        return vec![ScriptValue::Str(String::new())];
+    };
+    let points: Vec<String> = t
+        .points
+        .iter()
+        .map(|p| format!("{:.1},{:.1}", p[0], p[1]))
+        .collect();
+    vec![
+        ScriptValue::Str(t.name.clone()),
+        ScriptValue::Number(f64::from(t.laps)),
+        ScriptValue::Str(points.join(";")),
+    ]
+}
+
+/// The race map's racers, a line each (see the module's list).
+fn racer_lines(racers: &[RacerDot]) -> String {
+    racers
+        .iter()
+        .map(|r| {
+            format!(
+                "{}\t{:.1}\t{:.1}\t{}\t{}\t{}",
+                r.name,
+                r.at[0],
+                r.at[1],
+                r.place,
+                u8::from(r.me),
+                u8::from(r.near)
             )
         })
         .collect::<Vec<_>>()

@@ -1314,3 +1314,99 @@ fn unstuck_asks_the_server_and_says_why_it_waits() {
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
+
+#[test]
+fn the_race_map_draws_the_track_and_the_racers_on_it() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let track = |s: &mut UiScript, name: &str, points: &str| {
+        s.fire_event(
+            "BENILLA_KART_TRACKMAP",
+            vec![
+                ScriptValue::Str(name.into()),
+                ScriptValue::Number(3.0),
+                ScriptValue::Str(points.into()),
+            ],
+        );
+        s.tick(0.0);
+    };
+    let shown = |s: &UiScript| -> bool {
+        s.eval("return BenillaKartMapFrame:IsVisible() == 1")
+            .unwrap()
+    };
+
+    // A square circuit, 100 yd a side: the frame shows, titled, a trail of dots round it.
+    track(&mut s, "Elwynn Loop", "0,0;100,0;100,100;0,100");
+    assert!(shown(&s));
+    assert_eq!(
+        s.eval::<String>("return BenillaKartMapFrameTitle:GetText()")
+            .unwrap(),
+        "Elwynn Loop"
+    );
+    let route: u32 = s
+        .eval(
+            "local n = 0 for i = 1, table.getn(BenillaKartMap.route) do \
+             if BenillaKartMap.route[i]:IsVisible() then n = n + 1 end end return n",
+        )
+        .unwrap();
+    assert!(route > 40, "only {route} dots of route");
+
+    // Us at the start, a rival beside us, one far off at a checkpoint: dimmed.
+    s.fire_event(
+        "BENILLA_KART_RACERS",
+        vec![ScriptValue::Str(
+            "Probesix\t0\t0\t1\t1\t1\nGoblin\t0\t10\t2\t0\t1\nGnome\t100\t100\t3\t0\t0".into(),
+        )],
+    );
+    s.tick(0.0);
+    let (x, y): (f64, f64) = (
+        s.eval("local _, _, _, x = BenillaKartMap.me:GetPoint(1) return x")
+            .unwrap(),
+        s.eval("local _, _, _, _, y = BenillaKartMap.me:GetPoint(1) return y")
+            .unwrap(),
+    );
+    assert!(
+        (0.0..=172.0).contains(&x) && (-172.0..=0.0).contains(&y),
+        "me at {x},{y}"
+    );
+    assert!(s
+        .eval::<bool>("return BenillaKartMap.me:IsVisible() == 1")
+        .unwrap());
+    // Slot 1 is us; 2 the rival, 3 the far one.
+    assert_eq!(
+        s.eval::<f64>("return BenillaKartMap.racers[2]:GetAlpha()")
+            .unwrap(),
+        1.0
+    );
+    assert!(
+        s.eval::<f64>("return BenillaKartMap.racers[3]:GetAlpha()")
+            .unwrap()
+            < 0.5
+    );
+    assert_eq!(
+        s.eval::<String>("return BenillaKartMap.labels[3]:GetText()")
+            .unwrap(),
+        "3"
+    );
+
+    // A smaller field hides the rest; no race, no map.
+    s.fire_event(
+        "BENILLA_KART_RACERS",
+        vec![ScriptValue::Str("Goblin\t0\t10\t1\t0\t1".into())],
+    );
+    s.tick(0.0);
+    assert!(!s
+        .eval::<bool>("return BenillaKartMap.me:IsVisible() == 1")
+        .unwrap());
+    assert!(!s
+        .eval::<bool>("return BenillaKartMap.racers[3]:IsVisible() == 1")
+        .unwrap());
+    track(&mut s, "", "");
+    assert!(!shown(&s));
+    assert!(s
+        .eval::<bool>("return BenillaKartMapFrame:IsMovable() == 1")
+        .unwrap());
+}

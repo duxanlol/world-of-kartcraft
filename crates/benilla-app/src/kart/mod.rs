@@ -22,9 +22,9 @@ mod settings;
 mod sound;
 mod ui;
 pub(crate) use garage::{class_list, racer_list};
-pub(crate) use race::{COURSES, ZONES};
+pub(crate) use race::{RaceMap, COURSES, ZONES};
 pub(crate) use seat::SEAT_ANIMS;
-pub(crate) use ui::{KartOverlay, ScoreLines};
+pub(crate) use ui::{KartOverlay, RacerDot, ScoreLines};
 mod weapons;
 
 use benilla_world::collision::WorldCollision;

@@ -196,6 +196,21 @@ pub(crate) struct Offer {
     host: String,
 }
 
+/// What the race map draws: the track, and where each racer last passed a checkpoint (for one
+/// too far off for its kart to be relayed).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RaceMap {
+    /// The course's name.
+    pub(crate) name: String,
+    pub(crate) laps: u8,
+    /// Checkpoints, WoW x, y; the first is the start.
+    pub(crate) points: Vec<[f32; 2]>,
+    /// The standings, leader first.
+    pub(crate) order: Vec<String>,
+    /// Each racer and the checkpoint the server last has them past, WoW x, y.
+    pub(crate) checkpoints: Vec<(String, [f32; 2])>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Active {
     id: u32,
@@ -361,6 +376,28 @@ impl Races {
     /// its crates at the start; they go when we leave or finish).
     pub(crate) fn weapons_race(&self) -> Option<u32> {
         self.race.as_ref().filter(|r| !r.done).map(|r| r.id)
+    }
+
+    /// The race's track for the race map: once its course line has come.
+    pub(crate) fn map(&self) -> Option<RaceMap> {
+        let race = self.race.as_ref().filter(|r| r.points.len() >= 2)?;
+        let name = COURSES
+            .iter()
+            .find(|c| c.key == race.course)
+            .map_or_else(|| race.course.clone(), |c| c.name.clone());
+        // Each racer at the last checkpoint the server has them past (the start before any).
+        let n = race.points.len();
+        let at = |name: &String| {
+            let cp = race.progress.get(name).map_or(0, |p| usize::from(p.1));
+            race.points[cp.min(n - 1)]
+        };
+        Some(RaceMap {
+            name,
+            laps: race.laps,
+            points: race.points.clone(),
+            order: race.order.clone(),
+            checkpoints: race.roster.iter().map(|r| (r.clone(), at(r))).collect(),
+        })
     }
 
     /// The racers by name, leader first.
