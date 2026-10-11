@@ -21,7 +21,9 @@ WHAT YOU NEED
 
 FIRST RUN
 ---------
-Double-click "Play Kartcraft.bat". It asks for:
+Easiest: put your WoW 1.12.1 folder and your CTR .bin/.cue inside the World of Kartcraft folder
+(or unzip World of Kartcraft inside your WoW folder), then double-click "Play Kartcraft.bat". It
+finds both by itself. Otherwise it asks for:
   1. your WoW 1.12.1 folder,
   2. your CTR .bin file (it converts the kart, sounds, effects, HUD and music into kart-data\,
      which takes a few seconds),
