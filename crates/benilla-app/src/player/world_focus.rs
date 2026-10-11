@@ -100,6 +100,10 @@ pub(super) fn publish_view_focus(
             let wow = benilla_assets::coords::bevy_to_wow(p.pos + lead);
             if p.detached || flying {
                 ViewFocus::detached(wow, paced)
+            } else if lead != Vec3::ZERO {
+                // Ahead of the body: its tile loading is the point, not a body off the world, so
+                // the loading cover's backstop does not read it as the ground under us.
+                ViewFocus::ahead(wow, paced)
             } else {
                 ViewFocus::body(wow, paced)
             }
