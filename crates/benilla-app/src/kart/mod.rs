@@ -17,11 +17,13 @@ mod profession;
 mod race;
 mod remote;
 mod score;
+mod seat;
 mod settings;
 mod sound;
 mod ui;
 pub(crate) use garage::{class_list, racer_list};
 pub(crate) use race::{COURSES, ZONES};
+pub(crate) use seat::SEAT_ANIMS;
 pub(crate) use ui::{KartOverlay, ScoreLines};
 mod weapons;
 
@@ -404,33 +406,59 @@ fn update(
     drive.camera = view.camera;
 }
 
-/// Our character in the kart's seat: the body takes the kart's tilt and sits at its seat anchor.
-/// After the controller, which places the body at the kart's origin facing its heading.
-fn seat(view: Res<KartView>, mut body: Query<&mut Transform, With<crate::net::Embodied>>) {
+/// Our character in the kart's seat: the body takes the kart's tilt and sits its chair pose's
+/// pelvis on the seat anchor ([`seat::place`]). After the controller, which places the body at
+/// the kart's origin facing its heading.
+#[allow(clippy::type_complexity)]
+fn seat(
+    view: Res<KartView>,
+    mut fits: ResMut<seat::SeatFits>,
+    anim_data: Option<Res<crate::creature_anim::AnimData>>,
+    mut body: Query<
+        (
+            &mut Transform,
+            Option<&benilla_assets::ModelAnimations>,
+            Option<&benilla_world::rig_anim::RigPose>,
+        ),
+        With<crate::net::Embodied>,
+    >,
+) {
     if !view.active {
         return;
     }
-    let Ok(mut t) = body.single_mut() else {
+    let Ok((mut t, anims, rig)) = body.single_mut() else {
         return;
     };
-    let kart = view.transform;
-    t.translation = kart.transform_point(model::seat() + seat_nudge());
-    t.rotation = kart.rotation * driver_lean(view.steer);
+    let catalog = anim_data.as_deref().map(|d| &d.0);
+    let fit = anims
+        .zip(rig)
+        .and_then(|(anims, rig)| fits.get(anims, rig, catalog));
+    (t.translation, t.rotation) = seat::place(
+        &view.transform,
+        model::seat() + seat_nudge(),
+        driver_turn(),
+        driver_lean(view.steer),
+        fit,
+        t.scale.x,
+    );
+}
+
+/// The driver's facing in the kart: the body's model faces −Z at rest, the kart's +Z.
+pub(crate) fn driver_turn() -> Quat {
+    Quat::from_rotation_y(std::f32::consts::PI)
 }
 
 /// The driver's lean in the seat, as CTR's racers throw their weight into a turn: up to
-/// [`LEAN`] radians toward the steer, + left. The body's model faces −Z at rest, the kart's +Z.
+/// [`LEAN`] radians toward the steer, + left, about the kart's forward axis (its left is +X).
 pub(crate) fn driver_lean(steer: f32) -> Quat {
-    // About the kart's forward axis, toward the inside of the turn (its left is +X).
     Quat::from_rotation_z(-steer.clamp(-1.0, 1.0) * LEAN)
-        * Quat::from_rotation_y(std::f32::consts::PI)
 }
 
 /// The most a driver leans into a turn, radians.
 const LEAN: f32 = 0.2;
 
-/// `WOW_KART_SEAT=x,y,z` (meters, the kart's frame) moves the driver off CTR's seat anchor, for
-/// races whose saddle pose sits higher or lower.
+/// `WOW_KART_SEAT=x,y,z` (meters, the kart's frame) moves the seat anchor our driver's pelvis
+/// rests on, to try a seat by eye.
 fn seat_nudge() -> Vec3 {
     static NUDGE: std::sync::OnceLock<Vec3> = std::sync::OnceLock::new();
     *NUDGE.get_or_init(|| {
@@ -444,10 +472,14 @@ fn seat_nudge() -> Vec3 {
     })
 }
 
+/// How much bigger than its physics the kart is drawn: a WoW character is taller than the CTR
+/// racer the kart was built for.
+const MODEL_SIZE: f32 = 1.25;
+
 pub(crate) fn plugin(app: &mut App) {
     // A WoW character in the kart, and WoW's action bars along the bottom of the screen.
     kartcraft::set_framing(kartcraft::Framing {
-        model_size: 1.25,
+        model_size: MODEL_SIZE,
         look_drop: 70.0,
         hud_bottom_inset: 0.075,
         // A WoW character's head stands above a CTR racer's in the seat.
@@ -462,6 +494,7 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<sound::KartAudio>()
         .init_resource::<score::KartScore>()
         .init_resource::<remote::RemoteKarts>()
+        .init_resource::<seat::SeatFits>()
         .init_resource::<kartcraft::hud::KartHud>()
         .init_resource::<kartcraft::hud::HudExtras>()
         .init_resource::<kartcraft::effects::KartEffects>()

@@ -261,6 +261,17 @@ pub(crate) fn build_skeleton(skel: &Skeleton) -> (ModelSkeleton, Vec<Mat4>) {
     )
 }
 
+/// A rest skeleton baked to Bevy space as a loaded model holds it, for a reader that poses an
+/// M2 off its bytes, outside the asset loader.
+pub fn model_skeleton(skel: &Skeleton) -> ModelSkeleton {
+    build_skeleton(skel).0
+}
+
+/// One sequence's [`PoseClip`] as a loaded model's [`PoseSource`] holds it, for the same readers.
+pub fn pose_clip(anim: &ModelAnimation, skeleton: &ModelSkeleton) -> PoseClip {
+    build_animation_clip(anim, skeleton).1
+}
+
 /// Each bone's Bevy-space pivot, the one source for the joints and the attachment offsets.
 pub(crate) fn skeleton_pivots(skel: &Skeleton) -> Vec<Vec3> {
     skel.bones.iter().map(|b| wow_to_bevy(b.pivot)).collect()

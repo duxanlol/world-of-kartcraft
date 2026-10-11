@@ -2578,6 +2578,83 @@ fn the_mount_transition_takes_bone_0_back_from_a_full_body_one_shot() {
     assert_eq!(playing(&app), Some(0), "back on its own feet, standing");
 }
 
+/// World of Kartcraft: a kart driver (Summon Kart's aura over the mount field) sits in the seat
+/// with `SitChairLow` (102), a model without it holds the saddle, and a rider without the aura
+/// keeps the saddle.
+#[test]
+fn a_kart_driver_sits_the_chair_pose_and_a_rider_the_saddle() {
+    use benilla_protocol::field::{FIELD_UNIT_AURA, FIELD_UNIT_AURAFLAGS};
+    use benilla_protocol::ObjectFields;
+
+    const FIELD_MOUNTDISPLAYID: u16 = 133;
+    const MOUNT: u16 = 91;
+    let sit = crate::kart::SEAT_ANIMS[0];
+    assert_eq!(sit, 102, "SitChairLow");
+
+    let mut app = app();
+    let spawn = |app: &mut App, sits: bool, kart: bool| {
+        let mut clips = vec![clip(0, 1, true), clip(MOUNT, 2, true)];
+        if sits {
+            clips.push(clip(sit, 3, true));
+        }
+        let model = ModelAnimations {
+            graph: Handle::default(),
+            clips,
+            hand_close: [None, None],
+            playable_animation_lookup: Vec::new(),
+            animation_lookup: Vec::new(),
+            global_bones: Vec::new(),
+            first_seq: None,
+            pose: Default::default(),
+        };
+        // Slot 0's aura with its effect-index flag set, as a live aura reads.
+        let aura = if kart {
+            benilla_formats::kartcraft::SPELL_SUMMON_KART
+        } else {
+            0
+        };
+        app.world_mut()
+            .spawn((
+                model,
+                AnimationPlayer::default(),
+                AnimationTransitions::new(),
+                AnimDriver::default(),
+                crate::net::ObjectStore(ObjectFields::from_pairs(&[
+                    (FIELD_MOUNTDISPLAYID, 2404),
+                    (FIELD_UNIT_AURA, aura),
+                    (FIELD_UNIT_AURAFLAGS, 0x2),
+                ])),
+                MovementState::default(),
+            ))
+            .id()
+    };
+    let driver = spawn(&mut app, true, true);
+    let no_sit = spawn(&mut app, false, true);
+    let rider = spawn(&mut app, true, false);
+    app.update();
+    app.update();
+    // The clip on screen: Stand is node 1, Mount node 2, the sit node 3.
+    let plays = |app: &App, unit: Entity, node: usize| {
+        app.world()
+            .get::<AnimationPlayer>(unit)
+            .unwrap()
+            .is_playing_animation(AnimationNodeIndex::new(node))
+    };
+    assert_eq!(
+        drv_of(&app, driver).active_anim(),
+        Some(sit),
+        "the kart's seat"
+    );
+    assert!(plays(&app, driver, 3) && !plays(&app, driver, 2));
+    assert!(plays(&app, no_sit, 2), "no sit: the saddle");
+    assert_eq!(
+        drv_of(&app, rider).active_anim(),
+        Some(MOUNT),
+        "a real mount"
+    );
+    assert!(plays(&app, rider, 2) && !plays(&app, rider, 3));
+}
+
 /// The mount watcher's two op4 `0x7121a0` calls differ in one literal: the build cross-fades
 /// (`0x607b35 push 0x1`), the teardown cuts (`0x607d1c push 0x0`), seen in the outgoing weight.
 #[test]

@@ -216,7 +216,15 @@ pub(crate) fn update(
     mut karts: ResMut<RemoteKarts>,
     mut spawner: KartSpawner,
     mut units: Query<
-        (Entity, &Guid, &ObjectStore, &RemoteMotion, &mut Transform),
+        (
+            Entity,
+            &Guid,
+            &ObjectStore,
+            &RemoteMotion,
+            &mut Transform,
+            Option<&benilla_assets::ModelAnimations>,
+            Option<&benilla_world::rig_anim::RigPose>,
+        ),
         (Without<SelfPlayer>, Without<KartRoot>),
     >,
     mut kart_parts: Query<
@@ -229,12 +237,15 @@ pub(crate) fn update(
         With<KartRoot>,
     >,
     weapons: Res<kartcraft::weapons::Weapons>,
+    mut fits: ResMut<super::seat::SeatFits>,
+    anim_data: Option<Res<crate::creature_anim::AnimData>>,
 ) {
+    let catalog = anim_data.as_deref().map(|d| &d.0);
     let now = time.elapsed_secs();
     let dt = time.delta_secs();
     let karts = &mut *karts;
     let mut live = Vec::new();
-    for (entity, guid, store, motion, mut body) in &mut units {
+    for (entity, guid, store, motion, mut body, anims, rig) in &mut units {
         if !super::drives_kart(store) {
             continue;
         }
@@ -335,9 +346,19 @@ pub(crate) fn update(
                 speed,
             };
         }
-        // The driver in the seat, as ours.
-        body.translation = kart.transform_point(kartcraft::model::seat());
-        body.rotation = kart.rotation * super::driver_lean(state.steer);
+        // The driver in the seat of their kart, as ours.
+        let fit = anims
+            .zip(rig)
+            .and_then(|(anims, rig)| fits.get(anims, rig, catalog));
+        let scale = body.scale.x;
+        (body.translation, body.rotation) = super::seat::place(
+            &kart,
+            kartcraft::model::seat_of(&remote.racer),
+            super::driver_turn(),
+            super::driver_lean(state.steer),
+            fit,
+            scale,
+        );
     }
     // Karts whose drivers left the kart or our sight.
     let gone: Vec<Entity> = karts
