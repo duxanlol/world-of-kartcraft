@@ -1171,6 +1171,9 @@ namespace Kartcraft
     constexpr uint32 POP_ANSWER = 20 * IN_MILLISECONDS;
     // Countdown plus time for a teleport to settle before it.
     constexpr uint32 GRID_COUNTDOWN = COUNTDOWN + 4 * IN_MILLISECONDS;
+    // More when a racer comes from another map: a loading screen, then the world streaming in
+    // before the client acknowledges it, so they reach the grid before GO.
+    constexpr uint32 FAR_SETTLE = 20 * IN_MILLISECONDS;
     constexpr float GRID_SPACING = 4.f;
 
     struct Queued
@@ -1355,9 +1358,11 @@ namespace Kartcraft
         r.host = pop.members.front().guid;
         r.created = now;
         size_t slot = 0;
+        bool far = false;
         for (Queued const& q : pop.members)
             if (Player* p = ObjectAccessor::FindPlayer(q.guid))
             {
+                far |= p->GetMapId() != pop.course->map;
                 r.racers.push_back({ p->GetObjectGuid(), p->GetName() });
                 Origin from = { p->GetMapId(), p->GetPositionX(), p->GetPositionY(), p->GetPositionZ(),
                     p->GetOrientation(), now };
@@ -1365,7 +1370,7 @@ namespace Kartcraft
                     s_origins[p->GetGUIDLow()] = from;
             }
         SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(raceId) + "\t" + Roster(r));
-        StartRace(raceId, r, now, GRID_COUNTDOWN);
+        StartRace(raceId, r, now, far ? GRID_COUNTDOWN + FAR_SETTLE : GRID_COUNTDOWN);
     }
 
     // Drops the stale, fails late ready checks and pops the courses that are ready.

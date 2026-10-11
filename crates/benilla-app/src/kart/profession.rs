@@ -51,6 +51,13 @@ impl Profession<'_, '_> {
             .is_some_and(|a| a.spells.contains(&spell))
     }
 
+    /// Whether Summon Kart is on us, or `None` while we have no object of our own: a worldport
+    /// drops it (`SMSG_NEW_WORLD`) until the new map has us, and that is no answer either way.
+    pub(super) fn kart_aura(&self) -> Option<bool> {
+        self.self_q.single().ok()?;
+        Some(self.auras().kart)
+    }
+
     pub(super) fn auras(&self) -> KartAuras {
         let mut auras = KartAuras::default();
         let Ok(store) = self.self_q.single() else {
