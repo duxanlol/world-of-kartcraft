@@ -956,6 +956,8 @@ pub(crate) struct Looks {
     bright: Handle<StandardMaterial>,
     dim: Handle<StandardMaterial>,
     guide: Handle<StandardMaterial>,
+    /// The guide arrow's outline: a black shell around it, its front faces culled.
+    guide_edge: Handle<StandardMaterial>,
     /// The checkpoint arrow: its face and outline, the next one's and the one after's colour,
     /// and the outline's.
     cp_face: Handle<Mesh>,
@@ -989,6 +991,12 @@ impl Looks {
             bright: materials.add(glow(Color::srgb(1.0, 0.85, 0.2))),
             dim: materials.add(glow(Color::srgb(0.18, 0.12, 0.04))),
             guide: materials.add(solid(Color::srgb(1.0, 0.6, 0.08))),
+            guide_edge: materials.add(StandardMaterial {
+                base_color: Color::srgb(0.02, 0.015, 0.01),
+                unlit: true,
+                cull_mode: Some(bevy::render::render_resource::Face::Front),
+                ..default()
+            }),
             cp_face: meshes.add(face),
             cp_outline: meshes.add(outline),
             cp_next: materials.add(solid(Color::srgb(1.0, 0.85, 0.1))),
@@ -1126,6 +1134,30 @@ fn arrow_mesh() -> Mesh {
     mesh.duplicate_vertices();
     mesh.compute_flat_normals();
     mesh
+}
+
+/// The guide arrow's outline: the arrow itself grown about its centre, wider and much thicker so
+/// the shell shows round its rim from any side; its front faces culled, it is only the edge.
+const GUIDE_EDGE: Vec3 = Vec3::new(1.14, 2.6, 1.12);
+
+/// The guide arrow's rotation: its −Z tip along the ground toward `to`, then its face (+Y) tipped
+/// `tilt` degrees about the arrow's own axis toward `eye`, so it is not seen edge-on.
+fn guide_rotation(at: Vec3, to: Vec3, eye: Vec3, tilt: f32) -> Quat {
+    let level = pointing(at, Vec3::new(to.x, at.y, to.z));
+    let tip = level * Vec3::NEG_Z;
+    let to_eye = eye - at;
+    let side = to_eye - tip * to_eye.dot(tip) - Vec3::Y * to_eye.y;
+    let Some(side) = side.try_normalize() else {
+        return level;
+    };
+    // Tipping +Y toward `side` is a turn about the tip's axis, signed by which side the eye is.
+    let angle = tilt.clamp(0.0, GuideHud::MAX_TILT).to_radians();
+    let sign = if Vec3::Y.cross(side).dot(tip) >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    Quat::from_axis_angle(tip, sign * angle) * level
 }
 
 /// The rotation turning the arrow's −Z to point from `from` to `to` (Bevy world, level).
@@ -1305,6 +1337,10 @@ pub(crate) struct GuideHud {
     pub(crate) shown: bool,
     /// Being placed (`KartArrowMove`): shown, pointing north, race or not.
     pub(crate) editing: bool,
+    /// How far its face tips up toward the viewer, degrees (`KartArrowTilt`): 0 lies level.
+    pub(crate) tilt: f32,
+    /// The field of view it is seen through, degrees (`KartArrowFov`): narrower is flatter.
+    pub(crate) fov: f32,
 }
 
 impl Default for GuideHud {
@@ -1315,6 +1351,8 @@ impl Default for GuideHud {
             scale: 1.0,
             shown: true,
             editing: false,
+            tilt: 30.0,
+            fov: 45.0,
         }
     }
 }
@@ -1322,6 +1360,17 @@ impl Default for GuideHud {
 impl GuideHud {
     pub(crate) const MIN_SCALE: f32 = 0.4;
     pub(crate) const MAX_SCALE: f32 = 3.0;
+    pub(crate) const MAX_TILT: f32 = 80.0;
+    pub(crate) const MIN_FOV: f32 = 20.0;
+    pub(crate) const MAX_FOV: f32 = 110.0;
+
+    /// How far out the arrow floats, yards, to be seen through its own field of view from a
+    /// camera with `world_fov` (radians): the same size on screen, its perspective that of a
+    /// camera with `fov`. Further out and larger is flatter; capped so it stays close in.
+    fn distance(&self, world_fov: f32) -> f32 {
+        let own = self.fov.clamp(Self::MIN_FOV, Self::MAX_FOV).to_radians();
+        (GUIDE_DISTANCE * (world_fov / 2.0).tan() / (own / 2.0).tan()).clamp(1.0, 24.0)
+    }
 
     /// The arrow's place in front of a camera looking down −Z with this vertical field of view
     /// and aspect, `distance` ahead: the point under (x, y) on screen.
@@ -1404,12 +1453,13 @@ pub(crate) fn guide(
         Projection::Perspective(p) => (p.fov, p.aspect_ratio),
         _ => (1.0, 16.0 / 9.0),
     };
-    let local = hud.local_position(fov, aspect, GUIDE_DISTANCE);
-    // Level in the world, pointing along the ground at the checkpoint, seen from the camera.
+    let distance = hud.distance(fov);
+    let local = hud.local_position(fov, aspect, distance);
+    // Pointing along the ground at the checkpoint, its face tipped up toward the camera.
     let at = cam_at.transform_point(local);
-    let world = pointing(at, Vec3::new(towards.x, at.y, towards.z));
+    let world = guide_rotation(at, towards, cam_at.translation(), hud.tilt);
     let rotation = cam_at.compute_transform().rotation.inverse() * world;
-    let scale = Vec3::splat(GUIDE_SIZE * hud.scale);
+    let scale = Vec3::splat(GUIDE_SIZE * hud.scale * distance / GUIDE_DISTANCE);
     match arrows.single_mut() {
         Ok((_, mut t, parent)) if parent.parent() == cam => {
             t.translation = local;
@@ -1421,16 +1471,23 @@ pub(crate) fn guide(
                 commands.entity(e).despawn();
             }
             let looks = looks.get_or_insert_with(|| Looks::new(&mut meshes, &mut materials));
-            commands.spawn((
-                GuideArrow,
-                Mesh3d(looks.arrow.clone()),
-                MeshMaterial3d(looks.guide.clone()),
-                Transform::from_translation(local)
-                    .with_rotation(rotation)
-                    .with_scale(scale),
-                ChildOf(cam),
-                Name::new("race guide arrow"),
-            ));
+            commands
+                .spawn((
+                    GuideArrow,
+                    Mesh3d(looks.arrow.clone()),
+                    MeshMaterial3d(looks.guide.clone()),
+                    Transform::from_translation(local)
+                        .with_rotation(rotation)
+                        .with_scale(scale),
+                    ChildOf(cam),
+                    Name::new("race guide arrow"),
+                ))
+                .with_child((
+                    Mesh3d(looks.arrow.clone()),
+                    MeshMaterial3d(looks.guide_edge.clone()),
+                    Transform::from_scale(GUIDE_EDGE),
+                    Name::new("race guide arrow outline"),
+                ));
         }
     }
 }
@@ -1676,6 +1733,52 @@ mod tests {
         // An eye straight down the line still gives a proper rotation along it.
         let r = checkpoint_arrow_rotation(Vec3::ZERO, Vec3::X, Vec3::X * 50.0);
         assert!((r * Vec3::Y).abs_diff_eq(Vec3::X, 1e-4) && r.is_normalized());
+    }
+
+    #[test]
+    fn the_guide_arrow_points_at_the_checkpoint_and_tips_its_face_toward_the_eye() {
+        let at = Vec3::new(0.0, 2.0, 0.0);
+        let to = Vec3::new(50.0, 0.0, -30.0);
+        let level_tip = Vec3::new(to.x, 0.0, to.z).normalize();
+        for eye in [
+            Vec3::new(-6.0, 4.0, 3.0),
+            Vec3::new(3.0, 3.0, 8.0),
+            Vec3::new(9.0, 1.0, -9.0),
+        ] {
+            let level = guide_rotation(at, to, eye, 0.0);
+            let tilted = guide_rotation(at, to, eye, 40.0);
+            // Either way the tip lies along the ground toward the checkpoint.
+            assert!((level * Vec3::NEG_Z).abs_diff_eq(level_tip, 1e-4));
+            assert!((tilted * Vec3::NEG_Z).abs_diff_eq(level_tip, 1e-4));
+            // Level, the face is up; tilted 40 degrees, it leans that far toward the eye.
+            assert!((level * Vec3::Y).abs_diff_eq(Vec3::Y, 1e-4));
+            let face = tilted * Vec3::Y;
+            assert!((face.y - 40f32.to_radians().cos()).abs() < 1e-4);
+            // It leans to the eye's side of the arrow, across the ground square to its tip.
+            let to_eye = eye - at;
+            let side = to_eye - level_tip * to_eye.dot(level_tip) - Vec3::Y * to_eye.y;
+            assert!(
+                Vec3::new(face.x, 0.0, face.z).dot(side) > 0.0,
+                "{eye}: {face}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_guide_arrow_s_own_field_of_view_moves_it_out_at_the_same_size() {
+        let world = 45f32.to_radians();
+        let mut hud = GuideHud::default();
+        // At the world's own field of view it floats where it always has.
+        assert!((hud.distance(world) - GUIDE_DISTANCE).abs() < 1e-4);
+        // Narrower is further out and grown alike, so its size on screen holds.
+        hud.fov = 25.0;
+        let d = hud.distance(world);
+        assert!(d > GUIDE_DISTANCE * 1.5);
+        let on_screen = |d: f32| (GUIDE_SIZE * d / GUIDE_DISTANCE) / d;
+        assert!((on_screen(d) - on_screen(GUIDE_DISTANCE)).abs() < 1e-6);
+        // Wider comes in, never closer than a yard.
+        hud.fov = 110.0;
+        assert!(hud.distance(world) < GUIDE_DISTANCE && hud.distance(world) >= 1.0);
     }
 
     #[test]

@@ -736,6 +736,16 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "Kartcraft's own — the race's guide arrow; 1.12 has no kart",
     ),
     ours(
+        "KartArrowTilt",
+        "30",
+        "Kartcraft's own — the race's guide arrow; 1.12 has no kart",
+    ),
+    ours(
+        "KartArrowFov",
+        "45",
+        "Kartcraft's own — the race's guide arrow; 1.12 has no kart",
+    ),
+    ours(
         "KartArrowMove",
         "0",
         "Kartcraft's own — the guide arrow's placement mode; 1.12 has no kart",

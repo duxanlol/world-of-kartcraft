@@ -1110,6 +1110,8 @@
             frame.refreshing = 1
             BenillaKartSettingsFrameArrowShow:SetChecked(BenillaKart_Flag("KartArrowShow"))
             BenillaKartSettingsFrameArrowSize:SetValue(tonumber(GetCVar("KartArrowSize")) or 1)
+            BenillaKartSettingsFrameArrowTilt:SetValue(tonumber(GetCVar("KartArrowTilt")) or 30)
+            BenillaKartSettingsFrameArrowFov:SetValue(tonumber(GetCVar("KartArrowFov")) or 45)
             BenillaKartSettingsFrameChaseCamera:SetChecked(BenillaKart_Flag("KartChaseCamera"))
             BenillaKartSettingsFrameFarCamera:SetChecked(BenillaKart_Flag("KartFarCamera"))
             BenillaKartSettingsFrameMusic:SetChecked(BenillaKart_Flag("KartMusic"))
@@ -1152,6 +1154,8 @@
             SetCVar("KartArrowX", "0.5")
             SetCVar("KartArrowY", "0.22")
             SetCVar("KartArrowSize", "1")
+            SetCVar("KartArrowTilt", "30")
+            SetCVar("KartArrowFov", "45")
             BenillaKartSettings_Refresh()
         end
 
@@ -1861,7 +1865,7 @@
     <!-- The settings: the guide arrow, the camera, the music, the minimap button and the ghost,
          each a CVar set as it is clicked, as the stock option boxes are. -->
     <Frame name="BenillaKartSettingsFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="320" y="456"/></Size>
+        <Size><AbsDimension x="320" y="540"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -1893,10 +1897,10 @@
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-34"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentCameraTitle" inherits="GameFontNormal" text="Camera">
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-168"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-252"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentMusicTitle" inherits="GameFontNormal" text="Music">
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-250"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-334"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
@@ -1911,42 +1915,56 @@
                     <OnValueChanged>BenillaKartSettings_Slide(this, "KartArrowSize")</OnValueChanged>
                 </Scripts>
             </Slider>
+            <Slider name="$parentArrowTilt" inherits="OptionsSliderTemplate">
+                <Size><AbsDimension x="240" y="17"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="38" y="-142"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnValueChanged>BenillaKartSettings_Slide(this, "KartArrowTilt")</OnValueChanged>
+                </Scripts>
+            </Slider>
+            <Slider name="$parentArrowFov" inherits="OptionsSliderTemplate">
+                <Size><AbsDimension x="240" y="17"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="38" y="-184"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnValueChanged>BenillaKartSettings_Slide(this, "KartArrowFov")</OnValueChanged>
+                </Scripts>
+            </Slider>
             <Button name="$parentMoveArrow" inherits="UIPanelButtonTemplate" text="Move arrow">
                 <Size><AbsDimension x="128" y="22"/></Size>
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-132"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-216"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartSettings_MoveArrow()</OnClick></Scripts>
             </Button>
             <Button name="$parentResetArrow" inherits="UIPanelButtonTemplate" text="Reset arrow">
                 <Size><AbsDimension x="128" y="22"/></Size>
-                <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-132"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-216"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartSettings_ResetArrow()</OnClick></Scripts>
             </Button>
             <CheckButton name="$parentChaseCamera" inherits="BenillaKartSettingsCheckTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-182"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-266"/></Offset></Anchor></Anchors>
             </CheckButton>
             <CheckButton name="$parentFarCamera" inherits="BenillaKartSettingsCheckTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-210"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-294"/></Offset></Anchor></Anchors>
             </CheckButton>
             <Button name="$parentCamera" inherits="UIPanelButtonTemplate" text="Camera...">
                 <Size><AbsDimension x="100" y="22"/></Size>
-                <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-162"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-246"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartCamera_Toggle()</OnClick></Scripts>
             </Button>
             <CheckButton name="$parentMusic" inherits="BenillaKartSettingsCheckTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-264"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-348"/></Offset></Anchor></Anchors>
             </CheckButton>
             <Slider name="$parentMusicVolume" inherits="OptionsSliderTemplate">
                 <Size><AbsDimension x="240" y="17"/></Size>
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="38" y="-316"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="38" y="-400"/></Offset></Anchor></Anchors>
                 <Scripts>
                     <OnValueChanged>BenillaKartSettings_Slide(this, "KartMusicVolume")</OnValueChanged>
                 </Scripts>
             </Slider>
             <CheckButton name="$parentMinimapButton" inherits="BenillaKartSettingsCheckTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-344"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-428"/></Offset></Anchor></Anchors>
             </CheckButton>
             <CheckButton name="$parentGhost" inherits="BenillaKartSettingsCheckTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-372"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-456"/></Offset></Anchor></Anchors>
             </CheckButton>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>
@@ -1971,6 +1989,8 @@
                     getglobal(box:GetName() .. "Text"):SetText(boxes[i][3])
                 end
                 BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameArrowSize, "Arrow size", 0.4, 3, 0.1, "Small", "Large")
+                BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameArrowTilt, "Arrow tilt", 0, 80, 5, "Level", "Upright")
+                BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameArrowFov, "Arrow field of view", 20, 110, 5, "Flat", "Wide")
                 BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameMusicVolume, "Music volume", 0, 1, 0.05, "Quiet", "Loud")
                 if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
                 BenillaKart_Movable(this)

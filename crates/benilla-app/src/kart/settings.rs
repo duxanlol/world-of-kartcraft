@@ -145,6 +145,8 @@ pub(crate) fn on_cvar(
         "kartarrowx" => hud.x = ev.num().clamp(0.0, 1.0),
         "kartarrowy" => hud.y = ev.num().clamp(0.0, 1.0),
         "kartarrowmove" => hud.editing = ev.flag(),
+        "kartarrowtilt" => hud.tilt = ev.num().clamp(0.0, GuideHud::MAX_TILT),
+        "kartarrowfov" => hud.fov = ev.num().clamp(GuideHud::MIN_FOV, GuideHud::MAX_FOV),
         "kartchasecamera" => settings.chase_camera = ev.flag(),
         "kartfarcamera" => settings.far_camera = ev.flag(),
         "kartmusic" => settings.music = ev.flag(),
@@ -211,6 +213,8 @@ mod tests {
         assert_eq!(d("KartArrowSize"), hud.scale);
         assert_eq!(d("KartArrowShow") != 0.0, hud.shown);
         assert_eq!(d("KartArrowMove") != 0.0, hud.editing);
+        assert_eq!(d("KartArrowTilt"), hud.tilt);
+        assert_eq!(d("KartArrowFov"), hud.fov);
         let settings = KartSettings::default();
         assert_eq!(d("KartChaseCamera") != 0.0, settings.chase_camera);
         assert_eq!(d("KartFarCamera") != 0.0, settings.far_camera);
