@@ -610,6 +610,7 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
         [
             "World of Kartcraft",
             "Race Finder",
+            "Track browser",
             "Leave race",
             "Kart garage...",
             "Kartcraft settings...",
@@ -1103,4 +1104,154 @@ fn the_game_menu_closes_the_kart_windows_and_they_do_not_open_over_it() {
     s.run("BenillaKartGarage_Toggle()").unwrap();
     assert!(visible(&s, "BenillaKartGarageFrame"));
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
+/// Two tracks in Elwynn Forest, as the client sends them: a 3-lap circuit and a sprint.
+fn tracks(s: &mut UiScript) {
+    let list = [
+        "t1\tCrystal Lake Loop\tElwynn Forest\t0\t3\tA 3-lap circuit in Elwynn Forest.\t-9000.0,-100.0;-9100.0,0.0;-9050.0,100.0",
+        "t2\tGoldshire Dash\tElwynn Forest\t0\t0\tA sprint in Elwynn Forest.\t-8950.0,-150.0;-9150.0,150.0",
+    ];
+    s.fire_event(
+        "BENILLA_KART_TRACKS",
+        vec![ScriptValue::Str(list.join("\n"))],
+    );
+    s.tick(0.0);
+}
+
+/// A map with Elwynn Forest on it: the catalog, and a projection of the tracks' corner of it.
+fn elwynn_map(s: &mut UiScript) {
+    use benilla_ui::script::{WorldMapContinentView, WorldMapZoneView};
+    let zone = |name: &str| WorldMapZoneView {
+        name: name.into(),
+        ..Default::default()
+    };
+    s.set_world_map_catalog(vec![
+        WorldMapContinentView {
+            name: "Kalimdor".into(),
+            zones: vec![zone("Durotar")],
+            ..Default::default()
+        },
+        WorldMapContinentView {
+            name: "Eastern Kingdoms".into(),
+            zones: vec![zone("Elwynn Forest")],
+            ..Default::default()
+        },
+    ]);
+    s.set_world_loc_projector(Box::new(|selection, map, x, y| {
+        let (u, v) = ((250.0 - y) / 500.0, (-8900.0 - x) / 300.0);
+        (selection.0 == 2
+            && selection.1 == 1
+            && map == 0
+            && (0.0..=1.0).contains(&u)
+            && (0.0..=1.0).contains(&v))
+        .then_some((u, v))
+    }));
+}
+
+/// How many of the route's dots are on the map.
+fn dots_shown(s: &UiScript) -> u32 {
+    s.eval(
+        "local n = 0 for i = 1, table.getn(BenillaKartRoute.dots) do \
+         if BenillaKartRoute.dots[i]:IsVisible() then n = n + 1 end end return n",
+    )
+    .unwrap()
+}
+
+#[test]
+fn the_track_browser_shows_a_route_on_the_map_and_clears_it() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    tracks(&mut s);
+    elwynn_map(&mut s);
+
+    // The Race Marshal's "Browse the tracks" opens it at her course.
+    from_server(&mut s, "R\tTracks\tt2");
+    assert!(s
+        .eval::<bool>("return BenillaKartTracksFrame:IsVisible() == 1")
+        .unwrap());
+    assert_eq!(
+        s.eval::<String>("return BenillaKartTracksFrameTitle:GetText()")
+            .unwrap(),
+        "Goldshire Dash"
+    );
+    assert_eq!(
+        s.eval::<String>("return BenillaKartTracksFrameText:GetText()")
+            .unwrap(),
+        "A sprint in Elwynn Forest."
+    );
+
+    // Show on map: the world map opens at Elwynn Forest, with the trail and its start.
+    s.run("BenillaKartTracksFrameShow:Click()").unwrap();
+    s.tick(0.0);
+    assert!(s
+        .eval::<bool>("return WorldMapFrame:IsVisible() == 1")
+        .unwrap());
+    assert_eq!(
+        s.eval::<(i64, i64)>("return GetCurrentMapContinent(), GetCurrentMapZone()")
+            .unwrap(),
+        (2, 1)
+    );
+    let sprint = dots_shown(&s);
+    assert!(sprint > 10, "the sprint's trail: {sprint} dots");
+    assert!(s
+        .eval::<bool>("return BenillaKartRouteStart:IsVisible() == 1")
+        .unwrap());
+    assert_eq!(
+        s.eval::<String>("return BenillaKartTracksFrameShow:GetText()")
+            .unwrap(),
+        "Shown on the map"
+    );
+
+    // Another track takes the first one's place, not a second route beside it.
+    s.run("BenillaKartTrackBrowser_Select('t1') BenillaKartTracksFrameShow:Click()")
+        .unwrap();
+    s.tick(0.0);
+    assert_eq!(
+        s.eval::<String>("return BenillaKartRoute.key").unwrap(),
+        "t1"
+    );
+    let circuit = dots_shown(&s);
+    assert!(
+        circuit > 10 && circuit != sprint,
+        "the circuit's own trail: {circuit} dots"
+    );
+
+    // Closing the map takes the route away, and the browser is back on the screen; opening the
+    // map again shows no route.
+    s.run("ToggleWorldMap()").unwrap();
+    s.tick(0.0);
+    assert!(s
+        .eval::<bool>("return BenillaKartTracksFrame:IsVisible() == 1")
+        .unwrap());
+    assert!(!s
+        .eval::<bool>("return WorldMapFrame:IsVisible() == 1")
+        .unwrap());
+    assert!(s
+        .eval::<bool>("return BenillaKartRoute.key == nil")
+        .unwrap());
+    s.run("ToggleWorldMap()").unwrap();
+    s.tick(0.0);
+    assert_eq!(dots_shown(&s), 0, "no route left over");
+    assert!(!s
+        .eval::<bool>("return BenillaKartRouteStart:IsVisible() == 1")
+        .unwrap());
+
+    // A map opened by hand closes the open windows, as the stock map does; the browser opens
+    // again, and its search narrows the list by name or zone.
+    s.run("ToggleWorldMap() BenillaKartTrackBrowser_Open()")
+        .unwrap();
+    s.tick(0.0);
+    s.run("BenillaKartTracksFrameSearch:SetText('dash')")
+        .unwrap();
+    s.tick(0.0);
+    assert!(s.eval::<bool>("return BenillaKartTracksFrameRow1:IsVisible() == 1 and not BenillaKartTracksFrameRow2:IsVisible()").unwrap());
+    assert_eq!(
+        s.eval::<String>("return BenillaKartTracksFrameRow1Name:GetText()")
+            .unwrap(),
+        "Goldshire Dash"
+    );
 }

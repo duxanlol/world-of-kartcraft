@@ -1828,6 +1828,7 @@ namespace Kartcraft
         MARSHAL_HELP,
         MARSHAL_BACK,
         MARSHAL_RECORDS,
+        MARSHAL_TRACKS, // action: the course's index in COURSES the browser opens at
     };
 
     // The courses that start at this marshal: those placed with it, else (a marshal spawned
@@ -1923,6 +1924,9 @@ namespace Kartcraft
         if (busy)
             menu.AddMenuItem(GOSSIP_ICON_CHAT, "Leave the race", MARSHAL_LEAVE, 0, "", false);
         menu.AddMenuItem(GOSSIP_ICON_DOT, "Open the Race Finder", MARSHAL_FINDER, 0, "", false);
+        // The client's track browser, at her own course: its description and its route on the map.
+        menu.AddMenuItem(GOSSIP_ICON_DOT, "Browse the tracks", MARSHAL_TRACKS,
+            here.empty() ? uint32(COURSES.size()) : uint32(here.front()), "", false);
         if (!here.empty())
             menu.AddMenuItem(GOSSIP_ICON_CHAT, "Course records", MARSHAL_RECORDS, 0, "", false);
         menu.AddMenuItem(GOSSIP_ICON_CHAT, "How do races work?", MARSHAL_HELP, 0, "", false);
@@ -1983,6 +1987,9 @@ namespace Kartcraft
             case MARSHAL_FINDER:
                 line = "R\tFinder";
                 break;
+            case MARSHAL_TRACKS:
+                line = std::string("R\tTracks\t") + (action < COURSES.size() ? COURSES[action].key : "");
+                break;
             case MARSHAL_HELP:
                 player->PlayerTalkClass->GetGossipMenu().AddMenuItem(GOSSIP_ICON_CHAT, "Back", MARSHAL_BACK, 0, "", false);
                 player->PlayerTalkClass->SendGossipMenu(MARSHAL_HELP_TEXT, marshal->GetObjectGuid());
@@ -2002,9 +2009,9 @@ namespace Kartcraft
             Player* p = ObjectAccessor::FindPlayer(guid);
             if (!p || !p->IsInWorld())
                 return;
-            if (line == "R\tFinder")
+            if (line == "R\tFinder" || line.compare(0, 8, "R\tTracks") == 0)
             {
-                // The client opens its Race Finder at this line.
+                // The client opens its Race Finder, or its track browser, at this line.
                 SendLine(p, PREFIX + line);
                 return;
             }

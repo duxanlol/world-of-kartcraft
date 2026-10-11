@@ -10,6 +10,9 @@
 //!   `arg1`..`argN` would carry.
 //! - `BENILLA_KART_COURSE_NAMES(list)`: every course, one `key<TAB>name` a line, once per VM, for
 //!   naming the course a ready check is for.
+//! - `BENILLA_KART_TRACKS(list)`: the track browser's courses, once per VM, a line each:
+//!   `key<TAB>name<TAB>zone<TAB>map<TAB>laps<TAB>description<TAB>x,y;x,y;...` (the checkpoints, WoW x, y,
+//!   which `GetWorldLocMapPosition` puts on the world map).
 //! - `BENILLA_KART_GARAGE(skill, classes, racers)`: the garage's Karting skill (0 before the line
 //!   is ours), its classes one `key<TAB>name<TAB>skill needed<TAB>description` a line in the order
 //!   they open, and the racers whose karts the kart data holds, one `key<TAB>name` a line; at load
@@ -48,6 +51,7 @@ pub(crate) fn feed(
             vec![ScriptValue::Str(course_names())],
         );
         script.fire_event("BENILLA_KART_COURSES", vec![ScriptValue::Str(zone_list())]);
+        script.fire_event("BENILLA_KART_TRACKS", vec![ScriptValue::Str(track_list())]);
         sent.courses = true;
     }
     let race = (overlay.banner.clone(), overlay.results.clone());
@@ -109,6 +113,32 @@ fn course_names() -> String {
         .join("\n")
 }
 
+/// Every course for the track browser, a line each (see the module's list).
+fn track_list() -> String {
+    COURSES
+        .iter()
+        .map(|c| {
+            let points: Vec<String> = c
+                .route()
+                .iter()
+                .map(|p| format!("{:.1},{:.1}", p[0], p[1]))
+                .collect();
+            let clean = |s: &str| s.replace(['\t', '\n'], " ");
+            format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                c.key,
+                clean(&c.name),
+                clean(&c.zone),
+                c.map,
+                c.laps,
+                clean(&c.description()),
+                points.join(";")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn score_args(lines: ScoreLines) -> Vec<ScriptValue> {
     let rgb = |c: [f32; 3]| c.map(|v| ScriptValue::Number(f64::from(v)));
     let mut args = vec![ScriptValue::Str(lines.trick.0)];
@@ -137,5 +167,14 @@ mod tests {
         }
         assert_eq!(course_names().lines().count(), COURSES.len());
         assert!(course_names().contains("sprint\tNorthshire Sprint"));
+        let tracks = track_list();
+        assert_eq!(tracks.lines().count(), COURSES.len());
+        for line in tracks.lines() {
+            let fields: Vec<&str> = line.split('\t').collect();
+            assert_eq!(fields.len(), 7, "{line}");
+            assert!(fields[3].parse::<u32>().is_ok(), "the map id: {line}");
+            assert!(fields[4].parse::<u8>().is_ok(), "the laps: {line}");
+            assert!(fields[6].split(';').count() >= 2, "a route: {line}");
+        }
     }
 }

@@ -36,6 +36,12 @@ pub(crate) struct Course {
     pub(crate) map: u32,
     #[serde(default)]
     pub(crate) marshal: Option<MarshalSpot>,
+    /// Laps; 0 is a sprint, start to finish.
+    #[serde(default)]
+    pub(crate) laps: u8,
+    /// The course generator's note ("... 2.62 km, test lap 76.1s."), for the reference lap.
+    #[serde(default)]
+    note: String,
     checkpoints: Vec<CourseCheckpoint>,
 }
 
@@ -63,6 +69,59 @@ impl Course {
         self.checkpoints.first().map_or([0.0; 2], |c| [c.x, c.y])
     }
 
+    /// The checkpoints in order, WoW x, y: the route a circuit runs round, back to the first.
+    pub(crate) fn route(&self) -> Vec<[f32; 2]> {
+        self.checkpoints.iter().map(|c| [c.x, c.y]).collect()
+    }
+
+    /// The track browser's description: what kind of course, where, how long, how quick.
+    pub(crate) fn description(&self) -> String {
+        let route = self.route();
+        let mut yards: f32 = route
+            .windows(2)
+            .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+            .sum();
+        if self.laps > 0 {
+            if let (Some(first), Some(last)) = (route.first(), route.last()) {
+                yards += (first[0] - last[0]).hypot(first[1] - last[1]);
+            }
+        }
+        let km = yards * 0.9144 / 1000.0;
+        let place = if self.zone.is_empty() {
+            String::new()
+        } else {
+            format!(" in {}", self.zone)
+        };
+        let mut text = match self.laps {
+            0 => format!("A sprint{place}, {km:.2} km from start to finish"),
+            1 => format!("A one-lap circuit{place}, {km:.2} km"),
+            n => format!("A {n}-lap circuit{place}, {km:.2} km a lap"),
+        };
+        text += &format!(" through {} checkpoints.", route.len());
+        // The generator's test lap, "test lap 76.1s": a clean lap's time.
+        let lap = self
+            .note
+            .split("test lap ")
+            .nth(1)
+            .and_then(|rest| rest.split('s').next())
+            .and_then(|secs| secs.trim().parse::<f32>().ok());
+        if let Some(secs) = lap {
+            let secs = secs.round() as u32;
+            let what = if self.laps > 0 {
+                "a clean lap"
+            } else {
+                "a clean run"
+            };
+            text += &format!(
+                " {} takes about {}:{:02}.",
+                capitalise(what),
+                secs / 60,
+                secs % 60
+            );
+        }
+        text
+    }
+
     /// Each checkpoint's gate half-width.
     fn gates(&self) -> Vec<f32> {
         self.checkpoints
@@ -76,6 +135,13 @@ impl Course {
             })
             .collect()
     }
+}
+
+fn capitalise(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map_or(String::new(), |c| c.to_uppercase().chain(chars).collect())
 }
 
 /// The courses, in the file's order (the Race Finder's).
@@ -1174,6 +1240,34 @@ mod tests {
         race.record = (0, String::new());
         race.best = 0;
         assert_eq!(board(&race).len(), 2);
+    }
+
+    #[test]
+    fn a_track_describes_its_kind_length_and_lap() {
+        let circuit = COURSES
+            .iter()
+            .find(|c| c.key == "elwynn-fargodeep-maclure")
+            .expect("the course");
+        let text = circuit.description();
+        assert!(
+            text.starts_with("A 3-lap circuit in Elwynn Forest, 2.")
+                && text.contains(" km a lap through ")
+                && text.ends_with("A clean lap takes about 1:16."),
+            "{text}"
+        );
+        let sprint = COURSES
+            .iter()
+            .find(|c| c.key == "sprint")
+            .expect("the sprint");
+        let text = sprint.description();
+        assert!(
+            text.starts_with("A sprint") && text.contains("from start to finish"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("takes about"),
+            "no test lap in its note: {text}"
+        );
     }
 
     #[test]
