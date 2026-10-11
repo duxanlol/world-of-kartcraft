@@ -361,17 +361,24 @@
             BenillaKartFinder_Refresh()
         end
 
-        -- Each race's course key by race id, from the server's "C".
+        -- Each race's course key by race id, from the server's "C"; the time trials by race id,
+        -- from its "TT".
         BenillaKartRaceCourse = {}
+        BenillaKartRaceTrial = {}
 
         -- A finish that beat a best ("r" a course record, "p" a personal best) goes to the chat:
-        -- anyone's record, and our own best.
+        -- anyone's record, and our own best. A time trial's are on its own board.
         function BenillaKart_Finished(race, name, ms, best)
             if not DEFAULT_CHAT_FRAME or not ms or (best ~= "r" and best ~= "p") then return end
             local time = format("%d:%02d.%02d", floor(ms / 60000), mod(floor(ms / 1000), 60), floor(mod(ms, 1000) / 10))
             local course = BenillaKart_CourseName(BenillaKartRaceCourse[race or ""] or "")
-            if best == "r" then
+            local trial = BenillaKartRaceTrial[race or ""]
+            if best == "r" and trial then
+                DEFAULT_CHAT_FRAME:AddMessage(format("%s set a new time trial record on %s: %s!", name, course, time), 1, 0.82, 0)
+            elseif best == "r" then
                 DEFAULT_CHAT_FRAME:AddMessage(format("%s set a new course record on %s: %s!", name, course, time), 1, 0.82, 0)
+            elseif name == UnitName("player") and trial then
+                DEFAULT_CHAT_FRAME:AddMessage(format("New time trial best on %s: %s.", course, time), 1, 0.82, 0)
             elseif name == UnitName("player") then
                 DEFAULT_CHAT_FRAME:AddMessage(format("New personal best on %s: %s.", course, time), 1, 0.82, 0)
             end
@@ -846,6 +853,9 @@
             elseif verb == "C" then
                 -- A race's course, to name it when someone sets a record there.
                 BenillaKartRaceCourse[line[3] or ""] = line[4]
+            elseif verb == "TT" then
+                -- A time trial: its records are the time trials'.
+                BenillaKartRaceTrial[line[3] or ""] = 1
             elseif verb == "F" then
                 BenillaKart_Finished(line[3], line[4], tonumber(line[6]), line[7])
             elseif verb == "Ret" then

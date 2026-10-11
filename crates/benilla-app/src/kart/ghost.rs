@@ -1,7 +1,8 @@
-//! The ghost of our best run on each course, as CTR's time trial races one. From a race's GO to
-//! our finish our kart's pose is sampled [`RATE`] times a second; a finish the server times faster
+//! The ghost of our best run on each course, as CTR's time trial races one, and only in a time
+//! trial: a race with others has neither a ghost nor a recording. From a time trial's GO to our
+//! finish our kart's pose is sampled [`RATE`] times a second; a finish the server times faster
 //! than the run on file replaces it, in `benilla-config/kart-ghosts/` ([`crate::local_state`]).
-//! The next race on that course replays it from GO: a translucent kart in the run's colours
+//! The next time trial on that course replays it from GO: a translucent kart in the run's colours
 //! (`kartcraft::model::GhostKart`), interpolated between samples, solid to nothing and silent, and
 //! gone at our finish or when the race ends. `KartGhost` shows it; the runs are kept either way.
 
@@ -250,7 +251,12 @@ fn save(course: &str, ghost: &Ghost) -> bool {
     }
 }
 
-/// Records the race's run, saves a faster one, and replays the run on file as a ghost kart.
+/// The run a ghost belongs to: a time trial's; any other race has none.
+fn ghost_run(run: Option<super::race::Run<'_>>) -> Option<super::race::Run<'_>> {
+    run.filter(|r| r.time_trial)
+}
+
+/// Records a time trial's run, saves a faster one, and replays the run on file as a ghost kart.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update(
     time: Res<Time>,
@@ -264,7 +270,7 @@ pub(crate) fn update(
 ) {
     let now = time.elapsed_secs();
     let ghosts = &mut *ghosts;
-    let run = races.run();
+    let run = ghost_run(races.run());
 
     // The run on file for this race's course, read once the course is known.
     match run.filter(|r| !r.course.is_empty()) {
@@ -439,6 +445,21 @@ mod tests {
         long.push(0);
         assert!(Ghost::decode(&long).is_none());
         assert!(Ghost::decode(&ghost(1, Vec::new()).encode()).is_some());
+    }
+
+    #[test]
+    fn only_a_time_trial_has_a_ghost() {
+        let run = |time_trial| super::super::race::Run {
+            id: 1,
+            course: "sprint",
+            go_at: Some(5.0),
+            done: false,
+            finish_ms: None,
+            time_trial,
+        };
+        assert_eq!(ghost_run(Some(run(true))), Some(run(true)));
+        assert_eq!(ghost_run(Some(run(false))), None, "a race has no ghost");
+        assert_eq!(ghost_run(None), None);
     }
 
     #[test]
