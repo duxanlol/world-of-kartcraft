@@ -4,7 +4,6 @@
 #include "Player.h"
 #include "SpellMgr.h"
 #include "Timer.h"
-#include "Util.h"
 #include "ObjectAccessor.h"
 #include "WorldSession.h"
 #include "World.h"
@@ -23,6 +22,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#include <random>
 #include <set>
 #include <unordered_map>
 #include "GridMap.h"
@@ -1428,7 +1428,8 @@ namespace Kartcraft
                 ties = 0;
             }
             // Each tied course kept with chance 1/ties: a uniform pick in one pass.
-            if (urand(0, ties++) == 0)
+            static std::mt19937 s_pick{ std::random_device{}() };
+            if (std::uniform_int_distribution<uint32>(0, ties++)(s_pick) == 0)
                 best = int(i);
         }
         if (best < 0)

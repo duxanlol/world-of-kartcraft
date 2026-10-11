@@ -82,17 +82,16 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..b51f417
+index 0000000..5746d08
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,2181 @@
+@@ -0,0 +1,2182 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
 +#include "Player.h"
 +#include "SpellMgr.h"
 +#include "Timer.h"
-+#include "Util.h"
 +#include "ObjectAccessor.h"
 +#include "WorldSession.h"
 +#include "World.h"
@@ -111,6 +110,7 @@ index 0000000..b51f417
 +#include <cstdio>
 +#include <cstdlib>
 +#include <mutex>
++#include <random>
 +#include <set>
 +#include <unordered_map>
 +#include "GridMap.h"
@@ -1516,7 +1516,8 @@ index 0000000..b51f417
 +                ties = 0;
 +            }
 +            // Each tied course kept with chance 1/ties: a uniform pick in one pass.
-+            if (urand(0, ties++) == 0)
++            static std::mt19937 s_pick{ std::random_device{}() };
++            if (std::uniform_int_distribution<uint32>(0, ties++)(s_pick) == 0)
 +                best = int(i);
 +        }
 +        if (best < 0)
