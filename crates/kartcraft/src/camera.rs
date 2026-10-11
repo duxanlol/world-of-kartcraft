@@ -54,6 +54,20 @@ const TILT_FOLLOW: f32 = 0.1;
 /// screen however the rig tilts.
 const PIVOT_H: f32 = 32.0;
 
+/// How much of the body's turn and powerslide swing off the travel direction the eye takes.
+const BODY_SHARE: f32 = 0.35;
+/// The share of the gap to its aim the eye's yaw closes each 30 Hz tick (settles in ~0.12 s).
+const YAW_FOLLOW: f32 = 0.25;
+
+/// An angle difference in 4096ths into −2048..2048.
+fn wrap(a: i32) -> i32 {
+    (a + 2048).rem_euclid(4096) - 2048
+}
+
+fn wrapf(a: f32) -> f32 {
+    (a + 2048.0).rem_euclid(4096.0) - 2048.0
+}
+
 fn rad(angle: i32) -> f32 {
     angle as f32 * std::f32::consts::TAU / 4096.0
 }
@@ -103,6 +117,8 @@ pub struct ChaseCamera {
     started: bool,
     /// The ground's grade along the heading as an angle (radians), through two filter stages.
     tilt: [f32; 2],
+    /// The eye's yaw (4096ths), easing after its aim.
+    yaw: f32,
 }
 
 /// The ground's grade along `heading` around the kart at `at` (rise per run): a least-squares
@@ -171,8 +187,24 @@ impl ChaseCamera {
         d += (self.turbo >> 8) as f32;
 
         // 2.3: the eye trails the heading plus the powerslide's swing (and look-back's half turn).
+        // Deviation: CTR's eye is rigid on heading + swing, which turns it with the kart's body
+        // through every steer and swings it out of each powerslide; a player sliding through a
+        // bend is still going mostly forward and wants to see where. It aims along the kart's
+        // travel over the ground with [`BODY_SHARE`] of the body's turn and swing on top, and
+        // eases after that aim ([`YAW_FOLLOW`] of the gap a tick); look-back's half turn stays an
+        // instant cut.
+        let body = k.heading + k.spin;
+        let aim = match k.travel {
+            Some(travel) => travel as f32 + wrap(body - travel) as f32 * BODY_SHARE,
+            None => body as f32,
+        };
+        self.yaw = if self.started {
+            self.yaw + wrapf(aim - self.yaw) * YAW_FOLLOW
+        } else {
+            aim
+        };
         let rev = if self.look_back { REVERSE } else { 0 };
-        let a_eye = k.heading + k.spin + rev;
+        let a_eye = self.yaw.round() as i32 + rev;
         let (f, r) = (fwd(a_eye), right(a_eye));
         let (sp, cp) = (rad(PITCH).sin(), rad(PITCH).cos());
         let roll2 = rad(2 * self.roll);
@@ -275,7 +307,54 @@ mod tests {
             spinning: false,
             turbo: false,
             fire_speed_cap: 0,
+            travel: None,
         }
+    }
+
+    /// The eye's view direction as a heading, degrees.
+    fn view_deg(shot: &Shot) -> f32 {
+        let d = shot.look - shot.eye;
+        d.x.atan2(d.z).to_degrees()
+    }
+
+    #[test]
+    fn through_a_powerslide_the_camera_looks_mostly_where_the_kart_is_going() {
+        // Travelling straight along +Z, the body turned 200 into the slide and CTR's swing at
+        // its full 384 out of it: CTR's rigid eye would look 584/4096 of a turn (51 degrees) off.
+        let (mut cam, world) = (ChaseCamera::default(), flat());
+        let mut slide = input(13000);
+        slide.travel = Some(0);
+        slide.heading = 200;
+        slide.spin = 384;
+        let mut shot = cam.tick(&slide, &world);
+        for _ in 0..60 {
+            shot = cam.tick(&slide, &world);
+        }
+        let off = view_deg(&shot);
+        assert!(
+            off.abs() < 20.0 && off.abs() > 10.0,
+            "{off} degrees off the travel"
+        );
+    }
+
+    #[test]
+    fn a_sharp_turn_is_followed_smoothly_not_snapped_to() {
+        let (mut cam, world) = (ChaseCamera::default(), flat());
+        let mut k = input(13000);
+        k.travel = Some(0);
+        for _ in 0..30 {
+            cam.tick(&k, &world);
+        }
+        // A quarter turn at once.
+        k.heading = 1024;
+        k.travel = Some(1024);
+        let first = view_deg(&cam.tick(&k, &world));
+        assert!(first > 5.0 && first < 30.0, "first tick: {first}");
+        let mut last = first;
+        for _ in 0..30 {
+            last = view_deg(&cam.tick(&k, &world));
+        }
+        assert!((last - 90.0).abs() < 2.0, "after a second: {last}");
     }
 
     #[test]

@@ -311,6 +311,10 @@ fn tumble_frame(i: i32) -> (Mat3, Vec3) {
     )
 }
 
+/// The speed over the ground (lu/s) below which the kart has no travel direction for the
+/// camera to follow: a crawl, a stop, a hop in place.
+const TRAVEL_MIN: f32 = 120.0;
+
 fn atan2_units(y: f32, x: f32) -> i32 {
     wrap((y.atan2(x) * 4096.0 / std::f32::consts::TAU).round() as i32)
 }
@@ -399,6 +403,9 @@ pub struct CameraInput {
     /// A turbo was granted since the camera last looked.
     pub turbo: bool,
     pub fire_speed_cap: i32,
+    /// The direction the kart is travelling over the ground, 4096ths; `None` when it is barely
+    /// moving, so has none worth following.
+    pub travel: Option<i32>,
 }
 
 /// The world view of a kart, for drawing and the camera.
@@ -691,6 +698,8 @@ impl Kart {
             spinning: matches!(self.state, State::Spinning(_)),
             turbo: std::mem::take(&mut self.camera_kick),
             fire_speed_cap: self.fire_speed_cap,
+            travel: (self.vel.x.hypot(self.vel.z) * (30.0 / 256.0) > TRAVEL_MIN)
+                .then(|| atan2_units(self.vel.x, self.vel.z)),
         }
     }
 
