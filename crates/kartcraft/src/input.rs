@@ -72,30 +72,61 @@ impl Keys {
 
 /// The first connected pad's controls, else the keyboard's.
 pub fn read(keys: &Keys, pads: &Query<&Gamepad>) -> Controls {
-    if let Some(pad) = pads.iter().next() {
-        // The triggers accelerate and brake too, for those who drive a racing game that way.
-        let trigger = |b| pad.get(b).unwrap_or(0.0) > 0.4;
-        return Controls {
-            // Raw: the driving model applies CTR's own dead zone and response curve.
-            steer: pad
-                .get(GamepadAxis::LeftStickX)
-                .unwrap_or(0.0)
-                .clamp(-1.0, 1.0),
-            accelerate: pad.pressed(GamepadButton::South) || trigger(GamepadButton::RightTrigger2),
-            brake: pad.pressed(GamepadButton::West) || trigger(GamepadButton::LeftTrigger2),
-            reverse: pad.get(GamepadAxis::LeftStickY).unwrap_or(0.0) < -0.6,
-            hop: pad.pressed(GamepadButton::RightTrigger),
-            hop_alt: pad.pressed(GamepadButton::LeftTrigger),
-            fire: pad.just_pressed(GamepadButton::East),
-            dpad: [
-                pad.just_pressed(GamepadButton::DPadUp),
-                pad.just_pressed(GamepadButton::DPadRight),
-                pad.just_pressed(GamepadButton::DPadDown),
-                pad.just_pressed(GamepadButton::DPadLeft),
-            ],
-            pad: true,
-        };
+    let keyboard = from_keys(keys);
+    match pads.iter().next() {
+        Some(pad) => merge(from_pad(pad), keyboard),
+        None => keyboard,
     }
+}
+
+/// How far the stick must lean before it steers over the keys.
+const STICK_OVER_KEYS: f32 = 0.15;
+
+/// The pad and the keys together, so a paired pad lying idle does not lock out the keyboard: a
+/// button counts from either, and the stick steers once it leans, else the keys do.
+fn merge(pad: Controls, keys: Controls) -> Controls {
+    let stick = pad.steer.abs() > STICK_OVER_KEYS;
+    Controls {
+        steer: if stick { pad.steer } else { keys.steer },
+        accelerate: pad.accelerate || keys.accelerate,
+        brake: pad.brake || keys.brake,
+        reverse: pad.reverse || keys.reverse,
+        hop: pad.hop || keys.hop,
+        hop_alt: pad.hop_alt || keys.hop_alt,
+        fire: pad.fire || keys.fire,
+        dpad: std::array::from_fn(|i| pad.dpad[i] || keys.dpad[i]),
+        pad: stick,
+    }
+}
+
+/// The first pad's controls.
+fn from_pad(pad: &Gamepad) -> Controls {
+    // The triggers accelerate and brake too, for those who drive a racing game that way.
+    let trigger = |b| pad.get(b).unwrap_or(0.0) > 0.4;
+    Controls {
+        // Raw: the driving model applies CTR's own dead zone and response curve.
+        steer: pad
+            .get(GamepadAxis::LeftStickX)
+            .unwrap_or(0.0)
+            .clamp(-1.0, 1.0),
+        accelerate: pad.pressed(GamepadButton::South) || trigger(GamepadButton::RightTrigger2),
+        brake: pad.pressed(GamepadButton::West) || trigger(GamepadButton::LeftTrigger2),
+        reverse: pad.get(GamepadAxis::LeftStickY).unwrap_or(0.0) < -0.6,
+        hop: pad.pressed(GamepadButton::RightTrigger),
+        hop_alt: pad.pressed(GamepadButton::LeftTrigger),
+        fire: pad.just_pressed(GamepadButton::East),
+        dpad: [
+            pad.just_pressed(GamepadButton::DPadUp),
+            pad.just_pressed(GamepadButton::DPadRight),
+            pad.just_pressed(GamepadButton::DPadDown),
+            pad.just_pressed(GamepadButton::DPadLeft),
+        ],
+        pad: true,
+    }
+}
+
+/// The keys' controls.
+fn from_keys(keys: &Keys) -> Controls {
     Controls {
         steer: f32::from(i8::from(keys.right)) - f32::from(i8::from(keys.left)),
         accelerate: keys.accelerate,
@@ -156,3 +187,46 @@ pub fn autofire(t: f32, dt: f32) -> bool {
 
 /// Seconds between the autopilot's presses of ○.
 const AUTOFIRE_SECS: f32 = 1.5;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_idle_pad_leaves_the_keyboard_driving() {
+        let idle_pad = Controls {
+            pad: true,
+            ..Default::default()
+        };
+        let keys = Controls {
+            accelerate: true,
+            steer: -1.0,
+            dpad: [true, false, false, false],
+            ..Default::default()
+        };
+        let both = merge(idle_pad, keys);
+        assert!(both.accelerate, "the keys' gas");
+        assert_eq!(both.steer, -1.0, "the keys steer while the stick rests");
+        assert!(both.dpad[0], "and use the abilities");
+        assert!(!both.pad);
+    }
+
+    #[test]
+    fn a_leaning_stick_steers_over_the_keys_and_either_presses_buttons() {
+        let pad = Controls {
+            steer: 0.6,
+            hop: true,
+            pad: true,
+            ..Default::default()
+        };
+        let keys = Controls {
+            steer: -1.0,
+            accelerate: true,
+            ..Default::default()
+        };
+        let both = merge(pad, keys);
+        assert_eq!(both.steer, 0.6);
+        assert!(both.hop && both.accelerate);
+        assert!(both.pad);
+    }
+}
