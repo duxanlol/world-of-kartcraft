@@ -3,6 +3,7 @@
 #   powershell -ExecutionPolicy Bypass -File setup\account.ps1                  # asks name and password
 #   powershell -ExecutionPolicy Bypass -File setup\account.ps1 -Gm              # a GM account (yours)
 #   powershell -ExecutionPolicy Bypass -File setup\account.ps1 -Remote kart@host -Key C:\path\key
+#   powershell -ExecutionPolicy Bypass -File setup\account.ps1 -Account NAME -Gm -LevelOnly   # make GM
 #
 # With no -Remote, a remote server saved in .setup\remote ("user@host" on the first line, the key
 # file on the second) is used, else the local Docker server. An existing account keeps its
@@ -11,6 +12,8 @@ param(
     [string]$Account = "",
     [string]$Password = "",
     [switch]$Gm,
+    # Only the GM level of an existing account (-Gm: 3, else 0); its password is left alone.
+    [switch]$LevelOnly,
     [string]$Remote = "",
     [string]$Key = "",
     # The local server even when .setup/remote names a remote one (setup uses this).
@@ -59,6 +62,15 @@ $where = if ($Remote) { "the server at $Remote" } else { 'the local server' }
 Write-Host "Making an account on $where"
 while ($Account -notmatch '^[A-Za-z0-9]{1,16}$') { $Account = (Read-Host 'Account name (letters and digits, up to 16)').Trim() }
 $Account = $Account.ToUpper()
+if ($LevelOnly) {
+    $level = if ($Gm) { 3 } else { 0 }
+    Invoke-Sql ("UPDATE account SET gmlevel=$level WHERE username='$Account';`n" +
+        "DELETE account_access FROM account_access JOIN account USING (id) WHERE username='$Account';`n" +
+        "INSERT INTO account_access (id, gmlevel, RealmID) SELECT id, $level, -1 FROM account WHERE username='$Account' AND $level > 0;`n" +
+        "SELECT CONCAT('  account ', username, ' GM level ', gmlevel) FROM account WHERE username='$Account';`n")
+    Write-Host '  (they log out and back in for it to take effect)'
+    exit 0
+}
 while ($Password.Length -lt 1 -or $Password.Length -gt 16) {
     $secret = Read-Host 'Password (up to 16 characters)' -AsSecureString
     $Password = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret))
