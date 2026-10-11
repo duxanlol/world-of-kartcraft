@@ -151,6 +151,8 @@ pub struct KartAudio {
     pub drifting: bool,
     pub grounded: bool,
     pub turbo: bool,
+    /// Seconds since the turbo's roar last started its sweep: a new boost restarts it.
+    pub turbo_age: f32,
     /// The engine's distortion and volume (`ctr_kart::Kart::engine_sound`).
     pub engine: (u8, u8),
     /// The music's volume, 0 to 1 (the host's music slider).
@@ -160,11 +162,35 @@ pub struct KartAudio {
     pub weapons: WeaponLoops,
 }
 
+/// The turbo roar's pitch `age` seconds into its sweep, as CTR's `VehTurbo_ThTick` plays it
+/// (`VehTurbo.c:339-374`): OtherFX 0xE at distortion fireAudioDistort + 0x10, capped at 0x80,
+/// the counter zeroed by each boost and counting one a 30 Hz frame. So the roar starts about an
+/// octave down and climbs to the sample's own pitch over 3.7 s; played flat at 0x80 it whines.
+pub fn turbo_pitch(age: f32) -> f64 {
+    let distort = (0x10 + (age.max(0.0) * 30.0) as u32).min(0x80);
+    // OtherFX distortion (`distortConst_OtherFX`): an octave per 128.
+    2f64.powf((f64::from(distort) - 128.0) / 128.0)
+}
+
 /// A landing this fast downward (speed units) or harder plays the heavy thump.
 const HARD_LANDING: i32 = 9000;
 
 impl KartAudio {
+    /// One frame of `dt` seconds with the turbo burning or not: the roar's sweep runs while it
+    /// burns and starts over once it is out.
+    pub fn burn(&mut self, burning: bool, dt: f32) {
+        self.turbo = burning;
+        self.turbo_age = if burning { self.turbo_age + dt } else { 0.0 };
+    }
+
     pub fn observe(&mut self, event: &Event) {
+        // Every boost restarts the roar's sweep (`VehFire_Increment` zeroes fireAudioDistort).
+        if matches!(
+            event,
+            Event::Boost { .. } | Event::HangTime { .. } | Event::Turbo
+        ) {
+            self.turbo_age = 0.0;
+        }
         let cue = match *event {
             Event::Hop => Cue::Hop,
             Event::Land { air_ms, fall } if air_ms > 96 => Cue::Land {
@@ -617,7 +643,11 @@ impl Sounds {
         } else {
             (0.0, 1.0)
         };
-        let roar = if audio.turbo { (0.4, 1.0) } else { (0.0, 1.0) };
+        let roar = if audio.turbo {
+            (0.4, turbo_pitch(audio.turbo_age))
+        } else {
+            (0.0, 1.0)
+        };
         let w = audio.weapons;
         let weapons = [
             (if w.roulette { 0.7 } else { 0.0 }, 1.0),
@@ -662,6 +692,27 @@ impl Sounds {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_turbo_roar_starts_low_and_climbs_to_its_own_pitch_as_ctr_s_does() {
+        // fireAudioDistort 0 plays at 0x10: 2^(-112/128), about 0.55 of the sample's pitch.
+        assert!((turbo_pitch(0.0) - 0.5453).abs() < 1e-3);
+        // 112 frames (3.73 s) on it reaches 0x80, the sample's own pitch, and stays there.
+        assert!(turbo_pitch(2.0) < turbo_pitch(3.0));
+        assert!((turbo_pitch(112.0 / 30.0) - 1.0).abs() < 1e-9);
+        assert!((turbo_pitch(10.0) - 1.0).abs() < 1e-9);
+
+        // A boost restarts the sweep; the turbo running out does too.
+        let mut a = KartAudio::default();
+        a.burn(true, 2.0);
+        assert!((a.turbo_age - 2.0).abs() < 1e-6);
+        a.observe(&Event::Turbo);
+        assert_eq!(a.turbo_age, 0.0);
+        a.burn(true, 1.0);
+        a.burn(false, 0.016);
+        assert_eq!(a.turbo_age, 0.0);
+        assert!(!a.turbo);
+    }
 
     #[test]
     fn events_become_cues() {

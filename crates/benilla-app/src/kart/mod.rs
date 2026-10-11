@@ -405,7 +405,7 @@ fn update(
     audio.speed = kart.speed().max(0) as f32 * 30.0 / 256.0;
     audio.drifting = kart.state == State::Drifting;
     audio.grounded = kart.grounded();
-    audio.turbo = kart.reserves() > 0;
+    audio.burn(kart.reserves() > 0, dt);
     audio.engine = kart.engine_sound();
 
     *view = host.session.view(dt);
