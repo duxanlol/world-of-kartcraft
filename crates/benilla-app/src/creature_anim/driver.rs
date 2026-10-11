@@ -426,9 +426,12 @@ pub(super) fn drive_animations(
         let dead = store.is_some_and(|s| s.0.unit_reads_dead());
         // `UNIT_FIELD_MOUNTDISPLAYID` is the one mounted signal; a mount child has no store, so it
         // never reads as mounted.
-        // The kart seats us as a mount would, with no mount model: a display id no mount has.
+        // World of Kartcraft: a kart driver, ours or another's, sits in the kart's seat as a
+        // rider would in a saddle, with no mount model (`crate::kart` places the body), holding
+        // the seat's pose in the mounted pin; without a mount field, a display id no mount has.
+        let kart_seat = (is_self && in_kart) || store.is_some_and(crate::kart::drives_kart);
         let mount_display = match store.map_or(0, |s| s.0.unit_mount_display_id()) {
-            0 if is_self && in_kart => u32::MAX,
+            0 if kart_seat => u32::MAX,
             id => id,
         };
         let mounted = mount_display != 0;
@@ -954,6 +957,7 @@ pub(super) fn drive_animations(
                 moving,
                 relaxed,
                 mounted,
+                kart_seat,
                 looting,
                 engaged,
                 airborne_frozen,

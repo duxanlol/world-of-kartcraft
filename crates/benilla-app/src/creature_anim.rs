@@ -855,7 +855,7 @@ fn resolved_id(anims: &ModelAnimations, id: u16, catalog: Option<&AnimDataCatalo
 }
 
 /// The clip for a requested id, through the model's baked fallback.
-fn find_resolved<'a>(
+pub(crate) fn find_resolved<'a>(
     anims: &'a ModelAnimations,
     id: u16,
     catalog: Option<&AnimDataCatalog>,

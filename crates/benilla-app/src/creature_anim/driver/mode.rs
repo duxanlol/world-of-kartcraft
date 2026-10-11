@@ -28,6 +28,8 @@ pub(super) struct Frame<'a> {
     pub(super) moving: bool,
     pub(super) relaxed: bool,
     pub(super) mounted: bool,
+    /// World of Kartcraft: mounted in a kart's seat, which holds [`crate::kart::SEAT_ANIMS`].
+    pub(super) kart_seat: bool,
     pub(super) looting: bool,
     pub(super) engaged: bool,
     pub(super) airborne_frozen: bool,
@@ -60,6 +62,7 @@ pub(super) fn run(
         moving,
         relaxed,
         mounted,
+        kart_seat,
         looting,
         engaged,
         airborne_frozen,
@@ -358,7 +361,9 @@ pub(super) fn run(
                 // client arms 91 outside this chain, at attach (`0x607b44`) and on every play
                 // (`0x5fe803`–`0x5fe816`); the mount edge arms the attach over a live one-shot.
                 let mount_cands;
-                let cands: &[u16] = if mounted {
+                let cands: &[u16] = if kart_seat {
+                    &crate::kart::SEAT_ANIMS
+                } else if mounted {
                     mount_cands = [select::MOUNT, STAND];
                     &mount_cands
                 } else {
@@ -389,7 +394,8 @@ pub(super) fn run(
                 } else if let Some(c) = clip {
                     // The death pose (`0x5fc563`) and the mount attach (`0x607b44`) arm past the
                     // lock in the reference; here they are gait targets, so they drop it first.
-                    if target == DEATH || target == select::MOUNT {
+                    // A kart's seat arms as the mount attach does.
+                    if target == DEATH || target == select::MOUNT || kart_seat {
                         drv.base_lock.release();
                     }
                     // Locked: no roll. The reference re-picks on events (`0x5fd9e0(-1)`), so a

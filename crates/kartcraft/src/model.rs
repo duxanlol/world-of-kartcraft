@@ -183,11 +183,17 @@ pub fn model() -> Option<&'static Model> {
     model_named(our_kart()).or_else(|| model_named(""))
 }
 
-/// Where a seated driver's hips go, in the kart's frame, meters (the median of CTR's drivers).
+/// The median of CTR's drivers' seats, meters in the kart's frame: the seat without kart data.
+pub const MEDIAN_SEAT: Vec3 = Vec3::new(0.0, 0.254, -0.029);
+
+/// Where a seated driver's hips go, in the kart's frame, meters.
 pub fn seat() -> Vec3 {
-    model().map_or(Vec3::new(0.0, 0.254, -0.029), |m| {
-        Vec3::from_array(m.anchors.seat)
-    })
+    model().map_or(MEDIAN_SEAT, |m| Vec3::from_array(m.anchors.seat))
+}
+
+/// The seat of a racer's kart (see [`model_named`]), else ours.
+pub fn seat_of(racer: &str) -> Vec3 {
+    model_named(racer).map_or_else(seat, |m| Vec3::from_array(m.anchors.seat))
 }
 
 /// Reads the model off the disk early, so the first `J` only spawns it.
