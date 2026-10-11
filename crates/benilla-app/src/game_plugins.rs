@@ -642,8 +642,9 @@ pub(crate) mod schedule_tests {
     /// particle `EffectQuads` are most of it. Accepted with a reason: the kart weapons' look
     /// (`kartcraft::weapons::look::draw`, in the kart chain) against the other writers of
     /// `Transform`, `Visibility` and the mesh and material handles: it spawns and moves only the
-    /// crates, fruit and shots it owns.
-    const POST_UPDATE_CEILING: usize = 411;
+    /// crates, fruit and shots it owns. The kart seat (placing the driver on its own posed seat)
+    /// adds two of the same kind.
+    const POST_UPDATE_CEILING: usize = 413;
     const POST_UPDATE_SLACK: usize = 20;
     /// The actionable pairs in `Update`: conflicting access, no declared order, and nothing
     /// [`Classes`] explains, so the executor orders them however the graph falls. The count may
