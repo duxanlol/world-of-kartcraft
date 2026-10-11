@@ -467,6 +467,22 @@ fn leaverace_leaves_everything_and_the_answer_clears_the_finder() {
 }
 
 #[test]
+fn racewait_asks_the_server_for_the_finders_wait() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    sent(&mut s);
+
+    // The seconds, stripped of anything else; bare, it asks for the wait in force.
+    s.run("SlashCmdList[\"BENILLA_RACEWAIT\"](\" 5s\")").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tFillWait\t5"]);
+    s.run("SlashCmdList[\"BENILLA_RACEWAIT\"](\"\")").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tFillWait\t"]);
+}
+
+#[test]
 fn a_finder_race_offers_the_way_back_and_new_bests_reach_the_chat() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK

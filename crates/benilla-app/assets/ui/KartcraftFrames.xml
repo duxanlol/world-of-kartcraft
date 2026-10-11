@@ -853,6 +853,11 @@
             SlashCmdList["BENILLA_KARTCRAFT"] = function() BenillaKartSettings_Toggle() end
             SLASH_BENILLA_GARAGE1 = "/garage"
             SlashCmdList["BENILLA_GARAGE"] = function() BenillaKartGarage_Toggle() end
+            -- GMs: the Race Finder's wait for a second racer, in seconds (the server checks).
+            SLASH_BENILLA_RACEWAIT1 = "/racewait"
+            SlashCmdList["BENILLA_RACEWAIT"] = function(msg)
+                BenillaKart_Send("FillWait\t" .. (string.gsub(msg or "", "%D", "")))
+            end
         end
     ]]></Script>
 

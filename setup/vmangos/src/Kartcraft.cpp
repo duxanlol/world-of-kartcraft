@@ -1163,6 +1163,10 @@ namespace Kartcraft
     // timer; add an update hook if queues get busy.
 
     constexpr uint32 FILL_WAIT = 30 * IN_MILLISECONDS;
+    // The wait in force: a GM sets it for testing ("R\tFillWait\t<secs>", /racewait), until the
+    // server restarts.
+    static uint32 s_fillWait = FILL_WAIT;
+    constexpr uint32 FILL_WAIT_MAX = 300 * IN_MILLISECONDS;
     constexpr uint32 QUEUE_STALE = 10 * IN_MILLISECONDS;
     constexpr uint32 POP_ANSWER = 20 * IN_MILLISECONDS;
     // Countdown plus time for a teleport to settle before it.
@@ -1395,7 +1399,7 @@ namespace Kartcraft
                 if (q.courses[i])
                     takers.push_back(&q);
             bool ready = takers.size() >= MAX_RACERS ||
-                (takers.size() >= 2 && WorldTimer::getMSTimeDiff(takers[1]->joined, now) >= FILL_WAIT);
+                (takers.size() >= 2 && WorldTimer::getMSTimeDiff(takers[1]->joined, now) >= s_fillWait);
             if (ready && takers.size() > bestCount)
             {
                 best = int(i);
@@ -1428,7 +1432,21 @@ namespace Kartcraft
         std::string const& verb = f[1];
         ObjectGuid guid = player->GetObjectGuid();
         auto mine = std::find_if(s_queue.begin(), s_queue.end(), [guid](Queued const& q) { return q.guid == guid; });
-        if (verb == "Q+" && f.size() > 2)
+        if (verb == "FillWait")
+        {
+            // GM accounts only; a bare /racewait reports the wait in force.
+            ChatHandler chat(player->GetSession());
+            if (player->GetSession()->GetSecurity() < SEC_GAMEMASTER)
+            {
+                chat.SendSysMessage("Only a GM can change the Race Finder's wait.");
+                return true;
+            }
+            if (f.size() > 2 && !f[2].empty())
+                s_fillWait = std::min(uint32(std::strtoul(f[2].c_str(), nullptr, 10)) * IN_MILLISECONDS, FILL_WAIT_MAX);
+            chat.PSendSysMessage("Race Finder wait: %u s (default %u s, until the server restarts).",
+                s_fillWait / IN_MILLISECONDS, FILL_WAIT / IN_MILLISECONDS);
+        }
+        else if (verb == "Q+" && f.size() > 2)
         {
             std::vector<bool> mask = CourseMask(f[2]);
             // Not from a dungeon, a raid or a battleground: a pop would teleport them out of it.
