@@ -1535,7 +1535,7 @@
                 <FontString inherits="GameFontNormal" text="Kartcraft Settings">
                     <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
                 </FontString>
-                <FontString name="$parentArrowTitle" inherits="GameFontNormal" text="Pace notes">
+                <FontString name="$parentArrowTitle" inherits="GameFontNormal" text="Guide arrow">
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-34"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentCameraTitle" inherits="GameFontNormal" text="Camera">
@@ -1557,12 +1557,12 @@
                     <OnValueChanged>BenillaKartSettings_Slide(this, "KartArrowSize")</OnValueChanged>
                 </Scripts>
             </Slider>
-            <Button name="$parentMoveArrow" inherits="UIPanelButtonTemplate" text="Move sign">
+            <Button name="$parentMoveArrow" inherits="UIPanelButtonTemplate" text="Move arrow">
                 <Size><AbsDimension x="128" y="22"/></Size>
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-132"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartSettings_MoveArrow()</OnClick></Scripts>
             </Button>
-            <Button name="$parentResetArrow" inherits="UIPanelButtonTemplate" text="Reset sign">
+            <Button name="$parentResetArrow" inherits="UIPanelButtonTemplate" text="Reset arrow">
                 <Size><AbsDimension x="128" y="22"/></Size>
                 <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-132"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartSettings_ResetArrow()</OnClick></Scripts>
@@ -1599,7 +1599,7 @@
             <OnLoad>
                 -- Each box's CVar and label (the check template's), and each slider's range.
                 local boxes = {
-                    { "ArrowShow", "KartArrowShow", "Show the pace notes in a race" },
+                    { "ArrowShow", "KartArrowShow", "Show the guide arrow in a race" },
                     { "ChaseCamera", "KartChaseCamera", "CTR chase camera (off: your WoW camera)" },
                     { "FarCamera", "KartFarCamera", "Far chase camera (off: near)" },
                     { "Music", "KartMusic", "Play CTR race music" },
@@ -1774,7 +1774,7 @@
         </Backdrop>
         <Layers>
             <Layer level="ARTWORK">
-                <FontString name="$parentTitle" inherits="GameFontNormal" text="Pace notes">
+                <FontString name="$parentTitle" inherits="GameFontNormal" text="Guide arrow">
                     <Anchors><Anchor point="BOTTOM" relativePoint="TOP"><Offset><AbsDimension x="0" y="4"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentHint" inherits="GameFontHighlightSmall" text="Drag it where the arrow goes; the wheel sizes it.">
