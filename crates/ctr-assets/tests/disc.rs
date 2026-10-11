@@ -203,6 +203,30 @@ fn extracts_hud_and_music() {
             8
         );
         assert!(hud.meshes.iter().any(|m| m.name == "fruitdisp"));
+        // The start lights, trafficLightIcon[0..4]: one size, each with opaque texels, the
+        // lit ones brighter than the unlit.
+        let lights = hud.elements["layout"]["start_lights"]["sprites"]
+            .as_array()
+            .expect("start lights");
+        let lights: Vec<&ctr_assets::hud::Sprite> = lights
+            .iter()
+            .map(|i| &hud.sprites[i.as_u64().unwrap() as usize])
+            .collect();
+        assert_eq!(lights.len(), 4);
+        let brightness = |s: &ctr_assets::hud::Sprite| {
+            let t = &hud.textures[s.texture];
+            assert!(t.rgba.chunks(4).any(|p| p[3] > 0), "{} is empty", s.name);
+            t.rgba
+                .chunks(4)
+                .filter(|p| p[3] > 0)
+                .map(|p| u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2]))
+                .sum::<u64>()
+        };
+        for s in &lights {
+            assert_eq!(s.size, lights[0].size, "{}", s.name);
+        }
+        assert!(brightness(lights[1]) > brightness(lights[0]));
+        assert!(brightness(lights[3]) > brightness(lights[2]));
     }
     // One race track: Crash Cove is 34560 ticks at 190 BPM x 120 TPQN = 90.95 s.
     let (lba, size) = disc.find_file(ctr_assets::audio::HWL_PATH).unwrap();
@@ -261,4 +285,15 @@ fn hud_renderer_draws_real_hud_fast() {
     assert_eq!(a(30, 65), 255);
     assert_eq!(a(150, 100), 0);
     assert_eq!(a(50, 191), 255);
+    // The start lights in place, all lit at GO.
+    assert!(r.has_start_lights());
+    let lights = ctr_assets::hud_draw::HudState {
+        start_timer: Some(0),
+        hide_drift_meter: true,
+        ..Default::default()
+    };
+    r.render(&lights, &mut px);
+    let a = |x: usize, y: usize| px[(y * 512 + x) * 4 + 3];
+    assert_eq!(a(279, 56), 255);
+    assert_eq!(a(256, 100), 0);
 }

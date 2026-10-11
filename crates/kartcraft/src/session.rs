@@ -61,7 +61,8 @@ pub struct KartView {
     pub drift_yaw: f32,
     /// The hang-time meter's airtime (CTR-ms) while a hop counts for it.
     pub jump: Option<i32>,
-    /// Speed in CTR's units (1/256 lu per frame), the class's top speed, for the speedometer.
+    /// Speed in CTR's units (1/256 lu per frame), the class's top speed, for the speedometer
+    /// (the revs while revving on the grid).
     pub ctr_speed: i32,
     pub class_speed: i32,
     /// The turbo flame's size, 0 none, else 4 to 8.
@@ -421,7 +422,7 @@ impl Session {
             meter: kart.turbo_meter(),
             drift_yaw: kart.drawn_yaw_offset(),
             jump: kart.jump_meter(),
-            ctr_speed: kart.speed(),
+            ctr_speed: kart.needle(),
             class_speed: kart.stats().accel_speed,
             fire: kart.fire_size(),
             failed_boost: kart.failed_boost(),

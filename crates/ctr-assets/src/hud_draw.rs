@@ -63,6 +63,8 @@ pub struct HudState {
     /// Seconds since start, for the fruit spin (0.9375 turns/s), juiced shine pulse and the
     /// item roulette.
     pub time_seconds: f32,
+    /// The start lights' timer (see [`start_lights`]); `None` draws none.
+    pub start_timer: Option<i32>,
 }
 
 /// Where an element should be pinned when the 512×216 canvas is shown on a wider screen.
@@ -87,7 +89,94 @@ pub struct Region {
 /// the screen's left edge, `middle` to its centre and `right` to its right edge. Every element
 /// lies entirely inside one span.
 pub const CROP_LEFT: [i32; 2] = [0, 120];
-pub const CROP_MIDDLE: [i32; 2] = [200, 400];
+pub const CROP_MIDDLE: [i32; 2] = [120, 400];
+
+/// CTR's traffic-light timer (`gGT->trafficLightsTimer`) counts its "ms": 32 for a 30 Hz frame
+/// (MainFrame.c:188-203, `elapsedTimeMS`), 960 a second.
+pub const LIGHTS_UNITS_PER_SECOND: f32 = 960.0;
+/// The timer as the race starts (MainGameStart.c:17), and while the lights slide in
+/// (DotLights.c:21 `DOT_LIGHT_TIMER_HIDE`).
+pub const LIGHTS_TIMER_START: i32 = 0xF00;
+/// The lights show down to here, sliding out (DotLights.c:16 `DOT_LIGHT_TIMER_SHOW_MIN`).
+pub const LIGHTS_TIMER_END: i32 = -0x3BF;
+/// The first, second and third red light come on, and the green (DotLights.c:17-20).
+pub const LIGHTS_TIMER_RED: [i32; 3] = [0xB40, 0x780, 0x3C0];
+pub const LIGHTS_TIMER_GREEN: i32 = 0;
+/// The lights' slide reaches the top third of the screen (DotLights.c:63 `rect.h / 3`).
+const LIGHTS_DROP: i32 = HEIGHT as i32 / 3;
+
+/// The traffic-light timer `seconds` before GO: GO is 0, and the green light comes on with it.
+pub fn lights_timer(seconds: f32) -> i32 {
+    (seconds * LIGHTS_UNITS_PER_SECOND).ceil() as i32
+}
+
+/// The start lights at a timer: how many are lit (0, the three reds one by one, then 4 with the
+/// green) and how far they have slid down, 4096 = in place (DotLights.c:85-152). `None` when
+/// they are off screen: before CTR's countdown begins and once they have slid away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StartLights {
+    pub lit: u8,
+    pub pos: i32,
+}
+
+/// `DotLights_TweenPos` (DotLights.c:74-78): `value / 960`, truncated toward zero, by its
+/// reciprocal multiply.
+fn lights_tween(value: i32) -> i32 {
+    // DotLights.c:23 DOT_LIGHT_TWEEN_RECIPROCAL_960, :24 DOT_LIGHT_TWEEN_SHIFT.
+    let quotient = ((i64::from(value) * -0x7777_7777i64) >> 32) as i32;
+    ((quotient + value) >> 9) - (value >> 31)
+}
+
+pub fn start_lights(timer: i32) -> Option<StartLights> {
+    if !(LIGHTS_TIMER_END..=LIGHTS_TIMER_START).contains(&timer) {
+        return None;
+    }
+    let [red1, red2, red3] = LIGHTS_TIMER_RED;
+    Some(if timer <= LIGHTS_TIMER_GREEN {
+        StartLights {
+            lit: 4,
+            pos: lights_tween((timer + red3) * 4096),
+        }
+    } else if timer <= red1 {
+        let lit = if timer <= red3 {
+            3
+        } else if timer <= red2 {
+            2
+        } else {
+            1
+        };
+        StartLights { lit, pos: 4096 }
+    } else {
+        StartLights {
+            lit: 0,
+            pos: lights_tween((LIGHTS_TIMER_START - timer) * 4096),
+        }
+    })
+}
+
+/// A start light's sound: CTR's countdown beep (OtherFX 0x45) as each red comes on, its green
+/// sound (0x46) with the green.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartSound {
+    Red,
+    Green,
+}
+
+/// The sound a frame plays with the timer at `timer`, last frame's at `prev`: a light's when the
+/// timer has crossed into its stretch (DotLights.c:91-136, `trafficLightsTimer_prevFrame`).
+pub fn start_light_sound(prev: i32, timer: i32) -> Option<StartSound> {
+    if timer < LIGHTS_TIMER_END {
+        return None;
+    }
+    if timer <= LIGHTS_TIMER_GREEN {
+        return (prev > LIGHTS_TIMER_GREEN).then_some(StartSound::Green);
+    }
+    LIGHTS_TIMER_RED
+        .iter()
+        .rev()
+        .find(|&&red| timer <= red)
+        .and_then(|&red| (prev > red).then_some(StartSound::Red))
+}
 pub const CROP_RIGHT: [i32; 2] = [400, 512];
 
 struct Image {
@@ -145,6 +234,9 @@ pub struct HudRenderer {
     fruit: Mesh,
     items: Vec<(String, usize)>,
     portraits: Vec<(String, usize)>,
+    /// `trafficLightIcon[0..4]`: red off, red on, green off, green on; absent in a `hud.json`
+    /// converted before they were.
+    start_lights: Option<[usize; 4]>,
     l: Layout,
 }
 
@@ -309,7 +401,6 @@ impl HudRenderer {
             .map(|i| mesh(&format!("big{i}")))
             .collect::<Result<_>>()?;
         Ok(Self {
-            images,
             big: font("big")?,
             small: font("small")?,
             orange: grad(&j["colors"]["orange"])?,
@@ -319,8 +410,32 @@ impl HudRenderer {
             fruit: mesh("fruitdisp")?,
             items: named(&lay["weapon"]["sprites"]),
             portraits: named(&j["elements"]["portraits"]),
+            start_lights: lay["start_lights"]["sprites"].as_array().and_then(|a| {
+                let ids: Vec<usize> = a
+                    .iter()
+                    .filter_map(|v| v.as_u64().map(|s| s as usize))
+                    .filter(|&s| s < images.len())
+                    .collect();
+                ids.try_into().ok()
+            }),
+            images,
             l,
         })
+    }
+
+    /// Whether this HUD has CTR's start lights (a `hud.json` converted with them).
+    pub fn has_start_lights(&self) -> bool {
+        self.start_lights.is_some()
+    }
+
+    /// The start lights' top-left corner and the size of one light (canvas pixels) at a slide
+    /// `pos` (4096 = in place), 1P at scale 1.0 (DotLights.c:58-68).
+    fn start_lights_rect(&self, pos: i32) -> Option<[i32; 4]> {
+        let img = self.images.get(self.start_lights?[0])?;
+        let (w, h) = (img.draw[0] as i32, img.draw[1] as i32);
+        let x = (WIDTH as i32 - w * 4) / 2;
+        let y = ((LIGHTS_DROP * pos) >> 12) - h;
+        Some([x, y, w, h])
     }
 
     /// Screen regions of every element (canvas pixels) and how to anchor them.
@@ -331,7 +446,12 @@ impl HudRenderer {
             rect: [x as i32, y as i32, w as i32, h as i32],
             anchor,
         };
-        vec![
+        let lights = self.start_lights_rect(4096).map(|[x, y, w, h]| Region {
+            name: "start_lights",
+            rect: [x, y, 4 * w, h],
+            anchor: Anchor::Top,
+        });
+        let mut regions = vec![
             r(
                 "rank_list",
                 l.rank_portrait[0],
@@ -389,7 +509,9 @@ impl HudRenderer {
                 l.jump_bar[1] + l.jump_bar[3] - 161.0 + 1.0,
                 Anchor::BottomRight,
             ),
-        ]
+        ];
+        regions.extend(lights);
+        regions
     }
 
     /// Clears `out` (512×216 RGBA8, rows top-first) to transparent and draws `state`.
@@ -615,6 +737,11 @@ impl HudRenderer {
                 false,
             );
         }
+
+        // Start lights (DotLights_AudioAndVideo).
+        if let Some(timer) = s.start_timer {
+            self.draw_start_lights(c, timer);
+        }
     }
 
     fn item_sprite(&self, name: &str) -> Option<usize> {
@@ -761,6 +888,22 @@ impl HudRenderer {
                 };
                 c.put(px, py, col, 1.0);
             }
+        }
+    }
+
+    /// The start lights (DotLights_Video): four in a row centred, red off/on for the first
+    /// three and green off/on for the fourth, `trafficLightIcon[state + 2 * (i == 3)]`.
+    fn draw_start_lights(&self, c: &mut Canvas, timer: i32) {
+        let (Some(ids), Some(l)) = (self.start_lights, start_lights(timer)) else {
+            return;
+        };
+        let Some([x, y, w, _]) = self.start_lights_rect(l.pos) else {
+            return;
+        };
+        for i in 0..4u8 {
+            let on = usize::from(l.lit > i);
+            let icon = ids[on + if i == 3 { 2 } else { 0 }];
+            self.sprite(c, icon, (x + w * i32::from(i)) as f32, y as f32, None, 1.0);
         }
     }
 
@@ -1041,14 +1184,183 @@ mod tests {
 
     #[test]
     fn regions_fit_the_three_crops() {
-        let hud = HudRenderer::from_json(&tiny_hud()).unwrap();
-        for r in hud.regions() {
+        let hud = HudRenderer::from_json(&lights_hud()).unwrap();
+        let regions = hud.regions();
+        assert!(regions.iter().any(|r| r.name == "start_lights"));
+        for r in regions {
             let (x0, x1) = (r.rect[0], r.rect[0] + r.rect[2]);
             let ok = [CROP_LEFT, CROP_MIDDLE, CROP_RIGHT]
                 .iter()
                 .any(|c| x0 >= c[0] && x1 <= c[1]);
             assert!(ok, "{} {:?} straddles crops", r.name, r.rect);
         }
+    }
+
+    /// [`tiny_hud`] with the four start lights, 47×31 as on the disc, each one flat colour:
+    /// red off dark red, red on red, green off dark green, green on green.
+    fn lights_hud() -> Value {
+        let mut j = tiny_hud();
+        let colours = [[64, 0, 0], [255, 0, 0], [0, 64, 0], [0, 255, 0]];
+        for (i, c) in colours.iter().enumerate() {
+            let px: Vec<u8> = (0..4).flat_map(|_| [c[0], c[1], c[2], 255]).collect();
+            j["textures"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"width": 2, "height": 2, "rgba": px}));
+            j["sprites"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"texture": i + 1, "size": [47, 31]}));
+        }
+        j["elements"]["layout"]["start_lights"] = json!({"sprites": [1, 2, 3, 4]});
+        j
+    }
+
+    #[test]
+    fn the_start_lights_light_in_ctr_s_order_and_time_to_go() {
+        let at = |s: f32| start_lights(lights_timer(s)).map(|l| l.lit);
+        // A long countdown shows nothing until CTR's own 4 s of lights.
+        assert_eq!(at(25.0), None);
+        assert_eq!(at(4.01), None);
+        assert_eq!(at(4.0), Some(0));
+        // Red one by one at 3, 2 and 1 s before GO; green exactly at GO.
+        assert_eq!(at(3.001), Some(0));
+        assert_eq!(at(3.0), Some(1));
+        assert_eq!(at(2.001), Some(1));
+        assert_eq!(at(2.0), Some(2));
+        assert_eq!(at(1.001), Some(2));
+        assert_eq!(at(1.0), Some(3));
+        assert_eq!(at(0.0005), Some(3));
+        assert_eq!(at(0.0), Some(4));
+        // Green until they have slid away, 0x3BF units after GO.
+        assert_eq!(at(-0.99), Some(4));
+        assert_eq!(start_lights(LIGHTS_TIMER_END).map(|l| l.lit), Some(4));
+        assert_eq!(start_lights(LIGHTS_TIMER_END - 1), None);
+        assert_eq!(lights_timer(4.0), LIGHTS_TIMER_START);
+        assert_eq!(lights_timer(0.0), LIGHTS_TIMER_GREEN);
+    }
+
+    #[test]
+    fn the_start_lights_slide_in_and_out_with_ctr_s_tween() {
+        // DotLights_TweenPos is value / 960 truncated toward zero.
+        for v in (-3_932_160..=3_932_160).step_by(4093) {
+            assert_eq!(lights_tween(v), v / 960, "{v}");
+        }
+        let pos = |t: i32| start_lights(t).unwrap().pos;
+        // In over the first second, at rest through the reds, out over the second after GO.
+        assert_eq!(pos(0xF00), 0);
+        assert_eq!(pos(0xF00 - 480), 2048);
+        assert_eq!(pos(0xB41), 4091);
+        assert_eq!(pos(0xB40), 4096);
+        assert_eq!(pos(1), 4096);
+        assert_eq!(pos(0), 4096);
+        assert_eq!(pos(-480), 2048);
+        assert_eq!(pos(-0x3BF), 4);
+
+        // 47×31 lights: centred, x = (512 - 188) / 2; the bottom edge at a third of the height
+        // in place, and wholly above the screen at the start.
+        let hud = HudRenderer::from_json(&lights_hud()).unwrap();
+        assert!(hud.has_start_lights());
+        assert_eq!(hud.start_lights_rect(4096), Some([162, 41, 47, 31]));
+        assert_eq!(hud.start_lights_rect(2048), Some([162, 5, 47, 31]));
+        assert_eq!(hud.start_lights_rect(0), Some([162, -31, 47, 31]));
+        assert!(!HudRenderer::from_json(&tiny_hud())
+            .unwrap()
+            .has_start_lights());
+    }
+
+    #[test]
+    fn each_start_light_sound_plays_once_as_its_light_comes_on() {
+        // Every frame at 60 Hz from a 30 s countdown to 2 s after GO.
+        let mut prev = lights_timer(30.0);
+        let mut heard = Vec::new();
+        let mut t = 30.0f32;
+        while t > -2.0 {
+            t -= 1.0 / 60.0;
+            let now = lights_timer(t);
+            if let Some(s) = start_light_sound(prev, now) {
+                heard.push((s, now));
+            }
+            prev = now;
+        }
+        let sounds: Vec<StartSound> = heard.iter().map(|h| h.0).collect();
+        assert_eq!(
+            sounds,
+            [
+                StartSound::Red,
+                StartSound::Red,
+                StartSound::Red,
+                StartSound::Green
+            ]
+        );
+        // Each in the frame its light comes on.
+        for ((_, timer), threshold) in heard.iter().zip([0xB40, 0x780, 0x3C0, 0]) {
+            assert!(
+                *timer <= threshold && *timer > threshold - 16,
+                "{timer} {threshold}"
+            );
+        }
+        // A frame that skips a light plays the one it lands in, once.
+        assert_eq!(start_light_sound(3000, 1000), Some(StartSound::Red));
+        assert_eq!(start_light_sound(1000, 1000), None);
+        assert_eq!(start_light_sound(5000, 3000), None);
+        assert_eq!(start_light_sound(10, -100), Some(StartSound::Green));
+        assert_eq!(start_light_sound(10, -2000), None);
+    }
+
+    #[test]
+    fn the_start_lights_draw_lit_as_the_timer_says() {
+        let hud = HudRenderer::from_json(&lights_hud()).unwrap();
+        let mut px = vec![0u8; WIDTH * HEIGHT * 4];
+        let rgb = |px: &[u8], x: usize, y: usize| {
+            let o = (y * WIDTH + x) * 4;
+            [px[o], px[o + 1], px[o + 2], px[o + 3]]
+        };
+        let centres = [0, 1, 2, 3].map(|i| 162 + 47 * i + 23);
+        let draw = |px: &mut Vec<u8>, timer| {
+            let s = HudState {
+                hide_drift_meter: true,
+                start_timer: Some(timer),
+                ..Default::default()
+            };
+            hud.render(&s, px);
+        };
+        // Two reds on, in place.
+        draw(&mut px, 0x780);
+        let row = centres.map(|x| rgb(&px, x, 56));
+        assert_eq!(
+            row,
+            [
+                [255, 0, 0, 255],
+                [255, 0, 0, 255],
+                [64, 0, 0, 255],
+                [0, 64, 0, 255]
+            ]
+        );
+        assert_eq!(rgb(&px, 161, 56)[3], 0);
+        assert_eq!(rgb(&px, 162 + 188, 56)[3], 0);
+        assert_eq!(rgb(&px, 200, 41)[3], 255);
+        assert_eq!(rgb(&px, 200, 40)[3], 0);
+        assert_eq!(rgb(&px, 200, 72)[3], 0);
+        // All on at GO.
+        draw(&mut px, 0);
+        assert_eq!(rgb(&px, centres[3], 56), [0, 255, 0, 255]);
+        // Before CTR's countdown and after the slide out: nothing.
+        for t in [0xF01, LIGHTS_TIMER_END - 1] {
+            draw(&mut px, t);
+            assert!(px.chunks(4).all(|p| p[3] == 0), "{t}");
+        }
+        // A hud.json without the lights draws none.
+        let old = HudRenderer::from_json(&tiny_hud()).unwrap();
+        old.render(
+            &HudState {
+                hide_drift_meter: true,
+                start_timer: Some(0),
+                ..Default::default()
+            },
+            &mut px,
+        );
+        assert!(px.chunks(4).all(|p| p[3] == 0));
     }
 
     #[test]

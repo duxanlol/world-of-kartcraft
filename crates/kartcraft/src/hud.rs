@@ -1,12 +1,16 @@
 //! CTR's race HUD over the game while we drive, drawn by `ctr_assets::hud_draw` from the player's
 //! `kart-data/hud.json`: the speedometer with its needle, the powerslide's turbo meter (green,
 //! red in the boost window), the hang-time meter while a hop is in the air, the Wumpa count, and
-//! in a race the lap, the place and the held item (its roulette while it spins). The 512×216
-//! canvas (CTR's framebuffer, 4:3 pixels) is drawn into one texture each frame and shown as three
-//! crops: the left elements pinned to the left edge, the middle to the centre and the right to
-//! the right edge, at the window's height.
+//! in a race the lap, the place, the held item (its roulette while it spins) and the start
+//! lights. The 512×216 canvas (CTR's framebuffer, 4:3 pixels) is drawn into one texture each
+//! frame and shown as three crops: the left elements pinned to the left edge, the middle to the
+//! centre and the right to the right edge, at the window's height.
 
 use std::sync::OnceLock;
+
+pub use ctr_assets::hud_draw::{
+    lights_timer, start_light_sound, StartSound, LIGHTS_TIMER_END, LIGHTS_TIMER_START,
+};
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
@@ -35,6 +39,12 @@ fn renderer() -> Option<&'static HudRenderer> {
     .as_ref()
 }
 
+/// Whether the HUD draws CTR's start lights: the player's `hud.json` has them (one converted
+/// before them has not, and the race shows its countdown as text instead).
+pub fn has_start_lights() -> bool {
+    renderer().is_some_and(HudRenderer::has_start_lights)
+}
+
 /// What the HUD shows beyond the kart itself: race standing, when there is a race.
 #[derive(Resource, Default, Clone, Debug)]
 pub struct HudExtras {
@@ -46,6 +56,9 @@ pub struct HudExtras {
     /// The item slot: `(heldItemID, count)` in CTR's ids, 0x10 the roulette; a count above 0
     /// draws the digit (`UI/UI_Weapon.c`).
     pub item: Option<(u8, u8)>,
+    /// CTR's traffic-light timer ([`lights_timer`]) while a race counts down; `None` hides the
+    /// start lights.
+    pub start_timer: Option<i32>,
 }
 
 #[derive(Component)]
@@ -168,6 +181,7 @@ pub fn draw(
         item: extras.item,
         ranks: extras.ranks,
         time_seconds: now,
+        start_timer: extras.start_timer,
         ..Default::default()
     };
     let hud = &mut *hud;

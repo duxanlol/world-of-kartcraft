@@ -314,7 +314,7 @@ const fn weapon(file: &'static str, id: usize, loop_: bool, reference: &'static 
     }
 }
 
-pub const SOUNDS: [SoundSpec; 39] = [
+pub const SOUNDS: [SoundSpec; 41] = [
     SoundSpec {
         file: "engine.wav",
         source: Source::Engine(ENGINE_BALANCED_P1),
@@ -436,6 +436,10 @@ pub const SOUNDS: [SoundSpec; 39] = [
     weapon("warp_launch.wav", 0x4D, false, "VehPickupItem.c:156 SOUND_WARPBALL = 0x4D"),
     weapon("warp_fly.wav", 0x4E, true, "RB_Warpball.c:605 PlaySound3D_Flags(.., 0x4e, inst) while the warp orb flies"),
     weapon("warp_hit.wav", 0x4F, false, "RB_Warpball.c:66 PlaySound3D(0x4f, inst): the warp orb hits"),
+    // The start lights: OtherFX_Play(id, 0) plays at the default flags, full volume, no
+    // distortion (HOWL_OtherFX.c:19-21, namespace_Howl.h:65).
+    weapon("countdown.wav", 0x45, false, "DotLights.c:26 DOT_LIGHT_FX_COUNTDOWN = 0x45: OtherFX_Play(0x45, 0) as each red start light comes on (DotLights.c:108, 121, 134)"),
+    weapon("go.wav", 0x46, false, "DotLights.c:27 DOT_LIGHT_FX_GREEN = 0x46: OtherFX_Play(0x46, 0) as the green start light comes on (DotLights.c:95)"),
 ];
 
 /// OtherFX distortion pitch factor (`distortConst_OtherFX[d] / 0x10000`).
@@ -685,6 +689,23 @@ mod tests {
         assert_eq!(h.engine_fx[0].spu_index, 0);
         assert_eq!(h.sample(&h.other_fx[0]).unwrap(), &[0xAA; 32]);
         assert_eq!(h.sample(&h.engine_fx[0]).unwrap(), &[0xBB; 16]);
+    }
+
+    #[test]
+    fn the_start_lights_sounds_are_in_the_catalogue() {
+        // DotLights.c:26-28: OtherFX 0x45 at each red, 0x46 at green, default flags.
+        for (file, id) in [("countdown.wav", 0x45), ("go.wav", 0x46)] {
+            let s = SOUNDS
+                .iter()
+                .find(|s| s.file == file)
+                .unwrap_or_else(|| panic!("{file} missing"));
+            assert!(matches!(s.source, Source::Other(i) if i == id), "{file}");
+            assert!(!s.loop_ && s.volume == 0xFF && s.distort == 0x80, "{file}");
+        }
+        let mut files: Vec<&str> = SOUNDS.iter().map(|s| s.file).collect();
+        files.sort_unstable();
+        files.dedup();
+        assert_eq!(files.len(), SOUNDS.len(), "a file is written twice");
     }
 
     #[test]

@@ -651,3 +651,71 @@ fn the_turbo_item_is_seventy_five_frames_at_fire_level_128_or_256() {
     kart.tick(&w, &GAS, &NONE);
     assert_eq!(kart.reserves(), 0);
 }
+
+#[test]
+fn held_on_the_grid_the_gas_revs_the_engine_and_the_kart_stands() {
+    let w = world(floor(40000.0));
+    let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 1.0, 0.0), 0);
+    kart.hold_on_grid(true);
+    run(&mut kart, &w, Input::default(), 30);
+    let (idle, _) = kart.engine_sound();
+    // The gas revs it (`HOWL_Engine.c:170-181`): the pitch climbs well above idle...
+    let mut pitch = idle;
+    for _ in 0..8 {
+        kart.tick(&w, &GAS, &NONE);
+        assert!(kart.engine_sound().0 >= pitch, "the revs climb");
+        pitch = kart.engine_sound().0;
+    }
+    assert!(pitch > idle + 40, "revved {pitch} vs idle {idle}");
+    // ...the kart goes nowhere; the needle and the meter show the revs; the kart squashes...
+    assert_eq!(kart.speed(), 0);
+    let at = kart.pose().position;
+    assert!(at.x.abs() < 1.0 && at.z.abs() < 1.0, "{at:?}");
+    assert!(kart.needle() > kart.stats().accel_speed);
+    assert!(kart.turbo_meter().is_some_and(|(_, red)| red));
+    assert!(kart.pose().scale.y < 1.0);
+    // ...and let go, it falls back.
+    run(&mut kart, &w, Input::default(), 30);
+    assert!(
+        kart.engine_sound().0 < pitch - 40,
+        "{:?}",
+        kart.engine_sound()
+    );
+    assert_eq!(kart.needle(), 0);
+    // Held too long, it over-revs (OtherFX 0xF) and GO gives nothing.
+    let mut over = false;
+    for _ in 0..20 {
+        kart.tick(&w, &GAS, &NONE);
+        over |= saw(&kart, Event::OverRev);
+        kart.events.clear();
+    }
+    assert!(over);
+    assert_eq!(kart.hold_on_grid(false), None);
+    assert_eq!(kart.reserves(), 0);
+    // Driving again: the gas moves it.
+    run(&mut kart, &w, GAS, 10);
+    assert!(kart.speed() > 0);
+}
+
+#[test]
+fn revved_into_the_red_at_go_the_start_boost_fires() {
+    let w = world(floor(40000.0));
+    let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 1.0, 0.0), 0);
+    kart.hold_on_grid(true);
+    run(&mut kart, &w, Input::default(), 10);
+    run(&mut kart, &w, GAS, 6);
+    kart.events.clear();
+    assert_eq!(kart.hold_on_grid(false), Some(StartBoost::Small));
+    assert!(saw(&kart, Event::Turbo));
+    assert_eq!(kart.reserves(), crate::rev::START_BOOST_RESERVES);
+    assert!(kart.revs().is_none());
+    // Pumped twice first: the big one.
+    let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 1.0, 0.0), 0);
+    kart.hold_on_grid(true);
+    for _ in 0..2 {
+        run(&mut kart, &w, GAS, 6);
+        run(&mut kart, &w, Input::default(), 8);
+    }
+    run(&mut kart, &w, GAS, 8);
+    assert_eq!(kart.hold_on_grid(false), Some(StartBoost::Big));
+}

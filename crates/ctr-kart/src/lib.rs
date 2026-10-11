@@ -5,6 +5,7 @@
 
 pub mod collision;
 pub mod kart;
+pub mod rev;
 pub mod stats;
 
 pub use collision::Collision;
@@ -12,4 +13,5 @@ pub use kart::{
     clock_slowdown, CameraInput, Event, HitKind, Input, Kart, Modifiers, OtherKart, Pose, Shield,
     State, MS, TICK,
 };
+pub use rev::{RevEngine, RevState, StartBoost};
 pub use stats::Class;

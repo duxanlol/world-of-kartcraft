@@ -4,7 +4,9 @@
 //! simple sky/road backdrop, at the native 512×216 and as a 4:3-corrected 576×432 image.
 //! Also writes the raw transparent overlay (`*-overlay.png`, RGBA) and prints render timing.
 //!
-//! `cargo run -p ctr-assets --release --example render_hud -- kart-data/hud.json out.png`
+//! `cargo run -p ctr-assets --release --example render_hud -- kart-data/hud.json out.png [timer]`
+//!
+//! With `timer` (CTR's traffic-light timer, 1/960 s before GO), the start lights are drawn too.
 
 use ctr_assets::hud_draw::{HudRenderer, HudState, HEIGHT, WIDTH};
 
@@ -35,6 +37,7 @@ fn main() {
             .map(String::from)
             .to_vec(),
         time_seconds: 0.4,
+        start_timer: args.get(3).and_then(|t| t.parse().ok()),
         ..Default::default()
     };
     let mut overlay = vec![0u8; WIDTH * HEIGHT * 4];

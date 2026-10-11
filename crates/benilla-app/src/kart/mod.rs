@@ -62,8 +62,6 @@ pub(crate) struct KartDrive {
     pub(crate) fov: f32,
     /// Drive with the chase camera rather than our follow camera (`KartChaseCamera`).
     pub(crate) engine_camera: bool,
-    /// The gas is down (a race's countdown holds the kart but times the start boost by it).
-    pub(crate) revving: bool,
 }
 
 /// The kart's drive for the frame, which writes [`KartDrive`].
@@ -347,18 +345,16 @@ fn update(
     // Wumpa from the race's fruit, or all ten under Wumpa Juice.
     let wumpa = if auras.juice { 10 } else { arms.wumpa() };
     extras.wumpa = wumpa;
-    drive.revving = controls.accelerate;
-    // A race's countdown holds the kart on the line (the gas only revs it), pinned there so a
-    // start on a slope does not roll it back.
-    host.session.pin(races.holding(now));
-    let controls = if races.holding(now) {
-        input::Controls {
-            brake: true,
-            ..Default::default()
+    // A race's countdown holds the kart on the line, revving with the gas as CTR's does until
+    // GO, which gives the revs their start boost (`ctr_kart::rev`); pinned there so a start on
+    // a slope does not roll it back.
+    let on_grid = races.holding(now);
+    host.session.pin(on_grid);
+    if let Some(kart) = host.session.kart_mut() {
+        if let Some(boost) = kart.hold_on_grid(on_grid) {
+            info!("kart race: start boost {boost:?}");
         }
-    } else {
-        controls
-    };
+    }
     let mods = Modifiers {
         wumpa,
         mask: auras.aku,
@@ -367,11 +363,6 @@ fn update(
     if turbo {
         if let Some(kart) = host.session.kart_mut() {
             kart.fire_turbo(auras.juice);
-        }
-    }
-    if let Some(big) = race::START_BOOST.lock().unwrap().take() {
-        if let Some(kart) = host.session.kart_mut() {
-            kart.start_boost(big);
         }
     }
     let dt = time.delta_secs();

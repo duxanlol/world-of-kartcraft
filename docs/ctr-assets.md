@@ -319,6 +319,7 @@ Weapon and pickup sounds are OtherFX ids played at full event volume with no dis
 | `aku.wav` / `uka.wav` | 0x53 / 0x54 | 13997 Hz | 1.38 / 0.64 s | mask pickup, `STATIC_AKUAKU/UKAUKA + 0x1A` (`VehPickupItem.c:284`, `:305`) |
 | `clock.wav` | 0x44 | 11025 Hz | 1.55 s | `VehPickupItem.c:155` |
 | `warp_launch.wav` / `warp_fly.wav` (loop) / `warp_hit.wav` | 0x4D / 0x4E / 0x4F | 11025 / 12995 / 11025 Hz | 0.80 / 0.83 / 0.40 s | `VehPickupItem.c:156`, `RB_Warpball.c:605`, `:66` |
+| `countdown.wav` / `go.wav` | 0x45 / 0x46 | 11025 / 14707 Hz | 0.63 / 0.47 s | start lights: each red, then the green (`DotLights.c:26-27`, `:108`, `:95`) |
 
 Not produced: **`boost_early.wav`**. A too-early boost (`PowerSlide_Update` sets
 `failedBoostExhaustTimer`) only changes the exhaust particles in `VehEmitter.c` and plays no
@@ -612,7 +613,7 @@ back-right (orthographic, z-buffered, PSX blend modes).
                 "positions3d": [[x, y, z], …] } ],                     // unprojected (+y up), to spin the fruit
   "elements": { "portraits": { name: sprite }, "rank_icons_3p4p": [ … ],
                 "layout": { "rank_list", "weapon", "lap", "wumpa", "rank",
-                            "lock_on", "speedometer", "slide_meter", "jump_meter", "mode_note" } }
+                            "lock_on", "speedometer", "slide_meter", "jump_meter", "start_lights", "mode_note" } }
 }
 ```
 
@@ -644,6 +645,7 @@ back-right (orthographic, z-buffered, PSX blend modes).
 | speedometer | dial at origin (480, 190), needle pivot (479, 186) | `UI_Speedometer.c` |
 | drift meter | box x 441–490, y 199–206 | `UI_Meter.c` `UI_DrawSlideMeter` |
 | jump meter | bar x 491–503, y 168–206; readout box x 471–505, y 161–171 | `UI_Meter.c` |
+| start lights | four 47×31 lights in a row, x 162–350, bottom edge at y 72 in place (`start_lights` element: `lightredoff`, `lightredon`, `lightgreenoff`, `lightgreenon`) | `DotLights.c` `DotLights_Video` |
 
 The rank and fruit meshes are flattened from the game's HUD instances:
 `screen = model · scale/4096 · 256/z`, with y × 0.5625 and flipped to +y down. Rank is
@@ -677,6 +679,13 @@ scale 5120 at z 256; the fruit is scale 4096 at z 512.
   - Held for 1.5 s after landing, then cleared.
   - The white readout box shows S.T H in the debug font, which is not exported.
 - **Item flicker:** every other frame while `noItemTimer` runs.
+- **Start lights** (`DotLights_AudioAndVideo`, on `trafficLightsTimer`, 960 units a second,
+  0xF00 as the race starts)
+  - 0xF00 → 0xB40: all off, sliding down from above the screen, `y = 72·(0xF00 − t)/960 − 31`.
+  - ≤ 0xB40, ≤ 0x780, ≤ 0x3C0: the first, second and third red on, each with OtherFX 0x45.
+  - ≤ 0 (GO): the green on with OtherFX 0x46, then sliding back up, `y = 72·(t + 0x3C0)/960 − 31`,
+    gone below −0x3BF.
+  - A sound plays when the timer crosses into its stretch (`trafficLightsTimer_prevFrame`).
 
 Not exported:
 - the track-map mode;
@@ -694,7 +703,7 @@ Not exported:
 pub const WIDTH: usize = 512;
 pub const HEIGHT: usize = 216;
 pub const CROP_LEFT: [i32; 2] = [0, 120];
-pub const CROP_MIDDLE: [i32; 2] = [200, 400];
+pub const CROP_MIDDLE: [i32; 2] = [120, 400];
 pub const CROP_RIGHT: [i32; 2] = [400, 512];
 
 impl HudRenderer {
@@ -728,16 +737,17 @@ pub enum Anchor { TopLeft, Top, TopRight, BottomLeft, BottomRight }
 | `item: Option<(heldItemID, count)>` | CTR item ids; 0x10 = roulette |
 | `ranks: Vec<String>` | top-4 portrait names |
 | `time_seconds: f32` | fruit spin (0.9375 turns/s), shine pulse, roulette |
+| `start_timer: Option<i32>` | the start lights at CTR's traffic-light timer (`lights_timer(seconds to GO)`); `start_lights` and `start_light_sound` give the lit lights, the slide and each light's sound |
 
 For a 16:9 screen, draw the canvas in three horizontal crops:
 
 - `CROP_LEFT` (x 0–120) pinned to the left edge: rank list, place.
-- `CROP_MIDDLE` (x 200–400) pinned to the centre: item, wumpa.
+- `CROP_MIDDLE` (x 120–400) pinned to the centre: item, wumpa, start lights.
 - `CROP_RIGHT` (x 400–512) pinned to the right edge: lap, speedometer, drift and jump meters.
 
 `regions()` gives every element's rectangle; each lies entirely inside one crop.
 `examples/render_hud.rs` is a thin wrapper over the renderer and also writes the raw RGBA
-overlay.
+overlay; a third argument draws the start lights at that timer.
 
 ## Music
 
