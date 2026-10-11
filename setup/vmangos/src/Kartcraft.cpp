@@ -306,6 +306,7 @@ namespace Kartcraft
         float x, y, z;
         bool up = true;
         uint32 respawnAt = 0; // ms; 0 while up, or never (a single fruit)
+        uint32 grownAt = 0;   // ms; until then it regrows and cannot be taken; 0 full
     };
 
     // A relayed shot: the item, when it was relayed (ms), whether it has hit anyone, and whether
@@ -500,10 +501,14 @@ namespace Kartcraft
         ITEM_MISSILE_3 = 11, ITEM_NONE = 15,
     };
 
-    // A crate comes back 30 + 16 frames after it breaks (RB_Crate.c:48-75, 125).
-    constexpr uint32 CRATE_RESPAWN = 1533;
-    // How near a crate (yards, across the ground) a racer must be to take it.
-    constexpr float CRATE_RADIUS = 6.f;
+    // A crate comes back after its 30-frame cooldown (RB_Crate.c:125), then regrows 16 frames
+    // and cannot be taken until full (RB_Crate.c:48-75, 123).
+    constexpr uint32 CRATE_RESPAWN = 1000;
+    constexpr uint32 CRATE_GROW = 533;
+    // How near a crate (yards, across the ground) a racer must be to take it. The kart touches
+    // it 2 yd off, but our position here trails the kart: up to 42 yd/s at top speed, a 1/15 s
+    // heartbeat and the world update's turn are 5-8 yd.
+    constexpr float CRATE_RADIUS = 12.f;
     // Shots are accepted 20 frames into the roulette (the earliest Fire stop, VehPhysProc.c:833).
     constexpr uint32 ROLL_MIN = 600;
     // A shot can be reported as a hit this long after it was relayed (ms).
@@ -902,6 +907,7 @@ namespace Kartcraft
                 {
                     c.up = true;
                     c.respawnAt = 0;
+                    c.grownAt = (now + CRATE_GROW) | 1; // never 0, which means full
                     SendRace(race, "KARTCRAFT\tW\tU\t" + std::to_string(i));
                 }
             }
@@ -984,7 +990,9 @@ namespace Kartcraft
             if (end == f[2].c_str() || *end || index >= race->crates.size())
                 return;
             Crate& crate = race->crates[index];
-            if (!crate.up || DistanceTo(player, { crate.x, crate.y }) > CRATE_RADIUS)
+            if (crate.grownAt && int32(now - crate.grownAt) >= 0)
+                crate.grownAt = 0;
+            if (!crate.up || crate.grownAt || DistanceTo(player, { crate.x, crate.y }) > CRATE_RADIUS)
                 return;
             crate.up = false;
             crate.respawnAt = crate.kind == 'W' ? 0 : now + CRATE_RESPAWN;

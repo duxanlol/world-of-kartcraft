@@ -168,6 +168,28 @@ const FRUIT_TURN_FRAMES: f32 = 32.0;
 /// The "?" and fruit crates at half CTR's size beside the kart (Kartcraft's own: at full size
 /// they stand as tall as a WoW character).
 pub(crate) const CRATE_SIZE: f32 = 0.5;
+/// A Wumpa fruit at three quarters of CTR's size (Kartcraft's own, beside the smaller crates).
+pub(crate) const FRUIT_SIZE: f32 = 0.75;
+
+/// A crate spot's model and its size against CTR's.
+pub(crate) fn crate_model(kind: super::wire::CrateKind) -> (&'static str, f32) {
+    match kind {
+        super::wire::CrateKind::Weapon => ("crate_question", CRATE_SIZE),
+        super::wire::CrateKind::Fruit => ("crate_fruit", CRATE_SIZE),
+        super::wire::CrateKind::Wumpa => ("fruit", FRUIT_SIZE),
+    }
+}
+
+/// A dropped mine's model and its size against CTR's: the TNT and Nitro crates stand as big as
+/// the "?" crates; the beakers are CTR's.
+pub(crate) fn mine_model(kind: MineKind) -> (&'static str, f32) {
+    match kind {
+        MineKind::Tnt => ("tnt", CRATE_SIZE),
+        MineKind::Nitro => ("nitro", CRATE_SIZE),
+        MineKind::Beaker { red: false } => ("beaker_green", 1.0),
+        MineKind::Beaker { red: true } => ("beaker_red", 1.0),
+    }
+}
 /// The rain cloud hangs this far over the kart, meters.
 const CLOUD_HEIGHT: f32 = 1.9;
 
@@ -701,14 +723,11 @@ fn list(
         if grown <= 0.0 {
             continue;
         }
-        let (model, rotation, scale) = match c.kind {
-            super::wire::CrateKind::Weapon => ("crate_question", Quat::IDENTITY, CRATE_SIZE),
-            super::wire::CrateKind::Fruit => ("crate_fruit", Quat::IDENTITY, CRATE_SIZE),
-            super::wire::CrateKind::Wumpa => (
-                "fruit",
-                Quat::from_rotation_y(frame as f32 / FRUIT_TURN_FRAMES * std::f32::consts::TAU),
-                1.0,
-            ),
+        let (model, scale) = crate_model(c.kind);
+        let rotation = if c.kind == super::wire::CrateKind::Wumpa {
+            Quat::from_rotation_y(frame as f32 / FRUIT_TURN_FRAMES * std::f32::consts::TAU)
+        } else {
+            Quat::IDENTITY
         };
         draws.push(Draw {
             slot: slot(0, i as u64, 0, model),
@@ -770,14 +789,9 @@ fn list(
             }
             Body::Mine(m) => {
                 let grow = (MINE_GROW * (age + 1) as f32 / 4096.0).min(1.0);
-                let model = match m.kind() {
-                    MineKind::Tnt => "tnt",
-                    MineKind::Nitro => "nitro",
-                    MineKind::Beaker { red: false } => "beaker_green",
-                    MineKind::Beaker { red: true } => "beaker_red",
-                };
+                let (model, scale) = mine_model(m.kind());
                 let rotation = Quat::from_rotation_y(turns(info.heading as f32));
-                draws.push(one(0, model, age as usize, plain(rotation, grow)));
+                draws.push(one(0, model, age as usize, plain(rotation, grow * scale)));
             }
         }
     }
