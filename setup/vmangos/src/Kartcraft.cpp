@@ -1701,7 +1701,16 @@ namespace Kartcraft
             size_t slot = 0;
             for (Racer const& x : r.racers)
                 if (Player* p = ObjectAccessor::FindPlayer(x.guid))
+                {
+                    // A racer still fighting would be refused the teleport (CanBeRacedOff); the
+                    // race's shield ends the fight anyway, so it ends before the grid.
+                    if (p->IsInCombat())
+                    {
+                        p->CombatStopWithPets(true);
+                        p->GetHostileRefManager().deleteReferences();
+                    }
                     TeleportToGrid(p, *r.course, slot++);
+                }
             StartRace(id, r, now, GRID_COUNTDOWN);
         }
         else if (verb == "K" && race != s_races.end() && f.size() > 3)
@@ -2021,6 +2030,18 @@ namespace Kartcraft
 
     SpellCastResult CheckCast(Unit const* caster, SpellEntry const* spell)
     {
+        // No duels in a race under way, asked by a racer or of one: the race's shield keeps
+        // players apart, and the duel's cast would also dismount the challenger's kart.
+        for (uint32 i = 0; i < MAX_EFFECT_INDEX; ++i)
+            if (spell->Effect[i] == SPELL_EFFECT_DUEL)
+            {
+                std::lock_guard<std::mutex> lock(s_mutex);
+                if (s_shielded.count(caster->GetObjectGuid()))
+                    return SPELL_FAILED_AFFECTING_COMBAT;
+                if (s_shielded.count(caster->GetTargetGuid()))
+                    return SPELL_FAILED_BAD_TARGETS;
+                break;
+            }
         switch (spell->Id)
         {
             case SPELL_SUMMON_KART:
