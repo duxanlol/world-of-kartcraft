@@ -626,7 +626,7 @@
                 BenillaKart_Say(format("Unstuck: you can use it again in %d seconds.",
                     tonumber(line[3]) or 0))
             elseif verb == "Un" then
-                BenillaKart_Say("Unstuck: there is no course on this continent.")
+                BenillaKart_Say("Unstuck: no course starts within 300 yards.")
             elseif verb == "X" then
                 -- Out of every race and the queue (/leaverace, the minimap button's menu).
                 f.check, f.queued, f.waiting, f.waited = nil, nil, nil, nil

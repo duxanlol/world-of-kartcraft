@@ -1298,7 +1298,7 @@ fn unstuck_asks_the_server_and_says_why_it_waits() {
         s.eval::<Vec<String>>("return BenillaKartSaid").unwrap(),
         [
             "Unstuck: you can use it again in 17 seconds.",
-            "Unstuck: there is no course on this continent.",
+            "Unstuck: no course starts within 300 yards.",
         ]
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());

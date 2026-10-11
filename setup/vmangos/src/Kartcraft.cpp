@@ -4,6 +4,7 @@
 #include "Player.h"
 #include "SpellMgr.h"
 #include "Timer.h"
+#include "Util.h"
 #include "ObjectAccessor.h"
 #include "WorldSession.h"
 #include "World.h"
@@ -1406,8 +1407,11 @@ namespace Kartcraft
         std::stable_sort(s_queue.begin(), s_queue.end(), [now](Queued const& a, Queued const& b) {
             return WorldTimer::getMSTimeDiff(a.joined, now) > WorldTimer::getMSTimeDiff(b.joined, now);
         });
+        // Among the courses tied for the most takers (every one of them, for racers who ticked a
+        // whole zone or "any"), one at random: the first in the list would always win.
         int best = -1;
         size_t bestCount = 0;
+        uint32 ties = 0;
         for (size_t i = 0; i < COURSES.size(); ++i)
         {
             std::vector<Queued const*> takers;
@@ -1416,11 +1420,16 @@ namespace Kartcraft
                     takers.push_back(&q);
             bool ready = takers.size() >= MAX_RACERS ||
                 (takers.size() >= 2 && WorldTimer::getMSTimeDiff(takers[1]->joined, now) >= s_fillWait);
-            if (ready && takers.size() > bestCount)
+            if (!ready || takers.size() < bestCount)
+                continue;
+            if (takers.size() > bestCount)
             {
-                best = int(i);
                 bestCount = takers.size();
+                ties = 0;
             }
+            // Each tied course kept with chance 1/ties: a uniform pick in one pass.
+            if (urand(0, ties++) == 0)
+                best = int(i);
         }
         if (best < 0)
             return;
@@ -1652,15 +1661,14 @@ namespace Kartcraft
         s_origins.erase(guid.GetCounter());
     }
 
-    // `marshal`: the line comes from a Race Marshal's menu (MarshalSelect), which the player used
-    // standing at the start: the start's distance and the kart are not asked for.
     // "R\tU": a kart stuck in the world (sunk into a hill, wedged in a crease) put back on a course:
     // in a race under way at the last checkpoint it passed, facing the next, so the race goes on;
-    // else at the start of the nearest course on its map. Once every UNSTUCK_COOLDOWN and never
-    // what CanBeRacedOff refuses (dead, fighting, flying, in an instance), so it is neither a way
-    // out of a fight nor a free road across the world. "R\tUx\t<secs>" says how long to wait,
-    // "R\tUn" that no course is on this map.
+    // else at the start of the nearest course within UNSTUCK_REACH. Once every UNSTUCK_COOLDOWN
+    // and never what CanBeRacedOff refuses (dead, fighting, flying, in an instance), so it is
+    // neither a way out of a fight nor a free road across the world. "R\tUx\t<secs>" says how
+    // long to wait, "R\tUn" that no course starts near enough.
     constexpr uint32 UNSTUCK_COOLDOWN = 30 * IN_MILLISECONDS;
+    constexpr float UNSTUCK_REACH = 300.f; // yards
     static std::unordered_map<uint32, uint32> s_unstuck; // guid low -> when last used (ms)
 
     static void Unstuck(Player* player, uint32 now)
@@ -1706,7 +1714,7 @@ namespace Kartcraft
                 best = d;
             }
         }
-        if (!nearest)
+        if (!nearest || best > UNSTUCK_REACH)
         {
             SendLine(player, "KARTCRAFT\tR\tUn");
             return;
@@ -1715,6 +1723,8 @@ namespace Kartcraft
             s_unstuck[player->GetGUIDLow()] = now;
     }
 
+    // `marshal`: the line comes from a Race Marshal's menu (MarshalSelect), which the player used
+    // standing at the start: the start's distance and the kart are not asked for.
     static void HandleRace(Player* player, std::string const& body, bool marshal)
     {
         uint32 now = WorldTimer::getMSTime();
