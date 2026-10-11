@@ -5,8 +5,11 @@ rem kartcraft.cfg (delete it to be asked again). Each start first fetches what c
 rem server's update host (UPDATE_URL, by default port 8080 of the server). defaults.cfg, which
 rem comes with updates, presets SERVER and UPDATE_URL; kartcraft.cfg overrides it.
 rem "Play Kartcraft.bat demo" runs the offline demo.
+rem Before asking, it looks for both games itself: WoW in this folder, a folder in it or the one
+rem above it (Kartcraft unzipped into the WoW folder); the CTR image anywhere under this folder.
 setlocal EnableExtensions
 cd /d "%~dp0"
+set "HERE=%~dp0"
 set "CFG=%~dp0kartcraft.cfg"
 if exist "%~dp0defaults.cfg" for /f "usebackq tokens=1,* delims==" %%a in ("%~dp0defaults.cfg") do set "%%a=%%b"
 set "DEF_SERVER=%SERVER%"
@@ -14,6 +17,7 @@ set "DEF_UPDATE_URL=%UPDATE_URL%"
 if exist "%CFG%" for /f "usebackq tokens=1,* delims==" %%a in ("%CFG%") do set "%%a=%%b"
 
 :wow
+if not defined WOW_DIR if not defined WOW_SEARCHED call :findwow
 if not defined WOW_DIR (
     echo.
     echo Where is your World of Warcraft 1.12.1 folder? The one with Data in it,
@@ -53,6 +57,7 @@ rem file as it goes, so nothing of the old one may be read after the move.
 if exist "%~dp0Play Kartcraft.bat.new" (move /y "%~dp0Play Kartcraft.bat.new" "%~f0" >nul & "%~f0" %*)
 
 :ctr
+if not exist "kart-data\kart.json" if not defined CTR_DISC if not defined CTR_SEARCHED call :findctr
 if not exist "kart-data\kart.json" (
     if not defined CTR_DISC (
         echo.
@@ -92,6 +97,33 @@ if defined REGISTER_URL if not defined ACCOUNT_SEEN (
 )
 set "WOW_HOST=%SERVER%"
 start "" "%~dp0WorldOfKartcraft.exe"
+exit /b 0
+
+rem A WoW 1.12.1 folder (one with Data\dbc.MPQ) here, in a folder here, or above here. Once: a
+rem found folder always passes the check, so the question only comes when none is found.
+:findwow
+set "WOW_SEARCHED=1"
+for %%d in ("%HERE%." "%HERE%..") do if exist "%%~fd\Data\dbc.MPQ" (
+    set "WOW_DIR=%%~fd"
+    echo Found World of Warcraft in %%~fd
+    exit /b 0
+)
+for /d %%d in ("%HERE%*") do if exist "%%~fd\Data\dbc.MPQ" (
+    set "WOW_DIR=%%~fd"
+    echo Found World of Warcraft in %%~fd
+    exit /b 0
+)
+exit /b 0
+
+rem A CTR disc image under this folder: a .bin of a disc's size (the US disc is about 500 MB).
+rem Once: if it does not convert, the question comes as before.
+:findctr
+set "CTR_SEARCHED=1"
+for /r "%HERE%." %%f in (*.bin) do if %%~zf GTR 300000000 (
+    set "CTR_DISC=%%~ff"
+    echo Found a Crash Team Racing image: %%~ff
+    exit /b 0
+)
 exit /b 0
 
 :convert
