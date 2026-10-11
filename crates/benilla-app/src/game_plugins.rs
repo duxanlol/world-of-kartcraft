@@ -694,12 +694,15 @@ pub(crate) mod schedule_tests {
     ///   touch, and the screens never run in the world. Its race windows are the layer's. The
     ///   ghost kart (`kart::ghost::update`, in the kart chain) against the same writers of
     ///   `Transform`, `Visibility`, `KartWheels` and the mesh, material and image assets: it
-    ///   spawns, moves and despawns only its own `GhostKart` and its translucent handles.
+    ///   spawns, moves and despawns only its own `GhostKart` and its translucent handles. The
+    ///   pace-note sign (`kart::race::guide`, a 2D node in place of the 3D guide arrow), the seat
+    ///   placement and the race map's feed add ten more pairs of the same kind: each writes only
+    ///   its own sign, seat pose or event feed, against the screens and world writers above.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_003;
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_013;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
