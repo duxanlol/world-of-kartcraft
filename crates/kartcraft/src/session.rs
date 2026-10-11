@@ -248,6 +248,13 @@ impl Session {
         self.pinned = on;
     }
 
+    /// The chase camera's settings for the coming ticks: CTR's far zoom table (L2), and its
+    /// look-back (R2 held).
+    pub fn set_camera(&mut self, far: bool, look_back: bool) {
+        self.camera.far = far;
+        self.camera.look_back = look_back;
+    }
+
     /// How far into the next tick the drawn frame is, 0 to 1, for drawing between ticks.
     pub fn tick_fraction(&self) -> f32 {
         (self.owed / ctr_kart::TICK).clamp(0.0, 1.0)
@@ -344,9 +351,10 @@ impl Session {
                 }
             }
             let shot = self.camera.tick(&kart.camera_input(), &world);
+            // A cut (look-back) is drawn at once, never swept to through the kart.
             self.shots = Some(match self.shots {
-                Some((_, last)) => (last, shot),
-                None => (shot, shot),
+                Some((_, last)) if !shot.cut => (last, shot),
+                _ => (shot, shot),
             });
             events.append(&mut kart.events);
             self.previous = self.current.take();
