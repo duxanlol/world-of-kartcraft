@@ -54,10 +54,12 @@ const TILT_FOLLOW: f32 = 0.1;
 /// screen however the rig tilts.
 const PIVOT_H: f32 = 32.0;
 
-/// How much of the body's turn and powerslide swing off the travel direction the eye takes.
-const BODY_SHARE: f32 = 0.35;
-/// The share of the gap to its aim the eye's yaw closes each 30 Hz tick (settles in ~0.12 s).
-const YAW_FOLLOW: f32 = 0.25;
+/// How much of the body's turn and powerslide swing off the travel direction the eye takes:
+/// 1, all of it, is CTR's eye on heading + swing.
+const BODY_SHARE: f32 = 1.0;
+/// The share of the gap to its aim the eye's yaw closes each 30 Hz tick: 1, at once, is CTR's
+/// rigid eye.
+const YAW_FOLLOW: f32 = 1.0;
 
 /// An angle difference in 4096ths into −2048..2048.
 fn wrap(a: i32) -> i32 {
@@ -187,12 +189,9 @@ impl ChaseCamera {
         d += (self.turbo >> 8) as f32;
 
         // 2.3: the eye trails the heading plus the powerslide's swing (and look-back's half turn).
-        // Deviation: CTR's eye is rigid on heading + swing, which turns it with the kart's body
-        // through every steer and swings it out of each powerslide; a player sliding through a
-        // bend is still going mostly forward and wants to see where. It aims along the kart's
-        // travel over the ground with [`BODY_SHARE`] of the body's turn and swing on top, and
-        // eases after that aim ([`YAW_FOLLOW`] of the gap a tick); look-back's half turn stays an
-        // instant cut.
+        // The aim can follow the kart's travel over the ground with only [`BODY_SHARE`] of the
+        // body's turn and swing, easing after it ([`YAW_FOLLOW`] of the gap a tick); both at 1,
+        // as here, it is CTR's rigid eye. Look-back's half turn is an instant cut either way.
         let body = k.heading + k.spin;
         let aim = match k.travel {
             Some(travel) => travel as f32 + wrap(body - travel) as f32 * BODY_SHARE,
@@ -318,43 +317,31 @@ mod tests {
     }
 
     #[test]
-    fn through_a_powerslide_the_camera_looks_mostly_where_the_kart_is_going() {
-        // Travelling straight along +Z, the body turned 200 into the slide and CTR's swing at
-        // its full 384 out of it: CTR's rigid eye would look 584/4096 of a turn (51 degrees) off.
+    fn through_a_powerslide_the_eye_swings_with_the_kart_as_ctr_s_does() {
+        // Travelling along +Z, the body turned 200 into the slide and CTR's swing at its full
+        // 384: CTR's rigid eye looks 584/4096 of a turn (51.3 degrees) off the travel.
         let (mut cam, world) = (ChaseCamera::default(), flat());
         let mut slide = input(13000);
         slide.travel = Some(0);
         slide.heading = 200;
         slide.spin = 384;
-        let mut shot = cam.tick(&slide, &world);
-        for _ in 0..60 {
-            shot = cam.tick(&slide, &world);
-        }
+        let shot = cam.tick(&slide, &world);
         let off = view_deg(&shot);
-        assert!(
-            off.abs() < 20.0 && off.abs() > 10.0,
-            "{off} degrees off the travel"
-        );
+        assert!((off - 51.3).abs() < 0.5, "{off} degrees off the travel");
     }
 
     #[test]
-    fn a_sharp_turn_is_followed_smoothly_not_snapped_to() {
+    fn a_sharp_turn_is_taken_at_once_as_ctr_s_rigid_eye_does() {
         let (mut cam, world) = (ChaseCamera::default(), flat());
         let mut k = input(13000);
         k.travel = Some(0);
         for _ in 0..30 {
             cam.tick(&k, &world);
         }
-        // A quarter turn at once.
         k.heading = 1024;
         k.travel = Some(1024);
         let first = view_deg(&cam.tick(&k, &world));
-        assert!(first > 5.0 && first < 30.0, "first tick: {first}");
-        let mut last = first;
-        for _ in 0..30 {
-            last = view_deg(&cam.tick(&k, &world));
-        }
-        assert!((last - 90.0).abs() < 2.0, "after a second: {last}");
+        assert!((first - 90.0).abs() < 0.5, "first tick: {first}");
     }
 
     #[test]
