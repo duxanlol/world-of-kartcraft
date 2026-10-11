@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..2018093
+index 0000000..0b36267
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,2428 @@
+@@ -0,0 +1,2567 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -402,7 +402,8 @@ index 0000000..2018093
 +    // ("R\tK\t<id>\t<index>") is checked against the racer's real position and the course's order;
 +    // progress ("R\tP") and finishes ("R\tF") go to every racer, and a finish pays experience and
 +    // Karting skill by place. The courses are courses/courses.json (KartcraftCourses.h); clients
-+    // learn a course from "R\tC".
++    // learn a course from "R\tC". A time trial ("R\tT\t<course>", the Race Marshal's) is a race
++    // of one, started at once and marked "R\tTT\t<id>": no crates, no items, and its own records.
 +
 +    // A crate or fruit: 'F' fruit crate, 'Q' weapon crate, 'W' fruit; z at or below
 +    // INVALID_HEIGHT for the ground's.
@@ -486,6 +487,8 @@ index 0000000..2018093
 +        uint32 created = 0;
 +        uint32 start = 0; // 0 until started
 +        uint8 finishers = 0;
++        // A time trial (the Race Marshal's "R\tT"): one racer, no items, its own records.
++        bool timeTrial = false;
 +        std::vector<Racer> racers;
 +        // Weapons, live from the start: the crates, the shots relayed in the last SHOT_LIFETIME
 +        // keyed by shooter low guid << 16 | shot, and the race's MixRNG state.
@@ -576,9 +579,10 @@ index 0000000..2018093
 +    // ── Records ────────────────────────────────────────────────────────────────────────────────
 +    //
 +    // Every finish is a time on its course: each character's best there, and the course record
-+    // with its holder. kartcraft_records in the characters database keeps every character's best:
-+    // the core creates it if missing (the world database may be re-created by vmangos-deploy, the
-+    // characters database never is), reads it once at startup, and writes a new best in the
++    // with its holder. Races and time trials keep separate boards, kartcraft_records and
++    // kartcraft_tt_records in the characters database, each keeping every character's best: the
++    // core creates them if missing (the world database may be re-created by vmangos-deploy, the
++    // characters database never is), reads them once at startup, and writes a new best in the
 +    // background (an async execute), so a finish never waits on the database. The record is the
 +    // least of the bests.
 +
@@ -588,22 +592,30 @@ index 0000000..2018093
 +        std::string name;
 +    };
 +
-+    static std::map<std::pair<uint32, std::string>, uint32> s_bests; // (guid low, course key) -> ms
-+    static std::unordered_map<std::string, Record> s_records;        // course key -> its record
-+
-+    static void LoadRecords()
++    // One table's times: every character's best on each course, and each course's record.
++    struct Board
 +    {
-+        CharacterDatabase.DirectExecute(
-+            "CREATE TABLE IF NOT EXISTS `kartcraft_records` ("
++        std::string table;
++        std::map<std::pair<uint32, std::string>, Record> bests; // (guid low, course key) -> best
++        std::unordered_map<std::string, Record> records;        // course key -> its record
++    };
++
++    static Board s_raceBoard = { "kartcraft_records", {}, {} };
++    static Board s_trialBoard = { "kartcraft_tt_records", {}, {} };
++
++    static void LoadRecords(Board& board, char const* what)
++    {
++        CharacterDatabase.DirectExecute((
++            "CREATE TABLE IF NOT EXISTS `" + board.table + "` ("
 +            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
 +            "`course` VARCHAR(32) NOT NULL COMMENT 'course key, courses/courses.json', "
 +            "`name` VARCHAR(12) NOT NULL COMMENT 'character name when it was set', "
-+            "`ms` INT UNSIGNED NOT NULL COMMENT 'race time, ms', "
++            "`ms` INT UNSIGNED NOT NULL COMMENT '" + what + " time, ms', "
 +            "`at` INT UNSIGNED NOT NULL COMMENT 'when, unix time', "
 +            "PRIMARY KEY (`guid`, `course`), KEY `course_ms` (`course`, `ms`)"
-+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
++            ") ENGINE=InnoDB DEFAULT CHARSET=utf8").c_str());
 +        std::unique_ptr<QueryResult> result =
-+            CharacterDatabase.Query("SELECT `guid`, `course`, `name`, `ms` FROM `kartcraft_records`");
++            CharacterDatabase.Query(("SELECT `guid`, `course`, `name`, `ms` FROM `" + board.table + "`").c_str());
 +        if (!result)
 +            return;
 +        uint32 count = 0;
@@ -615,39 +627,59 @@ index 0000000..2018093
 +            uint32 ms = fields[3].GetUInt32();
 +            if (!ms)
 +                continue;
-+            s_bests[{ guid, course }] = ms;
-+            Record& record = s_records[course];
++            Record best;
++            best.ms = ms;
++            best.name = fields[2].GetCppString();
++            board.bests[{ guid, course }] = best;
++            Record& record = board.records[course];
 +            if (!record.ms || ms < record.ms)
-+                record = { ms, fields[2].GetCppString() };
++                record = best;
 +            ++count;
 +        } while (result->NextRow());
-+        sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Kartcraft: %u best times on %u courses.", count, uint32(s_records.size()));
++        sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Kartcraft: %u best %s times on %u courses.", count, what,
++            uint32(board.records.size()));
 +    }
 +
 +    // A finish of `ms` on `course`: "r" a new course record, "p" a new personal best, else "".
-+    static std::string RecordFinish(uint32 guid, std::string const& name, Course const& course, uint32 ms)
++    static std::string RecordFinish(Board& board, uint32 guid, std::string const& name, Course const& course, uint32 ms)
 +    {
 +        if (!ms)
 +            return "";
-+        uint32& best = s_bests[{ guid, course.key }];
-+        if (best && best <= ms)
++        Record& best = board.bests[{ guid, course.key }];
++        if (best.ms && best.ms <= ms)
 +            return "";
-+        best = ms;
++        best.ms = ms;
++        best.name = name;
 +        std::string escaped = name;
 +        CharacterDatabase.escape_string(escaped);
-+        CharacterDatabase.PExecute("REPLACE INTO `kartcraft_records` (`guid`, `course`, `name`, `ms`, `at`) "
-+            "VALUES (%u, '%s', '%s', %u, %u)", guid, course.key, escaped.c_str(), ms, uint32(std::time(nullptr)));
-+        Record& record = s_records[course.key];
++        CharacterDatabase.PExecute("REPLACE INTO `%s` (`guid`, `course`, `name`, `ms`, `at`) "
++            "VALUES (%u, '%s', '%s', %u, %u)", board.table.c_str(), guid, course.key, escaped.c_str(), ms,
++            uint32(std::time(nullptr)));
++        Record& record = board.records[course.key];
 +        if (record.ms && record.ms <= ms)
 +            return "p";
-+        record = { ms, name };
++        record = best;
 +        return "r";
 +    }
 +
-+    static uint32 BestOf(uint32 guid, std::string const& course)
++    static uint32 BestOf(Board const& board, uint32 guid, std::string const& course)
 +    {
-+        auto found = s_bests.find({ guid, course });
-+        return found == s_bests.end() ? 0 : found->second;
++        auto found = board.bests.find({ guid, course });
++        return found == board.bests.end() ? 0 : found->second.ms;
++    }
++
++    // A course's times on `board`, fastest first (a tie by name), as (guid low, best).
++    static std::vector<std::pair<uint32, Record>> Ranking(Board const& board, std::string const& course)
++    {
++        std::vector<std::pair<uint32, Record>> out;
++        for (auto const& entry : board.bests)
++            if (entry.first.second == course && entry.second.ms)
++                out.emplace_back(entry.first.first, entry.second);
++        std::sort(out.begin(), out.end(), [](std::pair<uint32, Record> const& a, std::pair<uint32, Record> const& b)
++        {
++            return a.second.ms != b.second.ms ? a.second.ms < b.second.ms : a.second.name < b.second.name;
++        });
++        return out;
 +    }
 +
 +    // "1:02.40", as the client shows a race time.
@@ -1172,7 +1204,7 @@ index 0000000..2018093
 +        for (auto& entry : s_races)
 +        {
 +            Race& r = entry.second;
-+            if (!r.start || int32(now - r.start) < 0 || r.crates.empty())
++            if (!r.start || int32(now - r.start) < 0 || r.crates.empty() || r.timeTrial)
 +                continue;
 +            if (Racer* x = FindRacer(r, player->GetGUIDLow()))
 +            {
@@ -1341,18 +1373,27 @@ index 0000000..2018093
 +        }
 +    }
 +
-+    // Each racer's "R\tRec": the course record and its holder, and their own best (ms, 0 none).
++    // A race's records: a time trial's own, or the races'.
++    static Board& BoardOf(Race const& r)
++    {
++        return r.timeTrial ? s_trialBoard : s_raceBoard;
++    }
++
++    // Each racer's "R\tRec": the course record and its holder, and their own best (ms, 0 none),
++    // on the race's board.
 +    static void SendRecords(uint32 id, Race const& r)
 +    {
-+        Record const& record = s_records[r.course->key];
++        Board& board = BoardOf(r);
++        Record const& record = board.records[r.course->key];
 +        for (Racer const& x : r.racers)
 +            if (Player* p = Recipient(x.guid))
 +                SendLine(p, "KARTCRAFT\tR\tRec\t" + std::to_string(id) + "\t" + r.course->key + "\t" +
 +                std::to_string(record.ms) + "\t" + record.name + "\t" +
-+                std::to_string(BestOf(x.guid.GetCounter(), r.course->key)));
++                std::to_string(BestOf(board, x.guid.GetCounter(), r.course->key)));
 +    }
 +
-+    // Sends the course and the countdown: the race is on once it runs out.
++    // Sends the course and the countdown: the race is on once it runs out. A time trial has no
++    // crates: its racer starts with nothing and is sent no layout.
 +    static void StartRace(uint32 id, Race& r, uint32 now, uint32 countdown)
 +    {
 +        r.start = now + countdown;
@@ -1363,7 +1404,8 @@ index 0000000..2018093
 +            std::to_string(r.course->laps) + "\t" + points);
 +        SendRace(r, "KARTCRAFT\tR\tG\t" + std::to_string(id) + "\t" + std::to_string(countdown) + "\t" + Roster(r));
 +        SendRecords(id, r);
-+        StartWeapons(r, now);
++        if (!r.timeTrial)
++            StartWeapons(r, now);
 +    }
 +
 +    // ── Race Finder ────────────────────────────────────────────────────────────────────────────
@@ -1753,7 +1795,7 @@ index 0000000..2018093
 +        for (auto const& entry : s_races)
 +        {
 +            Race const& r = entry.second;
-+            if (r.start || r.racers.empty())
++            if (r.start || r.racers.empty() || r.timeTrial)
 +                continue;
 +            std::string host = r.racers.front().name;
 +            for (Racer const& x : r.racers)
@@ -1763,6 +1805,45 @@ index 0000000..2018093
 +                host + ":" + std::to_string(r.racers.size());
 +        }
 +        SendLine(player, "KARTCRAFT\tR\tLobby\t" + counts + "\t" + open);
++    }
++
++    // Out of everything: the queue, any ready check (as a no), and every race, waiting, under way
++    // or finished; the racers left behind get their new roster.
++    static void QuitAll(ObjectGuid guid, uint32 now)
++    {
++        s_queue.erase(std::remove_if(s_queue.begin(), s_queue.end(), [guid](Queued const& q) { return q.guid == guid; }),
++            s_queue.end());
++        for (auto it = s_pops.begin(); it != s_pops.end();)
++        {
++            Pop& p = it->second;
++            bool member = std::any_of(p.members.begin(), p.members.end(), [guid](Queued const& q) { return q.guid == guid; });
++            if (!member)
++            {
++                it = std::next(it);
++                continue;
++            }
++            p.accepted.erase(std::remove(p.accepted.begin(), p.accepted.end(), guid), p.accepted.end());
++            EndPop(it->first, p, now);
++            it = s_pops.erase(it);
++        }
++        for (auto it = s_races.begin(); it != s_races.end();)
++        {
++            Race& r = it->second;
++            auto x = std::find_if(r.racers.begin(), r.racers.end(), [guid](Racer const& m) { return m.guid == guid; });
++            if (x == r.racers.end())
++            {
++                it = std::next(it);
++                continue;
++            }
++            RemoveRacer(r, x);
++            if (r.racers.empty())
++                it = s_races.erase(it);
++            else
++            {
++                SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(it->first) + "\t" + Roster(r));
++                it = std::next(it);
++            }
++        }
 +    }
 +
 +    // The finder's verbs; false when the line is not one of them.
@@ -1812,8 +1893,8 @@ index 0000000..2018093
 +            // grid. Out of the queue and any other race still waiting.
 +            uint32 id = uint32(std::strtoul(f[2].c_str(), nullptr, 10));
 +            auto race = s_races.find(id);
-+            if (race == s_races.end() || race->second.start || race->second.racers.size() >= MAX_RACERS ||
-+                !CanBeRacedOff(player) ||
++            if (race == s_races.end() || race->second.start || race->second.timeTrial ||
++                race->second.racers.size() >= MAX_RACERS || !CanBeRacedOff(player) ||
 +                std::any_of(race->second.racers.begin(), race->second.racers.end(),
 +                    [guid](Racer const& x) { return x.guid == guid; }))
 +                return true;
@@ -1888,42 +1969,9 @@ index 0000000..2018093
 +        }
 +        else if (verb == "X")
 +        {
-+            // Out of everything (/leaverace, F6): the queue, any ready check (as a no), and every
-+            // race, waiting or under way. Always answered, so a client sure it is racing when the
-+            // server is not lets go too; the shields come off with the next tick.
-+            if (mine != s_queue.end())
-+                s_queue.erase(mine);
-+            for (auto it = s_pops.begin(); it != s_pops.end();)
-+            {
-+                Pop& p = it->second;
-+                bool member = std::any_of(p.members.begin(), p.members.end(), [guid](Queued const& q) { return q.guid == guid; });
-+                if (!member)
-+                {
-+                    it = std::next(it);
-+                    continue;
-+                }
-+                p.accepted.erase(std::remove(p.accepted.begin(), p.accepted.end(), guid), p.accepted.end());
-+                EndPop(it->first, p, now);
-+                it = s_pops.erase(it);
-+            }
-+            for (auto it = s_races.begin(); it != s_races.end();)
-+            {
-+                Race& r = it->second;
-+                auto x = std::find_if(r.racers.begin(), r.racers.end(), [guid](Racer const& m) { return m.guid == guid; });
-+                if (x == r.racers.end())
-+                {
-+                    it = std::next(it);
-+                    continue;
-+                }
-+                RemoveRacer(r, x);
-+                if (r.racers.empty())
-+                    it = s_races.erase(it);
-+                else
-+                {
-+                    SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(it->first) + "\t" + Roster(r));
-+                    it = std::next(it);
-+                }
-+            }
++            // Out of everything (/leaverace, F6). Always answered, so a client sure it is racing
++            // when the server is not lets go too; the shields come off with the next tick.
++            QuitAll(guid, now);
 +            // The race shields too, whatever the bookkeeping says (TickShields).
 +            s_shielded.erase(guid);
 +            sWorld.GetMessager().AddMessage([guid](World*)
@@ -2100,7 +2148,7 @@ index 0000000..2018093
 +                Race& open = entry.second;
 +                bool in = std::any_of(open.racers.begin(), open.racers.end(),
 +                    [player](Racer const& x) { return x.guid == player->GetObjectGuid(); });
-+                if (open.course == course && !open.start && (in || open.racers.size() < MAX_RACERS))
++                if (open.course == course && !open.start && !open.timeTrial && (in || open.racers.size() < MAX_RACERS))
 +                {
 +                    if (!in)
 +                        open.racers.push_back({ player->GetObjectGuid(), player->GetName() });
@@ -2122,10 +2170,35 @@ index 0000000..2018093
 +            player->SendMessageToSetInRange(&data, START_RADIUS * 2.f, true);
 +            SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(raceId) + "\t" + Roster(r));
 +        }
++        else if (verb == "T" && f.size() > 2)
++        {
++            // A time trial: alone on the grid's first slot, the usual countdown, then the laps,
++            // with no crates and no items. Out of the queue, any ready check and every other race
++            // first; no one joins it, and the Race Finder never lists it.
++            Course const* course = FindCourse(f[2]);
++            if (!course || player->GetMapId() != course->map || !CanBeRacedOff(player) ||
++                (!marshal && DistanceTo(player, course->points[0]) > START_RADIUS))
++                return;
++            ObjectGuid const guid = player->GetObjectGuid();
++            QuitAll(guid, now);
++            uint32 raceId = s_nextRace++;
++            Race& r = s_races[raceId];
++            r.course = course;
++            r.host = guid;
++            r.created = now;
++            r.timeTrial = true;
++            r.racers.push_back({ guid, player->GetName() });
++            // The roster makes the client's race, the next line marks it a time trial, and the
++            // course, countdown and records follow (StartRace).
++            SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(raceId) + "\t" + Roster(r));
++            SendRace(r, "KARTCRAFT\tR\tTT\t" + std::to_string(raceId));
++            TeleportToGrid(player, *course, 0);
++            StartRace(raceId, r, now, GRID_COUNTDOWN);
++        }
 +        else if (verb == "J" && race != s_races.end())
 +        {
 +            Race& r = race->second;
-+            if (r.start || r.racers.size() >= MAX_RACERS || player->GetMapId() != r.course->map ||
++            if (r.start || r.timeTrial || r.racers.size() >= MAX_RACERS || player->GetMapId() != r.course->map ||
 +                (!marshal && DistanceTo(player, r.course->points[0]) > START_RADIUS))
 +                return;
 +            for (Racer const& x : r.racers)
@@ -2190,7 +2263,7 @@ index 0000000..2018093
 +                uint32 place = ++r.finishers;
 +                me->place = uint8(place);
 +                uint32 ms = WorldTimer::getMSTimeDiff(r.start, now);
-+                std::string const best = RecordFinish(player->GetGUIDLow(), me->name, c, ms);
++                std::string const best = RecordFinish(BoardOf(r), player->GetGUIDLow(), me->name, c, ms);
 +                SendRace(r, "KARTCRAFT\tR\tF\t" + std::to_string(id) + "\t" + me->name + "\t" +
 +                    std::to_string(place) + "\t" + std::to_string(ms) + "\t" + best);
 +                if (!best.empty())
@@ -2261,6 +2334,9 @@ index 0000000..2018093
 +    constexpr uint32 MARSHAL_TEXT = 190000;      // npc_text: the greeting
 +    constexpr uint32 MARSHAL_HELP_TEXT = 190001; // npc_text: "How do races work?"
 +    constexpr uint32 MARSHAL_RECORDS_TEXT = 190002; // npc_text: over the course records
++    constexpr uint32 MARSHAL_TRIALS_TEXT = 190003;  // npc_text: over the time trial leaderboard
++    // The leaderboard's length.
++    constexpr size_t TRIAL_BOARD_TOP = 10;
 +    // A marshal belongs to the courses whose "marshal" spot is its spawn point, this near (yards).
 +    constexpr float MARSHAL_MATCH = 2.f;
 +
@@ -2275,6 +2351,8 @@ index 0000000..2018093
 +        MARSHAL_BACK,
 +        MARSHAL_RECORDS,
 +        MARSHAL_TRACKS, // action: the course's index in COURSES the browser opens at
++        MARSHAL_TRIAL,  // action: the course's index in COURSES
++        MARSHAL_TRIALS, // action: the course's index in COURSES, or COURSES.size() for the list
 +    };
 +
 +    // The courses that start at this marshal: those placed with it, else (a marshal spawned
@@ -2309,8 +2387,8 @@ index 0000000..2018093
 +        PlayerMenu* talk = player->PlayerTalkClass;
 +        talk->ClearMenus();
 +        GossipMenu& menu = talk->GetGossipMenu();
-+        // Room for the three lines every menu ends with.
-+        size_t room = GOSSIP_MAX_MENU_ITEMS - 3;
++        // Room for the lines a menu ends with: leave, finder, tracks, records, leaderboard, help.
++        size_t room = GOSSIP_MAX_MENU_ITEMS - 6;
 +        bool busy = false;
 +        {
 +            std::lock_guard<std::mutex> lock(s_mutex);
@@ -2326,7 +2404,8 @@ index 0000000..2018093
 +                Race const& r = entry.second;
 +                bool in = std::any_of(r.racers.begin(), r.racers.end(), [guid](Racer const& x) { return x.guid == guid; });
 +                busy |= in;
-+                if (r.start || WorldTimer::getMSTimeDiff(r.created, now) > RACE_LIFETIME || !AtMarshal(here, r.course))
++                if (r.start || r.timeTrial || WorldTimer::getMSTimeDiff(r.created, now) > RACE_LIFETIME ||
++                    !AtMarshal(here, r.course))
 +                    continue;
 +                waiting.push_back(r.course);
 +                if (r.host == guid && room)
@@ -2353,17 +2432,24 @@ index 0000000..2018093
 +                    MARSHAL_JOIN, j.first, "", false);
 +                --room;
 +            }
-+            // A course with a race waiting is joined, not hosted again (as "R\tH" itself does).
++            // A course with a race waiting is joined, not hosted again (as "R\tH" itself does); a
++            // time trial is the player's own, on any course here.
 +            for (size_t i : here)
 +            {
 +                Course const& c = COURSES[i];
 +                if (!room)
 +                    break;
-+                if (std::find(waiting.begin(), waiting.end(), &c) != waiting.end())
-+                    continue;
-+                menu.AddMenuItem(GOSSIP_ICON_BATTLE, "Host a race: " + std::string(c.name) + " (" +
-+                    (c.laps ? std::to_string(c.laps) + (c.laps == 1 ? " lap)" : " laps)") : std::string("sprint)")),
-+                    MARSHAL_HOST, uint32(i), "", false);
++                std::string const kind = c.laps ? std::to_string(c.laps) + (c.laps == 1 ? " lap)" : " laps)")
++                                                : std::string("sprint)");
++                if (std::find(waiting.begin(), waiting.end(), &c) == waiting.end())
++                {
++                    menu.AddMenuItem(GOSSIP_ICON_BATTLE, "Host a race: " + std::string(c.name) + " (" + kind,
++                        MARSHAL_HOST, uint32(i), "", false);
++                    if (!--room)
++                        break;
++                }
++                menu.AddMenuItem(GOSSIP_ICON_BATTLE, "Time trial: " + std::string(c.name) + " (" + kind,
++                    MARSHAL_TRIAL, uint32(i), "", false);
 +                --room;
 +            }
 +        }
@@ -2374,7 +2460,12 @@ index 0000000..2018093
 +        menu.AddMenuItem(GOSSIP_ICON_DOT, "Browse the tracks", MARSHAL_TRACKS,
 +            here.empty() ? uint32(COURSES.size()) : uint32(here.front()), "", false);
 +        if (!here.empty())
++        {
 +            menu.AddMenuItem(GOSSIP_ICON_CHAT, "Course records", MARSHAL_RECORDS, 0, "", false);
++            // One course here: its leaderboard at once; several: the list to pick from.
++            menu.AddMenuItem(GOSSIP_ICON_CHAT, "Time trial leaderboard", MARSHAL_TRIALS,
++                here.size() == 1 ? uint32(here.front()) : uint32(COURSES.size()), "", false);
++        }
 +        menu.AddMenuItem(GOSSIP_ICON_CHAT, "How do races work?", MARSHAL_HELP, 0, "", false);
 +        talk->SendGossipMenu(MARSHAL_TEXT, marshal->GetObjectGuid());
 +        return true;
@@ -2393,19 +2484,57 @@ index 0000000..2018093
 +            for (size_t i = 0; i < here.size() && i + 1 < GOSSIP_MAX_MENU_ITEMS; ++i)
 +            {
 +                Course const& c = COURSES[here[i]];
-+                auto record = s_records.find(c.key);
++                auto record = s_raceBoard.records.find(c.key);
 +                std::string line = std::string(c.name) + ": ";
-+                if (record == s_records.end() || !record->second.ms)
++                if (record == s_raceBoard.records.end() || !record->second.ms)
 +                    line += "no record yet";
 +                else
 +                    line += Clock(record->second.ms) + " by " + record->second.name;
-+                if (uint32 best = BestOf(guid, c.key))
++                if (uint32 best = BestOf(s_raceBoard, guid, c.key))
 +                    line += " (yours " + Clock(best) + ")";
 +                menu.AddMenuItem(GOSSIP_ICON_DOT, line, MARSHAL_RECORDS, 0, "", false);
 +            }
 +        }
 +        menu.AddMenuItem(GOSSIP_ICON_CHAT, "Back", MARSHAL_BACK, 0, "", false);
 +        player->PlayerTalkClass->SendGossipMenu(MARSHAL_RECORDS_TEXT, marshal->GetObjectGuid());
++    }
++
++    // The time trial leaderboard of `course` (an index in COURSES) when it starts here: its top
++    // TRIAL_BOARD_TOP times with their holders, and the player's own best and rank. Else (the
++    // list's action, COURSES.size()) the courses here, a line each, to pick from. A line chosen
++    // shows its page again.
++    static void MarshalTrials(Player* player, Creature* marshal, uint32 course)
++    {
++        std::vector<size_t> const here = MarshalCourses(marshal);
++        uint32 const guid = player->GetGUIDLow();
++        GossipMenu& menu = player->PlayerTalkClass->GetGossipMenu();
++        menu.ClearMenu();
++        bool const one = course < COURSES.size() && AtMarshal(here, &COURSES[course]);
++        if (!one)
++            for (size_t i = 0; i < here.size() && i + 1 < GOSSIP_MAX_MENU_ITEMS; ++i)
++                menu.AddMenuItem(GOSSIP_ICON_DOT, "Time trials: " + std::string(COURSES[here[i]].name), MARSHAL_TRIALS,
++                    uint32(here[i]), "", false);
++        else
++        {
++            Course const& c = COURSES[course];
++            std::lock_guard<std::mutex> lock(s_mutex);
++            std::vector<std::pair<uint32, Record>> const ranking = Ranking(s_trialBoard, c.key);
++            if (ranking.empty())
++                menu.AddMenuItem(GOSSIP_ICON_DOT, std::string(c.name) + ": no time trials yet", MARSHAL_TRIALS,
++                    course, "", false);
++            for (size_t i = 0; i < ranking.size() && i < TRIAL_BOARD_TOP && i + 3 < GOSSIP_MAX_MENU_ITEMS; ++i)
++                menu.AddMenuItem(GOSSIP_ICON_DOT, std::to_string(i + 1) + ". " + Clock(ranking[i].second.ms) + "  " +
++                    ranking[i].second.name, MARSHAL_TRIALS, course, "", false);
++            auto mine = std::find_if(ranking.begin(), ranking.end(),
++                [guid](std::pair<uint32, Record> const& e) { return e.first == guid; });
++            menu.AddMenuItem(GOSSIP_ICON_CHAT, mine == ranking.end()
++                ? std::string("You have no time trial on ") + c.name + " yet"
++                : "Your best: " + Clock(mine->second.ms) + " (rank " + std::to_string(mine - ranking.begin() + 1) +
++                    " of " + std::to_string(ranking.size()) + ")",
++                MARSHAL_TRIALS, course, "", false);
++        }
++        menu.AddMenuItem(GOSSIP_ICON_CHAT, "Back", MARSHAL_BACK, 0, "", false);
++        player->PlayerTalkClass->SendGossipMenu(MARSHAL_TRIALS_TEXT, marshal->GetObjectGuid());
 +    }
 +
 +    static bool MarshalSelect(Player* player, Creature* marshal, uint32 sender, uint32 action)
@@ -2417,6 +2546,13 @@ index 0000000..2018093
 +                if (action < COURSES.size() && AtMarshal(MarshalCourses(marshal), &COURSES[action]))
 +                    line = std::string("R\tH\t") + COURSES[action].key;
 +                break;
++            case MARSHAL_TRIAL:
++                if (action < COURSES.size() && AtMarshal(MarshalCourses(marshal), &COURSES[action]))
++                    line = std::string("R\tT\t") + COURSES[action].key;
++                break;
++            case MARSHAL_TRIALS:
++                MarshalTrials(player, marshal, action);
++                return true;
 +            case MARSHAL_JOIN:
 +            case MARSHAL_START:
 +            {
@@ -2461,8 +2597,10 @@ index 0000000..2018093
 +                SendLine(p, PREFIX + line);
 +                return;
 +            }
-+            // Hosting or joining on foot: into the kart first, as a Race Finder pop does.
-+            bool const enters = line.compare(0, 4, "R\tH\t") == 0 || line.compare(0, 4, "R\tJ\t") == 0;
++            // Hosting, joining or a time trial on foot: into the kart first, as a Race Finder pop
++            // does.
++            bool const enters = line.compare(0, 4, "R\tH\t") == 0 || line.compare(0, 4, "R\tJ\t") == 0 ||
++                line.compare(0, 4, "R\tT\t") == 0;
 +            if (enters && CanBeRacedOff(p))
 +                SummonKart(p);
 +            HandleLine(p, line, true);
@@ -2478,7 +2616,8 @@ index 0000000..2018093
 +        marshal->pGossipHello = &MarshalHello;
 +        marshal->pGossipSelect = &MarshalSelect;
 +        marshal->RegisterSelf(true);
-+        LoadRecords();
++        LoadRecords(s_raceBoard, "race");
++        LoadRecords(s_trialBoard, "time trial");
 +    }
 +
 +    SpellCastResult CheckCast(Unit const* caster, SpellEntry const* spell)

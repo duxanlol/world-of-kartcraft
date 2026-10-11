@@ -249,6 +249,11 @@ Client → server:
 - `R\tS\t<id>`: start. Host only.
 - `R\tK\t<id>\t<index>`: checkpoint passed.
 - `R\tQ\t<id>`: leave.
+- `R\tT\t<courseKey>`: a time trial, from the Race Marshal's menu. The player leaves the queue,
+  any ready check (as a no) and every race, and races alone: the server answers with the roster
+  (`L`), then `TT`, puts them on grid slot 0 and sends the course, countdown and records as a
+  start does. Nobody can join it (`J`, `LJ` and `H` pass it by), the Race Finder's lobby never
+  lists it, and it never takes a pop.
 
 Server → client:
 
@@ -257,7 +262,14 @@ Server → client:
 - `R\tC\t<id>\t<key>\t<laps>\t<x:y;x:y;...>`: checkpoints, at the start.
 - `R\tG\t<id>\t<countdown ms 4000>\t<roster>`: countdown.
 - `R\tP\t<id>\t<name>\t<lap>\t<checkpoint>`: progress.
-- `R\tF\t<id>\t<name>\t<place>\t<ms>`: finish.
+- `R\tF\t<id>\t<name>\t<place>\t<ms>[\t<r|p>]`: finish; `r` a new course record, `p` a new
+  personal best, on the race's board.
+- `R\tTT\t<id>`: race `<id>` is a time trial, sent right after its first roster. No crate layout
+  (`W\tL`) follows and every `W` line from its racer is refused; the client draws no crates or
+  items, and records and replays its ghost only in a time trial.
+- `R\tRec\t<id>\t<key>\t<record ms>\t<holder>\t<own best ms>`: at the start and after a new
+  best; a time trial's come from its own board (`kartcraft_tt_records`), a race's from the races'
+  (`kartcraft_records`).
 
 How the server checks and stores race state:
 

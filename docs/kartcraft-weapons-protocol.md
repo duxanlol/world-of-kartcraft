@@ -16,7 +16,8 @@ limits) is `docs/ctr-weapons-assets-and-net.md`, part B.
 
 Weapons exist only **inside a race**. Crates belong to a course and are live while a race on it
 runs. Only that race's racers can take them, and shots and hits are relayed to that race's
-racers.
+racers. A time trial (`R\tTT\t<id>`, `ctr-weapons-assets-and-net.md` B3) has none: no layout is
+sent, every `W` line from its racer is refused, and the client binds no weapons to it.
 
 ## Lines
 
