@@ -217,7 +217,10 @@ fn sources() -> Vec<(PathBuf, String)> {
             {
                 continue;
             }
-            let whole = std::fs::read_to_string(&p).unwrap_or_default();
+            // A CRLF checkout reads as LF, so the test-module cut below finds its marker.
+            let whole = std::fs::read_to_string(&p)
+                .unwrap_or_default()
+                .replace("\r\n", "\n");
             let head = whole
                 .rfind("#[cfg(test)]\nmod ")
                 .map_or(whole.as_str(), |i| &whole[..i]);
@@ -237,10 +240,15 @@ fn quoted(text: &str, name: &str) -> bool {
     text.contains(&format!("\"{name}\""))
 }
 
+/// The path with `/` separators, the way the declared rows spell their files on every platform.
+fn slashed(p: &std::path::Path) -> String {
+    p.to_string_lossy().replace('\\', "/")
+}
+
 fn short(p: &std::path::Path) -> String {
-    let s = p.to_string_lossy();
+    let s = slashed(p);
     s.split_once("/crates/")
-        .map_or(s.to_string(), |(_, t)| t.to_string())
+        .map_or(s.clone(), |(_, t)| t.to_string())
 }
 
 /// The files that register `verb`, and whether any of them fires `event`.
@@ -324,7 +332,7 @@ fn the_declared_rows_are_still_true() {
         }
         let named: Vec<&(PathBuf, String)> = src
             .iter()
-            .filter(|(p, _)| p.to_string_lossy().ends_with(file))
+            .filter(|(p, _)| slashed(p).ends_with(file))
             .collect();
         if named.is_empty() {
             wrong.push(format!(

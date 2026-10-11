@@ -382,8 +382,8 @@ mod tests {
             ("PetUnlearnState", "rides the still-open gossip session"),
         ];
 
-        // The chain's own source says what is wired.
-        let this_file = include_str!("ui_session.rs");
+        // The chain's own source says what is wired; a CRLF checkout reads as LF.
+        let this_file = include_str!("ui_session.rs").replace("\r\n", "\n");
         let chain = this_file
             .split_once("pub(crate) fn feed_interact_npc")
             .expect("feed_interact_npc")

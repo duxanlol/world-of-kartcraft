@@ -205,7 +205,9 @@ end
         assert!(parse_localize_overrides("function Localize()\n\tK = \"v\";\n").is_empty());
     }
 
-    /// Three keys whose base and patched text differ. Skips without client data.
+    /// Three keys whose base and patched text differ on an enGB chain; an enUS chain's
+    /// `Localize()` holds only a commented line, so its table is the base file's. Skips without
+    /// client data.
     #[test]
     fn the_real_chain_patches_the_login_refusals_and_the_realm_suffixes() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -214,6 +216,27 @@ end
         let base = chain.read_file(GLUE_STRINGS).expect("GlueStrings.lua");
         let base = parse_glue_strings(&String::from_utf8_lossy(&base));
         let table = table_from_chain(&mut chain);
+
+        // The chain's locale, from the flag the stock `Localization.lua` sets.
+        let localization = chain
+            .read_file("Interface\\FrameXML\\Localization.lua")
+            .expect("Localization.lua");
+        let localization = String::from_utf8_lossy(&localization);
+        let flags = |locale: &str| {
+            localization.lines().any(|l| {
+                l.trim_start()
+                    .starts_with(&format!("LOCALE_{locale} = true"))
+            })
+        };
+        match (flags("enGB"), flags("enUS")) {
+            (true, false) => {}
+            (false, true) => {
+                assert_eq!(table.0, base, "enUS: Localize() overwrote a key");
+                assert_eq!(table.get("PVP_PARENTHESES"), Some("(PVP)"));
+                return;
+            }
+            _ => panic!("the chain's Localization.lua flags neither enGB nor enUS alone"),
+        }
 
         for key in ["AUTH_BANNED", "LOGIN_UNKNOWN_ACCOUNT", "PVP_PARENTHESES"] {
             let before = base.get(key).expect("key in the base file").as_str();

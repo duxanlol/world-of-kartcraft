@@ -1,7 +1,7 @@
 //! The 1.12 surface of the production load as a gate: every global and widget method an addon
 //! reaches once the core and benilla's layer have loaded is one the 1.12.1 client has
-//! (`reference/1.12-globals.tsv`), one the engine exposes, or a `Benilla`-prefixed name the layer
-//! defines. The engine's own surface is gated on a bare VM in `benilla-ui`, name by name against
+//! (`reference/1.12-globals.tsv`), one the engine exposes, a `Benilla`-prefixed name the layer
+//! defines, a Kartcraft key binding's caption, or the install's own locale flag. The engine's own surface is gated on a bare VM in `benilla-ui`, name by name against
 //! the same table (`script::tests::reference_surface`, whose commented `BEYOND_1_12` is the one
 //! allowlist) and method by method against each class's registrar tables
 //! (`script::tests::widget_surface`); so here the load itself may add nothing else.
@@ -64,6 +64,24 @@ fn layer_prefixed(n: &str) -> bool {
     n.starts_with("Benilla") || n.starts_with("BENILLA_") || n.starts_with("SLASH_BENILLA_")
 }
 
+/// World of Kartcraft's key bindings, a fork addition: 1.12 captions a binding through
+/// `BINDING_HEADER_<header>` and `BINDING_NAME_<command>` (`Bindings.xml`), so the kart's
+/// commands' captions cannot take the layer prefix.
+fn kartcraft_binding(n: &str) -> bool {
+    n == "BINDING_HEADER_KARTCRAFT" || n.starts_with("BINDING_NAME_KARTCRAFT_")
+}
+
+/// The stock `Localization.lua`'s locale flag, `LOCALE_<locale> = true`: the capture is an
+/// enGB client's (`LOCALE_enGB`), and the player's own chain sets its own locale's.
+fn stock_locale_flag(n: &str) -> bool {
+    n.strip_prefix("LOCALE_").is_some_and(|l| {
+        let b = l.as_bytes();
+        b.len() == 4
+            && b[..2].iter().all(u8::is_ascii_lowercase)
+            && b[2..].iter().all(u8::is_ascii_uppercase)
+    })
+}
+
 /// What the production load adds past 1.12 and past the engine, and the layer's own names: the
 /// globals (`Benilla`-prefixed ones the engine does not also define passing) and the methods.
 fn production_beyond(s: &UiScript, engine: &UiScript) -> (Vec<String>, Vec<String>) {
@@ -72,7 +90,7 @@ fn production_beyond(s: &UiScript, engine: &UiScript) -> (Vec<String>, Vec<Strin
     let globals = globals_of(s)
         .into_iter()
         .filter(|n| !reference.contains(n.as_str()) && !engine_globals.contains(n))
-        .filter(|n| !layer_prefixed(n))
+        .filter(|n| !layer_prefixed(n) && !kartcraft_binding(n) && !stock_locale_flag(n))
         .collect();
     let engine_methods = methods_of(engine);
     let methods = methods_of(s)
@@ -131,11 +149,16 @@ fn the_production_gate_catches_a_name_put_back() {
     s.run(
         "UnitAura = function() end \
          BenillaLayerThing = 1 \
+         BINDING_NAME_KARTCRAFT_HOP = 'Hop' BINDING_NAME_OTHERFORK_HOP = 'Hop' \
+         LOCALE_frFR = true LOCALE_english = true \
          getmetatable(CreateFrame('GameTooltip')).__index.BenillaSetItemById = function() end",
     )
     .unwrap();
     let (globals, methods) = production_beyond(&s, &engine);
-    assert_eq!(globals, vec!["UnitAura".to_string()]);
+    assert_eq!(
+        globals,
+        ["BINDING_NAME_OTHERFORK_HOP", "LOCALE_english", "UnitAura"].map(String::from)
+    );
     assert!(
         methods.contains(&"GameTooltip:BenillaSetItemById".to_string()),
         "{methods:?}"
