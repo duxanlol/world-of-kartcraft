@@ -956,8 +956,8 @@ pub(crate) struct Looks {
     bright: Handle<StandardMaterial>,
     dim: Handle<StandardMaterial>,
     guide: Handle<StandardMaterial>,
-    /// The guide arrow's outline: a black shell around it, its front faces culled.
-    guide_edge: Handle<StandardMaterial>,
+    /// The guide arrow's outline: its shape grown a little, laid flat just under it.
+    guide_outline: Handle<Mesh>,
     /// The checkpoint arrow: its face and outline, the next one's and the one after's colour,
     /// and the outline's.
     cp_face: Handle<Mesh>,
@@ -991,12 +991,7 @@ impl Looks {
             bright: materials.add(glow(Color::srgb(1.0, 0.85, 0.2))),
             dim: materials.add(glow(Color::srgb(0.18, 0.12, 0.04))),
             guide: materials.add(solid(Color::srgb(1.0, 0.6, 0.08))),
-            guide_edge: materials.add(StandardMaterial {
-                base_color: Color::srgb(0.02, 0.015, 0.01),
-                unlit: true,
-                cull_mode: Some(bevy::render::render_resource::Face::Front),
-                ..default()
-            }),
+            guide_outline: meshes.add(guide_outline_mesh()),
             cp_face: meshes.add(face),
             cp_outline: meshes.add(outline),
             cp_next: materials.add(solid(Color::srgb(1.0, 0.85, 0.1))),
@@ -1108,7 +1103,7 @@ fn arrow_mesh() -> Mesh {
         [-0.4, -0.1],
         [-0.12, -0.1],
     ];
-    let half = 0.06;
+    let half = GUIDE_HALF_THICKNESS;
     let mut positions = Vec::new();
     for y in [half, -half] {
         positions.extend(outline.iter().map(|p| [p[0], y, p[1]]));
@@ -1133,12 +1128,57 @@ fn arrow_mesh() -> Mesh {
     .with_inserted_indices(Indices::U32(indices));
     mesh.duplicate_vertices();
     mesh.compute_flat_normals();
+    // Two tones: its top and bottom bright, its rim darker, so its shape reads at any angle.
+    let colors: Vec<[f32; 4]> = match mesh.attribute(Mesh::ATTRIBUTE_NORMAL) {
+        Some(bevy::mesh::VertexAttributeValues::Float32x3(normals)) => normals
+            .iter()
+            .map(|n| {
+                if n[1].abs() > 0.9 {
+                    [1.0, 1.0, 1.0, 1.0]
+                } else {
+                    [GUIDE_RIM, GUIDE_RIM, GUIDE_RIM, 1.0]
+                }
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    if !colors.is_empty() {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    }
     mesh
 }
 
-/// The guide arrow's outline: the arrow itself grown about its centre, wider and much thicker so
-/// the shell shows round its rim from any side; its front faces culled, it is only the edge.
-const GUIDE_EDGE: Vec3 = Vec3::new(1.14, 2.6, 1.12);
+/// Half the guide arrow's thickness, and how dark its rim is against its top.
+const GUIDE_HALF_THICKNESS: f32 = 0.06;
+const GUIDE_RIM: f32 = 0.45;
+
+/// The guide arrow's outline: how far it stands out round the arrow (units of its length), and
+/// how far under the arrow's bottom face it lies.
+const GUIDE_EDGE: f32 = 0.055;
+const GUIDE_EDGE_DEPTH: f32 = 0.02;
+
+/// The guide arrow's shape as [`arrow_mesh`] draws it, as two convex parts in the flat meshes'
+/// plane (x across, y along, the tip at +y): the shaft and the head.
+const GUIDE_SHAFT: [[f32; 2]; 4] = [[-0.12, -0.5], [0.12, -0.5], [0.12, 0.1], [-0.12, 0.1]];
+const GUIDE_HEAD: [[f32; 2]; 3] = [[-0.4, 0.1], [0.4, 0.1], [0.0, 0.5]];
+
+/// The guide arrow's outline: its two parts grown by [`GUIDE_EDGE`], one flat sheet.
+fn guide_outline_mesh() -> Mesh {
+    flat_mesh(
+        &[
+            grown(&GUIDE_SHAFT, GUIDE_EDGE),
+            grown(&GUIDE_HEAD, GUIDE_EDGE),
+        ],
+        0.0,
+    )
+}
+
+/// The outline's place in the arrow: the flat sheet's +y tip turned to the arrow's −Z, laid in the
+/// arrow's plane just under its bottom face, so the border shows round the arrow's top.
+fn guide_outline_place() -> Transform {
+    Transform::from_xyz(0.0, -(GUIDE_HALF_THICKNESS + GUIDE_EDGE_DEPTH), 0.0)
+        .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
+}
 
 /// The guide arrow's rotation: its −Z tip along the ground toward `to`, then its face (+Y) tipped
 /// `tilt` degrees about the arrow's own axis toward `eye`, so it is not seen edge-on.
@@ -1483,9 +1523,9 @@ pub(crate) fn guide(
                     Name::new("race guide arrow"),
                 ))
                 .with_child((
-                    Mesh3d(looks.arrow.clone()),
-                    MeshMaterial3d(looks.guide_edge.clone()),
-                    Transform::from_scale(GUIDE_EDGE),
+                    Mesh3d(looks.guide_outline.clone()),
+                    MeshMaterial3d(looks.cp_edge.clone()),
+                    guide_outline_place(),
                     Name::new("race guide arrow outline"),
                 ));
         }
@@ -1779,6 +1819,49 @@ mod tests {
         // Wider comes in, never closer than a yard.
         hud.fov = 110.0;
         assert!(hud.distance(world) < GUIDE_DISTANCE && hud.distance(world) >= 1.0);
+    }
+
+    #[test]
+    fn the_guide_arrow_outline_lies_under_it_and_shows_round_its_rim() {
+        use bevy::mesh::VertexAttributeValues;
+        let points = |mesh: &Mesh| -> Vec<Vec3> {
+            match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+                Some(VertexAttributeValues::Float32x3(p)) => {
+                    p.iter().map(|p| Vec3::from_array(*p)).collect()
+                }
+                _ => panic!("no positions"),
+            }
+        };
+        let arrow = points(&arrow_mesh());
+        let place = guide_outline_place();
+        let outline: Vec<Vec3> = points(&guide_outline_mesh())
+            .into_iter()
+            .map(|p| place.transform_point(p))
+            .collect();
+        // Flat, just under the arrow's bottom face.
+        let bottom = arrow.iter().map(|p| p.y).fold(f32::MAX, f32::min);
+        for p in &outline {
+            assert!(p.y < bottom && p.y > bottom - 0.05, "{p}");
+        }
+        // Beyond the arrow on every side: across, at the tail and past the tip (−Z).
+        let span = |pts: &[Vec3], f: fn(&Vec3) -> f32| {
+            let v: Vec<f32> = pts.iter().map(f).collect();
+            (
+                v.iter().copied().fold(f32::MAX, f32::min),
+                v.iter().copied().fold(f32::MIN, f32::max),
+            )
+        };
+        let (ax, bx) = (span(&arrow, |p| p.x), span(&outline, |p| p.x));
+        let (az, bz) = (span(&arrow, |p| p.z), span(&outline, |p| p.z));
+        assert!(bx.0 < ax.0 - 0.03 && bx.1 > ax.1 + 0.03, "{ax:?} {bx:?}");
+        assert!(bz.0 < az.0 - 0.03 && bz.1 > az.1 + 0.03, "{az:?} {bz:?}");
+        // The arrow is two-toned: some vertices darker (the rim) than the rest.
+        let Some(VertexAttributeValues::Float32x4(colors)) =
+            arrow_mesh().attribute(Mesh::ATTRIBUTE_COLOR).cloned()
+        else {
+            panic!("no colours");
+        };
+        assert!(colors.iter().any(|c| c[0] < 0.5) && colors.iter().any(|c| c[0] == 1.0));
     }
 
     #[test]
