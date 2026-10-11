@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..e3bf4eb
+index 0000000..2018093
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,2418 @@
+@@ -0,0 +1,2428 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -509,10 +509,20 @@ index 0000000..e3bf4eb
 +        to->GetSession()->SendPacket(&data);
 +    }
 +
++    // A racer by guid for a line to their client, in the world or not: a Race Finder launch or a
++    // host's start sends the roster, course and countdown just after teleporting everyone, and a
++    // far teleport outside a map update runs at once (MapManager::ScheduleFarTeleport), taking
++    // the racer out of the world. Their session still takes the line, and the client keeps it
++    // through the loading screen.
++    static Player* Recipient(ObjectGuid guid)
++    {
++        return ObjectAccessor::FindPlayerNotInWorld(guid);
++    }
++
 +    static void SendRace(Race const& race, std::string const& text)
 +    {
 +        for (Racer const& r : race.racers)
-+            if (Player* p = ObjectAccessor::FindPlayer(r.guid))
++            if (Player* p = Recipient(r.guid))
 +                SendLine(p, text);
 +    }
 +
@@ -1336,7 +1346,7 @@ index 0000000..e3bf4eb
 +    {
 +        Record const& record = s_records[r.course->key];
 +        for (Racer const& x : r.racers)
-+            if (Player* p = ObjectAccessor::FindPlayer(x.guid))
++            if (Player* p = Recipient(x.guid))
 +                SendLine(p, "KARTCRAFT\tR\tRec\t" + std::to_string(id) + "\t" + r.course->key + "\t" +
 +                std::to_string(record.ms) + "\t" + record.name + "\t" +
 +                std::to_string(BestOf(x.guid.GetCounter(), r.course->key)));
@@ -1460,7 +1470,7 @@ index 0000000..e3bf4eb
 +
 +    static void SendTo(ObjectGuid guid, std::string const& text)
 +    {
-+        if (Player* p = ObjectAccessor::FindPlayer(guid))
++        if (Player* p = Recipient(guid))
 +            SendLine(p, text);
 +    }
 +

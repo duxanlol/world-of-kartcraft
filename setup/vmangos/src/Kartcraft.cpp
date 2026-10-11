@@ -421,10 +421,20 @@ namespace Kartcraft
         to->GetSession()->SendPacket(&data);
     }
 
+    // A racer by guid for a line to their client, in the world or not: a Race Finder launch or a
+    // host's start sends the roster, course and countdown just after teleporting everyone, and a
+    // far teleport outside a map update runs at once (MapManager::ScheduleFarTeleport), taking
+    // the racer out of the world. Their session still takes the line, and the client keeps it
+    // through the loading screen.
+    static Player* Recipient(ObjectGuid guid)
+    {
+        return ObjectAccessor::FindPlayerNotInWorld(guid);
+    }
+
     static void SendRace(Race const& race, std::string const& text)
     {
         for (Racer const& r : race.racers)
-            if (Player* p = ObjectAccessor::FindPlayer(r.guid))
+            if (Player* p = Recipient(r.guid))
                 SendLine(p, text);
     }
 
@@ -1248,7 +1258,7 @@ namespace Kartcraft
     {
         Record const& record = s_records[r.course->key];
         for (Racer const& x : r.racers)
-            if (Player* p = ObjectAccessor::FindPlayer(x.guid))
+            if (Player* p = Recipient(x.guid))
                 SendLine(p, "KARTCRAFT\tR\tRec\t" + std::to_string(id) + "\t" + r.course->key + "\t" +
                 std::to_string(record.ms) + "\t" + record.name + "\t" +
                 std::to_string(BestOf(x.guid.GetCounter(), r.course->key)));
@@ -1372,7 +1382,7 @@ namespace Kartcraft
 
     static void SendTo(ObjectGuid guid, std::string const& text)
     {
-        if (Player* p = ObjectAccessor::FindPlayer(guid))
+        if (Player* p = Recipient(guid))
             SendLine(p, text);
     }
 
