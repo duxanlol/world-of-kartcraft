@@ -13,6 +13,11 @@
 //! ready check and leaves races (`/leaverace`) over the addon channel itself. Here only a pending
 //! ready check is remembered (`Pop`, `Pop-`), so the race it starts keeps us through the teleport
 //! to the start. The banner and results below go to the layer's race frame (`super::ui`).
+//!
+//! On the way round a pace-note sign calls the next checkpoint's turn as a rally co-driver
+//! would, "HARD RIGHT", "LONG LEFT", with a 2D arrow bent to match ([`pacenotes`]).
+
+mod pacenotes;
 
 use std::collections::HashMap;
 
@@ -172,9 +177,6 @@ const START_RADIUS: f32 = 55.0;
 /// this many yards of its centre, or on coming this near it (the server allows 45).
 const GATE_HALF_WIDTH: f32 = 20.0;
 const CHECKPOINT_RADIUS: f32 = 8.0;
-/// The arrow on each beam towards the checkpoint after it (yards above the ground, length).
-const BEAM_ARROW_HEIGHT: f32 = 9.0;
-const BEAM_ARROW_LENGTH: f32 = 6.0;
 /// How long the results stay up once everyone is in (s), and how long we wait for racers still
 /// out on the course after we finish before closing anyway.
 const RESULTS_SECS: f32 = 10.0;
@@ -221,6 +223,8 @@ pub(crate) struct Active {
     points: Vec<[f32; 2]>,
     /// Each checkpoint's gate half-width, from our copy of the course; empty for the default.
     gates: Vec<f32>,
+    /// Each checkpoint's pace note.
+    notes: Vec<pacenotes::Note>,
     /// When GO falls, local seconds; `None` until the countdown arrives.
     go_at: Option<f32>,
     roster: Vec<String>,
@@ -555,6 +559,7 @@ pub(crate) fn update(
                         .iter()
                         .find(|c| c.key == f[2] && c.checkpoints.len() == race.points.len())
                         .map_or_else(Vec::new, Course::gates);
+                    race.notes = pacenotes::notes(&race.points, race.laps > 0);
                     info!(
                         "kart race: course {} — {} checkpoints, {} laps",
                         f[2],
@@ -915,22 +920,12 @@ fn clock(ms: u32) -> String {
 #[derive(Component)]
 pub(crate) struct Beam(usize);
 
-/// The arrow on beam `.0`, pointing on to the checkpoint after it.
-#[derive(Component)]
-pub(crate) struct BeamArrow(usize);
-
-/// The arrow over our kart, pointing at the next checkpoint.
-#[derive(Component)]
-pub(crate) struct GuideArrow;
-
-/// The beams' and arrows' meshes and looks, made once.
+/// The beams' mesh and looks, made once.
 #[derive(Clone)]
 pub(crate) struct Looks {
     beam: Handle<Mesh>,
-    arrow: Handle<Mesh>,
     bright: Handle<StandardMaterial>,
     dim: Handle<StandardMaterial>,
-    guide: Handle<StandardMaterial>,
 }
 
 impl Looks {
@@ -945,67 +940,10 @@ impl Looks {
         };
         Self {
             beam: meshes.add(Cylinder::new(BEAM_RADIUS, BEAM_HEIGHT)),
-            arrow: meshes.add(arrow_mesh()),
             bright: materials.add(glow(Color::srgb(1.0, 0.85, 0.2))),
             dim: materials.add(glow(Color::srgb(0.18, 0.12, 0.04))),
-            guide: materials.add(StandardMaterial {
-                base_color: Color::srgb(1.0, 0.6, 0.08),
-                unlit: true,
-                cull_mode: None,
-                double_sided: true,
-                ..default()
-            }),
         }
     }
-}
-
-/// A flat arrow one unit long, lying in the ground plane, its centre at the origin and its tip
-/// along −Z (Bevy's forward); a little thick, so it reads edge-on too.
-fn arrow_mesh() -> Mesh {
-    use bevy::asset::RenderAssetUsages;
-    use bevy::mesh::{Indices, PrimitiveTopology};
-    // The outline, (x, z): the shaft's tail, the head's shoulders, the tip.
-    let outline: [[f32; 2]; 7] = [
-        [-0.12, 0.5],
-        [0.12, 0.5],
-        [0.12, -0.1],
-        [0.4, -0.1],
-        [0.0, -0.5],
-        [-0.4, -0.1],
-        [-0.12, -0.1],
-    ];
-    let half = 0.06;
-    let mut positions = Vec::new();
-    for y in [half, -half] {
-        positions.extend(outline.iter().map(|p| [p[0], y, p[1]]));
-    }
-    // Top and bottom: the shaft's two triangles and the head's one.
-    let faces = [[0u32, 1, 2], [0, 2, 6], [5, 3, 4]];
-    let mut indices: Vec<u32> = Vec::new();
-    for f in faces {
-        indices.extend(f);
-        indices.extend(f.map(|i| i + 7));
-    }
-    // The rim.
-    for i in 0..7u32 {
-        let j = (i + 1) % 7;
-        indices.extend([i, j, j + 7, i, j + 7, i + 7]);
-    }
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_indices(Indices::U32(indices));
-    mesh.duplicate_vertices();
-    mesh.compute_flat_normals();
-    mesh
-}
-
-/// The rotation turning the arrow's −Z to point from `from` to `to` (Bevy world, level).
-fn pointing(from: Vec3, to: Vec3) -> Quat {
-    let d = to - from;
-    Quat::from_rotation_y((-d.x).atan2(-d.z))
 }
 
 /// The ground under a WoW x, y, in Bevy world; at height `fallback` where there is none.
@@ -1017,33 +955,19 @@ fn ground_at(collide: &WorldCollision, p: [f32; 2], fallback: f32) -> Vec3 {
     Vec3::new(column.x, y, column.z)
 }
 
-/// Stands a beam at each checkpoint of the race we are in, the next one bright, each with an
-/// arrow on to the checkpoint after it.
-#[allow(clippy::type_complexity)]
+/// Stands a beam at each checkpoint of the race we are in, the next one bright.
 pub(crate) fn beams(
     mut commands: Commands,
     races: Res<Races>,
     collide: WorldCollision,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut beams: Query<
-        (
-            Entity,
-            &Beam,
-            &mut Transform,
-            &mut MeshMaterial3d<StandardMaterial>,
-        ),
-        Without<BeamArrow>,
-    >,
-    mut arrows: Query<
-        (
-            Entity,
-            &BeamArrow,
-            &mut Transform,
-            &mut MeshMaterial3d<StandardMaterial>,
-        ),
-        Without<Beam>,
-    >,
+    mut beams: Query<(
+        Entity,
+        &Beam,
+        &mut Transform,
+        &mut MeshMaterial3d<StandardMaterial>,
+    )>,
     mut looks: Local<Option<Looks>>,
 ) {
     let race = races.race.as_ref().filter(|r| r.go_at.is_some() && !r.done);
@@ -1051,21 +975,11 @@ pub(crate) fn beams(
         for (e, ..) in &beams {
             commands.entity(e).despawn();
         }
-        for (e, ..) in &arrows {
-            commands.entity(e).despawn();
-        }
         return;
     };
     let looks = looks
         .get_or_insert_with(|| Looks::new(&mut meshes, &mut materials))
         .clone();
-    let look = |i: usize| {
-        if i == next {
-            looks.bright.clone()
-        } else {
-            looks.dim.clone()
-        }
-    };
     let n = race.points.len();
     let mut have = vec![false; n];
     for (_, beam, mut t, mut material) in &mut beams {
@@ -1075,49 +989,36 @@ pub(crate) fn beams(
         have[beam.0] = true;
         let ground = ground_at(&collide, p, t.translation.y - BEAM_HEIGHT / 2.0);
         t.translation = ground + Vec3::Y * (BEAM_HEIGHT / 2.0);
-        material.0 = look(beam.0);
-    }
-    let mut have_arrow = vec![false; n];
-    for (e, arrow, mut t, mut material) in &mut arrows {
-        let (Some(&p), Some(on)) = (race.points.get(arrow.0), race.after(arrow.0)) else {
-            commands.entity(e).despawn();
-            continue;
+        material.0 = if beam.0 == next {
+            looks.bright.clone()
+        } else {
+            looks.dim.clone()
         };
-        have_arrow[arrow.0] = true;
-        let at = ground_at(&collide, p, t.translation.y - BEAM_ARROW_HEIGHT);
-        let towards = wow_to_bevy([race.points[on][0], race.points[on][1], 0.0]);
-        t.translation = at + Vec3::Y * BEAM_ARROW_HEIGHT;
-        t.rotation = pointing(at, Vec3::new(towards.x, at.y, towards.z));
-        material.0 = look(arrow.0);
     }
     for (i, p) in race.points.iter().enumerate() {
-        let at = wow_to_bevy([p[0], p[1], 0.0]);
         if !have[i] {
             commands.spawn((
                 Beam(i),
                 Mesh3d(looks.beam.clone()),
                 MeshMaterial3d(looks.dim.clone()),
-                Transform::from_translation(at),
+                Transform::from_translation(wow_to_bevy([p[0], p[1], 0.0])),
                 Name::new("race checkpoint"),
-            ));
-        }
-        if !have_arrow[i] && race.after(i).is_some() {
-            commands.spawn((
-                BeamArrow(i),
-                Mesh3d(looks.arrow.clone()),
-                MeshMaterial3d(looks.dim.clone()),
-                Transform::from_translation(at).with_scale(Vec3::splat(BEAM_ARROW_LENGTH)),
-                Name::new("race checkpoint arrow"),
             ));
         }
     }
 }
 
+/// Whether checkpoint `next` is the finish: a sprint's last, or a circuit's first on its last lap.
+fn is_finish(race: &Active, next: usize) -> bool {
+    let n = race.points.len();
+    let last_lap = race.laps == 0 || race.lap + 1 >= race.laps;
+    (race.laps == 0 && next == n - 1) || (race.laps > 0 && next == 0 && last_lap)
+}
+
 /// What the minimap calls the next checkpoint.
 fn checkpoint_name(race: &Active, next: usize) -> String {
     let n = race.points.len();
-    let last_lap = race.laps == 0 || race.lap + 1 >= race.laps;
-    if (race.laps == 0 && next == n - 1) || (race.laps > 0 && next == 0 && last_lap) {
+    if is_finish(race, next) {
         "Finish".into()
     } else if race.laps > 0 && next == 0 {
         format!("Lap {} of {}", race.lap + 2, race.laps)
@@ -1126,9 +1027,10 @@ fn checkpoint_name(race: &Active, next: usize) -> String {
     }
 }
 
-/// Where the guide arrow sits on screen and how big it is: `x`, `y` across and down the screen
-/// (0 to 1), `scale` times its standard size, and whether it shows. The settings window places
-/// it (`/kartcraft`, "Move arrow"): its CVars, read by [`super::settings::on_cvar`].
+/// Where the pace-note sign sits on screen and how big it is: `x`, `y` across and down the screen
+/// (0 to 1) for its arrow's centre, `scale` times its standard size, and whether it shows. The
+/// settings window places it (`/kartcraft`, "Move arrow"): its CVars, read by
+/// [`super::settings::on_cvar`].
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub(crate) struct GuideHud {
     pub(crate) x: f32,
@@ -1136,7 +1038,7 @@ pub(crate) struct GuideHud {
     pub(crate) scale: f32,
     /// Shown in a race (`KartArrowShow`).
     pub(crate) shown: bool,
-    /// Being placed (`KartArrowMove`): shown, pointing north, race or not.
+    /// Being placed (`KartArrowMove`): shown with a sample note, race or not.
     pub(crate) editing: bool,
 }
 
@@ -1152,45 +1054,126 @@ impl Default for GuideHud {
     }
 }
 
+/// The sign's arrow at scale 1, as a share of the window's height: the layer's placing box,
+/// `BENILLA_KART_ARROW_BOX` (90) on the 768-high `UIParent`.
+const SIGN_ARROW: f32 = 90.0 / 768.0;
+/// The sign's lines, as shares of the arrow's side, and how wide the sign is.
+const SIGN_CALL: f32 = 0.34;
+const SIGN_FOLLOW: f32 = 0.22;
+const SIGN_WIDTH: f32 = 5.0;
+/// The arrow's texture side (px).
+const SIGN_TEXELS: usize = 128;
+/// Facing the wrong way must hold this long (s) before the sign says so.
+const WRONG_WAY_HOLD: f32 = 0.6;
+
+/// The sign laid out in a `width` × `height` window (logical px).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SignLayout {
+    left: f32,
+    top: f32,
+    width: f32,
+    arrow: f32,
+    call: f32,
+    follow: f32,
+}
+
 impl GuideHud {
     pub(crate) const MIN_SCALE: f32 = 0.4;
     pub(crate) const MAX_SCALE: f32 = 3.0;
 
-    /// The arrow's place in front of a camera looking down −Z with this vertical field of view
-    /// and aspect, `distance` ahead: the point under (x, y) on screen.
-    fn local_position(&self, fov_y: f32, aspect: f32, distance: f32) -> Vec3 {
-        let half = (fov_y / 2.0).tan() * distance;
-        Vec3::new(
-            (self.x * 2.0 - 1.0) * half * aspect,
-            (1.0 - self.y * 2.0) * half,
-            -distance,
-        )
+    /// The sign in a window this big: its arrow centred on (x, y), its lines under it.
+    fn layout(&self, width: f32, height: f32) -> SignLayout {
+        let arrow = SIGN_ARROW * height * self.scale;
+        let sign = arrow * SIGN_WIDTH;
+        SignLayout {
+            left: self.x * width - sign / 2.0,
+            top: self.y * height - arrow / 2.0,
+            width: sign,
+            arrow,
+            call: arrow * SIGN_CALL,
+            follow: arrow * SIGN_FOLLOW,
+        }
     }
 }
 
-/// How far in front of the camera the guide arrow floats (yards), and its length there at
-/// scale 1.
-const GUIDE_DISTANCE: f32 = 4.0;
-const GUIDE_SIZE: f32 = 0.7;
+/// The pace-note sign: its arrow and its two lines are its children.
+#[derive(Component)]
+pub(crate) struct PaceSign;
+#[derive(Component)]
+pub(crate) struct PaceArrow;
+/// A line of the sign: the call (false) or the turn after it (true).
+#[derive(Component)]
+pub(crate) struct PaceLine(bool);
 
-/// In a race (or while it is being placed, race or not): the arrow towards the next checkpoint, a child of
-/// the camera so it holds its place on screen; and that checkpoint on the minimap, in the slot a
-/// guard's directions use (`crate::poi_marker`).
+/// The sign while it shows: what it says and since when we have faced the wrong way.
+#[derive(Default)]
+pub(crate) struct SignState {
+    arrows: HashMap<pacenotes::Glyph, Handle<Image>>,
+    wrong_since: Option<f32>,
+    last: Option<pacenotes::Sign>,
+}
+
+/// The sign for the race we are in, as the kart drives; a wrong way only once it has held.
+fn race_sign(
+    race: &Active,
+    next: usize,
+    drive: &super::KartDrive,
+    now: f32,
+    state: &mut SignState,
+) -> pacenotes::Sign {
+    let wow = bevy_to_wow(drive.pos);
+    let place = pacenotes::Place {
+        points: &race.points,
+        notes: &race.notes,
+        last: race.checkpoint.min(race.points.len() - 1),
+        next,
+        finish: is_finish(race, next),
+        at: [wow[0], wow[1]],
+        facing: drive.yaw,
+        speed: drive.speed,
+    };
+    let sign = pacenotes::choose(&place);
+    if sign == pacenotes::Sign::WrongWay {
+        let since = *state.wrong_since.get_or_insert(now);
+        if now - since < WRONG_WAY_HOLD {
+            return state
+                .last
+                .clone()
+                .filter(|s| *s != pacenotes::Sign::WrongWay)
+                .unwrap_or(pacenotes::Sign::Straight(None));
+        }
+    } else {
+        state.wrong_since = None;
+    }
+    sign
+}
+
+/// In a race (or while it is being placed, race or not): the pace-note sign for the next
+/// checkpoint, a 2D arrow with its call under it; and that checkpoint on the minimap, in the slot
+/// a guard's directions use (`crate::poi_marker`).
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn guide(
     mut commands: Commands,
+    time: Res<Time>,
     races: Res<Races>,
     drive: Res<super::KartDrive>,
     hud: Res<GuideHud>,
-    collide: WorldCollision,
+    assets: Res<AssetServer>,
+    mut images: ResMut<Assets<Image>>,
     mut marker: ResMut<crate::poi_marker::PoiMarker>,
     current_map: Option<Res<benilla_world::world_map::CurrentMap>>,
     real: Res<Time<bevy::time::Real>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    camera: Query<(Entity, &GlobalTransform, &Projection), With<benilla_world::view::WorldCamera>>,
-    mut arrows: Query<(Entity, &mut Transform, &ChildOf), With<GuideArrow>>,
-    mut looks: Local<Option<Looks>>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut signs: Query<(&mut Node, &mut Visibility), With<PaceSign>>,
+    mut arrows: Query<(&mut Node, &mut ImageNode), (With<PaceArrow>, Without<PaceSign>)>,
+    mut lines: Query<(
+        &PaceLine,
+        &mut Text,
+        &mut TextFont,
+        &mut TextColor,
+        &mut TextShadow,
+    )>,
+    mut state: Local<SignState>,
     mut shown: Local<Option<String>>,
 ) {
     let race = races.race.as_ref().filter(|r| r.go_at.is_some() && !r.done);
@@ -1216,56 +1199,144 @@ pub(crate) fn guide(
         }
     }
 
-    // The arrow: north while it is being placed, else towards the next checkpoint if it shows.
-    let cam = camera.single().ok();
-    let towards = match (target, cam) {
-        (_, Some((_, cam_at, _))) if hud.editing => {
-            Some(cam_at.translation() + wow_to_bevy([100.0, 0.0, 0.0]))
-        }
-        (Some((race, next)), _) if hud.shown => {
-            Some(ground_at(&collide, race.points[next], drive.pos.y))
-        }
+    // The sign: a sample while it is being placed, else the next checkpoint's note if it shows.
+    let sign = match target {
+        _ if hud.editing => Some(pacenotes::Sign::sample()),
+        Some((race, next)) if hud.shown && race.points.len() >= 2 => Some(race_sign(
+            race,
+            next,
+            &drive,
+            time.elapsed_secs(),
+            &mut state,
+        )),
         _ => None,
     };
-    let (Some(towards), Some((cam, cam_at, projection))) = (towards, cam) else {
-        for (e, ..) in &arrows {
-            commands.entity(e).despawn();
+    state.last.clone_from(&sign);
+    let Some(sign) = sign else {
+        state.wrong_since = None;
+        for (_, mut vis) in &mut signs {
+            *vis = Visibility::Hidden;
         }
         return;
     };
-    let (fov, aspect) = match projection {
-        Projection::Perspective(p) => (p.fov, p.aspect_ratio),
-        _ => (1.0, 16.0 / 9.0),
+    let Ok((mut node, mut vis)) = signs.single_mut() else {
+        spawn_sign(&mut commands);
+        return;
     };
-    let local = hud.local_position(fov, aspect, GUIDE_DISTANCE);
-    // Level in the world, pointing along the ground at the checkpoint, seen from the camera.
-    let at = cam_at.transform_point(local);
-    let world = pointing(at, Vec3::new(towards.x, at.y, towards.z));
-    let rotation = cam_at.compute_transform().rotation.inverse() * world;
-    let scale = Vec3::splat(GUIDE_SIZE * hud.scale);
-    match arrows.single_mut() {
-        Ok((_, mut t, parent)) if parent.parent() == cam => {
-            t.translation = local;
-            t.rotation = rotation;
-            t.scale = scale;
-        }
-        _ => {
-            for (e, ..) in &arrows {
-                commands.entity(e).despawn();
-            }
-            let looks = looks.get_or_insert_with(|| Looks::new(&mut meshes, &mut materials));
-            commands.spawn((
-                GuideArrow,
-                Mesh3d(looks.arrow.clone()),
-                MeshMaterial3d(looks.guide.clone()),
-                Transform::from_translation(local)
-                    .with_rotation(rotation)
-                    .with_scale(scale),
-                ChildOf(cam),
-                Name::new("race guide arrow"),
-            ));
+    let (width, height) = windows
+        .single()
+        .map_or((1280.0, 720.0), |w| (w.width(), w.height()));
+    let layout = hud.layout(width, height);
+    node.left = Val::Px(layout.left);
+    node.top = Val::Px(layout.top);
+    node.width = Val::Px(layout.width);
+    *vis = Visibility::Inherited;
+
+    let glyph = sign.glyph();
+    let image = state
+        .arrows
+        .entry(glyph)
+        .or_insert_with(|| images.add(arrow_image(&glyph)))
+        .clone();
+    for (mut node, mut img) in &mut arrows {
+        node.width = Val::Px(layout.arrow);
+        node.height = Val::Px(layout.arrow);
+        if img.image != image {
+            img.image = image.clone();
         }
     }
+    let (call, follow) = sign.lines();
+    let colour = glyph.colour.map(|c| f32::from(c) / 255.0);
+    for (line, mut text, mut font, mut tint, mut shadow) in &mut lines {
+        let (want, size) = if line.0 {
+            (follow.clone().unwrap_or_default(), layout.follow)
+        } else {
+            (call.clone(), layout.call)
+        };
+        if text.0 != want {
+            text.0 = want;
+        }
+        let face = crate::char_select::wow_font(&assets);
+        if font.font_size != size || font.font != face {
+            font.font = face;
+            font.font_size = size;
+        }
+        let want_tint = if line.0 {
+            Color::srgb(0.95, 0.95, 0.95)
+        } else {
+            Color::srgb(colour[0], colour[1], colour[2])
+        };
+        if tint.0 != want_tint {
+            tint.0 = want_tint;
+        }
+        let offset = Vec2::splat((size * 0.08).max(1.5));
+        if shadow.offset != offset {
+            shadow.offset = offset;
+            shadow.color = Color::BLACK;
+        }
+    }
+}
+
+/// The sign's entities, hidden until placed: the arrow, then the call and the turn after it.
+fn spawn_sign(commands: &mut Commands) {
+    let line = |follow: bool| {
+        (
+            PaceLine(follow),
+            Text::new(String::new()),
+            TextFont::default(),
+            TextColor(Color::WHITE),
+            TextShadow::default(),
+            TextLayout {
+                justify: Justify::Center,
+                linebreak: LineBreak::NoWrap,
+            },
+            Pickable::IGNORE,
+        )
+    };
+    commands
+        .spawn((
+            PaceSign,
+            Node {
+                position_type: PositionType::Absolute,
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            Pickable::IGNORE,
+            GlobalZIndex(10),
+            Visibility::Hidden,
+            Name::new("race pace-note sign"),
+        ))
+        .with_children(|c| {
+            c.spawn((
+                PaceArrow,
+                ImageNode::default(),
+                Node::default(),
+                Pickable::IGNORE,
+            ));
+            c.spawn(line(false));
+            c.spawn(line(true));
+        });
+}
+
+/// A glyph as a texture.
+fn arrow_image(glyph: &pacenotes::Glyph) -> Image {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::image::ImageSampler;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    let mut image = Image::new(
+        Extent3d {
+            width: SIGN_TEXELS as u32,
+            height: SIGN_TEXELS as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        glyph.rasterize(SIGN_TEXELS),
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    );
+    image.sampler = ImageSampler::linear();
+    image
 }
 
 #[cfg(test)]
@@ -1417,23 +1488,100 @@ mod tests {
     }
 
     #[test]
-    fn the_guide_arrow_lands_where_it_is_put() {
-        // The screen's centre is straight ahead; its top-left corner is up and to the left.
-        let centre = GuideHud {
-            x: 0.5,
-            y: 0.5,
-            ..default()
-        }
-        .local_position(1.0, 2.0, 4.0);
-        assert!(centre.abs_diff_eq(Vec3::new(0.0, 0.0, -4.0), 1e-5));
-        let corner = GuideHud {
+    fn the_sign_lands_where_it_is_put() {
+        // At the default place on a 1366×768 window the arrow fills the layer's 90-unit box,
+        // centred on (x, y), the sign five arrows wide about it.
+        let l = GuideHud::default().layout(1366.0, 768.0);
+        assert!((l.arrow - 90.0).abs() < 1e-3);
+        assert!((l.top - (0.22 * 768.0 - 45.0)).abs() < 1e-3);
+        assert!((l.left + l.width / 2.0 - 683.0).abs() < 1e-3);
+        // Twice the size in the top-left corner.
+        let l = GuideHud {
             x: 0.0,
             y: 0.0,
+            scale: 2.0,
             ..default()
         }
-        .local_position(1.0, 2.0, 4.0);
-        let half = 0.5f32.tan() * 4.0;
-        assert!(corner.abs_diff_eq(Vec3::new(-half * 2.0, half, -4.0), 1e-4));
+        .layout(1366.0, 768.0);
+        assert!((l.arrow - 180.0).abs() < 1e-3 && (l.top + 90.0).abs() < 1e-3);
+        assert!(l.call > l.follow && l.follow > 0.0);
+    }
+
+    /// [`course`] with its notes, between checkpoints 1 and 2, the kart at WoW (x, 0) facing
+    /// `facing` (0 north).
+    fn driving(x: f32, facing: f32) -> (Active, super::super::KartDrive) {
+        let mut race = course();
+        race.notes = pacenotes::notes(&race.points, false);
+        race.checkpoint = 1;
+        let drive = super::super::KartDrive {
+            active: true,
+            pos: wow_to_bevy([x, 0.0, 0.0]),
+            yaw: facing,
+            ..default()
+        };
+        (race, drive)
+    }
+
+    #[test]
+    fn the_sign_calls_the_bend_north_then_west_as_a_left() {
+        // North along x, then west (+y) at checkpoint 2: a square left.
+        let (race, drive) = driving(170.0, 0.0);
+        let mut state = SignState::default();
+        let sign = race_sign(&race, 2, &drive, 10.0, &mut state);
+        assert_eq!(sign.lines().0, "HARD LEFT");
+        // The bevy yaw is the WoW facing: the kart's forward is north here.
+        let f = bevy_to_wow(Vec3::new(-drive.yaw.sin(), 0.0, -drive.yaw.cos()));
+        assert!((f[0] - 1.0).abs() < 1e-5 && f[1].abs() < 1e-5);
+        // Past it, the next is the finish.
+        let mut done = race;
+        done.checkpoint = 2;
+        assert_eq!(
+            race_sign(&done, 3, &drive, 10.0, &mut state),
+            pacenotes::Sign::Finish
+        );
+    }
+
+    #[test]
+    fn the_wrong_way_shows_once_it_has_held() {
+        let (race, drive) = driving(150.0, std::f32::consts::PI);
+        let mut state = SignState::default();
+        let first = race_sign(&race, 2, &drive, 10.0, &mut state);
+        assert_ne!(first, pacenotes::Sign::WrongWay, "not on the first glance");
+        state.last = Some(first);
+        let held = race_sign(&race, 2, &drive, 10.0 + WRONG_WAY_HOLD, &mut state);
+        assert_eq!(held, pacenotes::Sign::WrongWay);
+        // Turned back round, it is gone at once.
+        let (_, ahead) = driving(150.0, 0.0);
+        assert_ne!(
+            race_sign(&race, 2, &ahead, 11.0, &mut state),
+            pacenotes::Sign::WrongWay
+        );
+        assert_eq!(state.wrong_since, None);
+    }
+
+    #[test]
+    fn every_course_has_pace_notes_and_its_circuits_turn_full_circles() {
+        for c in COURSES.iter() {
+            let route = c.route();
+            let circuit = c.laps > 0;
+            let notes = pacenotes::notes(&route, circuit);
+            assert_eq!(notes.len(), route.len(), "{}", c.key);
+            if circuit {
+                // Round a closed loop the turns add up to whole turns (one, for a loop that
+                // does not cross itself): the wrap through the start is counted once.
+                let total: f32 = (0..route.len())
+                    .filter_map(|i| pacenotes::turn_angle(&route, true, i))
+                    .sum();
+                let turns = total / 360.0;
+                assert!(
+                    (turns - turns.round()).abs() < 0.01 && turns.round() != 0.0,
+                    "{}: {total}°",
+                    c.key
+                );
+            } else {
+                assert!(!notes[0].bend.is_turn() && !notes[route.len() - 1].bend.is_turn());
+            }
+        }
     }
 
     #[test]
