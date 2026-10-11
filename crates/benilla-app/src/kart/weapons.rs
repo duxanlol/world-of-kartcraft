@@ -73,6 +73,10 @@ pub(crate) fn update(
         link.race = race;
     }
     if race.is_none() {
+        // A time trial has no weapons: nothing a stray line laid out stays drawn or pickable.
+        if races.time_trial() && weapons.live() {
+            weapons.clear();
+        }
         extras.item = None;
         return;
     }

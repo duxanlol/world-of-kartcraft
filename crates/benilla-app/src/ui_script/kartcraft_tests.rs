@@ -545,6 +545,49 @@ fn a_finder_race_offers_the_way_back_and_new_bests_reach_the_chat() {
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tStay"]);
 }
 
+#[test]
+fn a_time_trial_s_new_bests_are_told_as_time_trial_bests() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 3);
+    s.run(
+        "BenillaTestSaid = {} \
+         DEFAULT_CHAT_FRAME.AddMessage = function(self, m) table.insert(BenillaTestSaid, m) end",
+    )
+    .unwrap();
+    let said =
+        |s: &UiScript| -> String { s.eval("return table.concat(BenillaTestSaid, '|')").unwrap() };
+    let me: String = s.eval("return UnitName('player')").unwrap();
+
+    // Race 7 is a time trial: its record and our best are the time trials'.
+    from_server(&mut s, &format!("R\tL\t7\t{me}"));
+    from_server(&mut s, "R\tTT\t7");
+    from_server(&mut s, "R\tC\t7\tsprint\t0\t1:2;3:4");
+    from_server(&mut s, &format!("R\tF\t7\t{me}\t1\t61000\tr"));
+    // A race on the same course afterwards is a race again.
+    from_server(&mut s, "R\tC\t8\tsprint\t0\t1:2;3:4");
+    from_server(&mut s, &format!("R\tF\t8\t{me}\t1\t60500\tp"));
+    from_server(&mut s, "R\tL\t9\tGnome");
+    from_server(&mut s, "R\tTT\t9");
+    from_server(&mut s, "R\tC\t9\tsprint\t0\t1:2;3:4");
+    from_server(&mut s, "R\tF\t9\tGnome\t1\t59000\tp");
+    from_server(&mut s, "R\tTT\t10");
+    from_server(&mut s, "R\tC\t10\tsprint\t0\t1:2;3:4");
+    from_server(&mut s, &format!("R\tF\t10\t{me}\t1\t58000\tp"));
+    assert_eq!(
+        said(&s),
+        format!(
+            "{me} set a new time trial record on Northshire Sprint: 1:01.00!|\
+             New personal best on Northshire Sprint: 1:00.50.|\
+             New time trial best on Northshire Sprint: 0:58.00."
+        ),
+        "another's time trial best is theirs alone"
+    );
+}
+
 /// The labels of the minimap button's menu, opened afresh.
 fn menu(s: &mut UiScript) -> Vec<String> {
     s.run("CloseDropDownMenus() BenillaKartMinimapButton:Click('RightButton')")

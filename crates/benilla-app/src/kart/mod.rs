@@ -4,8 +4,9 @@
 //! camera (read by `player::controller`), our character holds the saddle pose in the kart's seat
 //! ([`seat`]) and the kart is drawn under it (`kartcraft::model`). Banked turbo chains feed the
 //! Karting profession ([`profession`]) and the score on screen ([`score`]). In a race CTR's
-//! weapons are live ([`weapons`]): crates, items, shots and hits through the server, and the ghost
-//! of our best run on the course races us ([`ghost`]). Its settings
+//! weapons are live ([`weapons`]): crates, items, shots and hits through the server; in a time
+//! trial there are none, and the ghost of our best run on the course races us ([`ghost`]). Its
+//! settings
 //! are CVars the layer's settings window writes ([`settings`]); its controls are key bindings
 //! ([`bindings`]).
 

@@ -8,6 +8,11 @@
 //! and the course record: it sends both at the start (`Rec`), marks a finish that beats one
 //! (`F`'s sixth field), and the results board ends with them.
 //!
+//! A time trial is the Race Marshal's race of one (`TT` after its roster): no crates or items
+//! (no weapons are bound to it), our ghost to race (`super::ghost`, only there), no place on the
+//! HUD, and a board that sets our time against our best before the run and the time trial record,
+//! which the server keeps apart from the races'.
+//!
 //! The Race Finder is a WoW window in the client's UI layer (`assets/ui/KartcraftFrames.xml`,
 //! opened from its minimap button or `/racefinder`) that queues, keeps its place, answers the
 //! ready check and leaves races (`/leaverace`) over the addon channel itself. Here only a pending
@@ -242,6 +247,11 @@ pub(crate) struct Active {
     /// The course record (ms, holder) and our own best (ms), from the server's `Rec`; 0 none.
     record: (u32, String),
     best: u32,
+    /// The record and our best as the race began (the first `Rec`), for a time trial's finish to
+    /// be measured against once a new best has replaced them.
+    before: Option<(u32, u32)>,
+    /// A time trial (`TT`): us alone, no crates or items, and our ghost to race.
+    time_trial: bool,
     done: bool,
     /// When the gas went down during the countdown (local s), for the start boost.
     revved_at: Option<f32>,
@@ -363,6 +373,18 @@ pub(crate) struct Run<'a> {
     pub(crate) done: bool,
     /// Our time (ms) as the server timed it, once we have finished.
     pub(crate) finish_ms: Option<u32>,
+    /// A time trial: the only race with a ghost.
+    pub(crate) time_trial: bool,
+}
+
+/// What a server line did beyond the race state, for [`update`] to show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Heard {
+    Nothing,
+    /// A Race Finder ready check: its cue.
+    ReadyCheck,
+    /// Out of every race and the queue: whatever the race showed goes.
+    LeftAll,
 }
 
 #[derive(Resource, Default)]
@@ -391,7 +413,15 @@ impl Races {
     /// The race whose weapons are live: one we are in and have not finished (the server lays
     /// its crates at the start; they go when we leave or finish).
     pub(crate) fn weapons_race(&self) -> Option<u32> {
-        self.race.as_ref().filter(|r| !r.done).map(|r| r.id)
+        self.race
+            .as_ref()
+            .filter(|r| !r.done && !r.time_trial)
+            .map(|r| r.id)
+    }
+
+    /// Whether the race we are in is a time trial: no weapons in it at all.
+    pub(crate) fn time_trial(&self) -> bool {
+        self.race.as_ref().is_some_and(|r| r.time_trial)
     }
 
     /// The race's track for the race map: once its course line has come.
@@ -443,6 +473,7 @@ impl Races {
                 .map(|f| f.2)
                 .filter(|_| r.done),
             done: r.done,
+            time_trial: r.time_trial,
         })
     }
 
@@ -451,6 +482,135 @@ impl Races {
         self.race
             .as_ref()
             .is_some_and(|r| r.go_at.is_some_and(|go| now < go))
+    }
+}
+
+impl Races {
+    /// One server line (`R\t` taken off, split at the tabs): the race state it changes.
+    fn hear(&mut self, f: &[String], now: f32) -> Heard {
+        let me = self.me.clone();
+        let id = f.get(1).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+        match f.first().map(String::as_str) {
+            Some("Pop") => {
+                self.check_pending = true;
+                return Heard::ReadyCheck;
+            }
+            Some("Pop-") => self.check_pending = false,
+            // Out of everything (`/leaverace`): the server has let us go, so whatever we
+            // thought we were in goes too.
+            Some("X") => {
+                info!("kart race: left every race and the queue");
+                self.race = None;
+                self.offer = None;
+                self.check_pending = false;
+                return Heard::LeftAll;
+            }
+            Some("O") if f.len() >= 5 => {
+                if self.race.is_none() {
+                    self.offer = Some(Offer {
+                        id,
+                        name: f[3].clone(),
+                        host: f[4].clone(),
+                    });
+                }
+            }
+            Some("L") if f.len() >= 3 => {
+                let roster: Vec<String> = f[2].split(',').map(str::to_string).collect();
+                if roster.contains(&me) {
+                    self.check_pending = false;
+                    // Another race's roster with us in it: the server has moved us (a time trial
+                    // takes us out of every other race), so the old one goes.
+                    if self.race.as_ref().is_some_and(|r| r.id != id) {
+                        self.race = None;
+                    }
+                    // A Race Finder pop or a Race Marshal on foot summons the kart as it puts us
+                    // in: its aura lands after the roster, when the cast time has run.
+                    let race = self.race.get_or_insert_with(|| Active {
+                        id,
+                        grace_until: now + KART_GRACE_SECS,
+                        ..Default::default()
+                    });
+                    race.host = roster.first() == Some(&me);
+                    race.roster = roster;
+                    self.offer = None;
+                } else if self.race.as_ref().is_some_and(|r| r.id == id) {
+                    self.race = None;
+                }
+            }
+            // The race is a time trial: no weapons, and our ghost.
+            Some("TT") => {
+                if let Some(race) = self.race.as_mut().filter(|r| r.id == id) {
+                    race.time_trial = true;
+                    info!("kart race: {id} is a time trial");
+                }
+            }
+            Some("C") if f.len() >= 5 => {
+                if let Some(race) = self.race.as_mut().filter(|r| r.id == id) {
+                    race.course = f[2].clone();
+                    race.laps = f[3].parse().unwrap_or(0);
+                    race.points = f[4]
+                        .split(';')
+                        .filter_map(|p| {
+                            let (x, y) = p.split_once(':')?;
+                            Some([x.parse().ok()?, y.parse().ok()?])
+                        })
+                        .collect();
+                    race.gates = COURSES
+                        .iter()
+                        .find(|c| c.key == f[2] && c.checkpoints.len() == race.points.len())
+                        .map_or_else(Vec::new, Course::gates);
+                    info!(
+                        "kart race: course {} — {} checkpoints, {} laps",
+                        f[2],
+                        race.points.len(),
+                        race.laps
+                    );
+                }
+            }
+            Some("G") if f.len() >= 3 => {
+                if let Some(race) = self.race.as_mut().filter(|r| r.id == id) {
+                    race.count_down(now, f[2].parse().unwrap_or(4000.0));
+                    info!("kart race: countdown, {} racers", race.roster.len());
+                }
+            }
+            Some("P") if f.len() >= 5 => {
+                if let Some(race) = self.race.as_mut().filter(|r| r.id == id) {
+                    let lap = f[3].parse().unwrap_or(0);
+                    let cp = f[4].parse().unwrap_or(0);
+                    race.progress.insert(f[2].clone(), (lap, cp, now));
+                }
+            }
+            Some("F") if f.len() >= 5 => {
+                if let Some(race) = self.race.as_mut().filter(|r| r.id == id) {
+                    let place = f[3].parse().unwrap_or(0);
+                    let ms = f[4].parse().unwrap_or(0);
+                    // A sixth field: "r" a new course record, "p" a new personal best.
+                    let best = f.get(5).map(String::as_str).unwrap_or("");
+                    info!("kart race: {} finished {place} in {ms} ms {best}", f[2]);
+                    if best == "r" || best == "p" {
+                        race.bests.insert(f[2].clone(), best == "r");
+                    }
+                    race.finished.push((f[2].clone(), place, ms));
+                    if f[2] == me {
+                        race.done = true;
+                    }
+                }
+            }
+            // The course record and holder, and our best: at the start, and after a new best.
+            Some("Rec") if f.len() >= 6 => {
+                if let Some(race) = self.race.as_mut().filter(|r| r.id == id) {
+                    race.record = (f[3].parse().unwrap_or(0), f[4].clone());
+                    race.best = f[5].parse().unwrap_or(0);
+                    race.before.get_or_insert((race.record.0, race.best));
+                    info!(
+                        "kart race: course record {} by {}, our best {}",
+                        race.record.0, race.record.1, race.best
+                    );
+                }
+            }
+            _ => {}
+        }
+        Heard::Nothing
     }
 }
 
@@ -510,116 +670,15 @@ pub(crate) fn update(
 
     // The server's lines.
     for f in std::mem::take(&mut races.inbox) {
-        let id = f.get(1).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
-        match f.first().map(String::as_str) {
-            Some("Pop") => {
-                races.check_pending = true;
-                audio.cues.push(kartcraft::sound::Cue::Countdown(true));
-            }
-            Some("Pop-") => races.check_pending = false,
-            // Out of everything (`/leaverace`): the server has let us go, so whatever we
-            // thought we were in goes too.
-            Some("X") => {
-                info!("kart race: left every race and the queue");
-                races.race = None;
-                races.offer = None;
-                races.check_pending = false;
+        match races.hear(&f, now) {
+            Heard::Nothing => {}
+            Heard::ReadyCheck => audio.cues.push(kartcraft::sound::Cue::Countdown(true)),
+            Heard::LeftAll => {
                 *text = RaceText::default();
                 extras.lap = None;
                 extras.place = None;
                 audio.music_rate = 1.0;
             }
-            Some("O") if f.len() >= 5 => {
-                if races.race.is_none() {
-                    races.offer = Some(Offer {
-                        id,
-                        name: f[3].clone(),
-                        host: f[4].clone(),
-                    });
-                }
-            }
-            Some("L") if f.len() >= 3 => {
-                let roster: Vec<String> = f[2].split(',').map(str::to_string).collect();
-                if roster.contains(&me) {
-                    races.check_pending = false;
-                    // A Race Finder pop or a Race Marshal on foot summons the kart as it puts us
-                    // in: its aura lands after the roster, when the cast time has run.
-                    let race = races.race.get_or_insert_with(|| Active {
-                        id,
-                        grace_until: now + KART_GRACE_SECS,
-                        ..Default::default()
-                    });
-                    race.host = roster.first() == Some(&me);
-                    race.roster = roster;
-                    races.offer = None;
-                } else if races.race.as_ref().is_some_and(|r| r.id == id) {
-                    races.race = None;
-                }
-            }
-            Some("C") if f.len() >= 5 => {
-                if let Some(race) = races.race.as_mut().filter(|r| r.id == id) {
-                    race.course = f[2].clone();
-                    race.laps = f[3].parse().unwrap_or(0);
-                    race.points = f[4]
-                        .split(';')
-                        .filter_map(|p| {
-                            let (x, y) = p.split_once(':')?;
-                            Some([x.parse().ok()?, y.parse().ok()?])
-                        })
-                        .collect();
-                    race.gates = COURSES
-                        .iter()
-                        .find(|c| c.key == f[2] && c.checkpoints.len() == race.points.len())
-                        .map_or_else(Vec::new, Course::gates);
-                    info!(
-                        "kart race: course {} — {} checkpoints, {} laps",
-                        f[2],
-                        race.points.len(),
-                        race.laps
-                    );
-                }
-            }
-            Some("G") if f.len() >= 3 => {
-                if let Some(race) = races.race.as_mut().filter(|r| r.id == id) {
-                    race.count_down(now, f[2].parse().unwrap_or(4000.0));
-                    info!("kart race: countdown, {} racers", race.roster.len());
-                }
-            }
-            Some("P") if f.len() >= 5 => {
-                if let Some(race) = races.race.as_mut().filter(|r| r.id == id) {
-                    let lap = f[3].parse().unwrap_or(0);
-                    let cp = f[4].parse().unwrap_or(0);
-                    race.progress.insert(f[2].clone(), (lap, cp, now));
-                }
-            }
-            Some("F") if f.len() >= 5 => {
-                if let Some(race) = races.race.as_mut().filter(|r| r.id == id) {
-                    let place = f[3].parse().unwrap_or(0);
-                    let ms = f[4].parse().unwrap_or(0);
-                    // A sixth field: "r" a new course record, "p" a new personal best.
-                    let best = f.get(5).map(String::as_str).unwrap_or("");
-                    info!("kart race: {} finished {place} in {ms} ms {best}", f[2]);
-                    if best == "r" || best == "p" {
-                        race.bests.insert(f[2].clone(), best == "r");
-                    }
-                    race.finished.push((f[2].clone(), place, ms));
-                    if f[2] == me {
-                        race.done = true;
-                    }
-                }
-            }
-            // The course record and holder, and our best: at the start, and after a new best.
-            Some("Rec") if f.len() >= 6 => {
-                if let Some(race) = races.race.as_mut().filter(|r| r.id == id) {
-                    race.record = (f[3].parse().unwrap_or(0), f[4].clone());
-                    race.best = f[5].parse().unwrap_or(0);
-                    info!(
-                        "kart race: course record {} by {}, our best {}",
-                        race.record.0, race.record.1, race.best
-                    );
-                }
-            }
-            _ => {}
         }
     }
 
@@ -773,7 +832,12 @@ pub(crate) fn update(
         .collect();
     running.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     order.extend(running.into_iter().map(|(r, _)| r.clone()));
-    extras.place = order.iter().position(|r| *r == me).map(|i| i as u8 + 1);
+    // A time trial has no place to show: it is us alone against the clock.
+    extras.place = order
+        .iter()
+        .position(|r| *r == me)
+        .map(|i| i as u8 + 1)
+        .filter(|_| !race.time_trial);
     race.order = order;
     extras.lap = (race.laps > 0).then(|| ((race.lap + 1).min(race.laps), race.laps));
     audio.music_rate = if race.laps > 1 && race.lap + 1 == race.laps && !race.done {
@@ -790,7 +854,11 @@ pub(crate) fn update(
                     Some(false) => " — New personal best!",
                     None => "",
                 };
-                format!("{} — {}{news}", ordinal(*place), clock(*ms))
+                if race.time_trial {
+                    format!("Time trial — {}{news}", clock(*ms))
+                } else {
+                    format!("{} — {}{news}", ordinal(*place), clock(*ms))
+                }
             }
             None => String::new(),
         };
@@ -887,6 +955,9 @@ fn board(race: &Active) -> Vec<String> {
     if race.finished.is_empty() {
         return Vec::new();
     }
+    if race.time_trial {
+        return trial_board(race);
+    }
     let mut lines: Vec<String> = race
         .finished
         .iter()
@@ -908,6 +979,40 @@ fn board(race: &Active) -> Vec<String> {
     }
     if race.best != 0 {
         lines.push(format!("Your best: {}", clock(race.best)));
+    }
+    lines
+}
+
+/// A time trial's board: our time, against our best before this run, then the time trial record.
+fn trial_board(race: &Active) -> Vec<String> {
+    let Some((name, _, ms)) = race.finished.first() else {
+        return Vec::new();
+    };
+    let mark = match race.bests.get(name) {
+        Some(true) => "  (record)",
+        Some(false) => "  (best)",
+        None => "",
+    };
+    let mut lines = vec![format!("Your time: {}{mark}", clock(*ms))];
+    match race.before.map_or(0, |b| b.1) {
+        0 => lines.push("Your first time trial here".into()),
+        best if *ms < best => lines.push(format!(
+            "{} faster than your best of {}",
+            clock(best - ms),
+            clock(best)
+        )),
+        best => lines.push(format!(
+            "{} behind your best of {}",
+            clock(ms - best),
+            clock(best)
+        )),
+    }
+    if race.record.0 != 0 {
+        lines.push(format!(
+            "Time trial record: {} by {}",
+            clock(race.record.0),
+            race.record.1
+        ));
     }
     lines
 }
@@ -1551,6 +1656,93 @@ mod tests {
         race.record = (0, String::new());
         race.best = 0;
         assert_eq!(board(&race).len(), 2);
+    }
+
+    /// A server line as [`on_chat`] queues it, `R\t` taken off.
+    fn hear(races: &mut Races, line: &str, now: f32) -> Heard {
+        let f: Vec<String> = line.split('\t').map(str::to_string).collect();
+        races.hear(&f, now)
+    }
+
+    fn racer() -> Races {
+        Races {
+            me: "Racer".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_time_trial_is_marked_and_has_no_weapons() {
+        let mut races = racer();
+        hear(&mut races, "L\t7\tRacer", 1.0);
+        hear(&mut races, "TT\t7", 1.0);
+        hear(&mut races, "C\t7\tsprint\t0\t1:2;3:4;5:6", 1.0);
+        assert_eq!(hear(&mut races, "G\t7\t8000\tRacer", 1.0), Heard::Nothing);
+        assert!(races.time_trial());
+        assert_eq!(races.weapons_race(), None, "no crates, no items");
+        let run = races.run().expect("in the trial");
+        assert!(run.time_trial && run.course == "sprint" && run.go_at == Some(9.0));
+
+        // Another race's mark is not ours.
+        let mut races = racer();
+        hear(&mut races, "L\t8\tRacer,Goblin", 1.0);
+        hear(&mut races, "TT\t9", 1.0);
+        hear(&mut races, "C\t8\tsprint\t0\t1:2;3:4;5:6", 1.0);
+        assert!(!races.time_trial());
+        assert_eq!(races.weapons_race(), Some(8), "a race has its weapons");
+        assert!(!races.run().unwrap().time_trial);
+    }
+
+    #[test]
+    fn a_new_roster_with_us_in_it_replaces_the_race_we_were_in() {
+        let mut races = racer();
+        hear(&mut races, "L\t3\tRacer,Goblin", 1.0);
+        hear(&mut races, "F\t3\tRacer\t1\t60000\t", 2.0);
+        assert!(races.race.as_ref().unwrap().done);
+        // The results still showing, a time trial at the marshal: the server has moved us.
+        hear(&mut races, "L\t4\tRacer", 3.0);
+        hear(&mut races, "TT\t4", 3.0);
+        let race = races.race.as_ref().unwrap();
+        assert!(race.id == 4 && race.time_trial && !race.done && race.finished.is_empty());
+        // The ready check's cue and a leave-everything still come out.
+        assert_eq!(
+            hear(&mut races, "Pop\t1\tsprint\t2\t20", 4.0),
+            Heard::ReadyCheck
+        );
+        assert_eq!(hear(&mut races, "X", 4.0), Heard::LeftAll);
+        assert!(races.race.is_none());
+    }
+
+    #[test]
+    fn a_time_trial_s_board_sets_the_time_against_the_best_before_it() {
+        let mut races = racer();
+        hear(&mut races, "L\t5\tRacer", 1.0);
+        hear(&mut races, "TT\t5", 1.0);
+        hear(&mut races, "Rec\t5\tsprint\t58000\tGoblin\t61000", 1.0);
+        hear(&mut races, "F\t5\tRacer\t1\t60000\tp", 50.0);
+        // The new best comes back as the server's records: the board still measures the old one.
+        hear(&mut races, "Rec\t5\tsprint\t58000\tGoblin\t60000", 50.0);
+        let race = races.race.as_ref().unwrap();
+        assert_eq!(
+            board(race),
+            [
+                "Your time: 1:00.00  (best)",
+                "0:01.00 faster than your best of 1:01.00",
+                "Time trial record: 0:58.00 by Goblin",
+            ]
+        );
+        // Slower than the best, and a first run with no record yet.
+        let mut slow = race.clone();
+        slow.bests.clear();
+        slow.finished = vec![("Racer".into(), 1, 62_500)];
+        assert_eq!(board(&slow)[1], "0:01.50 behind your best of 1:01.00");
+        let mut first = slow.clone();
+        first.before = Some((0, 0));
+        first.record = (0, String::new());
+        assert_eq!(
+            board(&first),
+            ["Your time: 1:02.50", "Your first time trial here"]
+        );
     }
 
     #[test]
