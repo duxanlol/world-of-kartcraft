@@ -301,6 +301,13 @@ pub(crate) fn on_chat(In(ev): In<SessionEvent>, mut races: ResMut<Races>) {
     }
 }
 
+/// Whether a race is left for want of a kart: our own object known and no Summon Kart on it, past
+/// the grace a kart being summoned gets. A Race Finder race on another continent sends us through a
+/// loading screen that drops our object until the new map has us, for longer than the grace.
+fn left_without_kart(kart_aura: Option<bool>, now: f32, grace_until: f32) -> bool {
+    kart_aura == Some(false) && now >= grace_until
+}
+
 /// Where a racer stands in the race, for ordering: laps, then checkpoints, then who got there
 /// first.
 fn standing(progress: &(u8, u8, f32), points: usize) -> (i64, f32) {
@@ -461,8 +468,8 @@ pub(crate) fn update(
     // Out of the kart, out of the race; but not while the kart aura stays on us, as it does
     // through the Race Finder's teleport to the start.
     if !drive.active {
-        let grace = races.race.as_ref().is_some_and(|r| now < r.grace_until);
-        if !profession.auras().kart && !grace {
+        let grace_until = races.race.as_ref().map_or(0.0, |r| r.grace_until);
+        if left_without_kart(profession.kart_aura(), now, grace_until) {
             if let Some(race) = races.race.take() {
                 profession.send(format!("KARTCRAFT\tR\tQ\t{}", race.id));
             }
@@ -1174,6 +1181,20 @@ mod tests {
         race.record = (0, String::new());
         race.best = 0;
         assert_eq!(board(&race).len(), 2);
+    }
+
+    #[test]
+    fn a_race_is_kept_through_a_worldport_and_left_when_the_kart_is_gone() {
+        // In the kart, or with no object of ours (a loading screen), the race stays.
+        assert!(!left_without_kart(Some(true), 30.0, 10.0));
+        assert!(
+            !left_without_kart(None, 30.0, 10.0),
+            "a worldport is no answer"
+        );
+        // No kart, but a kart being summoned still has its grace.
+        assert!(!left_without_kart(Some(false), 5.0, 10.0));
+        // Our object back without Summon Kart, the grace run out: out of the race.
+        assert!(left_without_kart(Some(false), 30.0, 10.0));
     }
 
     #[test]
