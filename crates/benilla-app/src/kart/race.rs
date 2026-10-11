@@ -199,6 +199,8 @@ pub(crate) struct Offer {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Active {
     id: u32,
+    /// The course's key, as the server's course line names it; empty until it comes.
+    course: String,
     laps: u8,
     /// Checkpoints in WoW x, y; the first is the start (and finish of a lap).
     points: Vec<[f32; 2]>,
@@ -303,6 +305,20 @@ impl Active {
     }
 }
 
+/// What the ghost needs of the race we are in ([`Races::run`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Run<'a> {
+    pub(crate) id: u32,
+    /// The course's key; empty until the server's course line.
+    pub(crate) course: &'a str,
+    /// When GO falls, local seconds.
+    pub(crate) go_at: Option<f32>,
+    /// We have finished.
+    pub(crate) done: bool,
+    /// Our time (ms) as the server timed it, once we have finished.
+    pub(crate) finish_ms: Option<u32>,
+}
+
 #[derive(Resource, Default)]
 pub(crate) struct Races {
     pub(crate) offer: Option<Offer>,
@@ -342,6 +358,24 @@ impl Races {
     pub(crate) fn status(&self) -> Option<(u32, &[String], bool, bool)> {
         let r = self.race.as_ref()?;
         Some((r.id, r.roster.as_slice(), r.go_at.is_some(), r.done))
+    }
+
+    /// The race we are in, for its ghost ([`super::ghost`]): its id, course, when GO falls, and
+    /// our finish time (ms) once the server has it.
+    pub(crate) fn run(&self) -> Option<Run<'_>> {
+        let r = self.race.as_ref()?;
+        Some(Run {
+            id: r.id,
+            course: &r.course,
+            go_at: r.go_at,
+            finish_ms: r
+                .finished
+                .iter()
+                .find(|f| f.0 == self.me)
+                .map(|f| f.2)
+                .filter(|_| r.done),
+            done: r.done,
+        })
     }
 
     /// Whether the kart must hold on the line: a countdown is running.
@@ -456,6 +490,7 @@ pub(crate) fn update(
             }
             Some("C") if f.len() >= 5 => {
                 if let Some(race) = races.race.as_mut().filter(|r| r.id == id) {
+                    race.course = f[2].clone();
                     race.laps = f[3].parse().unwrap_or(0);
                     race.points = f[4]
                         .split(';')

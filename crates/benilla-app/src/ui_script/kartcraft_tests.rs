@@ -697,6 +697,7 @@ fn the_settings_window_sets_the_kart_s_cvars() {
         ("ChaseCamera", "CTR chase camera (off: your WoW camera)"),
         ("Music", "Play CTR race music"),
         ("MinimapButton", "Show the minimap button"),
+        ("Ghost", "Race the ghost of your best run"),
     ] {
         let frame = format!("BenillaKartSettingsFrame{name}");
         assert!(
@@ -725,6 +726,7 @@ fn the_settings_window_sets_the_kart_s_cvars() {
         "BenillaKartSettingsFrameArrowShow:Click() \
          BenillaKartSettingsFrameChaseCamera:Click() \
          BenillaKartSettingsFrameMusic:Click() \
+         BenillaKartSettingsFrameGhost:Click() \
          BenillaKartSettingsFrameArrowSize:SetValue(1.5) \
          BenillaKartSettingsFrameMusicVolume:SetValue(0.25)",
     )
@@ -733,6 +735,7 @@ fn the_settings_window_sets_the_kart_s_cvars() {
         ("KartArrowShow", "0"),
         ("KartChaseCamera", "0"),
         ("KartMusic", "0"),
+        ("KartGhost", "0"),
         ("KartArrowSize", "1.5"),
         ("KartMusicVolume", "0.25"),
     ] {

@@ -51,6 +51,7 @@ pub(super) fn remote_engines(
         (
             With<kartcraft::model::KartRoot>,
             Without<kartcraft::model::LocalKart>,
+            Without<kartcraft::model::GhostKart>,
         ),
     >,
     camera: Query<&GlobalTransform, With<benilla_world::view::WorldCamera>>,

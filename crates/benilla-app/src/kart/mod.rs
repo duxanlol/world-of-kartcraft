@@ -4,13 +4,15 @@
 //! camera (read by `player::controller`), our character holds the saddle pose in the kart's seat
 //! ([`seat`]) and the kart is drawn under it (`kartcraft::model`). Banked turbo chains feed the
 //! Karting profession ([`profession`]) and the score on screen ([`score`]). In a race CTR's
-//! weapons are live ([`weapons`]): crates, items, shots and hits through the server. Its settings
+//! weapons are live ([`weapons`]): crates, items, shots and hits through the server, and the ghost
+//! of our best run on the course races us ([`ghost`]). Its settings
 //! are CVars the layer's settings window writes ([`settings`]); its controls are key bindings
 //! ([`bindings`]).
 
 mod autotest;
 mod bindings;
 mod garage;
+mod ghost;
 mod profession;
 mod race;
 mod remote;
@@ -475,6 +477,7 @@ pub(crate) fn plugin(app: &mut App) {
         .net_handler(benilla_protocol::SessionEventKind::Chat, weapons::on_chat)
         .init_resource::<race::Races>()
         .init_resource::<race::RaceText>()
+        .init_resource::<ghost::Ghosts>()
         .init_resource::<ui::KartOverlay>()
         // Before `CvarLoad`'s boot fold, which fires their observer.
         .init_resource::<race::GuideHud>()
@@ -494,6 +497,7 @@ pub(crate) fn plugin(app: &mut App) {
                 race_name,
                 update,
                 race::update,
+                ghost::update,
                 weapons::update,
                 race::beams,
                 race::guide,

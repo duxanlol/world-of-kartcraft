@@ -23,7 +23,7 @@ const MAX_COAST: f32 = 0.25;
 /// A relayed state this old no longer applies (s).
 const STATE_TTL: f32 = 0.5;
 /// The model's wheel radius, meters.
-const WHEEL_RADIUS: f32 = 0.25;
+pub(super) const WHEEL_RADIUS: f32 = 0.25;
 
 /// What a driver relays about their kart.
 #[derive(Clone, Debug, Default, PartialEq)]

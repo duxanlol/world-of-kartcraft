@@ -15,7 +15,8 @@
 //! subtractive to `Multiply` by the inverted texture. The flames' subtractive outer haze is left
 //! out: drawn as a multiply it smothers the kart.
 //!
-//! Every [`KartRoot`] gets them, ours and other drivers', from its [`KartStatus`].
+//! Every [`KartRoot`] gets them, ours and other drivers', from its [`KartStatus`]; a ghost
+//! ([`GhostKart`]) has none.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::OnceLock;
@@ -27,7 +28,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-use crate::model::{KartRoot, KartStatus};
+use crate::model::{GhostKart, KartRoot, KartStatus};
 
 /// CTR updates its effects once a frame at 30 fps.
 const FRAME: f32 = 1.0 / 30.0;
@@ -329,13 +330,14 @@ fn build(
 }
 
 /// Gives each kart its flames, once the effects are built.
+#[allow(clippy::type_complexity)]
 pub fn attach(
     mut commands: Commands,
     mut state: ResMut<KartEffects>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
-    karts: Query<Entity, (With<KartRoot>, Without<KartFx>)>,
+    karts: Query<Entity, (With<KartRoot>, Without<KartFx>, Without<GhostKart>)>,
 ) {
     if karts.is_empty() {
         return;
