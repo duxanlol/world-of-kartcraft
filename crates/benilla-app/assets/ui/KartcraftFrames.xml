@@ -622,6 +622,11 @@
             elseif verb == "Tracks" then
                 -- The Race Marshal's "Browse the tracks", at her own course.
                 BenillaKartTrackBrowser_Open(line[3] ~= "" and line[3] or nil)
+            elseif verb == "Ux" then
+                BenillaKart_Say(format("Unstuck: you can use it again in %d seconds.",
+                    tonumber(line[3]) or 0))
+            elseif verb == "Un" then
+                BenillaKart_Say("Unstuck: there is no course on this continent.")
             elseif verb == "X" then
                 -- Out of every race and the queue (/leaverace, the minimap button's menu).
                 f.check, f.queued, f.waiting, f.waited = nil, nil, nil, nil
@@ -654,6 +659,19 @@
         function BenillaKart_Open(frame)
             if CanOpenPanels and not CanOpenPanels() then return end
             frame:Show()
+        end
+
+        -- Back onto a course when the kart is stuck: in a race, at the last checkpoint passed;
+        -- else at the nearest course's start. The server decides, and says when it will not.
+        function BenillaKart_Unstuck()
+            BenillaKart_Send("U")
+        end
+
+        -- A line of Kartcraft news in the chat, as the system's lines are.
+        function BenillaKart_Say(text)
+            if DEFAULT_CHAT_FRAME then
+                DEFAULT_CHAT_FRAME:AddMessage(text, 1, 1, 0)
+            end
         end
 
         function BenillaKart_Movable(frame)
@@ -817,6 +835,7 @@
                 { text = "Race Finder", func = BenillaKartFinder_Toggle },
                 { text = "Track browser", func = BenillaKartTrackBrowser_Toggle },
                 { text = "Leave race", func = BenillaKart_LeaveRace },
+                { text = "Unstuck", func = BenillaKart_Unstuck },
             }
             if BenillaKartFinder.queued then
                 table.insert(entries, { text = "Leave queue", func = BenillaKartFinder_QueueClick })
@@ -1149,6 +1168,8 @@
             SlashCmdList["BENILLA_KARTCRAFT"] = function() BenillaKartSettings_Toggle() end
             SLASH_BENILLA_TRACKS1 = "/tracks"
             SlashCmdList["BENILLA_TRACKS"] = function() BenillaKartTrackBrowser_Toggle() end
+            SLASH_BENILLA_UNSTUCK1 = "/unstuck"
+            SlashCmdList["BENILLA_UNSTUCK"] = function() BenillaKart_Unstuck() end
             SLASH_BENILLA_GARAGE1 = "/garage"
             SlashCmdList["BENILLA_GARAGE"] = function() BenillaKartGarage_Toggle() end
             -- GMs: the Race Finder's wait for a second racer, in seconds (the server checks).
