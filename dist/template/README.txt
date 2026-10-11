@@ -58,7 +58,7 @@ Everything else is WoW's own interface. The Kartcraft button on the minimap (the
 opens the Race Finder on a click; right-click it for Race Finder, Leave race, Leave queue,
 Kart garage, Kartcraft settings, Kart camera and Hide minimap button; drag it to move it round
 the minimap.
-Kartcraft settings (or /kartcraft): the pace notes (show, size, Move sign, Reset sign), CTR's
+Kartcraft settings (or /kartcraft): the guide arrow (show, size, Move arrow, Reset arrow), CTR's
 chase camera or your WoW camera, near or far, the race music and its volume, the ghost of your
 best run, and the minimap button.
 Kart camera (its Camera... button, or /kartcam): a preset (Kartcraft, Smooth follow, CTR
@@ -69,9 +69,8 @@ the turbo push-back and walls. Changes apply at once, so tune it while you drive
 Kartcraft puts it back.
 Slash commands: /racefinder, /tracks, /leaverace (/lr), /unstuck, /kartcraft, /kartcam, /garage.
 
-In a race the pace notes call each turn as you come to it, the way a rally co-driver does: EASY,
-MEDIUM, HARD or HAIRPIN, LEFT or RIGHT, LONG for a long bend, and the turn after it when it comes
-close. A map of the track with every racer on it sits in the corner; drag it where you like.
+In a race the guide arrow points at the next checkpoint, and a big arrow floats in the next
+checkpoints pointing on to the one after it. A map of the track with every racer on it sits in the corner; drag it where you like.
 
 Kart garage (or /garage): your engine class and your kart. Karting skill opens the classes:
 Turning from the start (slowest, easiest to steer), Balanced at 75, Acceleration at 150, Speed

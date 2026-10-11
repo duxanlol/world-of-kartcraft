@@ -702,7 +702,7 @@ fn the_settings_window_sets_the_kart_s_cvars() {
         "/kartcraft"
     );
     for (name, label) in [
-        ("ArrowShow", "Show the pace notes in a race"),
+        ("ArrowShow", "Show the guide arrow in a race"),
         ("ChaseCamera", "CTR chase camera (off: your WoW camera)"),
         ("Music", "Play CTR race music"),
         ("MinimapButton", "Show the minimap button"),
