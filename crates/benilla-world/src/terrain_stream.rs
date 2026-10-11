@@ -230,6 +230,9 @@ pub struct ViewFocus {
     body: Option<[f32; 3]>,
     /// The eye follows the body; false in free-fly.
     attached: bool,
+    /// `body` is a point ahead of the avatar, where a fast vehicle will be in a few seconds, not
+    /// its own ground: streamed around, but no fact about the player.
+    ahead: bool,
     /// The picked character's map and position, before an avatar exists.
     entry: Option<(u32, [f32; 3])>,
     /// The focus is settled, so spawning is paced; false through entry, a teleport and a world
@@ -248,15 +251,25 @@ impl ViewFocus {
         Self {
             body: Some(wow),
             attached: true,
+            ahead: false,
             entry: None,
             paced,
+        }
+    }
+
+    /// A live avatar on a fast vehicle, streamed around `wow`, a point ahead of it: the ground
+    /// there is meant to be loading, so its residency says nothing about the player's own.
+    pub fn ahead(wow: [f32; 3], paced: bool) -> Self {
+        Self {
+            ahead: true,
+            ..Self::body(wow, paced)
         }
     }
 
     /// The stream follows the body's own ground, so residency is a fact about the player; a
     /// detached eye streams wherever the camera went.
     pub fn follows_body(&self) -> bool {
-        self.attached && self.body.is_some()
+        self.attached && !self.ahead && self.body.is_some()
     }
 
     /// A live avatar with the eye detached: the stream follows the camera, the zone the body.
@@ -1284,6 +1297,21 @@ mod focus_tests {
             (f[0] - 100.0).abs() < 0.01 && (f[1] - 200.0).abs() < 0.01,
             "{f:?}"
         );
+    }
+
+    #[test]
+    fn a_focus_ahead_of_a_fast_vehicle_streams_there_but_is_not_the_body_s_ground() {
+        // The stream centres on the point ahead, as on a walker's own position.
+        let ahead = ViewFocus::ahead([300.0, 200.0, 30.0], true);
+        let f = ahead.resolve(cam_at_northshire());
+        assert!(
+            (f[0] - 300.0).abs() < 0.01 && (f[1] - 200.0).abs() < 0.01,
+            "{f:?}"
+        );
+        // But its tile still loading is the point of it: the loading cover's backstop must not
+        // read it as the ground under the player, as it does a walker's.
+        assert!(!ahead.follows_body());
+        assert!(ViewFocus::body([300.0, 200.0, 30.0], true).follows_body());
     }
 
     #[test]
