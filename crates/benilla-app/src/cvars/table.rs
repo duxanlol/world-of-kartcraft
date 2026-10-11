@@ -757,6 +757,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "1",
         "Kartcraft's own — CTR's race music; 1.12 has no kart",
     ),
+    // The ghost of our best run on a course, raced from GO (`kart::ghost`).
+    ours(
+        "KartGhost",
+        "1",
+        "Kartcraft's own — the time trial's ghost; 1.12 has no kart",
+    ),
     // The garage: the engine class picked (Turning, the one every new kart driver has; the Karting
     // skill opens the others, `kart::garage`) and whose kart it is.
     ours(

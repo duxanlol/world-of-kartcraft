@@ -8,6 +8,8 @@
 //! - `KartMusic`, `KartMusicVolume`: CTR's race music, on top of the client's music volume.
 //! - `KartClass`, `KartRacer`: the garage's engine class (as the Karting skill allows it,
 //!   [`super::garage`]) and whose kart we drive; both apply at once, while driving too.
+//! - `KartGhost`: the ghost of our best run on the course races us ([`super::ghost`]); the runs
+//!   are recorded and kept either way.
 //!
 //! `KartMinimapButton` and `KartMinimapAngle` are the layer's alone.
 
@@ -25,6 +27,8 @@ pub(crate) struct KartSettings {
     pub(crate) music_volume: f32,
     /// The engine class picked in the garage; the one driven is [`super::garage::effective`]'s.
     pub(crate) class: kartcraft::Class,
+    /// Race the ghost of our best run on the course.
+    pub(crate) ghost: bool,
 }
 
 impl Default for KartSettings {
@@ -34,6 +38,7 @@ impl Default for KartSettings {
             music: true,
             music_volume: 1.0,
             class: super::garage::TIERS[0].0,
+            ghost: true,
         }
     }
 }
@@ -69,6 +74,7 @@ pub(crate) fn on_cvar(
         "kartchasecamera" => settings.chase_camera = ev.flag(),
         "kartmusic" => settings.music = ev.flag(),
         "kartmusicvolume" => settings.music_volume = ev.num().clamp(0.0, 1.0),
+        "kartghost" => settings.ghost = ev.flag(),
         "kartclass" => {
             settings.class = kartcraft::class_named(&ev.new).unwrap_or(super::garage::TIERS[0].0)
         }
@@ -121,6 +127,7 @@ mod tests {
         assert_eq!(d("KartChaseCamera") != 0.0, settings.chase_camera);
         assert_eq!(d("KartMusic") != 0.0, settings.music);
         assert_eq!(d("KartMusicVolume"), settings.music_volume);
+        assert_eq!(d("KartGhost") != 0.0, settings.ghost);
         for name in ["KartMinimapButton", "KartMinimapAngle"] {
             d(name);
         }
@@ -180,5 +187,8 @@ mod tests {
         assert_eq!(settings.music_level(), 0.4);
         set(&mut app, "KartMusic", "0");
         assert_eq!(app.world().resource::<KartSettings>().music_level(), 0.0);
+        assert!(app.world().resource::<KartSettings>().ghost);
+        set(&mut app, "KartGhost", "0");
+        assert!(!app.world().resource::<KartSettings>().ghost);
     }
 }

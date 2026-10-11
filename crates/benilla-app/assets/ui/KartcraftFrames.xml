@@ -24,7 +24,8 @@
         The settings are CVars, which the kart reads (kart/settings.rs) and the client keeps in
         config.toml: the guide arrow (KartArrowShow, KartArrowSize, KartArrowX, KartArrowY, and
         KartArrowMove while it is being placed), the camera (KartChaseCamera), the music
-        (KartMusic, KartMusicVolume) and the minimap button (KartMinimapButton, KartMinimapAngle).
+        (KartMusic, KartMusicVolume), the minimap button (KartMinimapButton, KartMinimapAngle)
+        and the ghost of the best run on a course (KartGhost).
 
         The kart garage (/garage) picks the engine class (KartClass) and whose kart we drive
         (KartRacer). The kart sends BENILLA_KART_GARAGE at load and whenever the Karting skill
@@ -576,6 +577,7 @@
             BenillaKartSettingsFrameMusic:SetChecked(BenillaKart_Flag("KartMusic"))
             BenillaKartSettingsFrameMusicVolume:SetValue(tonumber(GetCVar("KartMusicVolume")) or 1)
             BenillaKartSettingsFrameMinimapButton:SetChecked(BenillaKart_Flag("KartMinimapButton"))
+            BenillaKartSettingsFrameGhost:SetChecked(BenillaKart_Flag("KartGhost"))
             frame.refreshing = nil
         end
 
@@ -1043,10 +1045,10 @@
         </Scripts>
     </CheckButton>
 
-    <!-- The settings: the guide arrow, the camera, the music and the minimap button, each a CVar
-         set as it is clicked, as the stock option boxes are. -->
+    <!-- The settings: the guide arrow, the camera, the music, the minimap button and the ghost,
+         each a CVar set as it is clicked, as the stock option boxes are. -->
     <Frame name="BenillaKartSettingsFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="320" y="392"/></Size>
+        <Size><AbsDimension x="320" y="420"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -1122,6 +1124,9 @@
             <CheckButton name="$parentMinimapButton" inherits="BenillaKartSettingsCheckTemplate">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-316"/></Offset></Anchor></Anchors>
             </CheckButton>
+            <CheckButton name="$parentGhost" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-344"/></Offset></Anchor></Anchors>
+            </CheckButton>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>
                 <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
@@ -1136,6 +1141,7 @@
                     { "ChaseCamera", "KartChaseCamera", "CTR chase camera (off: your WoW camera)" },
                     { "Music", "KartMusic", "Play CTR race music" },
                     { "MinimapButton", "KartMinimapButton", "Show the minimap button" },
+                    { "Ghost", "KartGhost", "Race the ghost of your best run" },
                 }
                 for i = 1, table.getn(boxes) do
                     local box = getglobal(this:GetName() .. boxes[i][1])

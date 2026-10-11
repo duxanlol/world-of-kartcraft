@@ -326,6 +326,14 @@ pub struct KartRoot;
 #[derive(Component)]
 pub struct LocalKart;
 
+/// A time trial's ghost: a translucent kart replaying a recorded run, silent and solid to
+/// nothing ([`KartSpawner::spawn_ghost`]).
+#[derive(Component)]
+pub struct GhostKart;
+
+/// A ghost kart's opacity.
+const GHOST_ALPHA: f32 = 0.4;
+
 /// A kart's moving parts this frame: front-wheel steer (−1 right to 1 left) and the wheels' roll
 /// (radians).
 #[derive(Component, Default, Clone, Copy, Debug, PartialEq)]
@@ -371,8 +379,8 @@ struct KartAssets {
 
 #[derive(Resource, Default)]
 pub struct KartModel {
-    /// By racer.
-    assets: std::collections::HashMap<String, KartAssets>,
+    /// By racer, and whether translucent for a ghost.
+    assets: std::collections::HashMap<(String, bool), KartAssets>,
     local: Option<Entity>,
     /// Whose kart `local` is.
     local_racer: &'static str,
@@ -458,17 +466,45 @@ impl KartSpawner<'_, '_> {
     /// A new kart in `racer`'s colours (ours if unknown), hidden at the origin; `None` without
     /// any `kart.json`.
     pub fn spawn(&mut self, racer: &str) -> Option<Entity> {
+        self.spawn_as(racer, false)
+    }
+
+    /// A ghost kart in `racer`'s colours: [`KartSpawner::spawn`]'s kart, translucent and marked
+    /// [`GhostKart`].
+    pub fn spawn_ghost(&mut self, racer: &str) -> Option<Entity> {
+        let kart = self.spawn_as(racer, true)?;
+        self.commands
+            .entity(kart)
+            .insert((GhostKart, Name::new("ghost kart")));
+        Some(kart)
+    }
+
+    fn spawn_as(&mut self, racer: &str, ghost: bool) -> Option<Entity> {
         let model = model_named(racer).or_else(model)?;
-        if !self.model.assets.contains_key(&model.kart) {
+        let key = (model.kart.clone(), ghost);
+        if !self.model.assets.contains_key(&key) {
             let built = build_assets(
                 model,
                 &mut self.meshes,
                 &mut self.materials,
                 &mut self.images,
             );
-            self.model.assets.insert(model.kart.clone(), built);
+            if ghost {
+                let handles = built
+                    .parts
+                    .iter()
+                    .map(|(_, m)| m)
+                    .chain([&built.disc_material, &built.tread_material]);
+                for handle in handles {
+                    if let Some(m) = self.materials.get_mut(handle) {
+                        m.alpha_mode = AlphaMode::Blend;
+                        m.base_color = m.base_color.with_alpha(GHOST_ALPHA);
+                    }
+                }
+            }
+            self.model.assets.insert(key.clone(), built);
         }
-        let assets = self.model.assets.get(&model.kart)?;
+        let assets = self.model.assets.get(&key)?;
         let commands = &mut self.commands;
         let root = commands
             .spawn((

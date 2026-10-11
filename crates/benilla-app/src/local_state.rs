@@ -183,6 +183,16 @@ pub(crate) fn name_cache_path(realm: &str) -> Option<PathBuf> {
     )
 }
 
+/// `benilla-config/kart-ghosts/<course>.bin`: the ghost of our best run on a Kartcraft course
+/// (`crate::kart`'s `ghost` owns the format).
+pub(crate) fn kart_ghost_path(course: &str) -> Option<PathBuf> {
+    Some(
+        home()?
+            .join("kart-ghosts")
+            .join(format!("{}.bin", file_token(course))),
+    )
+}
+
 /// `benilla-config/Logs/`: `WoWChatLog.txt` and `WoWCombatLog.txt`, the reference's names.
 pub(crate) fn logs_dir() -> Option<PathBuf> {
     home().map(|h| h.join("Logs"))
