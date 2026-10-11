@@ -40,15 +40,16 @@ Each crate is `<kind>,<x>,<y>,<z>`. Kind is `Q` for a weapon crate ("?"), `F` fo
 
 `W\tC\t<index>`. The server accepts it when:
 - the sender is a racer in a running race on that course;
-- the sender is within 6 yd of the crate (server-side position);
-- the crate is up;
+- the sender is within 12 yd of the crate (server-side position, which trails a fast kart);
+- the crate is up and has regrown (533 ms after its `U`);
 - and, for `Q`, the sender holds nothing and has no shots left.
 
 For a `Q` crate the item is still rolled even if the sender already holds one: CTR breaks the
 crate and gives nothing.
 
 Every racer gets `W\tX\t<index>\t<guid of taker>`, and the crate disappears. It comes back after
-46 frames (1533 ms) as `W\tU\t<index>`. Single fruit never come back.
+its 30-frame cooldown (1000 ms) as `W\tU\t<index>` and regrows over 16 frames, 46 in all
+(`RB_Crate.c:48-75`, `:125`). Single fruit never come back.
 
 The taker also gets:
 - for `Q`: `W\tI\t<item>\t<shots>`. The client spins the roulette for 90 frames (Fire stops it
@@ -135,7 +136,7 @@ Notes on `setup/vmangos/src/Kartcraft.cpp`'s `W` handling, where this page leave
   uniformly over ids 0–11 (Spring becomes Turbo). The lap-1 downgrade uses the racer's lap, so on
   a sprint (no laps) Race4 is always downgraded to Race3.
 - **Respawns** are applied on the next Kartcraft line from anyone (karts send state ten times a
-  second), so a `U` may come up to about 100 ms after the 1533 ms.
+  second), so a `U` may come up to about 100 ms after the 1000 ms.
 
 ## How the client reads this
 
@@ -147,9 +148,10 @@ is in, sends its lines at no more than 20 a second, and clears it when the race 
 leave it or we leave the kart. The offline demo plays against `weapons::referee::Referee`, the
 server's rules in-process, so it runs the same code.
 
-- **Crates.** `L` lays them out (index from `first`); a crate within 2.5 yd of our kart (the
-  server allows 6) is claimed with `C` once, and again after 30 frames without an answer. `X`
-  breaks it for everyone; taken by us, a `Q` crate starts the roulette at once if we hold
+- **Crates.** `L` lays them out (index from `first`); a full-grown crate within 2 yd of our kart (the
+  server allows 12) breaks at once on our screen, as CTR breaks it the frame it is touched, and
+  is claimed with `C`; with no answer in 30 frames the claim was refused and the crate is back,
+  regrowing. `X` breaks it for everyone; taken by us, a `Q` crate starts the roulette at once if we hold
   nothing, and `I` sets its result, shown when the 90-frame spin ends (Fire stops it after 20).
   A roulette with no `I` 60 frames past its end is dropped. `U` regrows the crate over 16
   frames. `F` sets the Wumpa total, which the HUD counts up one fruit every 5 frames.

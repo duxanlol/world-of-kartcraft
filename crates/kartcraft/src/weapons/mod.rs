@@ -36,11 +36,12 @@ use wire::{Aim, CrateKind, Down, Up};
 
 /// How near (yards, in the ground plane) our kart takes a crate: CTR breaks it when the kart's
 /// sphere touches its hitbox (`COLL.c:2186-2236`), here at half CTR's size (`look::CRATE_SIZE`);
-/// the server allows 6.
+/// the server allows 12.
 const TOUCH_YARDS: f32 = 2.0;
 const TOUCH_HEIGHT: f32 = 3.0;
-/// A claim the server has not answered is asked again after this many frames.
-const CLAIM_RETRY: u64 = 30;
+/// A crate we broke that the server leaves unanswered this many frames was refused (a refused
+/// claim gets no answer, and the server keeps the crate up): it is back where it stood, regrowing.
+const CLAIM_WAIT: u64 = 30;
 /// A crate regrows from nothing +0x100 a frame (`231/RB_Crate.c:48-75`): 16 frames.
 const CRATE_GROW: u64 = 16;
 /// A fruit reaches the counter every 5 frames (`UI/UI_RenderFrame.c:212-257`).
@@ -72,10 +73,10 @@ pub struct Crate {
     /// The ground under it, Bevy world.
     pub at: Vec3,
     pub up: bool,
-    /// When we asked for it, frames, until the server answers.
+    /// When we broke it and asked for it, frames, until the server answers.
     claimed: Option<u64>,
-    /// When it came back, frames: it regrows from there.
-    back_at: u64,
+    /// When it came back, frames: it regrows from there; `None` up since the layout.
+    back_at: Option<u64>,
 }
 
 /// What a kart wears: its shield, its mask, a TNT on its head (height in lu over its origin
@@ -340,7 +341,9 @@ impl Weapons {
         if !c.up {
             return 0.0;
         }
-        ((self.frame.saturating_sub(c.back_at)) as f32 / CRATE_GROW as f32).min(1.0)
+        c.back_at.map_or(1.0, |t| {
+            (self.frame.saturating_sub(t) as f32 / CRATE_GROW as f32).min(1.0)
+        })
     }
 
     pub fn frame(&self) -> u64 {
@@ -536,7 +539,7 @@ impl Weapons {
                         at,
                         up: true,
                         claimed: None,
-                        back_at: 0,
+                        back_at: None,
                     };
                     let i = first + i;
                     if i >= self.crates.len() {
@@ -549,6 +552,7 @@ impl Weapons {
                 let Some(c) = self.crates.get_mut(index) else {
                     return;
                 };
+                // A crate we broke ourselves already went with its debris and sound.
                 let was_up = c.up;
                 c.up = false;
                 c.claimed = None;
@@ -574,7 +578,8 @@ impl Weapons {
             Down::Back { index } => {
                 if let Some(c) = self.crates.get_mut(index) {
                     c.up = true;
-                    c.back_at = self.frame;
+                    c.claimed = None;
+                    c.back_at = Some(self.frame);
                 }
             }
             Down::Item { item, .. } => {
@@ -1071,18 +1076,41 @@ impl Weapons {
         }
     }
 
-    /// Our crate touches: each crate up within reach is asked for (`W C`), and again if the
-    /// server stays quiet.
+    /// Our crate touches. CTR breaks a full-size crate the frame the kart touches it, and a
+    /// growing one cannot be hit (`231/RB_Crate.c:123-150`): a grown crate within reach breaks
+    /// here at once, with its debris and sound, and is asked for (`W C`). The server's `X` keeps
+    /// it broken; one it leaves unanswered `CLAIM_WAIT` frames is back, regrowing.
     fn touch_crates(&mut self) {
         let frame = self.frame;
         let reach = TOUCH_YARDS * crate::kart_scale();
+        let mut broke = Vec::new();
         for (i, c) in self.crates.iter_mut().enumerate() {
+            if let Some(t) = c.claimed {
+                if frame.saturating_sub(t) >= CLAIM_WAIT {
+                    c.claimed = None;
+                    c.up = true;
+                    c.back_at = Some(frame);
+                }
+                continue;
+            }
             let d = c.at - self.at;
             let near = Vec2::new(d.x, d.z).length() < reach && d.y.abs() < TOUCH_HEIGHT;
-            let asked = c.claimed.is_some_and(|t| frame - t < CLAIM_RETRY);
-            if c.up && near && !asked {
+            let grown = c
+                .back_at
+                .is_none_or(|t| frame.saturating_sub(t) >= CRATE_GROW);
+            if c.up && grown && near {
+                c.up = false;
                 c.claimed = Some(frame);
-                self.outbox.push((self.me, Up::Claim(i)));
+                broke.push((i, c.kind, c.at));
+            }
+        }
+        for (i, kind, at) in broke {
+            self.outbox.push((self.me, Up::Claim(i)));
+            if kind == CrateKind::Wumpa {
+                self.sound(Sfx::Wumpa, at);
+            } else {
+                self.effect("crate_explosion", at);
+                self.sound(Sfx::CrateBreak, at);
             }
         }
     }

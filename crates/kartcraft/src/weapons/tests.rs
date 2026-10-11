@@ -109,12 +109,114 @@ fn a_crate_is_claimed_once_rolled_and_fired_from_the_relay() {
     tick(&mut w, &world, &mut kart, 1);
     assert_eq!(w.shots().count(), 1);
 
-    // The crate comes back and regrows.
+    // The crate comes back and regrows; full again under our kart, it breaks again.
     w.receive(Down::Back { index: 0 });
     tick(&mut w, &world, &mut kart, 1);
     assert!(w.crates()[0].up && w.crate_scale(&w.crates()[0]) < 1.0);
+    tick(&mut w, &world, &mut kart, CRATE_GROW as usize - 1);
+    assert!(
+        w.crates()[0].up && w.outbox.is_empty(),
+        "not hit while it grows"
+    );
+    tick(&mut w, &world, &mut kart, 1);
+    assert!(!w.crates()[0].up);
+    assert_eq!(std::mem::take(&mut w.outbox), vec![(ME, Up::Claim(0))]);
+}
+
+/// A crate's draw size, 0 broken to 1 full.
+fn scale_of(w: &Weapons, i: usize) -> f32 {
+    w.crate_scale(&w.crates()[i])
+}
+
+#[test]
+fn a_crate_breaks_the_frame_we_touch_it() {
+    let (mut w, world, mut kart) = setup();
+    let here = from_lu(kart.pose().position, ORIGIN);
+    w.receive(Down::Layout {
+        first: 0,
+        crates: vec![CrateSpot {
+            kind: CrateKind::Fruit,
+            at: bevy_to_wow(here),
+        }],
+    });
+    tick(&mut w, &world, &mut kart, 1);
+    // Gone at once, with its debris, before the server answers.
+    assert_eq!(std::mem::take(&mut w.outbox), vec![(ME, Up::Claim(0))]);
+    assert_eq!(scale_of(&w, 0), 0.0);
+    assert_eq!(w.effects().len(), 1);
+    assert_eq!(w.effects()[0].model, "crate_explosion");
+    // The server's `X` keeps it broken, and breaks it no second time.
+    w.receive(Down::Taken { index: 0, by: ME });
+    tick(&mut w, &world, &mut kart, CLAIM_WAIT as usize + 5);
+    assert_eq!(scale_of(&w, 0), 0.0);
+    assert_eq!(w.effects().len(), 0, "one debris, played out");
+    assert!(w.outbox.is_empty());
+}
+
+#[test]
+fn a_refused_claim_brings_the_crate_back() {
+    let (mut w, world, mut kart) = setup();
+    let here = from_lu(kart.pose().position, ORIGIN);
+    w.receive(Down::Layout {
+        first: 0,
+        crates: vec![CrateSpot {
+            kind: CrateKind::Weapon,
+            at: bevy_to_wow(here),
+        }],
+    });
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(std::mem::take(&mut w.outbox), vec![(ME, Up::Claim(0))]);
+    // No answer: broken until the wait is out, then back and regrowing.
+    tick(&mut w, &world, &mut kart, CLAIM_WAIT as usize - 1);
+    assert!(!w.crates()[0].up && w.outbox.is_empty());
+    tick(&mut w, &world, &mut kart, 1);
+    assert!(w.crates()[0].up);
+    assert!(scale_of(&w, 0) < 1.0);
+    // Full again, the kart still on it: broken and asked for again.
     tick(&mut w, &world, &mut kart, CRATE_GROW as usize);
-    assert_eq!(w.crate_scale(&w.crates()[0]), 1.0);
+    assert_eq!(std::mem::take(&mut w.outbox), vec![(ME, Up::Claim(0))]);
+}
+
+#[test]
+fn a_crate_another_takes_breaks_and_regrows_over_16_frames() {
+    let (mut w, world, mut kart) = setup();
+    let far = from_lu(kart.pose().position, ORIGIN) + Vec3::X * 30.0;
+    w.receive(Down::Layout {
+        first: 0,
+        crates: vec![CrateSpot {
+            kind: CrateKind::Weapon,
+            at: bevy_to_wow(far),
+        }],
+    });
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(scale_of(&w, 0), 1.0);
+    w.receive(Down::Taken { index: 0, by: THEM });
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(scale_of(&w, 0), 0.0);
+    assert_eq!(w.effects().len(), 1);
+    assert_eq!(w.held(), HeldView::Empty, "their crate gives us nothing");
+    // The server's `U` after the 30-frame cooldown: +1/16 a frame to full (`RB_Crate.c:48-75`).
+    tick(&mut w, &world, &mut kart, 29);
+    assert_eq!(scale_of(&w, 0), 0.0);
+    w.receive(Down::Back { index: 0 });
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(scale_of(&w, 0), 0.0);
+    tick(&mut w, &world, &mut kart, 8);
+    assert_eq!(scale_of(&w, 0), 0.5);
+    tick(&mut w, &world, &mut kart, 8);
+    assert_eq!(scale_of(&w, 0), 1.0);
+    assert!(w.outbox.is_empty());
+}
+
+#[test]
+fn nitro_and_tnt_stand_as_big_as_the_crates_and_fruit_is_three_quarters() {
+    use super::look::{crate_model, mine_model, CRATE_SIZE};
+    let (_, question) = crate_model(CrateKind::Weapon);
+    assert_eq!(question, CRATE_SIZE);
+    assert_eq!(crate_model(CrateKind::Fruit), ("crate_fruit", CRATE_SIZE));
+    assert_eq!(mine_model(MineKind::Tnt), ("tnt", question));
+    assert_eq!(mine_model(MineKind::Nitro), ("nitro", question));
+    assert_eq!(crate_model(CrateKind::Wumpa), ("fruit", 0.75));
 }
 
 #[test]

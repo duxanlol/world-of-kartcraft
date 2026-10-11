@@ -11,9 +11,12 @@ use ctr_weapons::{roll, HitKind, Item, KartId, RaceItems, Rng, ShotKey};
 use super::wire::{CrateKind, CrateSpot, Down, Up};
 
 /// The server's claim reach, yards (`CRATE_RADIUS`).
-const CRATE_RADIUS: f32 = 6.0;
-/// A crate is back 46 frames after it breaks (`231/RB_Crate.c:48-75`, `:125`).
-const CRATE_RESPAWN: f32 = 46.0 / 30.0;
+const CRATE_RADIUS: f32 = 12.0;
+/// A broken crate's 30-frame cooldown, 1 s (`231/RB_Crate.c:125`), then it is back.
+const CRATE_RESPAWN: f32 = 1.0;
+/// It regrows 16 frames, +0x100 a frame, and cannot be hit until full (`231/RB_Crate.c:48-75`,
+/// `:123`).
+const CRATE_GROW: f32 = 16.0 / 30.0;
 /// Shots of a rolled item are taken from 20 frames after the claim (`ROLL_MIN`).
 const ROLL_MIN: f32 = 20.0 / 30.0;
 /// A shot is remembered 30 s; CTR keeps 12 projectiles (`MAX_LIVE_SHOTS`).
@@ -32,6 +35,8 @@ struct Spot {
     spot: CrateSpot,
     up: bool,
     back_at: Option<f32>,
+    /// Until when it regrows after coming back.
+    grown_at: f32,
 }
 
 #[derive(Default)]
@@ -94,6 +99,7 @@ impl Referee {
                     spot,
                     up: true,
                     back_at: None,
+                    grown_at: f32::NEG_INFINITY,
                 })
                 .collect(),
             racers: HashMap::new(),
@@ -118,6 +124,7 @@ impl Referee {
             if !c.up && c.back_at.is_some_and(|t| now >= t) {
                 c.up = true;
                 c.back_at = None;
+                c.grown_at = now + CRATE_GROW;
                 out.push((None, Down::Back { index: i }));
             }
         }
@@ -149,7 +156,7 @@ impl Referee {
                     return out;
                 };
                 let d = (c.spot.at[0] - at[0]).hypot(c.spot.at[1] - at[1]);
-                if !c.up || d > CRATE_RADIUS {
+                if !c.up || now < c.grown_at || d > CRATE_RADIUS {
                     return out;
                 }
                 c.up = false;
@@ -337,17 +344,19 @@ mod tests {
         assert!(matches!(out[1], (Some(1), Down::Item { .. })));
         // Gone until it is back: a second claim gets nothing.
         assert!(r.handle(2, Up::Claim(0), [10.0, 20.0, 0.0], 0.5).is_empty());
-        assert!(r.tick(1.0).is_empty());
-        assert_eq!(r.tick(1.6), vec![(None, Down::Back { index: 0 })]);
+        // Back after its 30-frame cooldown, and not to be hit while it regrows 16 frames.
+        assert!(r.tick(0.95).is_empty());
+        assert_eq!(r.tick(1.0), vec![(None, Down::Back { index: 0 })]);
+        assert!(r.handle(1, Up::Claim(0), [10.0, 20.0, 0.0], 1.5).is_empty());
         // Holding an item, the crate breaks for nothing.
-        let out = r.handle(1, Up::Claim(0), [10.0, 20.0, 0.0], 2.0);
+        let out = r.handle(1, Up::Claim(0), [10.0, 20.0, 0.0], 1.6);
         assert_eq!(out, vec![(None, Down::Taken { index: 0, by: 1 })]);
     }
 
     #[test]
     fn claims_out_of_reach_are_refused() {
         let (mut r, _) = Referee::new(vec![spot(CrateKind::Fruit)], 100);
-        assert!(r.handle(1, Up::Claim(0), [17.0, 20.0, 0.0], 0.0).is_empty());
+        assert!(r.handle(1, Up::Claim(0), [23.0, 20.0, 0.0], 0.0).is_empty());
         assert!(r.handle(1, Up::Claim(5), [10.0, 20.0, 0.0], 0.0).is_empty());
         let out = r.handle(1, Up::Claim(0), [10.0, 20.0, 0.0], 0.0);
         let Some((Some(1), Down::Wumpa(n))) = out.get(1).cloned() else {
