@@ -265,7 +265,9 @@ pub(crate) fn load_stock_bindings(script: &mut UiScript) {
 /// stock load, with no `ADDON_LOADED` and no registry row, as FrameXML does (`0x48ffed`).
 fn load_layer(script: &UiScript) -> Vec<String> {
     let layer = Addon::layer();
-    layer.load_files(script, &layer.toc.files)
+    let mut failures = layer.load_files(script, &layer.toc.files);
+    failures.extend(layer.load_bindings(script));
+    failures
 }
 
 /// The in-game UI, the core, then the layer unless [`layer_enabled`] says no, then every
@@ -482,12 +484,13 @@ mod tests {
         assert_eq!(order, ["ExhaustionTick", "PlayerFrame"]);
     }
 
-    /// A shipped `.xml` the layer does not list never loads, with no error to say so.
+    /// A shipped `.xml` the layer does not list never loads, with no error to say so. Its
+    /// `Bindings.xml` loads after its files, as an addon's does, and no `.toc` names one.
     #[test]
     fn the_manifest_lists_every_shipped_file_and_nothing_else() {
         let mut listed = shipped_manifest_files();
         let mut shipped: Vec<String> = super::super::content::shipped_files()
-            .filter(|f| f.ends_with(".xml"))
+            .filter(|f| f.ends_with(".xml") && *f != "Bindings.xml")
             .map(str::to_owned)
             .collect();
         listed.sort();

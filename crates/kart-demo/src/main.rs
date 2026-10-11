@@ -245,7 +245,6 @@ fn scene(app: &mut App) {
                 demo.autopilot = std::env::var_os("WOW_KART_AUTOPILOT").is_some();
                 demo.far_camera = std::env::var("WOW_KART_CAM").is_ok_and(|v| v == "far");
                 weapons.me = ME;
-                weapons.extended = true;
                 model::preload();
                 weapons::look::preload();
             },
@@ -393,7 +392,7 @@ fn drive(
         // Unattended: the kart stands at the start, facing the dummies, whatever pad is about.
         input::Controls::default()
     } else {
-        input::read(&keys, &pads)
+        input::read(&input::Keys::from_keyboard(&keys), &pads)
     };
     // The autopilot fires now and then while it holds an item (a shield or a bomb it keeps).
     let holding = matches!(weapons.held(), HeldView::Item(_) | HeldView::Spinning);

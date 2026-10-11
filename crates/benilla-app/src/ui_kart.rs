@@ -10,13 +10,17 @@
 //!   `arg1`..`argN` would carry.
 //! - `BENILLA_KART_COURSE_NAMES(list)`: every course, one `key<TAB>name` a line, once per VM, for
 //!   naming the course a ready check is for.
+//! - `BENILLA_KART_GARAGE(skill, classes, racers)`: the garage's Karting skill (0 before the line
+//!   is ours), its classes one `key<TAB>name<TAB>skill needed<TAB>description` a line in the order
+//!   they open, and the racers whose karts the kart data holds, one `key<TAB>name` a line; at load
+//!   and whenever the skill moves.
 //!
 //! The Race Finder itself talks to the server over the addon channel, in Lua.
 
 use benilla_ui::script::{ScriptValue, UiScript};
 use bevy::prelude::*;
 
-use crate::kart::{KartOverlay, ScoreLines, COURSES, ZONES};
+use crate::kart::{class_list, racer_list, KartOverlay, ScoreLines, COURSES, ZONES};
 use crate::ui_script::VmMemo;
 
 /// What this VM was last sent, so an unchanged frame sends nothing.
@@ -25,6 +29,8 @@ pub(crate) struct Sent {
     race: Option<(String, Vec<String>)>,
     score: Option<Option<ScoreLines>>,
     courses: bool,
+    /// The skill the garage was last sent at.
+    garage: Option<Option<u16>>,
 }
 
 pub(crate) fn feed(
@@ -63,6 +69,21 @@ pub(crate) fn feed(
         );
         sent.score = Some(overlay.score.clone());
     }
+    if sent.garage != Some(overlay.skill) {
+        script.fire_event("BENILLA_KART_GARAGE", garage_args(overlay.skill));
+        sent.garage = Some(overlay.skill);
+    }
+}
+
+/// The garage's event: the skill, the classes and the racers.
+fn garage_args(skill: Option<u16>) -> Vec<ScriptValue> {
+    static RACERS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let racers = RACERS.get_or_init(|| racer_list(&kartcraft::model::racers()));
+    vec![
+        ScriptValue::Number(f64::from(skill.unwrap_or(0))),
+        ScriptValue::Str(class_list()),
+        ScriptValue::Str(racers.clone()),
+    ]
 }
 
 /// The finder's list: each zone with courses, by its place (`z3`, as the server reads it) and

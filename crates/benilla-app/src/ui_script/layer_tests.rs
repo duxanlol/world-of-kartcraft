@@ -461,7 +461,9 @@ fn the_error_log_collects_off_the_error_handler() {
 
 /// Every global the layer defines takes the `Benilla` prefix (a slash alias its `SLASH_BENILLA_`
 /// form, as `ChatEdit_ParseText` reads it), so no layer name meets a stock or an addon one; a stock
-/// global the layer redefines keeps its name and is not a new definition here.
+/// global the layer redefines keeps its name and is not a new definition here. The labels of its
+/// own `Bindings.xml` rows are the exception, named `BINDING_NAME_<command>` and
+/// `BINDING_HEADER_<header>` because Key Bindings reads them so.
 #[test]
 fn every_global_the_layer_defines_takes_the_benilla_prefix() {
     benilla_formats::wow_data_or_skip!();
@@ -479,6 +481,19 @@ fn every_global_the_layer_defines_takes_the_benilla_prefix() {
             || n.strip_prefix("arg")
                 .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
     };
+    // The labels of the layer's own `Bindings.xml` rows, named as Key Bindings reads them.
+    let bindings = benilla_ui::bindings_xml::parse(
+        &super::content::read("Bindings.xml").expect("the layer's Bindings.xml"),
+    )
+    .unwrap();
+    let label = |n: &str| {
+        bindings.iter().any(|b| {
+            n.strip_prefix("BINDING_NAME_") == Some(b.name.as_str())
+                || b.header
+                    .as_deref()
+                    .is_some_and(|h| n.strip_prefix("BINDING_HEADER_") == Some(h))
+        })
+    };
     let unprefixed: Vec<&String> = log[start..end]
         .iter()
         .filter(|n| {
@@ -486,6 +501,7 @@ fn every_global_the_layer_defines_takes_the_benilla_prefix() {
                 || n.starts_with("BENILLA_")
                 || n.starts_with("SLASH_BENILLA_"))
                 && !dispatch(n)
+                && !label(n)
         })
         .collect();
     assert!(

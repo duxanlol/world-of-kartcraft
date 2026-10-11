@@ -6,6 +6,12 @@
 //! `[ALT-][CTRL-][SHIFT-]<TOKEN>` and matched by string equality, which `SetBinding` writes without
 //! reading the command (`0x4b7490`): the live set the dispatcher probes, the stored account and
 //! character sets, and the defaults `WTF\DefaultBindings.wtf` fills (`0x4b62b0`).
+//!
+//! Deviation: the host may name an overlay plane ([`super::UiScript::set_binding_overlay`]), the
+//! commands of a mode that takes over keys the stock commands keep (the kart's driving controls on
+//! W, A, S, D). A key binds once per plane: binding it to a command takes it from that command's
+//! plane alone, so `W` can drive the kart and still run `MOVEFORWARD`; unbinding a key
+//! (`SetBinding(key)`) clears it from both, as the reference clears it from its one table.
 
 use std::collections::HashMap;
 
@@ -148,25 +154,37 @@ pub(crate) struct KeybindState {
     /// dispatch.
     generation: u64,
     requests: Vec<KeybindRequest>,
+    /// The overlay plane's commands, upper-cased (the module doc's deviation).
+    overlay: Vec<String>,
+}
+
+/// Whether `command` is in the overlay plane `overlay` names; names compare case-insensitively.
+pub fn in_overlay(overlay: &[String], command: &str) -> bool {
+    overlay.iter().any(|c| c.eq_ignore_ascii_case(command))
 }
 
 /// `SetBinding(set, key, command)` on one key list: unbind `key` everywhere, then bind it to the
 /// command unless that is empty (`0x4b7490`, where an empty action is the unbind). The key is one
-/// [`normalize_binding_key`] accepted.
-fn bind_key(list: &mut Vec<KeyBinding>, key: String, command: Option<&str>) {
-    list.retain(|(k, _)| k != &key);
-    if let Some(command) = command.filter(|c| !c.is_empty()) {
-        list.push((key, command.to_owned()));
+/// [`normalize_binding_key`] accepted. A bind takes the key from the command's own plane only
+/// (the module doc's deviation).
+fn bind_key(list: &mut Vec<KeyBinding>, key: String, command: Option<&str>, overlay: &[String]) {
+    match command.filter(|c| !c.is_empty()) {
+        Some(command) => {
+            let plane = in_overlay(overlay, command);
+            list.retain(|(k, c)| k != &key || in_overlay(overlay, c) != plane);
+            list.push((key, command.to_owned()));
+        }
+        None => list.retain(|(k, _)| k != &key),
     }
 }
 
 /// A list of `(key, command)` pairs applied in order through [`bind_key`], a key the validator
 /// refuses dropped: how the `.wtf` loader (`0x4b6140`) fills a set, line by line.
-fn key_list(pairs: impl IntoIterator<Item = KeyBinding>) -> Vec<KeyBinding> {
+fn key_list(pairs: impl IntoIterator<Item = KeyBinding>, overlay: &[String]) -> Vec<KeyBinding> {
     let mut list = Vec::new();
     for (key, command) in pairs {
         if let Some(key) = normalize_binding_key(&key) {
-            bind_key(&mut list, key, Some(&command));
+            bind_key(&mut list, key, Some(&command), overlay);
         }
     }
     list
@@ -229,7 +247,7 @@ impl KeybindState {
         let Some(key) = normalize_binding_key(key) else {
             return false;
         };
-        bind_key(&mut self.live, key, command);
+        bind_key(&mut self.live, key, command, &self.overlay);
         self.generation += 1;
         true
     }
@@ -321,14 +339,28 @@ impl super::UiScript {
 
     /// Register one addon's parsed `Bindings.xml`, at the reference's point in the addon load:
     /// after its `.toc` files, before its saved variables (`0x51f443`).
-    pub fn register_addon_bindings(&mut self, addon: &str, bindings: &[Binding]) {
+    pub fn register_addon_bindings(&self, addon: &str, bindings: &[Binding]) {
         self.model_mut().keybinds.register(Some(addon), bindings);
     }
 
     /// Set 0, the defaults, from `WTF\DefaultBindings.wtf` ([`parse_bindings_wtf`]), as
     /// `0x4b62b0` loads it: each pair through `SetBinding(0, key, command)`.
     pub fn set_default_bindings(&mut self, pairs: Vec<KeyBinding>) {
-        self.model_mut().keybinds.defaults = key_list(pairs);
+        let mut model = self.model_mut();
+        let kb = &mut model.keybinds;
+        kb.defaults = key_list(pairs, &kb.overlay);
+    }
+
+    /// Name the overlay plane's commands (the module doc's deviation), before any key set is
+    /// seeded: a key bound to one of them leaves the same key's stock command bound.
+    pub fn set_binding_overlay(&mut self, commands: &[&str]) {
+        self.model_mut().keybinds.overlay =
+            commands.iter().map(|c| c.to_ascii_uppercase()).collect();
+    }
+
+    /// The overlay plane's commands, upper-cased.
+    pub fn binding_overlay(&self) -> Vec<String> {
+        self.model_mut().keybinds.overlay.clone()
     }
 
     /// Set 0, the defaults, in file order.
@@ -339,8 +371,9 @@ impl super::UiScript {
     /// Seed stored set 1 (account) or 2 (character) from `benilla-config/bindings/`; `None` clears
     /// it. The live table is untouched until [`Self::load_binding_set`].
     pub fn seed_binding_set(&mut self, set: u32, keys: Option<Vec<KeyBinding>>) {
-        let keys = keys.map(key_list);
         let mut model = self.model_mut();
+        let overlay = model.keybinds.overlay.clone();
+        let keys = keys.map(|k| key_list(k, &overlay));
         match set {
             1 => model.keybinds.stored[0] = keys,
             2 => model.keybinds.stored[1] = keys,
@@ -518,11 +551,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, key: String| {
             let model = lua.app_data_mut::<Model>().expect("model app_data");
             let key = key.to_ascii_uppercase();
-            let name = model
-                .keybinds
-                .live
-                .iter()
-                .find(|(k, _)| k == &key)
+            let kb = &model.keybinds;
+            // A stock command before an overlay one on the same key: stock callers ask about
+            // theirs.
+            let mut holders = kb.live.iter().filter(|(k, _)| k == &key);
+            let name = holders
+                .clone()
+                .find(|(_, c)| !in_overlay(&kb.overlay, c))
+                .or_else(|| holders.next())
                 .map(|(_, c)| c.as_str())
                 .unwrap_or("");
             lua.create_string(name)
@@ -760,7 +796,7 @@ mod tests {
 
     #[test]
     fn an_addons_bindings_xml_registers_as_ordinary_rows() {
-        let mut s = script();
+        let s = script();
         let parsed = parse(
             r#"<Bindings>
                 <Binding name="PROBEHOLD" runOnUp="true" header="PROBE">
@@ -849,7 +885,7 @@ mod tests {
     /// stock `platform="mac"` iTunes rows are never commands.
     #[test]
     fn a_binding_for_another_platform_does_not_register() {
-        let mut s = script();
+        let s = script();
         let parsed = parse(
             r#"<Bindings>
                 <Binding name="PROBEHERE" platform="Windows">Here();</Binding>
@@ -1015,5 +1051,44 @@ mod addon_persistence_tests {
         s.load_binding_set(2);
         s.register_addon_bindings("MyAddon", &[binding("MYADDONTOGGLE")]);
         assert_eq!(keys(&s, "MYADDONTOGGLE"), ["ALT-Z"]);
+    }
+
+    /// The overlay plane: one key holds a stock command and an overlay command, a bind takes the
+    /// key from its own plane only, `GetBindingAction` answers the stock one, and an unbind
+    /// clears both.
+    #[test]
+    fn an_overlay_key_leaves_the_stock_command_its_key() {
+        let mut s = UiScript::new().unwrap();
+        s.set_binding_overlay(&["KARTGAS", "KARTFIRE"]);
+        s.set_default_bindings(vec![
+            ("W".into(), "MOVEFORWARD".into()),
+            ("W".into(), "KARTGAS".into()),
+            ("E".into(), "STRAFERIGHT".into()),
+            ("E".into(), "KARTFIRE".into()),
+        ]);
+        s.load_binding_set(1);
+        assert_eq!(keys(&s, "MOVEFORWARD"), ["W"]);
+        assert_eq!(keys(&s, "KARTGAS"), ["W"]);
+        assert_eq!(
+            s.eval::<String>("return GetBindingAction('W')").unwrap(),
+            "MOVEFORWARD"
+        );
+
+        // Fire to W: off E, off nothing in the stock plane, and W's gas is the overlay's own.
+        s.run("SetBinding('E') SetBinding('W', 'KARTFIRE')")
+            .unwrap();
+        assert_eq!(keys(&s, "KARTFIRE"), ["W"]);
+        assert!(keys(&s, "KARTGAS").is_empty());
+        assert_eq!(keys(&s, "MOVEFORWARD"), ["W"]);
+        assert!(
+            keys(&s, "STRAFERIGHT").is_empty(),
+            "the unbind cleared both planes"
+        );
+
+        // A stock bind takes the key from the stock plane alone.
+        s.run("SetBinding('W', 'JUMP')").unwrap();
+        assert_eq!(keys(&s, "JUMP"), ["W"]);
+        assert!(keys(&s, "MOVEFORWARD").is_empty());
+        assert_eq!(keys(&s, "KARTFIRE"), ["W"]);
     }
 }

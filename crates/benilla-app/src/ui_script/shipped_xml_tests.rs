@@ -1956,9 +1956,11 @@ fn the_layer_does_not_grow() {
         .filter(|n| !n.starts_with('.'))
         .collect();
     found.sort();
+    // Beside the manifest, the layer's `Bindings.xml`, loaded after its files as an addon's is:
+    // the kart's controls, rebindable in Key Bindings as an addon's are.
     let mut shipped: Vec<String> = LAYER
         .iter()
-        .chain(&["layer.toc"])
+        .chain(&["layer.toc", "Bindings.xml"])
         .map(|s| s.to_string())
         .collect();
     shipped.sort();

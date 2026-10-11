@@ -22,8 +22,34 @@
         config.toml: the guide arrow (KartArrowShow, KartArrowSize, KartArrowX, KartArrowY, and
         KartArrowMove while it is being placed), the camera (KartChaseCamera), the music
         (KartMusic, KartMusicVolume) and the minimap button (KartMinimapButton, KartMinimapAngle).
+
+        The kart garage (/garage) picks the engine class (KartClass) and whose kart we drive
+        (KartRacer). The kart sends BENILLA_KART_GARAGE at load and whenever the Karting skill
+        moves: the skill, the classes in the order the skill opens them with the skill each
+        needs, and the racers whose karts the player's kart data holds. A class the skill has not
+        opened is greyed; the kart drives the best opened class at or below the one picked.
+
+        The kart's controls are the layer's Bindings.xml, named here for Key Bindings as an
+        addon names its own.
     -->
     <Script><![CDATA[
+        BINDING_HEADER_KARTCRAFT = "World of Kartcraft"
+        BINDING_NAME_KARTCRAFT_ACCELERATE = "Accelerate"
+        BINDING_NAME_KARTCRAFT_BRAKE = "Brake / Reverse"
+        BINDING_NAME_KARTCRAFT_STEERLEFT = "Steer Left"
+        BINDING_NAME_KARTCRAFT_STEERRIGHT = "Steer Right"
+        BINDING_NAME_KARTCRAFT_HOP = "Hop / Powerslide"
+        BINDING_NAME_KARTCRAFT_BOOST = "Boost (Second Shoulder)"
+        BINDING_NAME_KARTCRAFT_FIRE = "Fire Item"
+        BINDING_NAME_KARTCRAFT_ABILITY1 = "Wumpa Juice"
+        BINDING_NAME_KARTCRAFT_ABILITY2 = "Turbo Boost"
+        BINDING_NAME_KARTCRAFT_ABILITY3 = "Super Engine"
+        BINDING_NAME_KARTCRAFT_ABILITY4 = "Aku Aku"
+        BINDING_NAME_KARTCRAFT_SUMMON = "Summon / Dismiss Kart"
+        BINDING_NAME_KARTCRAFT_RACEFINDER = "Race Finder"
+        BINDING_NAME_KARTCRAFT_LEAVERACE = "Leave Race"
+        BINDING_NAME_KARTCRAFT_SETTINGS = "Kartcraft Settings"
+        BINDING_NAME_KARTCRAFT_GARAGE = "Kart Garage"
         BENILLA_KART_PREFIX = "KARTCRAFT"
         -- What the finder offers, { key, name } in the kart's order, from BENILLA_KART_COURSES:
         -- the zones, keyed "z<place>".
@@ -351,6 +377,8 @@
                 BenillaKartCourses_Set(arg1)
             elseif event == "BENILLA_KART_COURSE_NAMES" then
                 BenillaKartCourseNames_Set(arg1)
+            elseif event == "BENILLA_KART_GARAGE" then
+                BenillaKartGarage_Set(arg1, arg2, arg3)
             end
         end
 
@@ -464,6 +492,7 @@
             if BenillaKartFinder.queued then
                 table.insert(entries, { text = "Leave queue", func = BenillaKartFinder_QueueClick })
             end
+            table.insert(entries, { text = "Kart garage...", func = BenillaKartGarage_Toggle })
             table.insert(entries, { text = "Kartcraft settings...", func = BenillaKartSettings_Toggle })
             table.insert(entries, { text = "Hide minimap button", func = BenillaKartMinimap_Hide })
             for i = 1, table.getn(entries) do
@@ -607,6 +636,144 @@
             end
         end
 
+        -- ── The garage ──
+
+        -- From BENILLA_KART_GARAGE: our Karting skill, the classes { key, name, needs, about } in
+        -- the order the skill opens them, and the racers { key, name } we have a kart for.
+        BenillaKartGarage = { skill = 0, classes = {}, racers = {} }
+        BENILLA_KART_GARAGE_CLASSES = 4
+        BENILLA_KART_GARAGE_RACERS = 12
+        BENILLA_KART_LOCKED_COLOR = { r = 0.5, g = 0.5, b = 0.5 }
+
+        -- `list`'s lines, each cut at its TABs.
+        function BenillaKart_Rows(list)
+            local rows, from = {}, 1
+            list = list or ""
+            while from <= string.len(list) do
+                local at = string.find(list, "\n", from, 1) or string.len(list) + 1
+                table.insert(rows, BenillaKart_Split(string.sub(list, from, at - 1)))
+                from = at + 1
+            end
+            return rows
+        end
+
+        function BenillaKartGarage_Set(skill, classes, racers)
+            local g = BenillaKartGarage
+            g.skill = tonumber(skill) or 0
+            g.classes = {}
+            local rows = BenillaKart_Rows(classes)
+            for i = 1, table.getn(rows) do
+                local r = rows[i]
+                table.insert(g.classes, { key = r[1], name = r[2] or r[1], needs = tonumber(r[3]) or 0, about = r[4] or "" })
+            end
+            g.racers = {}
+            rows = BenillaKart_Rows(racers)
+            for i = 1, table.getn(rows) do
+                table.insert(g.racers, { key = rows[i][1], name = rows[i][2] or rows[i][1] })
+            end
+            if BenillaKartGarageFrame:IsVisible() then BenillaKartGarage_Refresh() end
+        end
+
+        -- A check box's state for SetChecked: 1, or nil to clear it.
+        function BenillaKart_Tick(on)
+            if on then return 1 end
+            return nil
+        end
+
+        function BenillaKartGarage_Unlocked(i)
+            local c = BenillaKartGarage.classes[i]
+            return c and BenillaKartGarage.skill >= c.needs
+        end
+
+        -- The class the kart drives, as it decides (kart/garage.rs): the one picked if the skill
+        -- has opened it, else the best opened one below it.
+        function BenillaKartGarage_Driven()
+            local classes = BenillaKartGarage.classes
+            local picked = 1
+            for i = 1, table.getn(classes) do
+                if classes[i].key == GetCVar("KartClass") then picked = i end
+            end
+            for i = picked, 1, -1 do
+                if BenillaKartGarage_Unlocked(i) then return i end
+            end
+            return 1
+        end
+
+        function BenillaKartGarage_Toggle()
+            if BenillaKartGarageFrame:IsVisible() then
+                BenillaKartGarageFrame:Hide()
+            else
+                BenillaKartGarageFrame:Show()
+            end
+        end
+
+        -- Every row from the garage's lists and the CVars: the driven class and our kart ticked,
+        -- a class the skill has not opened greyed with the skill it needs.
+        function BenillaKartGarage_Refresh()
+            local g = BenillaKartGarage
+            BenillaKartGarageFrameSkill:SetText("Karting skill: " .. g.skill)
+            local driven = BenillaKartGarage_Driven()
+            for i = 1, BENILLA_KART_GARAGE_CLASSES do
+                local box = getglobal("BenillaKartGarageFrameClass" .. i)
+                local text = getglobal(box:GetName() .. "Text")
+                local about = getglobal(box:GetName() .. "About")
+                local c = g.classes[i]
+                if c then
+                    box:Show()
+                    text:SetText(c.name)
+                    box:SetChecked(BenillaKart_Tick(i == driven))
+                    if BenillaKartGarage_Unlocked(i) then
+                        box:Enable()
+                        text:SetTextColor(NORMAL_FONT_COLOR.r, NORMAL_FONT_COLOR.g, NORMAL_FONT_COLOR.b)
+                        about:SetText(c.about)
+                        about:SetTextColor(HIGHLIGHT_FONT_COLOR.r, HIGHLIGHT_FONT_COLOR.g, HIGHLIGHT_FONT_COLOR.b)
+                    else
+                        box:Disable()
+                        text:SetTextColor(BENILLA_KART_LOCKED_COLOR.r, BENILLA_KART_LOCKED_COLOR.g, BENILLA_KART_LOCKED_COLOR.b)
+                        about:SetText("Requires Karting (" .. c.needs .. ")")
+                        about:SetTextColor(RED_FONT_COLOR.r, RED_FONT_COLOR.g, RED_FONT_COLOR.b)
+                    end
+                else
+                    box:Hide()
+                end
+            end
+            for i = 1, BENILLA_KART_GARAGE_RACERS do
+                local box = getglobal("BenillaKartGarageFrameRacer" .. i)
+                local r = g.racers[i]
+                if r then
+                    box:Show()
+                    getglobal(box:GetName() .. "Text"):SetText(r.name)
+                    box:SetChecked(BenillaKart_Tick(r.key == GetCVar("KartRacer")))
+                else
+                    box:Hide()
+                end
+            end
+            if table.getn(g.racers) == 0 then
+                BenillaKartGarageFrameNoKarts:Show()
+            else
+                BenillaKartGarageFrameNoKarts:Hide()
+            end
+        end
+
+        -- A class row clicked: picked if the skill has opened it.
+        function BenillaKartGarage_PickClass(i)
+            local c = BenillaKartGarage.classes[i]
+            if c and BenillaKartGarage_Unlocked(i) then
+                SetCVar("KartClass", c.key)
+                PlaySound("igMainMenuOptionCheckBoxOn")
+            end
+            BenillaKartGarage_Refresh()
+        end
+
+        function BenillaKartGarage_PickRacer(i)
+            local r = BenillaKartGarage.racers[i]
+            if r then
+                SetCVar("KartRacer", r.key)
+                PlaySound("igMainMenuOptionCheckBoxOn")
+            end
+            BenillaKartGarage_Refresh()
+        end
+
         -- The heartbeat, and the end of a ready check nobody answered.
         function BenillaKartEvents_OnUpdate()
             BenillaKartMinimap_Update()
@@ -639,6 +806,8 @@
             SlashCmdList["BENILLA_LEAVERACE"] = function() BenillaKart_LeaveRace() end
             SLASH_BENILLA_KARTCRAFT1 = "/kartcraft"
             SlashCmdList["BENILLA_KARTCRAFT"] = function() BenillaKartSettings_Toggle() end
+            SLASH_BENILLA_GARAGE1 = "/garage"
+            SlashCmdList["BENILLA_GARAGE"] = function() BenillaKartGarage_Toggle() end
         end
     ]]></Script>
 
@@ -919,6 +1088,130 @@
         </Scripts>
     </Frame>
 
+    <!-- A garage class row: the class's name, and under it its numbers or the skill it needs. -->
+    <CheckButton name="BenillaKartGarageClassTemplate" inherits="OptionsCheckButtonTemplate" virtual="true">
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentAbout" inherits="GameFontHighlightSmall" justifyH="LEFT">
+                    <Anchors><Anchor point="TOPLEFT" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="-2" y="10"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Scripts>
+            <OnClick>BenillaKartGarage_PickClass(this:GetID())</OnClick>
+        </Scripts>
+    </CheckButton>
+
+    <CheckButton name="BenillaKartGarageRacerTemplate" inherits="OptionsCheckButtonTemplate" virtual="true">
+        <Scripts>
+            <OnClick>BenillaKartGarage_PickRacer(this:GetID())</OnClick>
+        </Scripts>
+    </CheckButton>
+
+    <!-- The kart garage: the engine class, as the Karting skill opens them, and whose kart we
+         drive, each a CVar set as it is clicked. -->
+    <Frame name="BenillaKartGarageFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
+        <Size><AbsDimension x="340" y="440"/></Size>
+        <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
+            <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
+            <TileSize><AbsValue val="32"/></TileSize>
+            <EdgeSize><AbsValue val="32"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
+                    <Size><AbsDimension x="256" y="64"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
+                </Texture>
+                <FontString inherits="GameFontNormal" text="Kart Garage">
+                    <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentClassTitle" inherits="GameFontNormal" text="Engine class">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-34"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentSkill" inherits="GameFontHighlightSmall" justifyH="RIGHT">
+                    <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-36"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentKartTitle" inherits="GameFontNormal" text="Kart">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-222"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentNoKarts" inherits="GameFontHighlightSmall" justifyH="LEFT" hidden="true" text="No karts: convert them from your CTR disc with the setup.">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-244"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <CheckButton name="$parentClass1" inherits="BenillaKartGarageClassTemplate" id="1">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-50"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentClass2" inherits="BenillaKartGarageClassTemplate" id="2">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-92"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentClass3" inherits="BenillaKartGarageClassTemplate" id="3">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-134"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentClass4" inherits="BenillaKartGarageClassTemplate" id="4">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-176"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <!-- The karts in two columns, as many rows as the kart data has racers. -->
+            <CheckButton name="$parentRacer1" inherits="BenillaKartGarageRacerTemplate" id="1">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-238"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRacer2" inherits="BenillaKartGarageRacerTemplate" id="2">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="176" y="-238"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRacer3" inherits="BenillaKartGarageRacerTemplate" id="3">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-262"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRacer4" inherits="BenillaKartGarageRacerTemplate" id="4">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="176" y="-262"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRacer5" inherits="BenillaKartGarageRacerTemplate" id="5">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-286"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRacer6" inherits="BenillaKartGarageRacerTemplate" id="6">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="176" y="-286"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRacer7" inherits="BenillaKartGarageRacerTemplate" id="7">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-310"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRacer8" inherits="BenillaKartGarageRacerTemplate" id="8">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="176" y="-310"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRacer9" inherits="BenillaKartGarageRacerTemplate" id="9">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-334"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRacer10" inherits="BenillaKartGarageRacerTemplate" id="10">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="176" y="-334"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRacer11" inherits="BenillaKartGarageRacerTemplate" id="11">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-358"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRacer12" inherits="BenillaKartGarageRacerTemplate" id="12">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="176" y="-358"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartGarageFrame:Hide()</OnClick></Scripts>
+            </Button>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
+                BenillaKart_Movable(this)
+            </OnLoad>
+            <OnShow>
+                PlaySound("igMainMenuOpen")
+                BenillaKartGarage_Refresh()
+            </OnShow>
+            <OnHide>PlaySound("igMainMenuClose")</OnHide>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+
     <!-- The guide arrow's place while it is set: a box the player drags where the arrow goes, the
          arrow itself drawn inside it (KartArrowMove); the wheel sizes both. -->
     <Frame name="BenillaKartArrowMover" parent="UIParent" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" frameStrata="DIALOG">
@@ -1046,6 +1339,7 @@
                 this:RegisterEvent("BENILLA_KART_SCORE")
                 this:RegisterEvent("BENILLA_KART_COURSES")
                 this:RegisterEvent("BENILLA_KART_COURSE_NAMES")
+                this:RegisterEvent("BENILLA_KART_GARAGE")
             </OnLoad>
             <OnEvent>BenillaKartEvents_OnEvent()</OnEvent>
             <OnUpdate>BenillaKartEvents_OnUpdate()</OnUpdate>

@@ -1,5 +1,6 @@
 //! What the kart puts on screen through the client's UI layer, as a model value: the race's
-//! banner and results and the chain score. `crate::ui_kart` hands it to the
+//! banner and results, the chain score and the Karting skill (for the garage's tiers).
+//! `crate::ui_kart` hands it to the
 //! layer's frames (`assets/ui/KartcraftFrames.xml`), which draw it in WoW's own fonts.
 
 use bevy::prelude::*;
@@ -23,6 +24,8 @@ pub(crate) struct KartOverlay {
     pub(crate) banner: String,
     pub(crate) results: Vec<String>,
     pub(crate) score: Option<ScoreLines>,
+    /// Our Karting skill; `None` before the line is ours.
+    pub(crate) skill: Option<u16>,
 }
 
 pub(super) fn publish(
@@ -36,6 +39,9 @@ pub(super) fn publish(
     }
     if overlay.results != text.lines {
         overlay.results.clone_from(&text.lines);
+    }
+    if overlay.skill != score.skill() {
+        overlay.skill = score.skill();
     }
     let rgb = |c: Color| {
         let c = c.to_srgba();

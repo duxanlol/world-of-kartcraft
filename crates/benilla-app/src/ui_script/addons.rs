@@ -115,6 +115,28 @@ impl Addon {
         self.load_files_into(script, &self.toc.files, toc)
     }
 
+    /// Register this addon's `Bindings.xml` (`0x51f400`), after the files whose functions a
+    /// binding calls, through its own sandboxed reader; absent is normal. The layer's goes the
+    /// same way, after its files.
+    pub(super) fn load_bindings(&self, script: &UiScript) -> Vec<String> {
+        let bindings_xml = benilla_ui::loader::join_ref(&self.prefix(), "Bindings.xml");
+        let Some(bytes) = self.read(&bindings_xml) else {
+            return Vec::new();
+        };
+        match benilla_ui::bindings_xml::parse(&benilla_ui::source::decode(&bytes)) {
+            Ok(bindings) => {
+                script.register_addon_bindings(&self.name, &bindings);
+                Vec::new()
+            }
+            Err(e) => {
+                let e = format!("{}/Bindings.xml: {e}", self.name);
+                error!("ui_script: {e}");
+                script.report_load_failure(&e);
+                vec![e]
+            }
+        }
+    }
+
     /// [`Addon::load_files_into`] with the load record dropped.
     pub(super) fn load_files(&self, script: &UiScript, files: &[String]) -> Vec<String> {
         self.load_files_into(script, files, &mut Status::default())
@@ -936,20 +958,8 @@ impl Walk {
         let mut block = Status::default();
         own.close_into(&mut block, debug, status::addon_banner(&addon.name));
         script.report_load_status(block);
-        // `Bindings.xml` (`0x51f400`), after the files whose functions a binding calls, through
-        // the addon's own sandboxed reader; absent is normal.
-        let bindings_xml = benilla_ui::loader::join_ref(&addon.prefix(), "Bindings.xml");
-        if let Some(bytes) = addon.read(&bindings_xml) {
-            match benilla_ui::bindings_xml::parse(&benilla_ui::source::decode(&bytes)) {
-                Ok(bindings) => script.register_addon_bindings(&addon.name, &bindings),
-                Err(e) => {
-                    let e = format!("{}/Bindings.xml: {e}", addon.name);
-                    error!("ui_script: {e}");
-                    script.report_load_failure(&e);
-                    self.failures.push(e);
-                }
-            }
-        }
+        // `Bindings.xml` (`0x51f400`), after the files whose functions a binding calls.
+        self.failures.extend(addon.load_bindings(script));
         // The saved variables, account then per-character (`0x51f4b5`, `0x51f53b`): after the
         // files set their defaults, before `ADDON_LOADED`.
         script.load_addon_saved_variables(&addon.name);

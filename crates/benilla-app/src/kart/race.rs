@@ -29,7 +29,21 @@ pub(crate) struct Course {
     /// The zone it is in, as the Race Finder offers courses; may be empty.
     #[serde(default)]
     pub(crate) zone: String,
+    /// Its map, and where its Race Marshal stands.
+    #[serde(default)]
+    pub(crate) map: u32,
+    #[serde(default)]
+    pub(crate) marshal: Option<MarshalSpot>,
     checkpoints: Vec<CourseCheckpoint>,
+}
+
+/// Where a course's Race Marshal stands: WoW x, y, z and facing.
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+pub(crate) struct MarshalSpot {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) z: f32,
+    pub(crate) o: f32,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -97,6 +111,8 @@ const BEAM_ARROW_LENGTH: f32 = 6.0;
 /// out on the course after we finish before closing anyway.
 const RESULTS_SECS: f32 = 10.0;
 const FINISH_WAIT_SECS: f32 = 60.0;
+/// How long a race just entered waits for the kart the server is summoning (s).
+const KART_GRACE_SECS: f32 = 10.0;
 /// The start boost: revving this long before GO (s) is big, a little earlier small, earlier
 /// still bogs the engine down.
 const BOOST_BIG: std::ops::Range<f32> = 0.15..0.6;
@@ -138,8 +154,8 @@ pub(crate) struct Active {
     order: Vec<String>,
     /// Where we were last frame (WoW x, y), to see a gate crossed.
     last_at: Option<[f32; 2]>,
-    /// A Race Finder race is not left for want of a kart until then (local s): the server
-    /// summons ours and teleports us, and the aura may land after the roster.
+    /// A race is not left for want of a kart until then (local s): the server summons ours as it
+    /// puts us in (and a Race Finder race teleports us), and the aura lands after the roster.
     grace_until: f32,
     /// When we crossed the finish (local s), and when the results stop showing and the race is
     /// left: RESULTS_SECS after everyone is in, or after FINISH_WAIT_SECS for the stragglers.
@@ -148,16 +164,17 @@ pub(crate) struct Active {
 }
 
 impl Active {
-    /// The checkpoint to reach next; `None` before there is a course.
+    /// The checkpoint to reach next; `None` before there is a course, and once a sprint's finish
+    /// is passed (its result is on its way: the finish is reported once).
     fn next(&self) -> Option<usize> {
         let n = self.points.len();
-        (n > 1).then(|| {
-            if self.laps > 0 {
-                (self.checkpoint + 1) % n
-            } else {
-                (self.checkpoint + 1).min(n - 1)
-            }
-        })
+        if n < 2 {
+            None
+        } else if self.laps > 0 {
+            Some((self.checkpoint + 1) % n)
+        } else {
+            (self.checkpoint + 1 < n).then_some(self.checkpoint + 1)
+        }
     }
 
     /// The checkpoint after `i` on the course; `None` after a sprint's finish.
@@ -245,6 +262,13 @@ impl Races {
     /// The racers by name, leader first.
     pub(crate) fn order(&self) -> &[String] {
         self.race.as_ref().map_or(&[], |r| r.order.as_slice())
+    }
+
+    /// The race we are in, for the test hook ([`super::autotest`]): its id, roster, whether its
+    /// countdown has come, and whether we have finished.
+    pub(crate) fn status(&self) -> Option<(u32, &[String], bool, bool)> {
+        let r = self.race.as_ref()?;
+        Some((r.id, r.roster.as_slice(), r.go_at.is_some(), r.done))
     }
 
     /// Whether the kart must hold on the line: a countdown is running.
@@ -335,10 +359,12 @@ pub(crate) fn update(
             Some("L") if f.len() >= 3 => {
                 let roster: Vec<String> = f[2].split(',').map(str::to_string).collect();
                 if roster.contains(&me) {
-                    let from_finder = std::mem::take(&mut races.check_pending);
+                    races.check_pending = false;
+                    // A Race Finder pop or a Race Marshal on foot summons the kart as it puts us
+                    // in: its aura lands after the roster, when the cast time has run.
                     let race = races.race.get_or_insert_with(|| Active {
                         id,
-                        grace_until: if from_finder { now + 10.0 } else { 0.0 },
+                        grace_until: now + KART_GRACE_SECS,
                         ..Default::default()
                     });
                     race.host = roster.first() == Some(&me);
@@ -1151,6 +1177,21 @@ mod tests {
             "Northshire Sprint, Road to Stormwind and Goldshire & Crystal Lake start here — talk \
              to the Race Marshal to race"
         );
+    }
+
+    #[test]
+    fn a_sprint_finish_is_reported_once() {
+        let mut race = course();
+        race.checkpoint = 2;
+        assert_eq!(race.next(), Some(3));
+        race.checkpoint = 3;
+        assert_eq!(
+            race.next(),
+            None,
+            "past the finish there is nothing to reach"
+        );
+        race.laps = 2;
+        assert_eq!(race.next(), Some(0));
     }
 
     #[test]

@@ -94,17 +94,20 @@ pub(super) struct Shown {
     pub(super) alpha: f32,
 }
 
+/// Our Karting skill, from our skill fields; `None` before we have the line.
+pub(super) fn karting_skill(store: &ObjectStore) -> Option<u16> {
+    (0..benilla_protocol::messages::PLAYER_SKILL_SLOTS)
+        .filter_map(|slot| store.0.player_skill(slot))
+        .find(|s| u32::from(s.skill_id) == SKILL_KARTING)
+        .map(|s| s.value)
+}
+
 /// The Karting skill's rise lands on the chain it came from.
 pub(super) fn track_skill(
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     mut score: ResMut<KartScore>,
 ) {
-    let skill = self_q.single().ok().and_then(|store| {
-        (0..benilla_protocol::messages::PLAYER_SKILL_SLOTS)
-            .filter_map(|slot| store.0.player_skill(slot))
-            .find(|s| u32::from(s.skill_id) == SKILL_KARTING)
-            .map(|s| s.value)
-    });
+    let skill = self_q.single().ok().and_then(karting_skill);
     if let (Some(new), Some(old)) = (skill, score.skill) {
         if new > old {
             if let Some(banked) = score.banked.as_mut() {
@@ -116,6 +119,11 @@ pub(super) fn track_skill(
 }
 
 impl KartScore {
+    /// The Karting skill last seen.
+    pub(super) fn skill(&self) -> Option<u16> {
+        self.skill
+    }
+
     /// What to show at `now`, or nothing.
     pub(super) fn shown(&self, now: f32) -> Option<Shown> {
         shown(self, now, self.skill)

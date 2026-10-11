@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..d02712b
+index 0000000..87ab917
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,1746 @@
+@@ -0,0 +1,1780 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -246,8 +246,13 @@ index 0000000..d02712b
 +                player->LearnSpell(unlock.spell, false);
 +    }
 +
++    static void LeaveRaces(Player* player);
++
 +    void OnLogin(Player* player)
 +    {
++        // A client logs in knowing of no race: it is out of any it was in, or a waiting race
++        // would hold it (the marshal offers neither hosting nor joining) until it expired.
++        LeaveRaces(player);
 +        if (!sSkillLineStore.LookupEntry(SKILL_KARTING))
 +            return;
 +        if (!player->HasSkill(SKILL_KARTING))
@@ -1454,6 +1459,33 @@ index 0000000..d02712b
 +        return true;
 +    }
 +
++    // Out of every race (not the Race Finder's queue), as a retirement; the shield comes off.
++    static void LeaveRaces(Player* player)
++    {
++        ObjectGuid const guid = player->GetObjectGuid();
++        std::lock_guard<std::mutex> lock(s_mutex);
++        for (auto it = s_races.begin(); it != s_races.end();)
++        {
++            Race& r = it->second;
++            auto x = std::find_if(r.racers.begin(), r.racers.end(), [guid](Racer const& m) { return m.guid == guid; });
++            if (x == r.racers.end())
++            {
++                it = std::next(it);
++                continue;
++            }
++            RemoveRacer(r, x);
++            if (r.racers.empty())
++                it = s_races.erase(it);
++            else
++            {
++                SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(it->first) + "\t" + Roster(r));
++                it = std::next(it);
++            }
++        }
++        if (s_shielded.erase(guid))
++            player->RemoveFlag(UNIT_FIELD_FLAGS, RACE_SHIELD_FLAGS);
++    }
++
 +    // `marshal`: the line comes from a Race Marshal's menu (MarshalSelect), which the player used
 +    // standing at the start: the start's distance and the kart are not asked for.
 +    static void HandleRace(Player* player, std::string const& body, bool marshal)
@@ -1471,8 +1503,10 @@ index 0000000..d02712b
 +                tab = body.size();
 +            f.push_back(body.substr(at, tab - at));
 +        }
-+        // The finder's verbs work on foot; the rest need the kart, but for a marshal's.
-+        if (f.size() < 2 || HandleFinder(player, f, now) || (!marshal && !player->HasAura(SPELL_SUMMON_KART)))
++        // The finder's verbs work on foot; the rest need the kart, but for a marshal's and for
++        // leaving: a racer the marshal put in on foot may leave before the kart's aura lands.
++        if (f.size() < 2 || HandleFinder(player, f, now) ||
++            (!marshal && f[1] != "Q" && !player->HasAura(SPELL_SUMMON_KART)))
 +            return;
 +        std::string const& verb = f[1];
 +        uint32 id = f.size() > 2 ? uint32(std::strtoul(f[2].c_str(), nullptr, 10)) : 0;

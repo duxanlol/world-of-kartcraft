@@ -992,3 +992,69 @@ fn toggleui_hides_uiparent_and_closes_the_windows() {
     assert!(s.eval::<bool>("return UIParent:IsVisible() == 1").unwrap());
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// A key an overlay command shares with a stock one (the kart's W, `crate::bindings`): the page
+/// moves the overlay command's key and leaves the stock command its own, and the other way about,
+/// with no victim named.
+#[test]
+fn rebinding_a_shared_key_moves_one_command_and_leaves_the_other() {
+    benilla_formats::wow_data_or_skip!();
+    let mut s = harness();
+    s.set_binding_overlay(&["KARTGAS"]);
+    s.register_addon_bindings(
+        "benilla",
+        &benilla_ui::bindings_xml::parse(
+            r#"<Bindings><Binding name="KARTGAS" header="KART">KART = 1</Binding></Bindings>"#,
+        )
+        .unwrap(),
+    );
+    s.run(r#"SetBinding("W", "KARTGAS")"#).unwrap();
+    on_page(&mut s);
+    let keys = |s: &UiScript, c: &str| -> String {
+        s.eval::<String>(&format!(
+            r#"local k1, k2 = GetBindingKey("{c}"); return (k1 or "") .. "," .. (k2 or "")"#
+        ))
+        .unwrap()
+    };
+    let output = |s: &UiScript| -> String {
+        s.eval::<String>("return BenillaOptionsFrameContainerBodyKeybindingsOutput:GetText()")
+            .unwrap()
+    };
+    assert_eq!(keys(&s, "KARTGAS"), "W,");
+    assert_eq!(keys(&s, "MOVEFORWARD"), "W,UP");
+
+    // The gas off W onto J: MOVEFORWARD keeps W, in its place.
+    s.run(r#"BenillaKeyBindings_SetSelected("KARTGAS", 1)"#)
+        .unwrap();
+    assert!(press(&mut s, "J"));
+    assert_eq!(keys(&s, "KARTGAS"), "J,");
+    assert_eq!(keys(&s, "MOVEFORWARD"), "W,UP");
+    assert_eq!(output(&s), "Key Bound Successfully");
+
+    // Onto W again, then MOVEFORWARD off W: the gas keeps it.
+    s.run(r#"BenillaKeyBindings_SetSelected("KARTGAS", 1)"#)
+        .unwrap();
+    assert!(press(&mut s, "W"));
+    assert_eq!(keys(&s, "KARTGAS"), "W,");
+    assert_eq!(
+        keys(&s, "MOVEFORWARD"),
+        "W,UP",
+        "a shared key steals nothing"
+    );
+    assert_eq!(output(&s), "Key Bound Successfully");
+    s.run(r#"BenillaKeyBindings_SetSelected("MOVEFORWARD", 1)"#)
+        .unwrap();
+    assert!(press(&mut s, "K"));
+    assert_eq!(keys(&s, "MOVEFORWARD"), "K,UP");
+    assert_eq!(keys(&s, "KARTGAS"), "W,");
+
+    // Unbind Key on the gas clears its W alone.
+    s.run(r#"SetBinding("W", "MOVEFORWARD") BenillaKeyBindings_SetSelected("KARTGAS", 1) BenillaKeyBindings_Unbind()"#)
+        .unwrap();
+    assert_eq!(keys(&s, "KARTGAS"), ",");
+    assert_eq!(
+        s.eval::<String>(r#"return GetBindingAction("W")"#).unwrap(),
+        "MOVEFORWARD"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

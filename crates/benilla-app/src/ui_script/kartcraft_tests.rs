@@ -1,7 +1,7 @@
 //! World of Kartcraft's windows (`assets/ui/KartcraftFrames.xml`) on the production load: the
 //! minimap button and its menu, the Race Finder queuing and answering over the addon channel, the
-//! ready check as the stock popup, the kart's race and score events reaching their frames, and the
-//! settings window writing its CVars.
+//! ready check as the stock popup, the kart's race and score events reaching their frames, the
+//! settings window writing its CVars, and the garage gating its classes by skill.
 
 use benilla_ui::script::{ScriptValue, UiScript};
 
@@ -554,6 +554,7 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
             "World of Kartcraft",
             "Race Finder",
             "Leave race",
+            "Kart garage...",
             "Kartcraft settings...",
             "Hide minimap button",
         ]
@@ -571,6 +572,11 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
     menu(&mut s);
     pick(&mut s, "Leave race");
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tX"]);
+
+    menu(&mut s);
+    pick(&mut s, "Kart garage...");
+    assert!(shown(&s, "BenillaKartGarageFrame"));
+    s.run("BenillaKartGarageFrame:Hide()").unwrap();
 
     menu(&mut s);
     pick(&mut s, "Kartcraft settings...");
@@ -708,6 +714,154 @@ fn the_settings_window_sets_the_kart_s_cvars() {
     }
 }
 
+/// The garage's event as the client sends it, at `skill`, with three racers' karts.
+fn garage(s: &mut UiScript, skill: u16) {
+    s.fire_event(
+        "BENILLA_KART_GARAGE",
+        vec![
+            ScriptValue::Number(f64::from(skill)),
+            ScriptValue::Str(crate::kart::class_list()),
+            ScriptValue::Str(crate::kart::racer_list(&["crash", "coco", "tiny"])),
+        ],
+    );
+    s.tick(0.0);
+}
+
+#[test]
+fn the_garage_opens_classes_by_skill_and_picks_a_kart() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    garage(&mut s, 1);
+    s.take_cvar_changes();
+    let eval_bool = |s: &UiScript, lua: &str| -> bool { s.eval(&format!("return {lua}")).unwrap() };
+    let text = |s: &UiScript, frame: &str| -> String {
+        s.eval(&format!("return {frame}:GetText()")).unwrap()
+    };
+
+    // /garage opens it at the CVars, writing nothing: Turning ticked, the rest locked.
+    s.run("SlashCmdList['BENILLA_GARAGE']('')").unwrap();
+    s.tick(0.0);
+    assert!(eval_bool(&s, "BenillaKartGarageFrame:IsVisible() == 1"));
+    assert_eq!(
+        s.eval::<String>("return SLASH_BENILLA_GARAGE1").unwrap(),
+        "/garage"
+    );
+    assert_eq!(text(&s, "BenillaKartGarageFrameSkill"), "Karting skill: 1");
+    let names: Vec<String> = (1..=4)
+        .map(|i| text(&s, &format!("BenillaKartGarageFrameClass{i}Text")))
+        .collect();
+    assert_eq!(names, ["Turning", "Balanced", "Acceleration", "Speed"]);
+    assert!(eval_bool(
+        &s,
+        "BenillaKartGarageFrameClass1:GetChecked() == 1"
+    ));
+    assert!(eval_bool(
+        &s,
+        "BenillaKartGarageFrameClass1:IsEnabled() == 1"
+    ));
+    assert_eq!(
+        text(&s, "BenillaKartGarageFrameClass1About"),
+        "Speed 1/4, acceleration 3/4, turning 4/4"
+    );
+    for (i, needs) in [(2, 75), (3, 150), (4, 225)] {
+        assert!(
+            !eval_bool(
+                &s,
+                &format!("BenillaKartGarageFrameClass{i}:IsEnabled() == 1")
+            ),
+            "class {i} is locked at skill 1"
+        );
+        assert_eq!(
+            text(&s, &format!("BenillaKartGarageFrameClass{i}About")),
+            format!("Requires Karting ({needs})")
+        );
+    }
+    assert!(
+        s.take_cvar_changes().is_empty(),
+        "showing the garage wrote a CVar"
+    );
+
+    // A locked class cannot be picked.
+    s.run("BenillaKartGarage_PickClass(4)").unwrap();
+    assert_eq!(s.cvar("KartClass").as_deref(), Some("turn"));
+
+    // At 160 Balanced and Acceleration open; Speed stays locked.
+    garage(&mut s, 160);
+    assert_eq!(
+        text(&s, "BenillaKartGarageFrameSkill"),
+        "Karting skill: 160"
+    );
+    assert!(eval_bool(
+        &s,
+        "BenillaKartGarageFrameClass3:IsEnabled() == 1"
+    ));
+    assert!(!eval_bool(
+        &s,
+        "BenillaKartGarageFrameClass4:IsEnabled() == 1"
+    ));
+    s.run("BenillaKartGarageFrameClass3:Click()").unwrap();
+    assert_eq!(s.cvar("KartClass").as_deref(), Some("accel"));
+    assert!(eval_bool(
+        &s,
+        "BenillaKartGarageFrameClass3:GetChecked() == 1"
+    ));
+    assert!(!eval_bool(
+        &s,
+        "BenillaKartGarageFrameClass1:GetChecked() == 1"
+    ));
+
+    // At 300 everything is open.
+    garage(&mut s, 300);
+    assert!((1..=4).all(|i| eval_bool(
+        &s,
+        &format!("BenillaKartGarageFrameClass{i}:IsEnabled() == 1")
+    )));
+    s.run("BenillaKartGarageFrameClass4:Click()").unwrap();
+    assert_eq!(s.cvar("KartClass").as_deref(), Some("speed"));
+    // Back under 225 the pick stays, and the tick falls to what the kart drives.
+    garage(&mut s, 100);
+    assert_eq!(s.cvar("KartClass").as_deref(), Some("speed"));
+    assert!(eval_bool(
+        &s,
+        "BenillaKartGarageFrameClass2:GetChecked() == 1"
+    ));
+
+    // The karts by racer, ours ticked; a click picks another, which the host hears.
+    assert_eq!(
+        text(&s, "BenillaKartGarageFrameRacer2Text"),
+        "Coco Bandicoot"
+    );
+    assert!(eval_bool(
+        &s,
+        "BenillaKartGarageFrameRacer1:GetChecked() == 1"
+    ));
+    assert!(!eval_bool(
+        &s,
+        "BenillaKartGarageFrameRacer4:IsShown() == 1"
+    ));
+    s.take_cvar_changes();
+    s.run("BenillaKartGarageFrameRacer2:Click()").unwrap();
+    assert_eq!(s.cvar("KartRacer").as_deref(), Some("coco"));
+    assert!(eval_bool(
+        &s,
+        "BenillaKartGarageFrameRacer2:GetChecked() == 1"
+    ));
+    assert!(!eval_bool(
+        &s,
+        "BenillaKartGarageFrameRacer1:GetChecked() == 1"
+    ));
+    assert!(s
+        .take_cvar_changes()
+        .iter()
+        .any(|(n, v)| n.eq_ignore_ascii_case("KartRacer") && v == "coco"));
+
+    s.run("SlashCmdList['BENILLA_GARAGE']('')").unwrap();
+    assert!(!eval_bool(&s, "BenillaKartGarageFrame:IsVisible() == 1"));
+}
+
 #[test]
 fn the_race_marshal_opens_the_finder() {
     benilla_formats::wow_data_or_skip!();
@@ -726,4 +880,47 @@ fn the_race_marshal_opens_the_finder() {
     // Again: it stays open.
     from_server(&mut s, "R\tFinder");
     assert!(open(&s));
+}
+
+/// The kart's controls are the layer's `Bindings.xml`: Key Bindings lists them as a "World of
+/// Kartcraft" section, each row by its name, and a row's binding runs the window it names.
+#[test]
+fn key_bindings_lists_the_kart_s_controls_and_they_run() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let s = loaded();
+    s.run("BenillaKeyBindings_BuildSections()").unwrap();
+    let (label, names): (String, String) = s
+        .eval(
+            r#"for _, sec in ipairs(BenillaKeyBindingsPage.sections) do
+                if sec.token == "BINDING_HEADER_KARTCRAFT" then
+                    local names = {}
+                    for _, i in ipairs(sec.indices) do
+                        local command = GetBinding(i)
+                        table.insert(names, BenillaKeyBindings_String("BINDING_NAME_" .. command, command))
+                    end
+                    return BenillaKeyBindings_String(sec.token, sec.fallback), table.concat(names, ",")
+                end
+            end
+            return "", """#,
+        )
+        .unwrap();
+    assert_eq!(label, "World of Kartcraft");
+    assert_eq!(
+        names,
+        "Accelerate,Brake / Reverse,Steer Left,Steer Right,Hop / Powerslide,\
+         Boost (Second Shoulder),Fire Item,Wumpa Juice,Turbo Boost,Super Engine,Aku Aku,\
+         Summon / Dismiss Kart,Race Finder,Leave Race,Kartcraft Settings,Kart Garage"
+    );
+    s.run("RunBinding('KARTCRAFT_GARAGE')").unwrap();
+    assert!(s
+        .eval::<bool>("return BenillaKartGarageFrame:IsVisible() == 1")
+        .unwrap());
+    s.run("RunBinding('KARTCRAFT_RACEFINDER')").unwrap();
+    assert!(s
+        .eval::<bool>("return BenillaKartFinderFrame:IsVisible() == 1")
+        .unwrap());
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }

@@ -96,18 +96,29 @@ Northshire straight from your WoW install, no server, login or character, to fee
 | Abilities: Wumpa Juice, Turbo Boost, Super Engine, Aku Aku | D-pad ↑ → ↓ ← | D-pad | 1–4 |
 | Climb in / out | | | **J** (or Summon Kart in your spellbook) |
 
+The keyboard's keys are key bindings: change them in the options window's **Key Bindings**, under
+**World of Kartcraft**, which also has Fire item (E), Race Finder, Leave race, Kartcraft settings
+and Kart garage. While you drive the driving keys are the kart's alone (1–4 cast its abilities,
+not your action bar); out of the kart W, A, S, D and 1–4 are WoW's as ever.
+
 Everything else is WoW's own interface. The **Kartcraft button on the minimap** (the
 mechanostrider) opens the **Race Finder** on a click; a right-click gives a menu with Race Finder,
-Leave race, Leave queue (while queued), Kartcraft settings and Hide minimap button. Drag it to move
+Leave race, Leave queue (while queued), Kart garage, Kartcraft settings and Hide minimap button. Drag it to move
 it round the minimap. **Kartcraft settings** (also `/kartcraft`) has the guide arrow (show it, its
 size, Move arrow to drag it where you want it, Reset arrow), CTR's chase camera or your WoW camera,
 the race music and its volume, and the minimap button itself. Slash commands: `/racefinder`,
-`/leaverace` (`/lr`), `/kartcraft`.
+`/leaverace` (`/lr`), `/kartcraft`, `/garage`.
+
+**Kart garage** (minimap menu, or `/garage`) picks your kart. The **engine class** is CTR's, and
+your Karting skill opens them: **Turning** from the start (the slowest, and the easiest to steer),
+**Balanced** at 75, **Acceleration** at 150 and **Speed** at 225. A locked class is greyed with
+the skill it needs; if your pick is ever above your skill you drive the best one you have. The
+**kart** is any CTR racer's whose kart setup converted from your disc, free to pick; the others
+see it too. Both apply at once, even while you drive.
 
 ### How it drives
 
-It is CTR's model, constants and all (the Balanced class by default; `WOW_KART_CLASS=accel`,
-`speed` or `turn` for the others):
+It is CTR's model, constants and all, in the engine class you pick in the garage:
 
 - **Powerslide:** hop and hold the shoulder while you steer into the turn. The turbo meter under
   the kart fills; press the other shoulder in the **red** part for a boost. Up to three per slide,
@@ -182,8 +193,8 @@ server (`play.bat` does), and make each friend an account (`setup.bat -NewAccoun
 
 | Variable | |
 |---|---|
-| `WOW_KART_CLASS` | `balanced` (default), `accel`, `speed`, `turn` |
-| `WOW_KART` | which racer's kart: `crash` (default), `cortex`, `coco`, `tiny`, `polar`, `pura`, `pinstripe`, `roo`, `joe`, `pen`, `fake` |
+| `WOW_KART_CLASS` | the garage's class for a run: `turn`, `balanced`, `accel`, `speed` (still only as far as your skill goes) |
+| `WOW_KART` | the garage's kart for a run: `crash`, `cortex`, `coco`, `tiny`, `polar`, `pura`, `pinstripe`, `roo`, `joe`, `pen`, `fake` |
 | `WOW_KART_SCALE` | kart size against CTR's own, model and physics together (default 1) |
 | `WOW_KART_SIZE` | the model alone against its physics (default 1.25 in the game, for a WoW driver) |
 | `WOW_KART_MUSIC` | a race track's name (`crash_cove`, `roo_tubes`, ...) or `off` |

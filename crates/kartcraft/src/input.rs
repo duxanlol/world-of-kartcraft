@@ -1,8 +1,8 @@
 //! The kart's controls: a PlayStation pad laid out as CTR's (✕ accelerates, □ brakes and reverses,
 //! R1 and L1 hop, powerslide and boost, ○ fires the held item), an Xbox pad by position (A as ✕,
 //! X brakes and reverses as □, B fires as ○, the shoulders hop and powerslide as R1/L1, the left
-//! stick steers), or the keyboard for want of one. While we drive these keys belong to the kart;
-//! the D-pad's abilities and `J`/`K` are read by the update.
+//! stick steers), or the keyboard for want of one, through [`Keys`]: the host's rebindable keys, or
+//! the fixed layout. The D-pad's abilities are read by the host.
 
 use bevy::input::gamepad::{Gamepad, GamepadAxis, GamepadButton};
 use bevy::prelude::*;
@@ -29,9 +29,49 @@ pub struct Controls {
     pub pad: bool,
 }
 
-/// The first connected pad's controls, else the keyboard's (arrows or WASD, Space to hop,
-/// Shift for the second shoulder, E to fire, digits 1–4 for the abilities).
-pub fn read(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>) -> Controls {
+/// The keyboard's controls this frame, whichever keys drive them: the host resolves its own key
+/// bindings into these, or [`Keys::from_keyboard`] reads the fixed layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Keys {
+    pub accelerate: bool,
+    pub brake: bool,
+    pub left: bool,
+    pub right: bool,
+    /// The first shoulder: hop, and held through a turn, powerslide.
+    pub hop: bool,
+    /// The second shoulder, the powerslide's turbo.
+    pub boost: bool,
+    /// Pressed this frame.
+    pub fire: bool,
+    /// Pressed this frame, the D-pad's four abilities (up, right, down, left).
+    pub abilities: [bool; 4],
+}
+
+impl Keys {
+    /// The fixed layout: arrows or WASD, Space to hop, Shift for the second shoulder, E to fire,
+    /// digits 1–4 for the abilities.
+    pub fn from_keyboard(keys: &ButtonInput<KeyCode>) -> Keys {
+        let any = |k: &[KeyCode]| keys.any_pressed(k.iter().copied());
+        Keys {
+            accelerate: any(&[KeyCode::ArrowUp, KeyCode::KeyW]),
+            brake: any(&[KeyCode::ArrowDown, KeyCode::KeyS]),
+            left: any(&[KeyCode::ArrowLeft, KeyCode::KeyA]),
+            right: any(&[KeyCode::ArrowRight, KeyCode::KeyD]),
+            hop: keys.pressed(KeyCode::Space),
+            boost: any(&[KeyCode::ShiftLeft, KeyCode::ShiftRight]),
+            fire: keys.just_pressed(KeyCode::KeyE),
+            abilities: [
+                keys.just_pressed(KeyCode::Digit1),
+                keys.just_pressed(KeyCode::Digit2),
+                keys.just_pressed(KeyCode::Digit3),
+                keys.just_pressed(KeyCode::Digit4),
+            ],
+        }
+    }
+}
+
+/// The first connected pad's controls, else the keyboard's.
+pub fn read(keys: &Keys, pads: &Query<&Gamepad>) -> Controls {
     if let Some(pad) = pads.iter().next() {
         // The triggers accelerate and brake too, for those who drive a racing game that way.
         let trigger = |b| pad.get(b).unwrap_or(0.0) > 0.4;
@@ -56,23 +96,15 @@ pub fn read(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>) -> Controls {
             pad: true,
         };
     }
-    let any = |k: &[KeyCode]| keys.any_pressed(k.iter().copied());
-    let left = any(&[KeyCode::ArrowLeft, KeyCode::KeyA]);
-    let right = any(&[KeyCode::ArrowRight, KeyCode::KeyD]);
     Controls {
-        steer: f32::from(i8::from(right)) - f32::from(i8::from(left)),
-        accelerate: any(&[KeyCode::ArrowUp, KeyCode::KeyW]),
-        brake: any(&[KeyCode::ArrowDown, KeyCode::KeyS]),
-        reverse: any(&[KeyCode::ArrowDown, KeyCode::KeyS]),
-        hop: keys.pressed(KeyCode::Space),
-        hop_alt: any(&[KeyCode::ShiftLeft, KeyCode::ShiftRight]),
-        fire: keys.just_pressed(KeyCode::KeyE),
-        dpad: [
-            keys.just_pressed(KeyCode::Digit1),
-            keys.just_pressed(KeyCode::Digit2),
-            keys.just_pressed(KeyCode::Digit3),
-            keys.just_pressed(KeyCode::Digit4),
-        ],
+        steer: f32::from(i8::from(keys.right)) - f32::from(i8::from(keys.left)),
+        accelerate: keys.accelerate,
+        brake: keys.brake,
+        reverse: keys.brake,
+        hop: keys.hop,
+        hop_alt: keys.boost,
+        fire: keys.fire,
+        dpad: keys.abilities,
         pad: false,
     }
 }

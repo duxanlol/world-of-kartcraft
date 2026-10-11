@@ -547,6 +547,18 @@ fn session_values(world: &World) -> Vec<(&'static str, Option<String>)> {
     let set = |k: &str| std::env::var_os(k).is_some();
     let flag = |b: bool| if b { "1" } else { "0" }.to_string();
     let mut out: Vec<(&'static str, Option<String>)> = Vec::new();
+    // `$WOW_KART` and `$WOW_KART_CLASS` pick the garage's kart and class for a run.
+    if set("WOW_KART") {
+        out.push(("KartRacer", std::env::var("WOW_KART").ok()));
+    }
+    if set("WOW_KART_CLASS") {
+        let v = std::env::var("WOW_KART_CLASS").ok();
+        out.push((
+            "KartClass",
+            v.and_then(|v| kartcraft::class_named(&v))
+                .map(|c| kartcraft::class_key(c).to_string()),
+        ));
+    }
     if set("WOW_UI_SCALE") {
         let v = world.get_resource::<crate::ui_script::UiScaleCvar>();
         out.push(("uiScale", v.map(|s| s.0.to_string())));
@@ -1944,8 +1956,9 @@ mod tests {
 
     /// The string-valued rows, a closed list, each default checked on its own terms: `realmName`
     /// (the reference's registered `""`, `0x882748`) and `gxApi` are empty until the session writes
-    /// them; `gxResolution` and `realmList` pass their observers' parsers
-    /// ([`crate::video::parse_resolution`], [`crate::realmlist::normalize`]).
+    /// them; `gxResolution`, `realmList` and the kart garage's `KartClass` and `KartRacer` pass
+    /// their observers' parsers ([`crate::video::parse_resolution`],
+    /// [`crate::realmlist::normalize`], [`kartcraft::class_named`], `ctr-extract`'s racers).
     #[test]
     fn the_string_valued_cvars_are_the_realm_and_the_windowed_size() {
         let mut strings: Vec<&str> = REGISTERED
@@ -1956,7 +1969,14 @@ mod tests {
         strings.sort_unstable(); // the list is the claim, not where the rows sit in the table
         assert_eq!(
             strings,
-            vec!["gxApi", "gxResolution", "realmList", "realmName"]
+            vec![
+                "KartClass",
+                "KartRacer",
+                "gxApi",
+                "gxResolution",
+                "realmList",
+                "realmName"
+            ]
         );
         let default_of = |name: &str| {
             REGISTERED
@@ -1976,6 +1996,8 @@ mod tests {
             crate::realmlist::normalize(default_of(crate::realmlist::CVAR_REALMLIST)).as_deref(),
             Some(crate::realmlist::DEFAULT_REALMLIST),
         );
+        assert!(kartcraft::class_named(default_of("KartClass")).is_some());
+        assert!(kartcraft::model::KARTS.contains(&default_of("KartRacer")));
     }
 
     /// A registry loaded from `file`, with no disk.

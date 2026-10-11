@@ -1,12 +1,16 @@
-//! Kart mode (World of Kartcraft): `J` seats our character in a Crash Team Racing kart driven by
-//! CTR's own driving model (`ctr-kart`, ported from the decompilation) through a
-//! [`kartcraft::Session`]. While we drive, the kart's pose is our position, facing and camera
-//! (read by `player::controller`), our character holds the saddle pose in the kart's seat
+//! Kart mode (World of Kartcraft): Summon Kart's key (`J`) seats our character in a Crash Team
+//! Racing kart driven by CTR's own driving model (`ctr-kart`, ported from the decompilation)
+//! through a [`kartcraft::Session`]. While we drive, the kart's pose is our position, facing and
+//! camera (read by `player::controller`), our character holds the saddle pose in the kart's seat
 //! ([`seat`]) and the kart is drawn under it (`kartcraft::model`). Banked turbo chains feed the
 //! Karting profession ([`profession`]) and the score on screen ([`score`]). In a race CTR's
 //! weapons are live ([`weapons`]): crates, items, shots and hits through the server. Its settings
-//! are CVars the layer's settings window writes ([`settings`]).
+//! are CVars the layer's settings window writes ([`settings`]); its controls are key bindings
+//! ([`bindings`]).
 
+mod autotest;
+mod bindings;
+mod garage;
 mod profession;
 mod race;
 mod remote;
@@ -14,6 +18,7 @@ mod score;
 mod settings;
 mod sound;
 mod ui;
+pub(crate) use garage::{class_list, racer_list};
 pub(crate) use race::{COURSES, ZONES};
 pub(crate) use ui::{KartOverlay, ScoreLines};
 mod weapons;
@@ -75,6 +80,10 @@ struct Host {
     backing_until: f32,
     /// When our kart's state was last relayed to the players around us.
     state_sent: f32,
+    /// The body's last teleport settle we saw begin (`Player::settle_since`).
+    settle_seen: f32,
+    /// The engine class the kart drives with.
+    class: kartcraft::Class,
 }
 
 fn autostart_after() -> Option<f32> {
@@ -97,8 +106,8 @@ fn start(
     collide: &WorldCollision,
     player: &crate::player::Player,
     host: &mut Host,
+    class: kartcraft::Class,
 ) -> bool {
-    let class = kartcraft::class();
     match host.session.start(
         collide,
         player.pos,
@@ -114,6 +123,7 @@ fn start(
                 class.name()
             );
             host.chain = Chain::default();
+            host.class = class;
             true
         }
         Err(e) => {
@@ -126,7 +136,10 @@ fn start(
 #[allow(clippy::too_many_arguments)]
 fn update(
     time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
+    (mut overlay, binds): (
+        ResMut<crate::bindings::BindingOverlay>,
+        Res<crate::bindings::BindingsState>,
+    ),
     pads: Query<&Gamepad>,
     ui: Res<crate::ui_script::UiKeyboardCapture>,
     player: Res<crate::player::Player>,
@@ -159,7 +172,25 @@ fn update(
         info!("kart: out of the kart for now: {}", player.drive_refusal());
         stop(host, &mut drive, &mut view);
     }
+    // A teleport (a race's grid, a `.go`) whose settle ended in its own frame, as a short hop
+    // over loaded ground does, never refused the drive: the kart starts again where it put us,
+    // or its old pose would carry us back.
+    let teleported =
+        std::mem::replace(&mut host.settle_seen, player.settle_since) != player.settle_since;
+    if drive.active && teleported {
+        info!("kart: out of the kart for now: teleported");
+        stop(host, &mut drive, &mut view);
+    }
     drive.engine_camera = settings.chase_camera();
+    // The garage's class as our Karting skill allows it; a new pick or a new tier applies at once.
+    let class = garage::effective(settings.class, score.skill());
+    if drive.active && host.class != class {
+        if let Some(kart) = host.session.kart_mut() {
+            kart.set_class(class);
+            host.class = class;
+            info!("kart: now in the {} class", class.name());
+        }
+    }
     // Test hook: `WOW_KART_AUTOSTART=<seconds>` presses `J` once, that long after we may drive.
     let autostart = autostart_after().is_some_and(|after| {
         if !player.may_drive() || host.autostarted {
@@ -174,8 +205,8 @@ fn update(
     let mut started = false;
     // The test hook only ever climbs in: a kart aura kept over a logout already has us in it.
     let autostart = autostart && !drive.active && !auras.kart;
-    // `J` is a raw key, not a binding: the spellbook's Summon Kart is the same toggle.
-    if (keys.just_pressed(KeyCode::KeyJ) && !ui.typing) || autostart {
+    // Summon Kart's binding (`J` by default); the spellbook's Summon Kart is the same toggle.
+    if binds.ran(bindings::SUMMON) || autostart {
         if server_kart {
             if drive.active || auras.kart {
                 profession.dismiss();
@@ -187,7 +218,7 @@ fn update(
         } else if drive.active {
             stop(host, &mut drive, &mut view);
         } else if player.may_drive() {
-            started = start(&time, &collide, &player, host);
+            started = start(&time, &collide, &player, host, class);
         }
     }
     if server_kart {
@@ -198,7 +229,7 @@ fn update(
                 stop(host, &mut drive, &mut view);
             }
         } else if !host.dismissing && !drive.active && player.may_drive() {
-            started = start(&time, &collide, &player, host);
+            started = start(&time, &collide, &player, host, class);
         }
     }
     if started {
@@ -216,6 +247,8 @@ fn update(
     let turbo = auras.turbo && !host.turbo_on;
     host.turbo_on = auras.turbo;
 
+    // The driving controls' keys are the kart's while it drives (`bindings`).
+    overlay.active = drive.active && host.session.active();
     if !drive.active || !host.session.active() {
         score.clear_live();
         return;
@@ -256,13 +289,18 @@ fn update(
                 }
             }
             // Waiting for a race to start (the race test hook): stay on the line.
-            None if std::env::var_os("WOW_KART_RACE").is_some() => input::Controls::default(),
+            None if std::env::var_os("WOW_KART_RACE").is_some() || autotest::active() => {
+                input::Controls {
+                    brake: true,
+                    ..Default::default()
+                }
+            }
             None => input::autopilot(now, view.meter),
         }
     } else if ui.typing {
         input::Controls::default()
     } else {
-        input::read(&keys, &pads)
+        input::read(&bindings::keys(&overlay), &pads)
     };
     if server_kart {
         profession.dpad(controls.dpad);
@@ -412,6 +450,8 @@ pub(crate) fn plugin(app: &mut App) {
         // A WoW character's head stands above a CTR racer's in the seat.
         head_lift: 0.5,
     });
+    autotest::plugin(app);
+    bindings::plugin(app);
     app.init_resource::<Host>()
         .init_resource::<KartDrive>()
         .init_resource::<KartView>()

@@ -1,0 +1,27 @@
+<Bindings>
+    <!--
+        The layer's key bindings, registered after its files as an addon's Bindings.xml is, so they
+        rebind in Key Bindings like any addon's. Their names are in KartcraftFrames.xml.
+
+        World of Kartcraft: the driving controls are the kart's overlay plane (crate::bindings):
+        their keys may also hold a WoW command (W still walks), the kart reads them while it
+        drives, and then they run nothing else; their bodies never run. The rest are ordinary
+        bindings. Default keys: kart/bindings.rs.
+    -->
+    <Binding name="KARTCRAFT_ACCELERATE" header="KARTCRAFT">-- read by the kart while it drives</Binding>
+    <Binding name="KARTCRAFT_BRAKE">-- read by the kart while it drives</Binding>
+    <Binding name="KARTCRAFT_STEERLEFT">-- read by the kart while it drives</Binding>
+    <Binding name="KARTCRAFT_STEERRIGHT">-- read by the kart while it drives</Binding>
+    <Binding name="KARTCRAFT_HOP">-- read by the kart while it drives</Binding>
+    <Binding name="KARTCRAFT_BOOST">-- read by the kart while it drives</Binding>
+    <Binding name="KARTCRAFT_FIRE">-- read by the kart while it drives</Binding>
+    <Binding name="KARTCRAFT_ABILITY1">-- read by the kart while it drives</Binding>
+    <Binding name="KARTCRAFT_ABILITY2">-- read by the kart while it drives</Binding>
+    <Binding name="KARTCRAFT_ABILITY3">-- read by the kart while it drives</Binding>
+    <Binding name="KARTCRAFT_ABILITY4">-- read by the kart while it drives</Binding>
+    <Binding name="KARTCRAFT_SUMMON">-- the kart reads the press: Summon Kart, or in and out</Binding>
+    <Binding name="KARTCRAFT_RACEFINDER">BenillaKartFinder_Toggle()</Binding>
+    <Binding name="KARTCRAFT_LEAVERACE">BenillaKart_LeaveRace()</Binding>
+    <Binding name="KARTCRAFT_SETTINGS">BenillaKartSettings_Toggle()</Binding>
+    <Binding name="KARTCRAFT_GARAGE">BenillaKartGarage_Toggle()</Binding>
+</Bindings>

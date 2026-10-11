@@ -22,6 +22,13 @@
 //!
 //! Persistence: `benilla-config/bindings/account.txt` and `<Realm>-<Char>.txt` ([`store`]); the
 //! character file's existence is the character-set state, as in the reference.
+//!
+//! Deviation: a mode may own an overlay plane ([`BindingOverlay`], the table's own deviation in
+//! [`benilla_ui::script::keybind`]): commands in the Key Bindings window like any addon's, whose
+//! keys may also hold a stock command. Its commands never dispatch. While the mode is on its keys
+//! are its own: a press one of them matches runs no stock command, and the owner polls which of
+//! its commands are down. Off, the same keys run their stock commands. The kart's driving controls
+//! are one (`crate::kart`), so W drives the kart and still walks.
 
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
@@ -48,6 +55,8 @@ pub(crate) use script_input::Input;
 #[derive(Resource, Default)]
 struct BindingDispatch {
     map: std::collections::HashMap<Chord, String>,
+    /// The overlay plane's keys ([`BindingOverlay`]), which never dispatch.
+    overlay: Vec<(OverlayKey, String)>,
     /// The engine table's generation this map was built from, keyed per VM: a fresh VM restarts
     /// its counter at 0.
     seen_generation: crate::ui_script::VmMemo<Option<u64>>,
@@ -70,6 +79,110 @@ impl BindingDispatch {
         }
         self.map.get(&chord.fallback()?).map(String::as_str)
     }
+
+    /// Whether an overlay key takes this press: its base input, with at least its modifiers held.
+    fn overlay_takes(&self, key: BindKey, alt: bool, ctrl: bool, shift: bool) -> bool {
+        self.overlay
+            .iter()
+            .any(|(k, _)| k.key == Some(key) && k.modifiers_held(alt, ctrl, shift))
+    }
+}
+
+/// One overlay key: a chord, or a lone modifier (`SHIFT-`, a key string `SetBinding` accepts,
+/// `0x4b78e6`), which a held key can carry.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct OverlayKey {
+    alt: bool,
+    ctrl: bool,
+    shift: bool,
+    /// The base input; `None` for a lone modifier.
+    key: Option<BindKey>,
+}
+
+impl OverlayKey {
+    fn parse(s: &str) -> Option<OverlayKey> {
+        if let Some(c) = Chord::parse(s) {
+            return Some(OverlayKey {
+                alt: c.alt,
+                ctrl: c.ctrl,
+                shift: c.shift,
+                key: Some(c.key),
+            });
+        }
+        let lone = OverlayKey {
+            alt: s.contains("ALT-"),
+            ctrl: s.contains("CTRL-"),
+            shift: s.contains("SHIFT-"),
+            key: None,
+        };
+        let rest = s
+            .replace("ALT-", "")
+            .replace("CTRL-", "")
+            .replace("SHIFT-", "");
+        (rest.is_empty() && (lone.alt || lone.ctrl || lone.shift)).then_some(lone)
+    }
+
+    /// Its modifiers are held, whatever others are: a held Shift (the kart's boost) must not
+    /// stop the gas on `W`.
+    fn modifiers_held(&self, alt: bool, ctrl: bool, shift: bool) -> bool {
+        (!self.alt || alt) && (!self.ctrl || ctrl) && (!self.shift || shift)
+    }
+}
+
+/// A plane of commands its mode owns ([`crate::bindings`]' deviation): the owner names the
+/// commands and the default keys at startup, says when the mode is on, and reads which commands
+/// are down.
+#[derive(Resource, Default)]
+pub(crate) struct BindingOverlay {
+    /// The plane's commands.
+    commands: &'static [&'static str],
+    /// `(key, command)` defaults the stock `DefaultBindings.wtf` lacks, of the plane's commands
+    /// and the owner's stock-plane ones; a stock-plane default on a key the stock defaults bind
+    /// is dropped, so the owner never takes a stock key.
+    defaults: &'static [(&'static str, &'static str)],
+    /// The mode is on: the plane's keys are its own.
+    pub(crate) active: bool,
+    /// Commands down this frame, and those whose key went down this frame.
+    held: Vec<&'static str>,
+    just: Vec<&'static str>,
+}
+
+impl BindingOverlay {
+    pub(crate) fn new(
+        commands: &'static [&'static str],
+        defaults: &'static [(&'static str, &'static str)],
+    ) -> Self {
+        BindingOverlay {
+            commands,
+            defaults,
+            ..Default::default()
+        }
+    }
+
+    /// Is a key bound to this command down (only while the mode is on)?
+    pub(crate) fn held(&self, command: &str) -> bool {
+        self.held.contains(&command)
+    }
+
+    /// Did a key bound to this command go down this frame (only while the mode is on)?
+    pub(crate) fn just_pressed(&self, command: &str) -> bool {
+        self.just.contains(&command)
+    }
+
+    /// The stock defaults with this plane's own added.
+    pub(crate) fn defaults_over(
+        &self,
+        mut stock: Vec<benilla_ui::script::keybind::KeyBinding>,
+    ) -> Vec<benilla_ui::script::keybind::KeyBinding> {
+        for &(key, command) in self.defaults {
+            let stock_plane = !self.commands.contains(&command);
+            if stock_plane && stock.iter().any(|(k, _)| k.eq_ignore_ascii_case(key)) {
+                continue;
+            }
+            stock.push((key.to_owned(), command.to_owned()));
+        }
+        stock
+    }
 }
 
 /// This frame's binding activity, which engine-side consumers read instead of raw keys: the
@@ -88,6 +201,8 @@ pub(crate) struct BindingsState {
     fired: Vec<Input>,
     /// Amount per one-shot this frame: a zoom's yards, else 1.0.
     amounts: Vec<(Input, f32)>,
+    /// The commands a press ran this frame, for an engine-side owner whose body is a no-op.
+    ran: Vec<String>,
     /// The keys we believe are down: a press of one is a repeat. The reference classifies
     /// auto-repeat off its own list (`0x4248b3`), never the Win32 `lParam` repeat bit.
     /// Normalized like [`latched`](Self::latched) and reconciled against `ButtonInput` every
@@ -117,6 +232,10 @@ impl BindingsState {
     /// Did this one-shot fire this frame?
     pub(crate) fn fired(&self, i: Input) -> bool {
         self.fired.contains(&i)
+    }
+    /// Did a key's press run this command this frame?
+    pub(crate) fn ran(&self, command: &str) -> bool {
+        self.ran.iter().any(|c| c.eq_ignore_ascii_case(command))
     }
     /// Total amount for a one-shot this frame (0.0 when idle): the camera zoom's yards.
     pub(crate) fn amount(&self, i: Input) -> f32 {
@@ -160,13 +279,14 @@ impl Plugin for BindingsPlugin {
             .init_resource::<BindingDispatch>()
             .init_resource::<BindingsState>()
             .init_resource::<BindingFiles>()
+            .init_resource::<BindingOverlay>()
             .add_systems(
                 Update,
                 (
                     // The key sets are seeded at the VM's birth, not here: `seed_bindings_for_vm`
                     // runs in `load_ingame_ui_on_world_entry`, before FrameXML and every addon;
                     // the commands come with the load.
-                    (sync_dispatch, latch_and_dispatch)
+                    (sync_dispatch, latch_and_dispatch, poll_overlay)
                         .chain()
                         .in_set(crate::ui_script::UiInput)
                         .in_set(BindingSet)
@@ -188,12 +308,18 @@ impl Plugin for BindingsPlugin {
 /// read first because the stored sets are diffs against them ([`store`]'s deviation), and nothing
 /// reads set 0 before `LoadBindings(0)`.
 pub(crate) fn seed_bindings_for_vm(world: &mut World, script: &mut UiScript) {
-    let defaults = crate::ui_script::default_bindings();
+    let mut defaults = crate::ui_script::default_bindings();
+    // The overlay plane before any key: its keys share the stock ones'.
+    if let Some(overlay) = world.get_resource::<BindingOverlay>() {
+        script.set_binding_overlay(overlay.commands);
+        defaults = overlay.defaults_over(defaults);
+    }
     script.set_default_bindings(defaults);
     let defaults = script.default_bindings();
+    let planes = script.binding_overlay();
     let account = crate::local_state::bindings_account_path();
     let overrides = read_diff(&account).unwrap_or_default();
-    script.seed_binding_set(1, Some(store::resolve(&overrides, &defaults)));
+    script.seed_binding_set(1, Some(store::resolve(&overrides, &defaults, &planes)));
     script.load_binding_set(1);
 
     // The character's own set: its file existing makes it the active set, the reference's rule.
@@ -206,7 +332,7 @@ pub(crate) fn seed_bindings_for_vm(world: &mut World, script: &mut UiScript) {
         .and_then(|(realm, name)| crate::local_state::bindings_character_path(realm, name));
     match read_diff(&character) {
         Some(overrides) => {
-            script.seed_binding_set(2, Some(store::resolve(&overrides, &defaults)));
+            script.seed_binding_set(2, Some(store::resolve(&overrides, &defaults, &planes)));
             script.load_binding_set(2);
             info!("bindings: character-specific set loaded");
         }
@@ -274,7 +400,16 @@ fn sync_dispatch(script: Option<NonSendMut<UiScript>>, mut dispatch: ResMut<Bind
     }
     *dispatch.seen_generation.get(&script) = Some(generation);
     dispatch.map.clear();
+    dispatch.overlay.clear();
+    let planes = script.binding_overlay();
     for (key, command) in script.binding_keys() {
+        if benilla_ui::script::keybind::in_overlay(&planes, &command) {
+            match OverlayKey::parse(&key) {
+                Some(k) => dispatch.overlay.push((k, command)),
+                None => warn!("bindings: {command}: unpressable chord '{key}' (unknown token)"),
+            }
+            continue;
+        }
         match Chord::parse(&key) {
             Some(ch) => {
                 dispatch.map.insert(ch, command);
@@ -340,10 +475,12 @@ fn latch_and_dispatch(
     mut notches: Local<WheelNotches>,
     mut focus_lost: MessageReader<bevy::input::keyboard::KeyboardFocusLost>,
     cover: Option<Res<crate::loading_screen::LoadingScreen>>,
+    overlay: Res<BindingOverlay>,
 ) {
     state.just.clear();
     state.fired.clear();
     state.amounts.clear();
+    state.ran.clear();
 
     // Deviation: latches die with the VM that made them, because a latch names a command of that
     // VM's table and releasing it against a new one would run another load's up-half. The
@@ -434,6 +571,10 @@ fn latch_and_dispatch(
                 let Some(name) = chord::key_token(ev.key_code, &layout) else {
                     continue;
                 };
+                // The overlay's mode owns this key (module doc).
+                if overlay.active && dispatch.overlay_takes(BindKey::Key(name), alt, ctrl, shift) {
+                    continue;
+                }
                 let chord = Chord {
                     alt,
                     ctrl,
@@ -464,6 +605,7 @@ fn latch_and_dispatch(
             && !sup
             && hover.0.is_none()
             && !state.latched.iter().any(|(k, _)| *k == Held::Mouse(b))
+            && !(overlay.active && dispatch.overlay_takes(BindKey::Mouse(b), alt, ctrl, shift))
         {
             let chord = Chord {
                 alt,
@@ -563,6 +705,73 @@ fn press(
         }
     }
     state.latched.push((key, command.to_owned()));
+    state.ran.push(command.to_owned());
+}
+
+/// The overlay's commands down this frame ([`BindingOverlay`]), read off the keys and buttons
+/// held, by the names the active layout gives them. Nothing while the mode is off, a box has the
+/// keyboard, or Super is held (the module doc's deviation).
+fn poll_overlay(
+    dispatch: Res<BindingDispatch>,
+    layout: Res<LayoutNames>,
+    keys: Res<ButtonInput<KeyCode>>,
+    buttons: Res<ButtonInput<MouseButton>>,
+    capture: Res<UiKeyboardCapture>,
+    mut overlay: ResMut<BindingOverlay>,
+) {
+    let overlay = &mut *overlay;
+    overlay.held.clear();
+    overlay.just.clear();
+    let sup = keys.any_pressed([KeyCode::SuperLeft, KeyCode::SuperRight]);
+    if !overlay.active || capture.typing || sup {
+        return;
+    }
+    let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let alt = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
+    let names = |codes: Vec<&KeyCode>| -> Vec<chord::KeyName> {
+        codes
+            .into_iter()
+            .filter_map(|&kc| chord::key_token(kc, &layout))
+            .collect()
+    };
+    let down = names(keys.get_pressed().collect());
+    let pressed_now = names(keys.get_just_pressed().collect());
+    for (k, command) in &dispatch.overlay {
+        if !k.modifiers_held(alt, ctrl, shift) {
+            continue;
+        }
+        let (held, just) = match k.key {
+            Some(BindKey::Key(n)) => (down.contains(&n), pressed_now.contains(&n)),
+            Some(BindKey::Mouse(b)) => (buttons.pressed(b), buttons.just_pressed(b)),
+            Some(BindKey::WheelUp | BindKey::WheelDown) => (false, false),
+            // A lone modifier, held as `modifiers_held` found it.
+            None => {
+                let mods = [
+                    (k.shift, [KeyCode::ShiftLeft, KeyCode::ShiftRight]),
+                    (k.ctrl, [KeyCode::ControlLeft, KeyCode::ControlRight]),
+                    (k.alt, [KeyCode::AltLeft, KeyCode::AltRight]),
+                ];
+                let just = mods
+                    .iter()
+                    .any(|(on, codes)| *on && keys.any_just_pressed(*codes));
+                (true, just)
+            }
+        };
+        let Some(&name) = overlay
+            .commands
+            .iter()
+            .find(|c| c.eq_ignore_ascii_case(command))
+        else {
+            continue;
+        };
+        if held && !overlay.held.contains(&name) {
+            overlay.held.push(name);
+        }
+        if just && !overlay.just.contains(&name) {
+            overlay.just.push(name);
+        }
+    }
 }
 
 /// A base key's release: drop its latch and run the command's `runOnUp` up-half, even while
@@ -711,7 +920,11 @@ mod tests {
             .init_resource::<BindingsState>()
             .init_resource::<BindingDispatch>()
             .init_resource::<LayoutNames>()
-            .add_systems(Update, (sync_dispatch, latch_and_dispatch).chain());
+            .init_resource::<BindingOverlay>()
+            .add_systems(
+                Update,
+                (sync_dispatch, latch_and_dispatch, poll_overlay).chain(),
+            );
         app.insert_non_send_resource(script);
         app
     }
@@ -733,12 +946,147 @@ mod tests {
     }
 
     fn with_addon(bindings: &str) -> UiScript {
-        let mut script = core_script();
+        let script = core_script();
         script.register_addon_bindings(
             "ProbeAddon",
             &benilla_ui::bindings_xml::parse(bindings).expect("well-formed"),
         );
         script
+    }
+
+    /// A mode's plane, the kart's shape: driving commands sharing W, 1 and E with the stock
+    /// ones, Shift alone, and an ordinary summon on a key the stock defaults leave free.
+    const PLANE: &[&str] = &["KARTGAS", "KARTFIRE", "KARTABILITY1", "KARTBOOST"];
+    const PLANE_KEYS: &[(&str, &str)] = &[
+        ("W", "KARTGAS"),
+        ("E", "KARTFIRE"),
+        ("1", "KARTABILITY1"),
+        ("SHIFT-", "KARTBOOST"),
+        ("J", "KARTSUMMON"),
+        // A stock key: an ordinary command's default there is dropped.
+        ("Z", "KARTFINDER"),
+    ];
+    const PLANE_BINDINGS: &str = r#"<Bindings>
+        <Binding name="KARTGAS" header="KART">KART_RAN = 1</Binding>
+        <Binding name="KARTFIRE">KART_RAN = 1</Binding>
+        <Binding name="KARTABILITY1">KART_RAN = 1</Binding>
+        <Binding name="KARTBOOST">KART_RAN = 1</Binding>
+        <Binding name="KARTSUMMON">SUMMONS = (SUMMONS or 0) + 1</Binding>
+        <Binding name="KARTFINDER">KART_RAN = 1</Binding>
+    </Bindings>"#;
+
+    /// [`harness`] with the plane seeded as `seed_bindings_for_vm` seeds it.
+    fn plane_harness() -> App {
+        let overlay = BindingOverlay::new(PLANE, PLANE_KEYS);
+        let mut script = UiScript::new().expect("VM");
+        script.set_binding_overlay(PLANE);
+        let stock = benilla_ui::script::keybind::parse_bindings_wtf(DEFAULTS);
+        script.set_default_bindings(overlay.defaults_over(stock));
+        script.load_binding_set(1);
+        script.register_bindings(&benilla_ui::bindings_xml::parse(CORE).expect("well-formed"));
+        script.register_addon_bindings(
+            "benilla",
+            &benilla_ui::bindings_xml::parse(PLANE_BINDINGS).expect("well-formed"),
+        );
+        let mut app = vm_harness(script);
+        app.insert_resource(overlay);
+        app
+    }
+
+    fn overlay(app: &App) -> &BindingOverlay {
+        app.world().resource::<BindingOverlay>()
+    }
+
+    /// While the mode is on a key bound to both a plane command and a stock one is the plane's:
+    /// the stock body does not run and the poll reports the plane's command; off, the stock one
+    /// runs as ever. Plane bodies never run.
+    #[test]
+    fn a_key_the_mode_shares_is_the_modes_alone_while_it_is_on() {
+        let mut app = plane_harness();
+        let keys = |app: &App, c: &str| -> Vec<String> {
+            let s = app.world().non_send_resource::<UiScript>();
+            s.keybind_snapshot()
+                .into_iter()
+                .find(|(n, _)| n == c)
+                .map(|(_, k)| k)
+                .unwrap_or_default()
+        };
+        assert_eq!(keys(&app, "ACTIONBUTTON1"), ["1"]);
+        assert_eq!(keys(&app, "KARTABILITY1"), ["1"]);
+        assert_eq!(keys(&app, "KARTSUMMON"), ["J"]);
+        assert!(
+            keys(&app, "KARTFINDER").is_empty(),
+            "Z stays TOGGLESHEATH's"
+        );
+        assert_eq!(keys(&app, "TOGGLESHEATH"), ["Z"]);
+
+        // Off: 1 presses the action button, W walks, the poll reads nothing.
+        press_key(&mut app, KeyCode::Digit1);
+        press_key(&mut app, KeyCode::KeyW);
+        app.update();
+        assert_eq!(lua_str(&app, "AB1"), "down");
+        assert!(state(&app).pressed(Input::MoveForward));
+        assert!(!overlay(&app).just_pressed("KARTABILITY1"));
+        release_key(&mut app, KeyCode::Digit1);
+        release_key(&mut app, KeyCode::KeyW);
+        app.update();
+        assert!(!state(&app).pressed(Input::MoveForward));
+        app.world()
+            .non_send_resource::<UiScript>()
+            .run("AB1 = nil")
+            .unwrap();
+
+        // On: the same keys are the kart's.
+        app.world_mut().resource_mut::<BindingOverlay>().active = true;
+        press_key(&mut app, KeyCode::Digit1);
+        press_key(&mut app, KeyCode::KeyW);
+        app.update();
+        assert_eq!(lua_str(&app, "AB1"), "", "ACTIONBUTTON1 did not run");
+        assert!(!state(&app).pressed(Input::MoveForward), "W did not walk");
+        assert!(overlay(&app).just_pressed("KARTABILITY1"));
+        assert!(overlay(&app).held("KARTGAS"));
+        app.update();
+        assert!(!overlay(&app).just_pressed("KARTABILITY1"), "an edge, once");
+        assert!(overlay(&app).held("KARTGAS"), "held while down");
+
+        // Shift alone is a key of the plane, and a held Shift keeps W the gas, not SHIFT-W.
+        press_key(&mut app, KeyCode::ShiftLeft);
+        app.update();
+        assert!(overlay(&app).held("KARTBOOST"));
+        assert!(overlay(&app).held("KARTGAS"));
+        release_key(&mut app, KeyCode::ShiftLeft);
+        release_key(&mut app, KeyCode::Digit1);
+        release_key(&mut app, KeyCode::KeyW);
+        app.update();
+        assert!(!overlay(&app).held("KARTGAS"));
+
+        // An ordinary command of the mode's runs as any binding, and its owner sees the press.
+        press_key(&mut app, KeyCode::KeyJ);
+        app.update();
+        assert!(state(&app).ran("KARTSUMMON"));
+        assert_eq!(lua_count(&app, "SUMMONS"), 1);
+        release_key(&mut app, KeyCode::KeyJ);
+        app.update();
+        assert!(!state(&app).ran("KARTSUMMON"));
+        assert_eq!(lua_count(&app, "KART_RAN"), 0, "a plane body never runs");
+    }
+
+    /// A rebind moves what the poll reads: Fire off E onto F.
+    #[test]
+    fn rebinding_a_plane_command_moves_what_the_mode_reads() {
+        let mut app = plane_harness();
+        app.world_mut().resource_mut::<BindingOverlay>().active = true;
+        app.world()
+            .non_send_resource::<UiScript>()
+            .run("SetBinding('E') SetBinding('F', 'KARTFIRE')")
+            .unwrap();
+        press_key(&mut app, KeyCode::KeyE);
+        app.update();
+        assert!(!overlay(&app).just_pressed("KARTFIRE"), "E no longer fires");
+        release_key(&mut app, KeyCode::KeyE);
+        press_key(&mut app, KeyCode::KeyF);
+        app.update();
+        assert!(overlay(&app).just_pressed("KARTFIRE"), "F fires");
     }
 
     /// A `runOnUp` body is one chunk run twice, `keystate` "down" then "up"; a plain one runs on

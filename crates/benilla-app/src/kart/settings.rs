@@ -6,6 +6,8 @@
 //!   ([`GuideHud`]); `KartArrowMove` is its placement mode, held for the session only.
 //! - `KartChaseCamera`: CTR's chase camera, else our own follow camera.
 //! - `KartMusic`, `KartMusicVolume`: CTR's race music, on top of the client's music volume.
+//! - `KartClass`, `KartRacer`: the garage's engine class (as the Karting skill allows it,
+//!   [`super::garage`]) and whose kart we drive; both apply at once, while driving too.
 //!
 //! `KartMinimapButton` and `KartMinimapAngle` are the layer's alone.
 
@@ -21,6 +23,8 @@ pub(crate) struct KartSettings {
     pub(crate) music: bool,
     /// The music's share of the client's music volume, 0 to 1.
     pub(crate) music_volume: f32,
+    /// The engine class picked in the garage; the one driven is [`super::garage::effective`]'s.
+    pub(crate) class: kartcraft::Class,
 }
 
 impl Default for KartSettings {
@@ -29,6 +33,7 @@ impl Default for KartSettings {
             chase_camera: true,
             music: true,
             music_volume: 1.0,
+            class: super::garage::TIERS[0].0,
         }
     }
 }
@@ -64,6 +69,12 @@ pub(crate) fn on_cvar(
         "kartchasecamera" => settings.chase_camera = ev.flag(),
         "kartmusic" => settings.music = ev.flag(),
         "kartmusicvolume" => settings.music_volume = ev.num().clamp(0.0, 1.0),
+        "kartclass" => {
+            settings.class = kartcraft::class_named(&ev.new).unwrap_or(super::garage::TIERS[0].0)
+        }
+        "kartracer" if !kartcraft::model::set_our_kart(ev.new.trim()) => {
+            warn!("kart: no kart for racer {:?} in the kart data", ev.new);
+        }
         _ => {}
     }
 }
@@ -113,6 +124,36 @@ mod tests {
         for name in ["KartMinimapButton", "KartMinimapAngle"] {
             d(name);
         }
+        let text = |name: &str| REGISTERED.iter().find(|r| r.name == name).unwrap().default;
+        assert_eq!(text("KartClass"), kartcraft::class_key(settings.class));
+        assert_eq!(text("KartRacer"), "crash");
+    }
+
+    #[test]
+    fn the_garage_s_class_is_kept_and_the_skill_decides_what_is_driven() {
+        let mut app = app();
+        set(&mut app, "KartClass", "speed");
+        let picked = app.world().resource::<KartSettings>().class;
+        assert_eq!(picked, kartcraft::Class::Speed);
+        assert_eq!(
+            super::super::garage::effective(picked, Some(100)),
+            kartcraft::Class::Balanced
+        );
+        set(&mut app, "kartclass", "Acceleration");
+        assert_eq!(
+            app.world().resource::<KartSettings>().class,
+            kartcraft::Class::Accel
+        );
+        set(&mut app, "KartClass", "rocket");
+        assert_eq!(
+            app.world().resource::<KartSettings>().class,
+            kartcraft::Class::Turn,
+            "an unknown class is the starting one"
+        );
+        // A racer the kart data has no kart for changes nothing.
+        let before = kartcraft::model::our_kart();
+        set(&mut app, "KartRacer", "nobody");
+        assert_eq!(kartcraft::model::our_kart(), before);
     }
 
     #[test]

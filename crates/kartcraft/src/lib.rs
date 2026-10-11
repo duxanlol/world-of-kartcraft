@@ -115,11 +115,30 @@ pub fn heading_of(yaw: f32) -> i32 {
 
 /// The engine class: `WOW_KART_CLASS` (balanced, accel, speed or turn), default Balanced.
 pub fn class() -> Class {
-    match std::env::var("WOW_KART_CLASS").as_deref() {
-        Ok("accel") | Ok("acceleration") => Class::Accel,
-        Ok("speed") => Class::Speed,
-        Ok("turn") | Ok("turning") => Class::Turn,
-        _ => Class::Balanced,
+    std::env::var("WOW_KART_CLASS")
+        .ok()
+        .and_then(|v| class_named(&v))
+        .unwrap_or(Class::Balanced)
+}
+
+/// A class by its key ([`class_key`]) or its name, any case.
+pub fn class_named(key: &str) -> Option<Class> {
+    match key.trim().to_ascii_lowercase().as_str() {
+        "balanced" => Some(Class::Balanced),
+        "accel" | "acceleration" => Some(Class::Accel),
+        "speed" => Some(Class::Speed),
+        "turn" | "turning" => Some(Class::Turn),
+        _ => None,
+    }
+}
+
+/// A class's key, as `WOW_KART_CLASS` spells it.
+pub fn class_key(class: Class) -> &'static str {
+    match class {
+        Class::Balanced => "balanced",
+        Class::Accel => "accel",
+        Class::Speed => "speed",
+        Class::Turn => "turn",
     }
 }
 
@@ -157,6 +176,15 @@ mod tests {
             );
             assert_eq!(heading_of(yaw), heading);
         }
+    }
+
+    #[test]
+    fn every_class_s_key_and_name_name_it() {
+        for class in Class::ALL {
+            assert_eq!(class_named(class_key(class)), Some(class));
+            assert_eq!(class_named(class.name()), Some(class));
+        }
+        assert_eq!(class_named("hover"), None);
     }
 
     #[test]

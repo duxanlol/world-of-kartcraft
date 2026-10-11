@@ -44,12 +44,22 @@ CONTROLS
   Abilities           D-pad         D-pad       1-4
   Climb in / out                                J (or Summon Kart, spellbook)
 
+The keyboard keys are rebindable: options window, Key Bindings, World of Kartcraft (also Fire
+item (E), Race Finder, Leave race, Kartcraft settings and Kart garage). While you drive the
+driving keys are the kart's alone (1-4 cast its abilities, not your action bar); out of the kart
+W, A, S, D and 1-4 are WoW's as ever.
+
 Everything else is WoW's own interface. The Kartcraft button on the minimap (the mechanostrider)
 opens the Race Finder on a click; right-click it for Race Finder, Leave race, Leave queue,
-Kartcraft settings and Hide minimap button; drag it to move it round the minimap.
+Kart garage, Kartcraft settings and Hide minimap button; drag it to move it round the minimap.
 Kartcraft settings (or /kartcraft): the guide arrow (show, size, Move arrow, Reset arrow), CTR's
 chase camera or your WoW camera, the race music and its volume, and the minimap button.
-Slash commands: /racefinder, /leaverace (/lr), /kartcraft.
+Slash commands: /racefinder, /leaverace (/lr), /kartcraft, /garage.
+
+Kart garage (or /garage): your engine class and your kart. Karting skill opens the classes:
+Turning from the start (slowest, easiest to steer), Balanced at 75, Acceleration at 150, Speed
+at 225; locked ones are greyed with the skill they need. Any CTR racer's kart is free to pick,
+and other drivers see it. Both change at once, even while you drive.
 
 Powerslide: hop and hold while steering into a turn; the turbo meter by the speedometer fills.
 Press the other shoulder when it turns red for a boost, up to three per slide. The exhaust smokes

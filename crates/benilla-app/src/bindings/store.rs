@@ -85,11 +85,20 @@ pub(crate) fn from_diff(text: &str) -> Vec<(String, Vec<String>)> {
 
 /// Resolve a diff into the full key table: the defaults, then each override in file order
 /// replacing its command's keys and stealing each key from every other command, so one key always
-/// maps to one command.
-pub(crate) fn resolve(diff: &[(String, Vec<String>)], defaults: &[KeyBinding]) -> Vec<KeyBinding> {
+/// maps to one command in its plane: a key of an `overlay` command is taken from the overlay's
+/// other commands only (`benilla_ui::script::keybind`'s deviation).
+pub(crate) fn resolve(
+    diff: &[(String, Vec<String>)],
+    defaults: &[KeyBinding],
+    overlay: &[String],
+) -> Vec<KeyBinding> {
+    use benilla_ui::script::keybind::in_overlay;
     let mut table = defaults.to_vec();
     for (name, keys) in diff {
-        table.retain(|(k, c)| !c.eq_ignore_ascii_case(name) && !keys.contains(k));
+        let plane = in_overlay(overlay, name);
+        table.retain(|(k, c)| {
+            !c.eq_ignore_ascii_case(name) && !(keys.contains(k) && in_overlay(overlay, c) == plane)
+        });
         table.extend(keys.iter().map(|k| (k.clone(), name.clone())));
     }
     table
@@ -155,7 +164,7 @@ mod tests {
             "untouched commands stay absent"
         );
 
-        let resolved = resolve(&from_diff(&text), &defaults());
+        let resolved = resolve(&from_diff(&text), &defaults(), &[]);
         assert_eq!(keys(&resolved, "JUMP"), ["F"]);
         assert!(keys(&resolved, "TOGGLESHEATH").is_empty());
         assert_eq!(keys(&resolved, "MOVEFORWARD"), ["W", "UP"]);
@@ -163,9 +172,23 @@ mod tests {
 
     #[test]
     fn resolve_steals_across_commands_even_without_a_line_for_the_victim() {
-        let resolved = resolve(&[("JUMP".to_string(), vec!["W".to_string()])], &defaults());
+        let resolved = resolve(
+            &[("JUMP".to_string(), vec!["W".to_string()])],
+            &defaults(),
+            &[],
+        );
         assert_eq!(keys(&resolved, "MOVEFORWARD"), ["UP"]);
         assert_eq!(keys(&resolved, "JUMP"), ["W"]);
+    }
+
+    /// An overlay command's stored key leaves the stock command on the same key bound.
+    #[test]
+    fn resolve_steals_only_within_a_plane() {
+        let overlay = ["KARTFIRE".to_string()];
+        let diff = [("KARTFIRE".to_string(), vec!["Q".to_string()])];
+        let resolved = resolve(&diff, &defaults(), &overlay);
+        assert_eq!(keys(&resolved, "KARTFIRE"), ["Q"]);
+        assert_eq!(keys(&resolved, "STRAFELEFT"), ["Q"]);
     }
 
     #[test]
@@ -179,7 +202,7 @@ mod tests {
             ]
         );
         // An unknown command (an addon's, registered later) is kept, and still steals its key.
-        let resolved = resolve(&parsed, &defaults());
+        let resolved = resolve(&parsed, &defaults(), &[]);
         assert_eq!(keys(&resolved, "BOGUSCMD"), ["Q"]);
         assert!(
             keys(&resolved, "STRAFELEFT").is_empty(),

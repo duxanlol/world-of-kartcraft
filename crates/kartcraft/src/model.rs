@@ -16,6 +16,8 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, Face, TextureDimension, TextureFormat};
 
+pub use ctr_assets::kart::KARTS;
+
 use crate::session::KartView;
 
 /// The tread band's width, meters (the game's sprite has no depth).
@@ -103,9 +105,18 @@ pub fn data_root() -> Option<PathBuf> {
         })
 }
 
-/// Our kart's racer: `WOW_KART` (crash, cortex, coco, tiny, polar, pura, pinstripe, roo, joe,
-/// pen, fake), else whichever `kart.json` holds.
+/// The racer picked with [`set_our_kart`], over [`our_kart`]'s default.
+static CHOSEN: std::sync::RwLock<Option<&'static str>> = std::sync::RwLock::new(None);
+
+/// Our kart's racer: the one picked with [`set_our_kart`], else `WOW_KART` (crash, cortex, coco,
+/// tiny, polar, pura, pinstripe, roo, joe, pen, fake), else whichever `kart.json` holds.
 pub fn our_kart() -> &'static str {
+    if let Some(racer) = *CHOSEN
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    {
+        return racer;
+    }
     static NAME: OnceLock<String> = OnceLock::new();
     NAME.get_or_init(|| {
         std::env::var("WOW_KART")
@@ -114,6 +125,29 @@ pub fn our_kart() -> &'static str {
             .or_else(|| model_named("").map(|m| m.kart.clone()))
             .unwrap_or_default()
     })
+}
+
+/// Picks our kart's racer; `false`, and no change, for one the kart data has no kart for. Our
+/// kart on screen follows at its next frame ([`update`]), and so does the racer we relay.
+pub fn set_our_kart(racer: &str) -> bool {
+    let Some(model) = model_named(racer).filter(|_| !racer.is_empty()) else {
+        return false;
+    };
+    *CHOSEN
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(model.kart.as_str());
+    true
+}
+
+/// The racers whose karts the kart data holds (`kart-<name>.json`), in `ctr-extract`'s order.
+pub fn racers() -> Vec<&'static str> {
+    let Some(root) = data_root() else {
+        return Vec::new();
+    };
+    KARTS
+        .into_iter()
+        .filter(|k| root.join(format!("kart-{k}.json")).is_file())
+        .collect()
 }
 
 /// A racer's kart (`kart-<name>.json`; `""` for `kart.json`), read once and kept.
@@ -340,6 +374,8 @@ pub struct KartModel {
     /// By racer.
     assets: std::collections::HashMap<String, KartAssets>,
     local: Option<Entity>,
+    /// Whose kart `local` is.
+    local_racer: &'static str,
 }
 
 fn build_assets(
@@ -501,14 +537,21 @@ impl KartSpawner<'_, '_> {
         self.commands.entity(kart).despawn();
     }
 
-    /// Our own kart, spawned the first time it is asked for.
+    /// Our own kart, spawned the first time it is asked for and again when another racer's is
+    /// picked.
     fn local(&mut self) -> Option<Entity> {
+        let racer = our_kart();
         if let Some(e) = self.model.local {
-            return Some(e);
+            if self.model.local_racer == racer {
+                return Some(e);
+            }
+            self.despawn(e);
+            self.model.local = None;
         }
-        let e = self.spawn(our_kart())?;
+        let e = self.spawn(racer)?;
         self.commands.entity(e).insert(LocalKart);
         self.model.local = Some(e);
+        self.model.local_racer = racer;
         Some(e)
     }
 }

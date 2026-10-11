@@ -757,6 +757,18 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "1",
         "Kartcraft's own — CTR's race music; 1.12 has no kart",
     ),
+    // The garage: the engine class picked (Turning, the one every new kart driver has; the Karting
+    // skill opens the others, `kart::garage`) and whose kart it is.
+    ours(
+        "KartClass",
+        "turn",
+        "Kartcraft's own — the kart's engine class; 1.12 has no kart",
+    ),
+    ours(
+        "KartRacer",
+        "crash",
+        "Kartcraft's own — whose kart we drive; 1.12 has no kart",
+    ),
     // The minimap button: shown, and its place on the ring in degrees counter-clockwise from east,
     // as an addon's minimap button keeps it.
     ours(

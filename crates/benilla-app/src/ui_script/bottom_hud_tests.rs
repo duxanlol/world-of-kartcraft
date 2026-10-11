@@ -44,7 +44,8 @@ fn shipped_xml() -> Vec<(String, String)> {
         .expect("assets/ui")
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "xml"))
+        // The FrameXML files: the layer's `Bindings.xml` is a binding list, not a document.
+        .filter(|p| p.extension().is_some_and(|e| e == "xml") && !p.ends_with("Bindings.xml"))
         .map(|p| {
             (
                 p.file_name().unwrap().to_string_lossy().into_owned(),

@@ -158,8 +158,13 @@ namespace Kartcraft
                 player->LearnSpell(unlock.spell, false);
     }
 
+    static void LeaveRaces(Player* player);
+
     void OnLogin(Player* player)
     {
+        // A client logs in knowing of no race: it is out of any it was in, or a waiting race
+        // would hold it (the marshal offers neither hosting nor joining) until it expired.
+        LeaveRaces(player);
         if (!sSkillLineStore.LookupEntry(SKILL_KARTING))
             return;
         if (!player->HasSkill(SKILL_KARTING))
@@ -279,6 +284,10 @@ namespace Kartcraft
         uint32 claimed = 0;
         uint8 wumpa = 0;
         uint32 maskUntil = 0;
+        // A fired shield not yet launched as a shield bomb: when (ms, 0 none), and juiced (blue,
+        // no time limit).
+        uint32 shieldAt = 0;
+        bool shieldJuiced = false;
     };
 
     // A weapon crate ('Q'), a fruit crate ('F') or a single Wumpa fruit ('W') on a race's course.
@@ -413,6 +422,8 @@ namespace Kartcraft
     // The mask protects 7680 ms, 11520 ms juiced (VehPickupItem.c:193-351).
     constexpr uint32 MASK_TIME = 7680;
     constexpr uint32 MASK_TIME_JUICED = 11520;
+    // A green shield lasts 12 s (VehPickupItem.c:976-983); a second's slack for the line.
+    constexpr uint32 SHIELD_TIME = 13 * IN_MILLISECONDS;
     // A whole addon line stays under this (docs/ctr-weapons-assets-and-net.md, B1).
     constexpr size_t MAX_LINE = 200;
 
@@ -711,6 +722,7 @@ namespace Kartcraft
             r.claimed = 0;
             r.wumpa = 0;
             r.maskUntil = 0;
+            r.shieldAt = 0;
         }
         SendLayout(race);
     }
@@ -811,6 +823,24 @@ namespace Kartcraft
         return end != text.c_str() && *end == '\0' && std::isfinite(out);
     }
 
+    // "<x>,<y>,<z>,<yaw>" as the wire writes it, back to the wire's decimals; empty if malformed.
+    static std::string ParsePlace(std::string const& text)
+    {
+        std::vector<std::string> pos;
+        for (size_t at = 0, comma; at <= text.size(); at = comma + 1)
+        {
+            comma = text.find(',', at);
+            if (comma == std::string::npos)
+                comma = text.size();
+            pos.push_back(text.substr(at, comma - at));
+        }
+        float x, y, z, yaw;
+        if (pos.size() != 4 || !ParseFloat(pos[0], x) || !ParseFloat(pos[1], y) || !ParseFloat(pos[2], z) ||
+            !ParseFloat(pos[3], yaw))
+            return "";
+        return Fixed(x, 2) + "," + Fixed(y, 2) + "," + Fixed(z, 2) + "," + Fixed(yaw, 3);
+    }
+
     static void HandleWeapon(Player* player, std::string const& body)
     {
         uint32 now = WorldTimer::getMSTime();
@@ -891,17 +921,8 @@ namespace Kartcraft
                 return;
             if (me->held == ITEM_NONE || !me->shots || WorldTimer::getMSTimeDiff(me->claimed, now) < ROLL_MIN)
                 return;
-            std::vector<std::string> pos;
-            for (size_t at = 0, comma; at <= f[3].size(); at = comma + 1)
-            {
-                comma = f[3].find(',', at);
-                if (comma == std::string::npos)
-                    comma = f[3].size();
-                pos.push_back(f[3].substr(at, comma - at));
-            }
-            float x, y, z, yaw;
-            if (pos.size() != 4 || !ParseFloat(pos[0], x) || !ParseFloat(pos[1], y) || !ParseFloat(pos[2], z) ||
-                !ParseFloat(pos[3], yaw))
+            std::string const place = ParsePlace(f[3]);
+            if (place.empty())
                 return;
             uint32 target = uint32(std::strtoul(f[4].c_str(), nullptr, 10));
             std::string flags;
@@ -923,6 +944,11 @@ namespace Kartcraft
                 me->held = ITEM_NONE;
             if (item == ITEM_MASK)
                 me->maskUntil = now + (juiced ? MASK_TIME_JUICED : MASK_TIME);
+            if (item == ITEM_SHIELD)
+            {
+                me->shieldAt = now ? now : 1;
+                me->shieldJuiced = juiced;
+            }
             if (item == ITEM_WARP)
             {
                 // The leader, or the next racer when the shooter leads (RB_Warpball.c:127-198).
@@ -940,8 +966,42 @@ namespace Kartcraft
             record.at = now;
             record.dropped = flags.find('d') != std::string::npos;
             SendRace(*race, "KARTCRAFT\tW\tS\t" + guid + "\t" + std::to_string(item) + "\t" + (juiced ? "1" : "0") +
-                "\t" + std::to_string(shot) + "\t" + Fixed(x, 2) + "," + Fixed(y, 2) + "," + Fixed(z, 2) + "," +
-                Fixed(yaw, 3) + "\t" + std::to_string(target) + "\t" + flags);
+                "\t" + std::to_string(shot) + "\t" + place + "\t" + std::to_string(target) + "\t" + flags);
+        }
+        else if (verb == "D" && !me->finished)
+        {
+            // Fire again with a bomb rolling: only with a bomb of the sender's still in the pool.
+            uint32 const low = player->GetGUIDLow();
+            bool rolling = std::any_of(race->shots.begin(), race->shots.end(),
+                [low, now](std::pair<uint64 const, Shot> const& s)
+                {
+                    return uint32(s.first >> 16) == low &&
+                        (s.second.item == ITEM_BOMB || s.second.item == ITEM_BOMB_3) && InPool(s.second, now);
+                });
+            if (rolling)
+                SendRace(*race, "KARTCRAFT\tW\tD\t" + guid);
+        }
+        else if (verb == "Z" && f.size() >= 4 && !me->finished)
+        {
+            // Fire with a shield up: it leaves as a shield bomb, once per shield.
+            char* end = nullptr;
+            unsigned long shot = std::strtoul(f[2].c_str(), &end, 10);
+            if (end == f[2].c_str() || *end || shot < 1 || shot > 0xFFFF || !me->shieldAt)
+                return;
+            if (!me->shieldJuiced && WorldTimer::getMSTimeDiff(me->shieldAt, now) > SHIELD_TIME)
+            {
+                me->shieldAt = 0;
+                return;
+            }
+            std::string const place = ParsePlace(f[3]);
+            if (place.empty())
+                return;
+            me->shieldAt = 0;
+            Shot& record = race->shots[(uint64(player->GetGUIDLow()) << 16) | shot];
+            record = Shot();
+            record.item = ITEM_SHIELD;
+            record.at = now;
+            SendRace(*race, "KARTCRAFT\tW\tZ\t" + guid + "\t" + std::to_string(shot) + "\t" + place);
         }
         else if (verb == "H" && f.size() >= 5)
         {
@@ -1366,6 +1426,33 @@ namespace Kartcraft
         return true;
     }
 
+    // Out of every race (not the Race Finder's queue), as a retirement; the shield comes off.
+    static void LeaveRaces(Player* player)
+    {
+        ObjectGuid const guid = player->GetObjectGuid();
+        std::lock_guard<std::mutex> lock(s_mutex);
+        for (auto it = s_races.begin(); it != s_races.end();)
+        {
+            Race& r = it->second;
+            auto x = std::find_if(r.racers.begin(), r.racers.end(), [guid](Racer const& m) { return m.guid == guid; });
+            if (x == r.racers.end())
+            {
+                it = std::next(it);
+                continue;
+            }
+            RemoveRacer(r, x);
+            if (r.racers.empty())
+                it = s_races.erase(it);
+            else
+            {
+                SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(it->first) + "\t" + Roster(r));
+                it = std::next(it);
+            }
+        }
+        if (s_shielded.erase(guid))
+            player->RemoveFlag(UNIT_FIELD_FLAGS, RACE_SHIELD_FLAGS);
+    }
+
     // `marshal`: the line comes from a Race Marshal's menu (MarshalSelect), which the player used
     // standing at the start: the start's distance and the kart are not asked for.
     static void HandleRace(Player* player, std::string const& body, bool marshal)
@@ -1383,8 +1470,10 @@ namespace Kartcraft
                 tab = body.size();
             f.push_back(body.substr(at, tab - at));
         }
-        // The finder's verbs work on foot; the rest need the kart, but for a marshal's.
-        if (f.size() < 2 || HandleFinder(player, f, now) || (!marshal && !player->HasAura(SPELL_SUMMON_KART)))
+        // The finder's verbs work on foot; the rest need the kart, but for a marshal's and for
+        // leaving: a racer the marshal put in on foot may leave before the kart's aura lands.
+        if (f.size() < 2 || HandleFinder(player, f, now) ||
+            (!marshal && f[1] != "Q" && !player->HasAura(SPELL_SUMMON_KART)))
             return;
         std::string const& verb = f[1];
         uint32 id = f.size() > 2 ? uint32(std::strtoul(f[2].c_str(), nullptr, 10)) : 0;

@@ -106,6 +106,10 @@
                     break
                 end
             end
+            -- A lone modifier ("SHIFT-", the kart's boost) reads as the modifier.
+            if rest == "" then
+                return strsub(prefix, 1, -2)
+            end
             return prefix .. BenillaKeyBindings_String("KEY_" .. rest, rest)
         end
 
@@ -374,42 +378,90 @@
             if IsControlKeyDown() then chord = "CTRL-" .. chord end
             if IsAltKeyDown() then chord = "ALT-" .. chord end
             local selected = page.selected
-            local oldAction = GetBindingAction(chord)
-            if oldAction ~= "" and oldAction ~= selected then
-                local k1, k2 = GetBindingKey(oldAction)
-                if (not k1 or k1 == chord) and (not k2 or k2 == chord) then
-                    BenillaKeyBindings_Output(string.format(
-                        BenillaKeyBindings_String("KEY_UNBOUND_ERROR", "|cffff0000%s Function is Now Unbound!|r"),
-                        BenillaKeyBindings_String("BINDING_NAME_" .. oldAction, oldAction)))
-                else
-                    BenillaKeyBindings_Output(BenillaKeyBindings_String("KEY_BOUND", "Key Bound Successfully"))
-                end
-            else
-                BenillaKeyBindings_Output(BenillaKeyBindings_String("KEY_BOUND", "Key Bound Successfully"))
-            end
+            -- Who holds the chord now: a holder this bind leaves keyless is told so, as 1.12's
+            -- window tells it (Blizzard_BindingUI.lua:186-196), once the keys have moved.
+            local holders = BenillaKeyBindings_Holders(chord)
             local key1, key2 = GetBindingKey(selected)
-            if key1 then SetBinding(key1) end
-            if key2 then SetBinding(key2) end
+            if key1 then BenillaKeyBindings_ClearKey(key1, selected) end
+            if key2 then BenillaKeyBindings_ClearKey(key2, selected) end
+            local bound
             if page.keyID == 1 then
-                BenillaKeyBindings_SetOrRestore(chord, selected, key1)
+                bound = BenillaKeyBindings_SetOrRestore(chord, selected, key1)
                 if key2 then SetBinding(key2, selected) end
             else
                 if key1 then SetBinding(key1, selected) end
-                BenillaKeyBindings_SetOrRestore(chord, selected, key2)
+                bound = BenillaKeyBindings_SetOrRestore(chord, selected, key2)
+            end
+            if bound then
+                local lost = nil
+                for _, holder in ipairs(holders) do
+                    if holder ~= selected and not GetBindingKey(holder) then
+                        lost = lost or holder
+                    end
+                end
+                if lost then
+                    BenillaKeyBindings_Output(string.format(
+                        BenillaKeyBindings_String("KEY_UNBOUND_ERROR", "|cffff0000%s Function is Now Unbound!|r"),
+                        BenillaKeyBindings_String("BINDING_NAME_" .. lost, lost)))
+                else
+                    BenillaKeyBindings_Output(BenillaKeyBindings_String("KEY_BOUND", "Key Bound Successfully"))
+                end
             end
             BenillaKeyBindings_Commit()
             BenillaKeyBindings_SetSelected(nil)
             BenillaKeyBindings_RepaintVisible()
         end
 
+        -- The commands `key` is bound to, in list order. One key may hold a WoW command and one
+        -- of the kart's driving controls at once (the engine's overlay plane).
+        function BenillaKeyBindings_Holders(key)
+            local out = {}
+            for i = 1, GetNumBindings() do
+                local row = { GetBinding(i) }
+                for j = 2, table.getn(row) do
+                    if row[j] == key then
+                        table.insert(out, row[1])
+                        break
+                    end
+                end
+            end
+            return out
+        end
+
+        -- Take `key` from `command` alone. SetBinding(key) unbinds the key from every command, as
+        -- 1.12's does, so each other command that held it is bound again, its keys in their order.
+        function BenillaKeyBindings_ClearKey(key, command)
+            local others = {}
+            for i = 1, GetNumBindings() do
+                local row = { GetBinding(i) }
+                if row[1] ~= command then
+                    for j = 2, table.getn(row) do
+                        if row[j] == key then
+                            table.insert(others, row)
+                            break
+                        end
+                    end
+                end
+            end
+            SetBinding(key)
+            for _, row in ipairs(others) do
+                for j = 2, table.getn(row) do
+                    SetBinding(row[j], row[1])
+                end
+            end
+        end
+
         -- 1.12's KeyBindingFrame_SetBinding, message and all; SetBinding refuses only a non-key.
+        -- Answers whether the key bound.
         function BenillaKeyBindings_SetOrRestore(key, command, oldKey)
             if not SetBinding(key, command) then
                 if oldKey then SetBinding(oldKey, command) end
                 BenillaKeyBindings_Output(BenillaKeyBindings_String(
                     "KEYBINDINGFRAME_MOUSEWHEEL_ERROR",
                     "Can't bind mousewheel to actions with up and down states"))
+                return nil
             end
+            return 1
         end
 
         -- The list's OnMouseWheel while armed (Blizzard_BindingUI.xml:377-387).
@@ -425,8 +477,8 @@
         function BenillaKeyBindings_Unbind()
             local page = BenillaKeyBindingsPage
             local key1, key2 = GetBindingKey(page.selected)
-            if key1 then SetBinding(key1) end
-            if key2 then SetBinding(key2) end
+            if key1 then BenillaKeyBindings_ClearKey(key1, page.selected) end
+            if key2 then BenillaKeyBindings_ClearKey(key2, page.selected) end
             if key1 and page.keyID == 1 then
                 if key2 then SetBinding(key2, page.selected) end
             else
