@@ -206,7 +206,7 @@ fn hits_on_others_wait_for_the_server() {
 }
 
 #[test]
-fn online_a_second_press_neither_detonates_nor_fires_the_shield() {
+fn a_second_press_fires_the_shield() {
     let (mut w, world, mut kart) = setup();
     let here = from_lu(kart.pose().position, ORIGIN);
     w.receive(Down::Item {
@@ -221,11 +221,7 @@ fn online_a_second_press_neither_detonates_nor_fires_the_shield() {
     w.receive(shot(ME, Item::Shield, 1, here));
     tick(&mut w, &world, &mut kart, 2);
     assert!(kart.shield().is_some());
-    w.press(true, false);
-    tick(&mut w, &world, &mut kart, 1);
-    assert!(w.outbox.is_empty() && kart.shield().is_some());
-    // The demo's referee takes `W Z`.
-    w.extended = true;
+    // The second press sends `W Z`; the shield leaves our kart at once, the bomb on the relay.
     w.press(true, false);
     tick(&mut w, &world, &mut kart, 1);
     assert!(matches!(
@@ -233,6 +229,36 @@ fn online_a_second_press_neither_detonates_nor_fires_the_shield() {
         [(ME, Up::ShieldShot { shot: 2, .. })]
     ));
     assert!(kart.shield().is_none());
+}
+
+#[test]
+fn a_second_press_detonates_our_bomb_on_the_relay() {
+    let (mut w, world, mut kart) = setup();
+    let here = from_lu(kart.pose().position, ORIGIN);
+    w.receive(Down::Item {
+        item: Item::Bomb,
+        shots: 1,
+    });
+    tick(&mut w, &world, &mut kart, usize::from(ROLL_FRAMES) + 1);
+    w.press(true, false);
+    tick(&mut w, &world, &mut kart, 1);
+    assert!(matches!(w.outbox[..], [(ME, Up::Fire { shot: 1, .. })]));
+    w.outbox.clear();
+    w.receive(shot(ME, Item::Bomb, 1, here));
+    tick(&mut w, &world, &mut kart, 5);
+    assert_eq!(w.shots().count(), 1, "rolling");
+    // The second press sends `W D`; the bomb goes off when the server relays it.
+    w.press(true, false);
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(std::mem::take(&mut w.outbox), vec![(ME, Up::Detonate)]);
+    assert_eq!(w.shots().count(), 1, "nothing goes off before the relay");
+    w.receive(Down::Detonate { shooter: ME });
+    tick(&mut w, &world, &mut kart, 30);
+    assert!(
+        w.shots()
+            .all(|(_, b, _, _)| !matches!(b, Body::Bomb(x) if !x.is_shield() && !x.done())),
+        "the bomb went off"
+    );
 }
 
 #[test]

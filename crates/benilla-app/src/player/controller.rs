@@ -860,6 +860,8 @@ const KART_CAMERA_FOLLOW: f32 = 2.5;
 
 /// The heartbeat period (s) while the kart moves, against WoW's 0.5.
 const KART_HEARTBEAT: f32 = 1.0 / 15.0;
+/// How far (radians, about 3°) a still kart turns before its facing goes on the wire.
+const KART_FACING_STEP: f32 = 0.05;
 
 /// A riding frame: the kart's pose is the body's, and the wire carries it as a
 /// run, FORWARD while the kart moves, with heartbeats every 500 ms. No FALLING is ever sent, so
@@ -877,11 +879,20 @@ fn drive_kart(
     // A kart covers yards between WoW's 500 ms heartbeats, so other players' clients would see it
     // jump: while it moves, a heartbeat is due every 1/15 s.
     let now = time.elapsed_secs();
-    if drive.moving() && now - player.last_heartbeat >= KART_HEARTBEAT {
+    let heartbeat = drive.moving() && now - player.last_heartbeat >= KART_HEARTBEAT;
+    if heartbeat {
         player.last_heartbeat = now - 1.0;
     }
     player.pos = drive.pos;
-    player.face_yaw = drive.yaw;
+    // The wire's facing follows the kart on a heartbeat, which carries it, or past a few degrees:
+    // a SET_FACING goes out each frame the facing changes, and a kart nudging against a wall or a
+    // resting stick's drift would send one every frame. The drawn kart turns every frame.
+    let turned = (drive.yaw - player.face_yaw + std::f32::consts::PI)
+        .rem_euclid(std::f32::consts::TAU)
+        - std::f32::consts::PI;
+    if heartbeat || turned.abs() > KART_FACING_STEP {
+        player.face_yaw = drive.yaw;
+    }
     player.model_yaw = drive.yaw;
     player.vel_y = 0.0;
     player.horiz_vel = Vec3::ZERO;

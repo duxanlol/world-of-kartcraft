@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..87ab917
+index 0000000..0cc8b24
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,1780 @@
+@@ -0,0 +1,2042 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -98,8 +98,11 @@ index 0000000..87ab917
 +#include "Creature.h"
 +#include "GossipDef.h"
 +#include "ScriptMgr.h"
++#include "Database/DatabaseEnv.h"
 +
 +#include <cmath>
++#include <ctime>
++#include <map>
 +#include <string>
 +#include <vector>
 +
@@ -372,6 +375,10 @@ index 0000000..87ab917
 +        uint32 claimed = 0;
 +        uint8 wumpa = 0;
 +        uint32 maskUntil = 0;
++        // A fired shield not yet launched as a shield bomb: when (ms, 0 none), and juiced (blue,
++        // no time limit).
++        uint32 shieldAt = 0;
++        bool shieldJuiced = false;
 +    };
 +
 +    // A weapon crate ('Q'), a fruit crate ('F') or a single Wumpa fruit ('W') on a race's course.
@@ -477,6 +484,91 @@ index 0000000..87ab917
 +        }
 +    }
 +
++    // ── Records ────────────────────────────────────────────────────────────────────────────────
++    //
++    // Every finish is a time on its course: each character's best there, and the course record
++    // with its holder. kartcraft_records in the characters database keeps every character's best:
++    // the core creates it if missing (the world database may be re-created by vmangos-deploy, the
++    // characters database never is), reads it once at startup, and writes a new best in the
++    // background (an async execute), so a finish never waits on the database. The record is the
++    // least of the bests.
++
++    struct Record
++    {
++        uint32 ms = 0; // 0: none yet
++        std::string name;
++    };
++
++    static std::map<std::pair<uint32, std::string>, uint32> s_bests; // (guid low, course key) -> ms
++    static std::unordered_map<std::string, Record> s_records;        // course key -> its record
++
++    static void LoadRecords()
++    {
++        CharacterDatabase.DirectExecute(
++            "CREATE TABLE IF NOT EXISTS `kartcraft_records` ("
++            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
++            "`course` VARCHAR(32) NOT NULL COMMENT 'course key, courses/courses.json', "
++            "`name` VARCHAR(12) NOT NULL COMMENT 'character name when it was set', "
++            "`ms` INT UNSIGNED NOT NULL COMMENT 'race time, ms', "
++            "`at` INT UNSIGNED NOT NULL COMMENT 'when, unix time', "
++            "PRIMARY KEY (`guid`, `course`), KEY `course_ms` (`course`, `ms`)"
++            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
++        std::unique_ptr<QueryResult> result =
++            CharacterDatabase.Query("SELECT `guid`, `course`, `name`, `ms` FROM `kartcraft_records`");
++        if (!result)
++            return;
++        uint32 count = 0;
++        do
++        {
++            Field* fields = result->Fetch();
++            uint32 guid = fields[0].GetUInt32();
++            std::string course = fields[1].GetCppString();
++            uint32 ms = fields[3].GetUInt32();
++            if (!ms)
++                continue;
++            s_bests[{ guid, course }] = ms;
++            Record& record = s_records[course];
++            if (!record.ms || ms < record.ms)
++                record = { ms, fields[2].GetCppString() };
++            ++count;
++        } while (result->NextRow());
++        sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Kartcraft: %u best times on %u courses.", count, uint32(s_records.size()));
++    }
++
++    // A finish of `ms` on `course`: "r" a new course record, "p" a new personal best, else "".
++    static std::string RecordFinish(uint32 guid, std::string const& name, Course const& course, uint32 ms)
++    {
++        if (!ms)
++            return "";
++        uint32& best = s_bests[{ guid, course.key }];
++        if (best && best <= ms)
++            return "";
++        best = ms;
++        std::string escaped = name;
++        CharacterDatabase.escape_string(escaped);
++        CharacterDatabase.PExecute("REPLACE INTO `kartcraft_records` (`guid`, `course`, `name`, `ms`, `at`) "
++            "VALUES (%u, '%s', '%s', %u, %u)", guid, course.key, escaped.c_str(), ms, uint32(std::time(nullptr)));
++        Record& record = s_records[course.key];
++        if (record.ms && record.ms <= ms)
++            return "p";
++        record = { ms, name };
++        return "r";
++    }
++
++    static uint32 BestOf(uint32 guid, std::string const& course)
++    {
++        auto found = s_bests.find({ guid, course });
++        return found == s_bests.end() ? 0 : found->second;
++    }
++
++    // "1:02.40", as the client shows a race time.
++    static std::string Clock(uint32 ms)
++    {
++        char buf[32];
++        std::snprintf(buf, sizeof(buf), "%u:%02u.%02u", ms / 60000, ms / 1000 % 60, ms % 1000 / 10);
++        return buf;
++    }
++
 +    // ── Weapons ────────────────────────────────────────────────────────────────────────────────
 +    //
 +    // docs/kartcraft-weapons-protocol.md. The server owns the crates, the roulette, what each
@@ -506,6 +598,8 @@ index 0000000..87ab917
 +    // The mask protects 7680 ms, 11520 ms juiced (VehPickupItem.c:193-351).
 +    constexpr uint32 MASK_TIME = 7680;
 +    constexpr uint32 MASK_TIME_JUICED = 11520;
++    // A green shield lasts 12 s (VehPickupItem.c:976-983); a second's slack for the line.
++    constexpr uint32 SHIELD_TIME = 13 * IN_MILLISECONDS;
 +    // A whole addon line stays under this (docs/ctr-weapons-assets-and-net.md, B1).
 +    constexpr size_t MAX_LINE = 200;
 +
@@ -804,6 +898,7 @@ index 0000000..87ab917
 +            r.claimed = 0;
 +            r.wumpa = 0;
 +            r.maskUntil = 0;
++            r.shieldAt = 0;
 +        }
 +        SendLayout(race);
 +    }
@@ -904,6 +999,24 @@ index 0000000..87ab917
 +        return end != text.c_str() && *end == '\0' && std::isfinite(out);
 +    }
 +
++    // "<x>,<y>,<z>,<yaw>" as the wire writes it, back to the wire's decimals; empty if malformed.
++    static std::string ParsePlace(std::string const& text)
++    {
++        std::vector<std::string> pos;
++        for (size_t at = 0, comma; at <= text.size(); at = comma + 1)
++        {
++            comma = text.find(',', at);
++            if (comma == std::string::npos)
++                comma = text.size();
++            pos.push_back(text.substr(at, comma - at));
++        }
++        float x, y, z, yaw;
++        if (pos.size() != 4 || !ParseFloat(pos[0], x) || !ParseFloat(pos[1], y) || !ParseFloat(pos[2], z) ||
++            !ParseFloat(pos[3], yaw))
++            return "";
++        return Fixed(x, 2) + "," + Fixed(y, 2) + "," + Fixed(z, 2) + "," + Fixed(yaw, 3);
++    }
++
 +    static void HandleWeapon(Player* player, std::string const& body)
 +    {
 +        uint32 now = WorldTimer::getMSTime();
@@ -984,17 +1097,8 @@ index 0000000..87ab917
 +                return;
 +            if (me->held == ITEM_NONE || !me->shots || WorldTimer::getMSTimeDiff(me->claimed, now) < ROLL_MIN)
 +                return;
-+            std::vector<std::string> pos;
-+            for (size_t at = 0, comma; at <= f[3].size(); at = comma + 1)
-+            {
-+                comma = f[3].find(',', at);
-+                if (comma == std::string::npos)
-+                    comma = f[3].size();
-+                pos.push_back(f[3].substr(at, comma - at));
-+            }
-+            float x, y, z, yaw;
-+            if (pos.size() != 4 || !ParseFloat(pos[0], x) || !ParseFloat(pos[1], y) || !ParseFloat(pos[2], z) ||
-+                !ParseFloat(pos[3], yaw))
++            std::string const place = ParsePlace(f[3]);
++            if (place.empty())
 +                return;
 +            uint32 target = uint32(std::strtoul(f[4].c_str(), nullptr, 10));
 +            std::string flags;
@@ -1016,6 +1120,11 @@ index 0000000..87ab917
 +                me->held = ITEM_NONE;
 +            if (item == ITEM_MASK)
 +                me->maskUntil = now + (juiced ? MASK_TIME_JUICED : MASK_TIME);
++            if (item == ITEM_SHIELD)
++            {
++                me->shieldAt = now ? now : 1;
++                me->shieldJuiced = juiced;
++            }
 +            if (item == ITEM_WARP)
 +            {
 +                // The leader, or the next racer when the shooter leads (RB_Warpball.c:127-198).
@@ -1033,8 +1142,42 @@ index 0000000..87ab917
 +            record.at = now;
 +            record.dropped = flags.find('d') != std::string::npos;
 +            SendRace(*race, "KARTCRAFT\tW\tS\t" + guid + "\t" + std::to_string(item) + "\t" + (juiced ? "1" : "0") +
-+                "\t" + std::to_string(shot) + "\t" + Fixed(x, 2) + "," + Fixed(y, 2) + "," + Fixed(z, 2) + "," +
-+                Fixed(yaw, 3) + "\t" + std::to_string(target) + "\t" + flags);
++                "\t" + std::to_string(shot) + "\t" + place + "\t" + std::to_string(target) + "\t" + flags);
++        }
++        else if (verb == "D" && !me->finished)
++        {
++            // Fire again with a bomb rolling: only with a bomb of the sender's still in the pool.
++            uint32 const low = player->GetGUIDLow();
++            bool rolling = std::any_of(race->shots.begin(), race->shots.end(),
++                [low, now](std::pair<uint64 const, Shot> const& s)
++                {
++                    return uint32(s.first >> 16) == low &&
++                        (s.second.item == ITEM_BOMB || s.second.item == ITEM_BOMB_3) && InPool(s.second, now);
++                });
++            if (rolling)
++                SendRace(*race, "KARTCRAFT\tW\tD\t" + guid);
++        }
++        else if (verb == "Z" && f.size() >= 4 && !me->finished)
++        {
++            // Fire with a shield up: it leaves as a shield bomb, once per shield.
++            char* end = nullptr;
++            unsigned long shot = std::strtoul(f[2].c_str(), &end, 10);
++            if (end == f[2].c_str() || *end || shot < 1 || shot > 0xFFFF || !me->shieldAt)
++                return;
++            if (!me->shieldJuiced && WorldTimer::getMSTimeDiff(me->shieldAt, now) > SHIELD_TIME)
++            {
++                me->shieldAt = 0;
++                return;
++            }
++            std::string const place = ParsePlace(f[3]);
++            if (place.empty())
++                return;
++            me->shieldAt = 0;
++            Shot& record = race->shots[(uint64(player->GetGUIDLow()) << 16) | shot];
++            record = Shot();
++            record.item = ITEM_SHIELD;
++            record.at = now;
++            SendRace(*race, "KARTCRAFT\tW\tZ\t" + guid + "\t" + std::to_string(shot) + "\t" + place);
 +        }
 +        else if (verb == "H" && f.size() >= 5)
 +        {
@@ -1070,6 +1213,17 @@ index 0000000..87ab917
 +        }
 +    }
 +
++    // Each racer's "R\tRec": the course record and its holder, and their own best (ms, 0 none).
++    static void SendRecords(uint32 id, Race const& r)
++    {
++        Record const& record = s_records[r.course->key];
++        for (Racer const& x : r.racers)
++            if (Player* p = ObjectAccessor::FindPlayer(x.guid))
++                SendLine(p, "KARTCRAFT\tR\tRec\t" + std::to_string(id) + "\t" + r.course->key + "\t" +
++                std::to_string(record.ms) + "\t" + record.name + "\t" +
++                std::to_string(BestOf(x.guid.GetCounter(), r.course->key)));
++    }
++
 +    // Sends the course and the countdown: the race is on once it runs out.
 +    static void StartRace(uint32 id, Race& r, uint32 now, uint32 countdown)
 +    {
@@ -1080,6 +1234,7 @@ index 0000000..87ab917
 +        SendRace(r, "KARTCRAFT\tR\tC\t" + std::to_string(id) + "\t" + r.course->key + "\t" +
 +            std::to_string(r.course->laps) + "\t" + points);
 +        SendRace(r, "KARTCRAFT\tR\tG\t" + std::to_string(id) + "\t" + std::to_string(countdown) + "\t" + Roster(r));
++        SendRecords(id, r);
 +        StartWeapons(r, now);
 +    }
 +
@@ -1201,11 +1356,11 @@ index 0000000..87ab917
 +        player->CastSpell(player, SPELL_SUMMON_KART, true);
 +    }
 +
-+    static void TeleportToGrid(Player* player, Course const& c, size_t slot)
++    static bool TeleportToGrid(Player* player, Course const& c, size_t slot)
 +    {
 +        // Their situation may have changed since they said yes: then they stay where they are.
 +        if (!CanBeRacedOff(player))
-+            return;
++            return false;
 +        float sx = c.points[0].first, sy = c.points[0].second;
 +        float dx = c.points[1].first - sx, dy = c.points[1].second - sy;
 +        float len = std::max(std::sqrt(dx * dx + dy * dy), 1.f);
@@ -1218,10 +1373,49 @@ index 0000000..87ab917
 +        float ground = sTerrainMgr.LoadTerrain(c.map)->GetHeightStatic(x, y, 500.f);
 +        // No terrain data there: better left where they are, to drive over, than dropped from the sky.
 +        if (ground <= INVALID_HEIGHT)
-+            return;
++            return false;
 +        float z = ground + 0.5f;
 +        SummonKart(player);
 +        player->TeleportTo(c.map, x, y, z, std::atan2(dy, dx));
++        return true;
++    }
++
++    // Where the Race Finder took each racer from, so they can go back when their race is over, as
++    // the dungeon finder's teleport out does: offered ("R\tRet") once they are out of every race,
++    // answered "R\tBack" (back there) or "R\tStay" (forget it). Forgotten after RETURN_KEEP and
++    // at login.
++    struct Origin
++    {
++        uint32 map;
++        float x, y, z, o;
++        uint32 at; // ms
++    };
++
++    static std::unordered_map<uint32, Origin> s_origins; // guid low -> where they were
++    constexpr uint32 RETURN_KEEP = 10 * MINUTE * IN_MILLISECONDS;
++
++    static bool InAnyRace(ObjectGuid guid)
++    {
++        for (auto const& entry : s_races)
++            for (Racer const& r : entry.second.racers)
++                if (r.guid == guid)
++                    return true;
++        return false;
++    }
++
++    // Out of every race with a spot to go back to: the client asks whether to.
++    static void OfferReturn(Player* player, uint32 now)
++    {
++        auto found = s_origins.find(player->GetGUIDLow());
++        if (found == s_origins.end())
++            return;
++        if (WorldTimer::getMSTimeDiff(found->second.at, now) > RETURN_KEEP)
++        {
++            s_origins.erase(found);
++            return;
++        }
++        if (!InAnyRace(player->GetObjectGuid()))
++            SendLine(player, "KARTCRAFT\tR\tRet");
 +    }
 +
 +    static void EndPop(uint32 id, Pop& pop, uint32 now)
@@ -1249,7 +1443,10 @@ index 0000000..87ab917
 +            if (Player* p = ObjectAccessor::FindPlayer(q.guid))
 +            {
 +                r.racers.push_back({ p->GetObjectGuid(), p->GetName() });
-+                TeleportToGrid(p, *pop.course, slot++);
++                Origin from = { p->GetMapId(), p->GetPositionX(), p->GetPositionY(), p->GetPositionZ(),
++                    p->GetOrientation(), now };
++                if (TeleportToGrid(p, *pop.course, slot++))
++                    s_origins[p->GetGUIDLow()] = from;
 +            }
 +        SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(raceId) + "\t" + Roster(r));
 +        StartRace(raceId, r, now, GRID_COUNTDOWN);
@@ -1261,6 +1458,8 @@ index 0000000..87ab917
 +        s_queue.erase(std::remove_if(s_queue.begin(), s_queue.end(), [now](Queued const& q) {
 +            return WorldTimer::getMSTimeDiff(q.seen, now) > QUEUE_STALE || !ObjectAccessor::FindPlayer(q.guid);
 +        }), s_queue.end());
++        for (auto it = s_origins.begin(); it != s_origins.end();)
++            it = WorldTimer::getMSTimeDiff(it->second.at, now) > RETURN_KEEP ? s_origins.erase(it) : std::next(it);
 +
 +        for (auto it = s_pops.begin(); it != s_pops.end();)
 +            if (WorldTimer::getMSTimeDiff(it->second.created, now) > POP_ANSWER)
@@ -1453,6 +1652,25 @@ index 0000000..87ab917
 +                    p->RemoveFlag(UNIT_FIELD_FLAGS, RACE_SHIELD_FLAGS);
 +            });
 +            SendLine(player, "KARTCRAFT\tR\tX");
++            OfferReturn(player, now);
++        }
++        else if (verb == "Back" || verb == "Stay")
++        {
++            auto found = s_origins.find(player->GetGUIDLow());
++            if (found == s_origins.end() || InAnyRace(guid))
++                return true;
++            Origin const to = found->second;
++            s_origins.erase(found);
++            if (verb == "Stay" || WorldTimer::getMSTimeDiff(to.at, now) > RETURN_KEEP)
++                return true;
++            // A teleport belongs to the world thread: posted to its messager, as a Race Marshal's
++            // choice is, and only for a player who could be raced off (alive, not fighting...).
++            sWorld.GetMessager().AddMessage([guid, to](World*)
++            {
++                Player* p = ObjectAccessor::FindPlayer(guid);
++                if (p && p->IsInWorld() && CanBeRacedOff(p))
++                    p->TeleportTo(to.map, to.x, to.y, to.z, to.o);
++            });
 +        }
 +        else
 +            return false;
@@ -1484,6 +1702,8 @@ index 0000000..87ab917
 +        }
 +        if (s_shielded.erase(guid))
 +            player->RemoveFlag(UNIT_FIELD_FLAGS, RACE_SHIELD_FLAGS);
++        // A spot to go back to does not outlive the session.
++        s_origins.erase(guid.GetCounter());
 +    }
 +
 +    // `marshal`: the line comes from a Race Marshal's menu (MarshalSelect), which the player used
@@ -1603,8 +1823,11 @@ index 0000000..87ab917
 +                uint32 place = ++r.finishers;
 +                me->place = uint8(place);
 +                uint32 ms = WorldTimer::getMSTimeDiff(r.start, now);
++                std::string const best = RecordFinish(player->GetGUIDLow(), me->name, c, ms);
 +                SendRace(r, "KARTCRAFT\tR\tF\t" + std::to_string(id) + "\t" + me->name + "\t" +
-+                    std::to_string(place) + "\t" + std::to_string(ms));
++                    std::to_string(place) + "\t" + std::to_string(ms) + "\t" + best);
++                if (!best.empty())
++                    SendRecords(id, r);
 +                Reward(player, place, uint32(r.racers.size()));
 +                if (r.finishers >= r.racers.size())
 +                    s_races.erase(race);
@@ -1623,6 +1846,9 @@ index 0000000..87ab917
 +            else
 +                SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(id) + "\t" + Roster(r));
 +        }
++        // Out of the race (a finished one may already be gone): back where the finder took them?
++        if (verb == "Q")
++            OfferReturn(player, now);
 +    }
 +
 +    static std::string const PREFIX = "KARTCRAFT\t";
@@ -1667,6 +1893,7 @@ index 0000000..87ab917
 +
 +    constexpr uint32 MARSHAL_TEXT = 190000;      // npc_text: the greeting
 +    constexpr uint32 MARSHAL_HELP_TEXT = 190001; // npc_text: "How do races work?"
++    constexpr uint32 MARSHAL_RECORDS_TEXT = 190002; // npc_text: over the course records
 +    // A marshal belongs to the courses whose "marshal" spot is its spawn point, this near (yards).
 +    constexpr float MARSHAL_MATCH = 2.f;
 +
@@ -1679,6 +1906,7 @@ index 0000000..87ab917
 +        MARSHAL_FINDER,
 +        MARSHAL_HELP,
 +        MARSHAL_BACK,
++        MARSHAL_RECORDS,
 +    };
 +
 +    // The courses that start at this marshal: those placed with it, else (a marshal spawned
@@ -1774,9 +2002,39 @@ index 0000000..87ab917
 +        if (busy)
 +            menu.AddMenuItem(GOSSIP_ICON_CHAT, "Leave the race", MARSHAL_LEAVE, 0, "", false);
 +        menu.AddMenuItem(GOSSIP_ICON_DOT, "Open the Race Finder", MARSHAL_FINDER, 0, "", false);
++        if (!here.empty())
++            menu.AddMenuItem(GOSSIP_ICON_CHAT, "Course records", MARSHAL_RECORDS, 0, "", false);
 +        menu.AddMenuItem(GOSSIP_ICON_CHAT, "How do races work?", MARSHAL_HELP, 0, "", false);
 +        talk->SendGossipMenu(MARSHAL_TEXT, marshal->GetObjectGuid());
 +        return true;
++    }
++
++    // The courses that start here, a line each: the record and its holder, and the player's own
++    // best. A line chosen shows the page again.
++    static void MarshalRecords(Player* player, Creature* marshal)
++    {
++        std::vector<size_t> const here = MarshalCourses(marshal);
++        uint32 const guid = player->GetGUIDLow();
++        GossipMenu& menu = player->PlayerTalkClass->GetGossipMenu();
++        menu.ClearMenu();
++        {
++            std::lock_guard<std::mutex> lock(s_mutex);
++            for (size_t i = 0; i < here.size() && i + 1 < GOSSIP_MAX_MENU_ITEMS; ++i)
++            {
++                Course const& c = COURSES[here[i]];
++                auto record = s_records.find(c.key);
++                std::string line = std::string(c.name) + ": ";
++                if (record == s_records.end() || !record->second.ms)
++                    line += "no record yet";
++                else
++                    line += Clock(record->second.ms) + " by " + record->second.name;
++                if (uint32 best = BestOf(guid, c.key))
++                    line += " (yours " + Clock(best) + ")";
++                menu.AddMenuItem(GOSSIP_ICON_DOT, line, MARSHAL_RECORDS, 0, "", false);
++            }
++        }
++        menu.AddMenuItem(GOSSIP_ICON_CHAT, "Back", MARSHAL_BACK, 0, "", false);
++        player->PlayerTalkClass->SendGossipMenu(MARSHAL_RECORDS_TEXT, marshal->GetObjectGuid());
 +    }
 +
 +    static bool MarshalSelect(Player* player, Creature* marshal, uint32 sender, uint32 action)
@@ -1810,6 +2068,9 @@ index 0000000..87ab917
 +                return true;
 +            case MARSHAL_BACK:
 +                return MarshalHello(player, marshal);
++            case MARSHAL_RECORDS:
++                MarshalRecords(player, marshal);
++                return true;
 +        }
 +        player->PlayerTalkClass->CloseGossip();
 +        if (line.empty())
@@ -1843,6 +2104,7 @@ index 0000000..87ab917
 +        marshal->pGossipHello = &MarshalHello;
 +        marshal->pGossipSelect = &MarshalSelect;
 +        marshal->RegisterSelf(true);
++        LoadRecords();
 +    }
 +
 +    SpellCastResult CheckCast(Unit const* caster, SpellEntry const* spell)

@@ -466,6 +466,63 @@ fn leaverace_leaves_everything_and_the_answer_clears_the_finder() {
         .unwrap());
 }
 
+#[test]
+fn a_finder_race_offers_the_way_back_and_new_bests_reach_the_chat() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 3);
+    s.run(
+        "BenillaTestSaid = {} \
+         DEFAULT_CHAT_FRAME.AddMessage = function(self, m) table.insert(BenillaTestSaid, m) end",
+    )
+    .unwrap();
+    let said =
+        |s: &UiScript| -> String { s.eval("return table.concat(BenillaTestSaid, '|')").unwrap() };
+    let me: String = s.eval("return UnitName('player')").unwrap();
+
+    // A course record by anyone is told; a personal best only when it is ours.
+    from_server(&mut s, "R\tC\t4\tstormwind\t0\t1:2;3:4");
+    from_server(&mut s, "R\tF\t4\tGoblin\t1\t62400\tr");
+    from_server(&mut s, "R\tF\t4\tGnome\t2\t65000\tp");
+    from_server(&mut s, "R\tF\t4\tElf\t3\t66000\t");
+    from_server(&mut s, &format!("R\tF\t4\t{me}\t4\t70010\tp"));
+    assert_eq!(
+        said(&s),
+        "Goblin set a new course record on Road to Stormwind: 1:02.40!|\
+         New personal best on Road to Stormwind: 1:10.01."
+    );
+
+    // Out of the race the finder took us to: the stock popup offers the way back.
+    from_server(&mut s, "R\tRet");
+    assert!(s
+        .eval::<bool>("return StaticPopup1:IsVisible() == 1")
+        .unwrap());
+    assert_eq!(
+        s.eval::<String>("return StaticPopup1Text:GetText()")
+            .unwrap(),
+        "Return to where you were before the race?"
+    );
+    assert_eq!(
+        s.eval::<String>("return StaticPopup1Button1:GetText()")
+            .unwrap(),
+        "Return"
+    );
+    sent(&mut s);
+    s.run("StaticPopup1Button1:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tBack"]);
+    assert!(!s
+        .eval::<bool>("return StaticPopup1:IsVisible() == 1")
+        .unwrap());
+
+    // Stay says so, and the server forgets the spot.
+    from_server(&mut s, "R\tRet");
+    s.run("StaticPopup1Button2:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tStay"]);
+}
+
 /// The labels of the minimap button's menu, opened afresh.
 fn menu(s: &mut UiScript) -> Vec<String> {
     s.run("CloseDropDownMenus() BenillaKartMinimapButton:Click('RightButton')")

@@ -2,7 +2,7 @@
 //! `HandleWeapon`; `docs/kartcraft-weapons-protocol.md`) for a race with no server, so the demo
 //! drives the same [`super::Weapons`] the client does. It owns the crates and their respawns,
 //! rolls the roulette ([`ctr_weapons::roll`]), keeps each racer's item, shots and Wumpa, and
-//! relays shots and hits; it also takes the `W D` and `W Z` lines the server has none for.
+//! relays shots, detonations, shield bombs and hits.
 
 use std::collections::HashMap;
 
@@ -22,6 +22,8 @@ const MAX_LIVE_SHOTS: usize = 12;
 /// The mask's 8 s, juiced 12 s: no Wumpa is lost under it (`231/RB_Player.c:153-161`).
 const MASK_TIME: f32 = 7680.0 / 960.0;
 const MASK_TIME_JUICED: f32 = 11520.0 / 960.0;
+/// A green shield lasts 12 s (`VehPickupItem.c:976-983`); a second's slack for the line.
+const SHIELD_TIME: f32 = 13.0;
 /// The roulette's field: 8 racers on lap 2, CTR's 1P arcade table set.
 const RACERS: usize = 8;
 const LAP: u32 = 1;
@@ -39,6 +41,8 @@ struct Racer {
     claimed: f32,
     wumpa: u8,
     mask_until: f32,
+    /// A shield fired and not yet launched: when, and whether juiced (blue, no time limit).
+    shield: Option<(f32, bool)>,
 }
 
 struct Record {
@@ -198,6 +202,9 @@ impl Referee {
                 if item == Item::Mask {
                     r.mask_until = now + if juiced { MASK_TIME_JUICED } else { MASK_TIME };
                 }
+                if item == Item::Shield {
+                    r.shield = Some((now, juiced));
+                }
                 if item == Item::WarpOrb {
                     // The leader, or the next racer when the shooter leads.
                     aim.target = order.into_iter().find(|&k| k != from).unwrap_or(0);
@@ -265,8 +272,36 @@ impl Referee {
                     },
                 ));
             }
-            Up::Detonate => out.push((None, Down::Detonate { shooter: from })),
+            Up::Detonate => {
+                // Only with a bomb of ours still rolling.
+                let rolling = self.shots.iter().any(|(k, s)| {
+                    k.owner == from
+                        && matches!(s.item, Item::Bomb | Item::Bomb3)
+                        && !s.hit
+                        && now - s.at < SHOT_LIFE
+                });
+                if rolling {
+                    out.push((None, Down::Detonate { shooter: from }));
+                }
+            }
             Up::ShieldShot { shot, aim } => {
+                // Only with a shield of ours up; it becomes a shot that hits may name.
+                let r = self.racers.entry(from).or_default();
+                let Some((at, juiced)) = r.shield.take() else {
+                    return out;
+                };
+                if !juiced && now - at > SHIELD_TIME {
+                    return out;
+                }
+                self.shots.insert(
+                    ShotKey { owner: from, shot },
+                    Record {
+                        item: Item::Shield,
+                        at: now,
+                        hit: false,
+                        dropped: false,
+                    },
+                );
                 out.push((
                     None,
                     Down::ShieldShot {
@@ -353,5 +388,56 @@ mod tests {
             r.handle(2, hit(9), [0.0; 3], 1.5).is_empty(),
             "no such shot"
         );
+    }
+
+    #[test]
+    fn a_bomb_detonates_and_a_shield_launches_only_while_ours() {
+        let (mut r, _) = Referee::new(vec![], 100);
+        let aim = Aim::default();
+        assert!(
+            r.handle(1, Up::Detonate, [0.0; 3], 0.0).is_empty(),
+            "no bomb"
+        );
+        r.grant(1, Item::Bomb, 0.0);
+        r.handle(1, Up::Fire { shot: 1, aim }, [0.0; 3], 1.0);
+        assert!(
+            r.handle(2, Up::Detonate, [0.0; 3], 1.5).is_empty(),
+            "not theirs"
+        );
+        assert_eq!(
+            r.handle(1, Up::Detonate, [0.0; 3], 1.5),
+            vec![(None, Down::Detonate { shooter: 1 })]
+        );
+        let launch = |shot| Up::ShieldShot { shot, aim };
+        assert!(
+            r.handle(1, launch(2), [0.0; 3], 2.0).is_empty(),
+            "no shield"
+        );
+        r.grant(1, Item::Shield, 2.0);
+        r.handle(1, Up::Fire { shot: 3, aim }, [0.0; 3], 3.0);
+        let out = r.handle(1, launch(4), [0.0; 3], 4.0);
+        assert!(matches!(
+            &out[..],
+            [(
+                None,
+                Down::ShieldShot {
+                    shooter: 1,
+                    shot: 4,
+                    ..
+                }
+            )]
+        ));
+        assert!(r.handle(1, launch(5), [0.0; 3], 4.5).is_empty(), "once");
+        // The shield bomb is a shot a hit can name.
+        let hit = Up::Hit {
+            shooter: 1,
+            shot: 4,
+            kind: HitKind::Blasted,
+        };
+        assert_eq!(r.handle(2, hit, [0.0; 3], 5.0).len(), 1);
+        // A green shield gone stale launches nothing.
+        r.grant(1, Item::Shield, 6.0);
+        r.handle(1, Up::Fire { shot: 6, aim }, [0.0; 3], 7.0);
+        assert!(r.handle(1, launch(7), [0.0; 3], 30.0).is_empty());
     }
 }

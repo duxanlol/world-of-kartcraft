@@ -77,19 +77,11 @@ pub enum Down {
         crates: Vec<CrateSpot>,
     },
     /// A crate was taken (`W X`).
-    Taken {
-        index: usize,
-        by: Guid,
-    },
+    Taken { index: usize, by: Guid },
     /// A crate is back (`W U`).
-    Back {
-        index: usize,
-    },
+    Back { index: usize },
     /// Our roulette's result (`W I`).
-    Item {
-        item: Item,
-        shots: u8,
-    },
+    Item { item: Item, shots: u8 },
     /// Our Wumpa total (`W F`).
     Wumpa(u8),
     /// A shot to launch (`W S`).
@@ -102,16 +94,10 @@ pub enum Down {
         kind: HitKind,
         wumpa: u8,
     },
-    /// Kartcraft's offline referee only, not on the server's wire: the shooter's bomb goes off
-    /// (`W D`), and its shield leaves as a shield bomb (`W Z`).
-    Detonate {
-        shooter: Guid,
-    },
-    ShieldShot {
-        shooter: Guid,
-        shot: u16,
-        aim: Aim,
-    },
+    /// The shooter pressed Fire again: its rolling bomb goes off (`W D`).
+    Detonate { shooter: Guid },
+    /// The shooter pressed Fire with its shield up: the shield leaves as a shield bomb (`W Z`).
+    ShieldShot { shooter: Guid, shot: u16, aim: Aim },
 }
 
 /// Racer → server.
@@ -120,22 +106,17 @@ pub enum Up {
     /// Take crate `index` (`W C`).
     Claim(usize),
     /// Fire the held item (`W S`): our own shot counter, 1–65535.
-    Fire {
-        shot: u16,
-        aim: Aim,
-    },
+    Fire { shot: u16, aim: Aim },
     /// We were hit by the shooter's shot (`W H`); a self-inflicted hit names us and shot 0.
     Hit {
         shooter: Guid,
         shot: u16,
         kind: HitKind,
     },
-    /// The offline referee's `W D` and `W Z`; see [`Down::Detonate`].
+    /// Fire again with our bomb rolling: set it off (`W D`).
     Detonate,
-    ShieldShot {
-        shot: u16,
-        aim: Aim,
-    },
+    /// Fire with our shield up: launch it as a shield bomb (`W Z`), a shot of our own counter.
+    ShieldShot { shot: u16, aim: Aim },
 }
 
 fn flags(aim: &Aim) -> String {

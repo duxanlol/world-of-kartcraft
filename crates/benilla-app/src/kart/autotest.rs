@@ -5,6 +5,9 @@
 //!
 //! - `host:<course>` clicks "Host a race: <name>", then "Start the race" once another racer is in.
 //! - `join:<course>` clicks "Join ...'s race on <name>", asking again until a race is offered.
+//! - `queue:<course>` hops to Northshire's marshal instead, queues for the course in the Race
+//!   Finder (its Lua, as the window's button does), accepts the ready check on its popup, races,
+//!   and once out of the race clicks "Return" on the popup that offers the way back.
 //! - `:leave=<s>` sends `/leaverace`'s line (`R\tX`) that long after GO.
 //! - `:warp=<s>` hops to the next checkpoint when the autopilot has not reached it in that long
 //!   (it steers straight at it, and courses bend round buildings).
@@ -19,6 +22,7 @@ use crate::names::NameCache;
 use crate::net::{ChatKind, ClientCommand, Guid, NetCommands, NetEntity, ObjectStore, SelfPlayer};
 use crate::player::Player;
 use crate::ui_gossip::GossipState;
+use benilla_ui::script::UiScript;
 
 /// The marshal's name (`creature_template` 190000).
 const MARSHAL: &str = "Race Marshal";
@@ -28,11 +32,15 @@ const SEARCH: f32 = 40.0;
 const REACH: f32 = 4.5;
 /// Seconds before asking the marshal again when the option is not (yet) on the menu.
 const RETRY: f64 = 4.0;
+/// Where `queue:` waits for its race (Northshire's marshal, WoW x, y, z): far from the course, so
+/// the way back is seen to go somewhere.
+const QUEUE_SPOT: [f32; 3] = [-8930.5, -127.4, 83.6];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Role {
     Host,
     Join,
+    Queue,
 }
 
 /// What the hook does next.
@@ -50,6 +58,14 @@ enum Step {
     /// Hosted or joined: waiting for the roster (host: for a second racer).
     Waiting,
     Racing,
+    /// `queue:` queued at this time; the ready check is accepted on its popup.
+    Queued(f64),
+    /// `queue:` out of its race since then: "Return" is clicked when the popup offers it, and
+    /// where we are is logged when it is.
+    Returning {
+        since: f64,
+        clicked: Option<f64>,
+    },
     Done,
 }
 
@@ -83,6 +99,7 @@ fn plan() -> Option<&'static Plan> {
         let role = match parts.next()? {
             "host" => Role::Host,
             "join" => Role::Join,
+            "queue" => Role::Queue,
             other => {
                 error!("kart autotest: unknown role {other:?} in WOW_KART_MARSHAL={spec}");
                 return None;
@@ -125,6 +142,7 @@ fn drive(
     names: Option<Res<NameCache>>,
     units: Query<(&Guid, &NetEntity, &ObjectStore, &Transform), Without<SelfPlayer>>,
     net: Option<Res<NetCommands>>,
+    script: Option<NonSend<UiScript>>,
 ) {
     let (Some(plan), Some(net)) = (plan(), net) else {
         return;
@@ -148,7 +166,19 @@ fn drive(
                 test.step = ask(plan);
                 return;
             }
-            if !hop(plan, &send) {
+            if plan.role == Role::Queue {
+                let [x, y, z] = QUEUE_SPOT;
+                info!(
+                    "kart autotest: queue on {} — hopping to Northshire",
+                    plan.course.key
+                );
+                send(ClientCommand::Chat {
+                    kind: ChatKind::Say,
+                    target: None,
+                    text: format!(".go xyz {x:.1} {y:.1} {z:.1} 0"),
+                    language: None,
+                });
+            } else if !hop(plan, &send) {
                 test.step = Step::Done;
                 return;
             }
@@ -156,10 +186,66 @@ fn drive(
             test.step = Step::Hopped(now);
         }
         Step::Hopped(at) => {
-            if now - *at > 5.0 {
+            if now - *at > 5.0 && plan.role == Role::Queue {
+                let Some(script) = script.as_deref() else {
+                    return;
+                };
+                let w = bevy_to_wow(player.pos);
+                info!(
+                    "kart autotest: at ({:.1}, {:.1}, {:.1}) — queueing for {}",
+                    w[0], w[1], w[2], plan.course.key
+                );
+                // As the window's Find race does, for one course.
+                let queued = script.run(&format!(
+                    "local f = BenillaKartFinder \
+                     f.queued, f.waiting, f.waited, f.noticeUntil = '{0}', nil, nil, 0 \
+                     BenillaKart_Send('Q+\\t{0}') \
+                     f.beat = GetTime() + BENILLA_KART_HEARTBEAT",
+                    plan.course.key
+                ));
+                if let Err(e) = queued {
+                    error!("kart autotest: FAILURE — queueing: {e}");
+                    test.step = Step::Done;
+                    return;
+                }
+                test.step = Step::Queued(now);
+            } else if now - *at > 5.0 {
                 test.step = ask(plan);
             }
         }
+        Step::Queued(at) => {
+            if races.status().is_some() {
+                test.step = Step::Waiting;
+                return;
+            }
+            if click_popup(script.as_deref(), "BENILLA_KART_READY", 1) {
+                info!("kart autotest: ready check — clicked Accept");
+            }
+            if now - *at > 180.0 {
+                error!("kart autotest: FAILURE — no race in 180 s of queueing");
+                test.step = Step::Done;
+            }
+        }
+        Step::Returning { since, clicked } => match clicked {
+            None => {
+                if click_popup(script.as_deref(), "BENILLA_KART_RETURN", 1) {
+                    info!("kart autotest: the way back offered — clicked Return");
+                    *clicked = Some(now);
+                } else if now - *since > 30.0 {
+                    error!("kart autotest: FAILURE — no way back offered in 30 s");
+                    test.step = Step::Done;
+                }
+            }
+            Some(at) if now - *at > 8.0 => {
+                let w = bevy_to_wow(player.pos);
+                info!(
+                    "kart autotest: back at ({:.1}, {:.1}, {:.1}) — done",
+                    w[0], w[1], w[2]
+                );
+                test.step = Step::Done;
+            }
+            Some(_) => {}
+        },
         Step::Asking { want, sent, tries } => {
             // Already in a race here (one left waiting from before is still ours): on to it.
             if plan.role == Role::Host && races.status().is_some() && want.starts_with("Host") {
@@ -287,17 +373,39 @@ fn drive(
                 }
             }
             if races.status().is_none() {
-                info!("kart autotest: out of the race — done");
-                test.step = Step::Done;
+                if plan.role == Role::Queue {
+                    info!("kart autotest: out of the race — waiting for the way back");
+                    test.step = Step::Returning {
+                        since: now,
+                        clicked: None,
+                    };
+                } else {
+                    info!("kart autotest: out of the race — done");
+                    test.step = Step::Done;
+                }
             }
         }
         Step::Done => {}
     }
 }
 
+/// Clicks button `button` of the stock popup `which` when it is up; whether it was.
+fn click_popup(script: Option<&UiScript>, which: &str, button: u8) -> bool {
+    let Some(script) = script else {
+        return false;
+    };
+    script
+        .eval::<bool>(&format!(
+            "local n = StaticPopup_Visible and StaticPopup_Visible('{which}') \
+             if n then getglobal(n .. 'Button{button}'):Click() return true end \
+             return false"
+        ))
+        .unwrap_or(false)
+}
+
 fn ask(plan: &Plan) -> Step {
     let want = match plan.role {
-        Role::Host => format!("Host a race: {}", plan.course.name),
+        Role::Host | Role::Queue => format!("Host a race: {}", plan.course.name),
         Role::Join => format!("race on {}", plan.course.name),
     };
     Step::Asking {
@@ -333,7 +441,7 @@ fn hop(plan: &Plan, send: &impl Fn(ClientCommand)) -> bool {
     // Host and joiner either side of her facing, apart, so their karts do not bump.
     let a = m.o
         + match plan.role {
-            Role::Host => 0.9,
+            Role::Host | Role::Queue => 0.9,
             Role::Join => -0.9,
         };
     let (x, y) = (m.x + 2.5 * a.cos(), m.y + 2.5 * a.sin());

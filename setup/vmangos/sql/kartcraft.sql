@@ -7,16 +7,18 @@ START TRANSACTION;
 
 DELETE FROM `creature` WHERE `guid` BETWEEN 400000 AND 400999 OR `id` = 190000;
 DELETE FROM `creature_template` WHERE `entry` = 190000;
-DELETE FROM `npc_text` WHERE `ID` IN (190000, 190001);
-DELETE FROM `broadcast_text` WHERE `entry` IN (190000, 190001);
+DELETE FROM `npc_text` WHERE `ID` IN (190000, 190001, 190002);
+DELETE FROM `broadcast_text` WHERE `entry` IN (190000, 190001, 190002);
 
 INSERT INTO `broadcast_text` (`entry`, `male_text`, `female_text`) VALUES
 (190000, 'Racers, start your engines! Every course that starts here is yours to host: pick one, gather your friends, and when the host says go, everyone lines up on the grid.', 'Racers, start your engines! Every course that starts here is yours to host: pick one, gather your friends, and when the host says go, everyone lines up on the grid.'),
-(190001, 'Host a race on a course that starts here, or join one that is waiting. Anyone can join until the host starts it; then every racer is put on the grid behind the line for the countdown.$B$BPass every checkpoint in order. A circuit runs its laps back through the start; a sprint ends at its last checkpoint. Break crates along the way for Wumpa fruit and weapons.$B$BEvery finish pays experience and Karting skill, the more the better your place. Far from a start? The Race Finder queues you for any course and takes you there.', 'Host a race on a course that starts here, or join one that is waiting. Anyone can join until the host starts it; then every racer is put on the grid behind the line for the countdown.$B$BPass every checkpoint in order. A circuit runs its laps back through the start; a sprint ends at its last checkpoint. Break crates along the way for Wumpa fruit and weapons.$B$BEvery finish pays experience and Karting skill, the more the better your place. Far from a start? The Race Finder queues you for any course and takes you there.');
+(190001, 'Host a race on a course that starts here, or join one that is waiting. Anyone can join until the host starts it; then every racer is put on the grid behind the line for the countdown.$B$BPass every checkpoint in order. A circuit runs its laps back through the start; a sprint ends at its last checkpoint. Break crates along the way for Wumpa fruit and weapons.$B$BEvery finish pays experience and Karting skill, the more the better your place. Far from a start? The Race Finder queues you for any course and takes you there.', 'Host a race on a course that starts here, or join one that is waiting. Anyone can join until the host starts it; then every racer is put on the grid behind the line for the countdown.$B$BPass every checkpoint in order. A circuit runs its laps back through the start; a sprint ends at its last checkpoint. Break crates along the way for Wumpa fruit and weapons.$B$BEvery finish pays experience and Karting skill, the more the better your place. Far from a start? The Race Finder queues you for any course and takes you there.'),
+(190002, 'The fastest times on the courses that start here, and the record holders. Beat one and your name goes up on the board.', 'The fastest times on the courses that start here, and the record holders. Beat one and your name goes up on the board.');
 
 INSERT INTO `npc_text` (`ID`, `BroadcastTextID0`, `Probability0`) VALUES
 (190000, 190000, 1),
-(190001, 190001, 1);
+(190001, 190001, 1),
+(190002, 190002, 1);
 
 -- Daisy's goblin with the starting flag (display 2591), friendly to all (faction 35), a
 -- gossip NPC (npc_flags 1) whose menu is the core's script npc_kartcraft_marshal.

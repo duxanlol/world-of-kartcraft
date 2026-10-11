@@ -305,11 +305,12 @@ fn update(
     if server_kart {
         profession.dpad(controls.dpad);
     }
-    // ○ fires the held item; the autopilot fires now and then while it holds one.
+    // ○ fires the held item; the autopilot fires now and then while it holds one, and again
+    // with its bomb rolling or its shield up.
     let holding = matches!(
         arms.held(),
         kartcraft::weapons::HeldView::Item(_) | kartcraft::weapons::HeldView::Spinning
-    );
+    ) || arms.fires_again();
     let fire = controls.fire
         || (input::autopilot_on() && holding && input::autofire(now, time.delta_secs()));
     arms.press(fire, controls.reverse);

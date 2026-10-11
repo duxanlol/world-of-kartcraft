@@ -4,7 +4,9 @@
 //! the line, with CTR's start boost for an engine revved just before GO. Each checkpoint passed is
 //! reported, and the server checks it against where we really are; it relays everyone's progress,
 //! from which our place is worked out, and the finishes with their times. Checkpoints stand in the
-//! world as beams of light, the next one bright.
+//! world as beams of light, the next one bright. The server keeps each character's best per course
+//! and the course record: it sends both at the start (`Rec`), marks a finish that beats one
+//! (`F`'s sixth field), and the results board ends with them.
 //!
 //! The Race Finder is a WoW window in the client's UI layer (`assets/ui/KartcraftFrames.xml`,
 //! opened from its minimap button or `/racefinder`) that queues, keeps its place, answers the
@@ -146,6 +148,11 @@ pub(crate) struct Active {
     progress: HashMap<String, (u8, u8, f32)>,
     /// Finishes: (name, place, ms).
     finished: Vec<(String, u8, u32)>,
+    /// Finishers who set a new best with it: true a course record, false a personal best.
+    bests: HashMap<String, bool>,
+    /// The course record (ms, holder) and our own best (ms), from the server's `Rec`; 0 none.
+    record: (u32, String),
+    best: u32,
     done: bool,
     /// When the gas went down during the countdown (local s), for the start boost.
     revved_at: Option<f32>,
@@ -420,11 +427,27 @@ pub(crate) fn update(
                 if let Some(race) = races.race.as_mut().filter(|r| r.id == id) {
                     let place = f[3].parse().unwrap_or(0);
                     let ms = f[4].parse().unwrap_or(0);
-                    info!("kart race: {} finished {place} in {ms} ms", f[2]);
+                    // A sixth field: "r" a new course record, "p" a new personal best.
+                    let best = f.get(5).map(String::as_str).unwrap_or("");
+                    info!("kart race: {} finished {place} in {ms} ms {best}", f[2]);
+                    if best == "r" || best == "p" {
+                        race.bests.insert(f[2].clone(), best == "r");
+                    }
                     race.finished.push((f[2].clone(), place, ms));
                     if f[2] == me {
                         race.done = true;
                     }
+                }
+            }
+            // The course record and holder, and our best: at the start, and after a new best.
+            Some("Rec") if f.len() >= 6 => {
+                if let Some(race) = races.race.as_mut().filter(|r| r.id == id) {
+                    race.record = (f[3].parse().unwrap_or(0), f[4].clone());
+                    race.best = f[5].parse().unwrap_or(0);
+                    info!(
+                        "kart race: course record {} by {}, our best {}",
+                        race.record.0, race.record.1, race.best
+                    );
                 }
             }
             _ => {}
@@ -588,15 +611,18 @@ pub(crate) fn update(
     };
     if race.done {
         text.banner = match race.finished.iter().find(|f| f.0 == me) {
-            Some((_, place, ms)) => format!("{} — {}", ordinal(*place), clock(*ms)),
+            Some((_, place, ms)) => {
+                let news = match race.bests.get(&me) {
+                    Some(true) => " — New course record!",
+                    Some(false) => " — New personal best!",
+                    None => "",
+                };
+                format!("{} — {}{news}", ordinal(*place), clock(*ms))
+            }
             None => String::new(),
         };
     }
-    text.lines = race
-        .finished
-        .iter()
-        .map(|(name, place, ms)| format!("{}. {name}  {}", place, clock(*ms)))
-        .collect();
+    text.lines = board(race);
 
     // Over: once everyone is in (or the stragglers have had their minute), the results stay up a
     // while and then we leave the race.
@@ -680,6 +706,37 @@ fn start_banner(here: &[&Course]) -> String {
         [first @ .., last] => ("start", format!("{} and {last}", first.join(", "))),
     };
     format!("{names} {verb} here — talk to the Race Marshal to race")
+}
+
+/// The results board: the finished in order with their times, a new best marked, then the course
+/// record and our own best. Empty until someone finishes.
+fn board(race: &Active) -> Vec<String> {
+    if race.finished.is_empty() {
+        return Vec::new();
+    }
+    let mut lines: Vec<String> = race
+        .finished
+        .iter()
+        .map(|(name, place, ms)| {
+            let mark = match race.bests.get(name) {
+                Some(true) => "  (record)",
+                Some(false) => "  (best)",
+                None => "",
+            };
+            format!("{place}. {name}  {}{mark}", clock(*ms))
+        })
+        .collect();
+    if race.record.0 != 0 {
+        lines.push(format!(
+            "Course record: {} by {}",
+            clock(race.record.0),
+            race.record.1
+        ));
+    }
+    if race.best != 0 {
+        lines.push(format!("Your best: {}", clock(race.best)));
+    }
+    lines
 }
 
 fn ordinal(place: u8) -> String {
@@ -1093,6 +1150,30 @@ mod tests {
         assert_eq!(ordinal(1), "1ST");
         assert_eq!(ordinal(3), "3RD");
         assert_eq!(ordinal(7), "7TH");
+    }
+
+    #[test]
+    fn the_board_marks_new_bests_and_ends_with_the_record() {
+        let mut race = Active::default();
+        assert!(board(&race).is_empty(), "no board before a finish");
+        race.finished = vec![("Racer".into(), 1, 62_400), ("Goblin".into(), 2, 65_000)];
+        race.bests.insert("Racer".into(), true);
+        race.bests.insert("Goblin".into(), false);
+        race.record = (62_400, "Racer".into());
+        race.best = 62_400;
+        assert_eq!(
+            board(&race),
+            [
+                "1. Racer  1:02.40  (record)",
+                "2. Goblin  1:05.00  (best)",
+                "Course record: 1:02.40 by Racer",
+                "Your best: 1:02.40",
+            ]
+        );
+        // No record yet and no best of ours: just the finishes.
+        race.record = (0, String::new());
+        race.best = 0;
+        assert_eq!(board(&race).len(), 2);
     }
 
     #[test]

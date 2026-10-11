@@ -8,7 +8,10 @@
         The finder is a plain addon over the addon channel, as a 1.12 group-finder addon is: it
         sends the server's verbs with SendAddonMessage ("KARTCRAFT", "R\t<verb>...") and reads its
         replies from CHAT_MSG_ADDON (docs on the protocol: kart/race.rs and Kartcraft.cpp). Queued,
-        it says it is still there every two seconds or the server drops it after ten.
+        it says it is still there every two seconds or the server drops it after ten. Once out of a
+        race the finder took us to, the server offers the way back ("R<TAB>Ret"): a stock popup
+        whose Return sends "R<TAB>Back" and Stay "R<TAB>Stay". A finish that sets a course record,
+        or our own personal best, is told in the chat.
 
         The race and score come from the kart (kart/ui.rs) as BENILLA_KART_RACE and
         BENILLA_KART_SCORE when they change, and BENILLA_KART_COURSES names what the finder offers once per load, one "key<TAB>name" a line:
@@ -287,6 +290,22 @@
             BenillaKartFinder_Refresh()
         end
 
+        -- Each race's course key by race id, from the server's "C".
+        BenillaKartRaceCourse = {}
+
+        -- A finish that beat a best ("r" a course record, "p" a personal best) goes to the chat:
+        -- anyone's record, and our own best.
+        function BenillaKart_Finished(race, name, ms, best)
+            if not DEFAULT_CHAT_FRAME or not ms or (best ~= "r" and best ~= "p") then return end
+            local time = format("%d:%02d.%02d", floor(ms / 60000), mod(floor(ms / 1000), 60), floor(mod(ms, 1000) / 10))
+            local course = BenillaKart_CourseName(BenillaKartRaceCourse[race or ""] or "")
+            if best == "r" then
+                DEFAULT_CHAT_FRAME:AddMessage(format("%s set a new course record on %s: %s!", name, course, time), 1, 0.82, 0)
+            elseif name == UnitName("player") then
+                DEFAULT_CHAT_FRAME:AddMessage(format("New personal best on %s: %s.", course, time), 1, 0.82, 0)
+            end
+        end
+
         -- The server's replies.
         function BenillaKartFinder_OnLine(message)
             local f = BenillaKartFinder
@@ -317,6 +336,14 @@
                 f.check, f.queued, f.waiting, f.waited = nil, nil, nil, nil
                 if StaticPopup_Hide then StaticPopup_Hide("BENILLA_KART_READY") end
                 if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("You left every race and the Race Finder queue.", 1, 0.82, 0) end
+            elseif verb == "C" then
+                -- A race's course, to name it when someone sets a record there.
+                BenillaKartRaceCourse[line[3] or ""] = line[4]
+            elseif verb == "F" then
+                BenillaKart_Finished(line[3], line[4], tonumber(line[6]), line[7])
+            elseif verb == "Ret" then
+                -- Our Race Finder race is over: back to where it took us from?
+                if StaticPopup_Show then StaticPopup_Show("BENILLA_KART_RETURN") end
             elseif verb == "L" then
                 -- A roster with us in it: we are in a race, so the finder is done and closes.
                 local me = UnitName("player")
@@ -795,6 +822,17 @@
                 hideOnEscape = 1,
                 OnAccept = function() BenillaKartFinder_Answer(1) end,
                 OnCancel = function() BenillaKartFinder_Answer(nil) end,
+            }
+            -- After a Race Finder race, as the dungeon finder offers the way out of a dungeon.
+            StaticPopupDialogs["BENILLA_KART_RETURN"] = {
+                text = "Return to where you were before the race?",
+                button1 = "Return",
+                button2 = "Stay",
+                timeout = 0,
+                whileDead = 1,
+                hideOnEscape = 1,
+                OnAccept = function() BenillaKart_Send("Back") end,
+                OnCancel = function() BenillaKart_Send("Stay") end,
             }
         end
         if SlashCmdList then

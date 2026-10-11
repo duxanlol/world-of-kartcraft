@@ -75,6 +75,22 @@ now). Every racer, the sender included, gets
   except the shooter's.
 - Warp orb: the server fills `target` with the race leader (the next racer if the shooter leads).
 
+### Client → server: fire again
+
+CTR's Fire with a bomb rolling sets it off, and Fire with a shield up launches it as a shield
+bomb (`ctr-weapons-spec.md`, 3.6).
+
+- `W\tD`: detonate. Accepted while the sender has a bomb shot (Bomb or Bomb ×3) relayed in the
+  last 30 s that has not ended. Every racer gets `W\tD\t<guid>`, and the sender's rolling bomb
+  goes off where each client has it.
+- `W\tZ\t<shot>\t<x>,<y>,<z>,<yaw>`: launch the shield. `shot` is from the sender's own counter,
+  as for `S`. Accepted once per shield, while the sender has a relayed Shield up: within 13 s of
+  it (CTR's 12 s and a second's slack), or any time for a juiced (blue) one. Every racer gets
+  `W\tZ\t<guid>\t<shot>\t<x>,<y>,<z>,<yaw>`; the shield leaves the shooter's kart and a shield
+  bomb rolls straight on from there. It is a shot like any other: hits name it.
+
+A refused `D` or `Z` gets no answer.
+
 ### Client → server: I was hit
 
 `W\tH\t<shooter guid>\t<shot>\t<kind>`.
@@ -110,7 +126,11 @@ Notes on `setup/vmangos/src/Kartcraft.cpp`'s `W` handling, where this page leave
 - **The item in the `S` relay** is the held id, so Bomb ×3 and Missile ×3 relay as 10 and 11.
 - **Live shots** (the 12-shot pool) are projectiles (bomb, missile, TNT, beaker, warp orb, ×3
   items) relayed in the last 30 s that have not ended: a missile or warp orb that hit, or a dropped
-  item that was hit. Turbo, Shield, Mask and Clock do not count.
+  item that was hit. Turbo, Shield, Mask and Clock do not count, nor does a shield bomb (it
+  is recorded as a Shield shot): the shield it was already took its place.
+- **A shield up** is the racer's last relayed Shield, until a `Z` launches it, a new race starts
+  or 13 s pass (a juiced one has no time limit). A shield popped by a hit is not reported, so a
+  `Z` after a pop inside those 13 s is still relayed; the shooter's own client sends none.
 - **Roulette field size** is the race's racer count. With 1 or 7 racers CTR has no table and rolls
   uniformly over ids 0–11 (Spring becomes Turbo). The lap-1 downgrade uses the racer's lap, so on
   a sprint (no laps) Race4 is always downgraded to Race3.
@@ -151,10 +171,11 @@ server's rules in-process, so it runs the same code.
   within 320 lu, blasts it and reports that as its own self-inflicted `B`: a TNT on a head is no
   longer a shot the server knows.
 
-Not on this wire, so online the client does nothing for them: Fire with a bomb rolling
-(detonate) and Fire with a shield up (the shield bomb). The offline referee takes two lines of
-its own for them, `W D` and `W Z\t<shot>\t<x>,<y>,<z>,<yaw>`, relayed as `W D\t<guid>` and
-`W Z\t<guid>\t<shot>\t...`. Also unsent: a TNT thrown off by hopping (it goes off where it lands,
+- **Fire again.** With our bomb rolling, Fire sends `D`, and the bomb goes off on the relay, ours
+  included. With our shield up, Fire sends `Z` from our kart and takes the shield off it at once;
+  the shield bomb launches on the relay, and another's shield leaves their ghost then.
+
+Not on this wire: a TNT thrown off by hopping (it goes off where it lands,
 without damage), the rain cloud's effects beyond its look, and weapons breaking crates.
 Weapons are stepped only inside our session's collision, 120 yd round our kart: a shot farther
 out finds no ground and goes off.

@@ -189,9 +189,6 @@ pub struct Weapons {
     pub me: KartId,
     /// Our race position, 0 the leader.
     pub rank: u8,
-    /// The offline referee also takes `W D` and `W Z` (a bomb's remote detonation, a fired
-    /// shield), which the server's protocol has no line for: online those presses do nothing.
-    pub extended: bool,
     /// Lines for the server, by sender (ours, or a demo dummy's).
     pub outbox: Vec<(KartId, Up)>,
     /// The fraction of a tick drawn past the last, for drawing between ticks.
@@ -268,7 +265,6 @@ impl Weapons {
     pub fn clear(&mut self) {
         *self = Weapons {
             me: self.me,
-            extended: self.extended,
             next_shot: self.next_shot,
             frame: self.frame,
             serial: self.serial,
@@ -309,6 +305,12 @@ impl Weapons {
 
     pub fn held(&self) -> HeldView {
         self.held.view()
+    }
+
+    /// Whether Fire now does something to a shot already out: our bomb rolling (it goes off) or
+    /// our shield up (it leaves as a shield bomb).
+    pub fn fires_again(&self) -> bool {
+        self.held.bomb_out() || self.held.shield_up()
     }
 
     /// The item slot for the HUD: the roulette while it spins, the item with its shots when
@@ -592,9 +594,11 @@ impl Weapons {
                 wumpa,
             } => self.relayed_hit(victim, shooter, shot, kind, wumpa, kart, origin),
             Down::Detonate { shooter } => {
-                self.field.detonate(shooter);
+                let found = self.field.detonate(shooter);
+                info!("kart weapons: detonate by {shooter} (bomb here: {found})");
             }
             Down::ShieldShot { shooter, shot, aim } => {
+                info!("kart weapons: shield bomb {shot} by {shooter}");
                 let key = ShotKey {
                     owner: shooter,
                     shot,
@@ -943,11 +947,6 @@ impl Weapons {
             }
         }
         if !std::mem::take(&mut self.fire) {
-            return;
-        }
-        // The server's protocol has no line to detonate a bomb or fire a shield: online those
-        // presses do nothing.
-        if (self.held.bomb_out() || self.held.shield_up()) && !self.extended {
             return;
         }
         let can = if self.held.shield_up() {
