@@ -923,46 +923,78 @@ namespace Kartcraft
     // unit belongs to its map's thread, so the change goes through the world's messager, which
     // runs between map updates; the flags are checked there, so a racer who logs back in mid-race
     // is covered again.
-    static std::set<ObjectGuid> s_shielded;
+    // Race mode, asked for from the minimap button's menu, is the same shield at will, untargetable
+    // too: for waiting in the Race Finder's queue in peace. Never entered in combat; a login ends it.
+    // Each shielded player by the flags they wear.
+    static std::map<ObjectGuid, uint32> s_shielded;
+    static std::set<ObjectGuid> s_raceMode;
     static uint32 s_shieldedAt = 0;
     constexpr uint32 SHIELD_INTERVAL = 250;
     constexpr uint32 RACE_SHIELD_FLAGS = UNIT_FLAG_IMMUNE_TO_NPC | UNIT_FLAG_IMMUNE_TO_PLAYER;
+    constexpr uint32 RACE_MODE_FLAGS = RACE_SHIELD_FLAGS | UNIT_FLAG_NOT_SELECTABLE;
 
     // Run after every Kartcraft line: a racer let go is freed at once; those racing are covered
     // again at most every SHIELD_INTERVAL.
     static void TickShields(uint32 now)
     {
-        std::set<ObjectGuid> racing;
+        std::map<ObjectGuid, uint32> want;
         for (auto const& entry : s_races)
             if (entry.second.start)
                 for (Racer const& r : entry.second.racers)
                     if (!r.finished)
-                        racing.insert(r.guid);
-        std::vector<ObjectGuid> off;
-        for (ObjectGuid const& guid : s_shielded)
-            if (!racing.count(guid))
-                off.push_back(guid);
-        bool newcomer = std::any_of(racing.begin(), racing.end(),
-            [](ObjectGuid const& guid) { return !s_shielded.count(guid); });
-        s_shielded = racing;
-        bool due = !racing.empty() && WorldTimer::getMSTimeDiff(s_shieldedAt, now) >= SHIELD_INTERVAL;
+                        want[r.guid] |= RACE_SHIELD_FLAGS;
+        for (ObjectGuid const& guid : s_raceMode)
+            want[guid] |= RACE_MODE_FLAGS;
+        // The flags each player no longer needs.
+        std::vector<std::pair<ObjectGuid, uint32>> off;
+        for (auto const& had : s_shielded)
+        {
+            auto kept = want.find(had.first);
+            uint32 gone = had.second & ~(kept == want.end() ? 0 : kept->second);
+            if (gone)
+                off.emplace_back(had.first, gone);
+        }
+        bool newcomer = std::any_of(want.begin(), want.end(),
+            [](std::pair<ObjectGuid const, uint32> const& w)
+            {
+                auto had = s_shielded.find(w.first);
+                return had == s_shielded.end() || had->second != w.second;
+            });
+        s_shielded = want;
+        bool due = !want.empty() && WorldTimer::getMSTimeDiff(s_shieldedAt, now) >= SHIELD_INTERVAL;
         if (off.empty() && !newcomer && !due)
             return;
         s_shieldedAt = now;
-        sWorld.GetMessager().AddMessage([racing, off](World*)
+        sWorld.GetMessager().AddMessage([want, off](World*)
         {
-            for (ObjectGuid const& guid : racing)
-                if (Player* p = ObjectAccessor::FindPlayer(guid))
-                    if (!p->HasFlag(UNIT_FIELD_FLAGS, RACE_SHIELD_FLAGS))
+            for (auto const& w : off)
+                if (Player* p = ObjectAccessor::FindPlayer(w.first))
+                    p->RemoveFlag(UNIT_FIELD_FLAGS, w.second);
+            for (auto const& w : want)
+                if (Player* p = ObjectAccessor::FindPlayer(w.first))
+                    if ((p->GetUInt32Value(UNIT_FIELD_FLAGS) & w.second) != w.second)
                     {
-                        p->SetFlag(UNIT_FIELD_FLAGS, RACE_SHIELD_FLAGS);
+                        p->SetFlag(UNIT_FIELD_FLAGS, w.second);
                         p->CombatStopWithPets(true);
                         p->GetHostileRefManager().deleteReferences();
                     }
-            for (ObjectGuid const& guid : off)
-                if (Player* p = ObjectAccessor::FindPlayer(guid))
-                    p->RemoveFlag(UNIT_FIELD_FLAGS, RACE_SHIELD_FLAGS);
         });
+    }
+
+    // "R\tM\t1" or "R\tM\t0": race mode on or off. The answer is "R\tM\t<1 or 0>", or "R\tMx"
+    // when it can't come on (in combat). The shield follows with the line's TickShields.
+    static void RaceMode(Player* player, bool on)
+    {
+        if (on && player->IsInCombat())
+        {
+            SendLine(player, "KARTCRAFT\tR\tMx");
+            return;
+        }
+        if (on)
+            s_raceMode.insert(player->GetObjectGuid());
+        else
+            s_raceMode.erase(player->GetObjectGuid());
+        SendLine(player, std::string("KARTCRAFT\tR\tM\t") + (on ? "1" : "0"));
     }
 
     // Crates due back come up; old shots are forgotten. Run on every Kartcraft line: a racer's
@@ -1769,8 +1801,10 @@ namespace Kartcraft
                 it = std::next(it);
             }
         }
+        // Race mode too: a login starts without it.
+        s_raceMode.erase(guid);
         if (s_shielded.erase(guid))
-            player->RemoveFlag(UNIT_FIELD_FLAGS, RACE_SHIELD_FLAGS);
+            player->RemoveFlag(UNIT_FIELD_FLAGS, RACE_MODE_FLAGS);
         // A spot to go back to does not outlive the session.
         s_origins.erase(guid.GetCounter());
     }
@@ -1854,10 +1888,15 @@ namespace Kartcraft
                 tab = body.size();
             f.push_back(body.substr(at, tab - at));
         }
-        // Unstuck works in the kart or out of it.
+        // Unstuck and race mode work in the kart or out of it.
         if (f.size() >= 2 && f[1] == "U")
         {
             Unstuck(player, now);
+            return;
+        }
+        if (f.size() >= 3 && f[1] == "M")
+        {
+            RaceMode(player, f[2] == "1");
             return;
         }
         // The finder's verbs work on foot; the rest need the kart, but for a marshal's and for

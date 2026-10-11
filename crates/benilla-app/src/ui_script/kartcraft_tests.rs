@@ -627,6 +627,7 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
         [
             "World of Kartcraft",
             "Race Finder",
+            "Race mode",
             "Track browser",
             "Leave race",
             "Unstuck",
@@ -1409,4 +1410,51 @@ fn the_race_map_draws_the_track_and_the_racers_on_it() {
     assert!(s
         .eval::<bool>("return BenillaKartMapFrame:IsMovable() == 1")
         .unwrap());
+}
+
+#[test]
+fn race_mode_is_asked_of_the_server_and_its_answer_ticks_the_menu() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let ticked = |s: &mut UiScript| -> bool {
+        menu(s);
+        s.eval(
+            "for i = 1, UIDROPDOWNMENU_MAXBUTTONS do \
+             local b = getglobal('DropDownList1Button' .. i) \
+             if b and b:IsVisible() and b:GetText() == 'Race mode' then \
+             return getglobal(b:GetName() .. 'Check'):IsVisible() == 1 end end return false",
+        )
+        .unwrap()
+    };
+    s.run(
+        "BenillaKartSaid = {} local said = BenillaKart_Say \
+         BenillaKart_Say = function(t) table.insert(BenillaKartSaid, t) said(t) end",
+    )
+    .unwrap();
+
+    // Off until the server says on; the menu asks, the answer ticks it.
+    assert!(!ticked(&mut s));
+    pick(&mut s, "Race mode");
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tM\t1"]);
+    from_server(&mut s, "R\tM\t1");
+    assert!(ticked(&mut s));
+    // On, the entry asks for it off.
+    pick(&mut s, "Race mode");
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tM\t0"]);
+    from_server(&mut s, "R\tM\t0");
+    assert!(!ticked(&mut s));
+    // Refused in combat: still off.
+    from_server(&mut s, "R\tMx");
+    assert!(!ticked(&mut s));
+    assert_eq!(
+        s.eval::<Vec<String>>("return BenillaKartSaid").unwrap(),
+        [
+            "Race mode on: nobody can target or attack you, and you can't attack anyone.",
+            "Race mode off.",
+            "Race mode: not while you're in combat.",
+        ]
+    );
 }
