@@ -239,6 +239,21 @@ pub(crate) struct Active {
 }
 
 impl Active {
+    /// The countdown's line (`G`): GO `ms` from `now`, the race from scratch. The server sends it
+    /// as it teleports everyone to the grid, taking a driver out of the kart for the teleport and
+    /// putting them back after it: the grace a kart being summoned gets starts again, or a race
+    /// hosted long ago would be left in that moment without one.
+    fn count_down(&mut self, now: f32, ms: f32) {
+        self.go_at = Some(now + ms / 1000.0);
+        self.lap = 0;
+        self.checkpoint = 0;
+        self.progress.clear();
+        self.finished.clear();
+        self.revved_at = None;
+        self.beeped = 0;
+        self.grace_until = self.grace_until.max(now + KART_GRACE_SECS);
+    }
+
     /// The checkpoint to reach next; `None` before there is a course, and once a sprint's finish
     /// is passed (its result is on its way: the finish is reported once).
     fn next(&self) -> Option<usize> {
@@ -513,14 +528,7 @@ pub(crate) fn update(
             }
             Some("G") if f.len() >= 3 => {
                 if let Some(race) = races.race.as_mut().filter(|r| r.id == id) {
-                    let ms: f32 = f[2].parse().unwrap_or(4000.0);
-                    race.go_at = Some(now + ms / 1000.0);
-                    race.lap = 0;
-                    race.checkpoint = 0;
-                    race.progress.clear();
-                    race.finished.clear();
-                    race.revved_at = None;
-                    race.beeped = 0;
+                    race.count_down(now, f[2].parse().unwrap_or(4000.0));
                     info!("kart race: countdown, {} racers", race.roster.len());
                 }
             }
@@ -1408,6 +1416,24 @@ mod tests {
             "Northshire Sprint, Road to Stormwind and Goldshire & Crystal Lake start here — talk \
              to the Race Marshal to race"
         );
+    }
+
+    #[test]
+    fn the_countdown_gives_a_kart_taken_off_for_the_grid_time_to_come_back() {
+        // A race hosted long ago: its first grace is long gone.
+        let mut race = course();
+        race.grace_until = 10.0;
+        race.checkpoint = 2;
+        race.count_down(100.0, 8000.0);
+        assert_eq!(race.go_at, Some(108.0));
+        assert_eq!(race.checkpoint, 0, "from scratch");
+        // Out of the kart for the teleport: kept while the kart comes back, left after.
+        assert!(!left_without_kart(Some(false), 101.5, race.grace_until));
+        assert!(left_without_kart(
+            Some(false),
+            100.0 + KART_GRACE_SECS,
+            race.grace_until
+        ));
     }
 
     #[test]
