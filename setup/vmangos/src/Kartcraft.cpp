@@ -1281,16 +1281,49 @@ namespace Kartcraft
         player->CastSpell(player, SPELL_SUMMON_KART, true);
     }
 
-    // To (x, y) on `map`, on the ground there, facing `o`; in the kart first if `kart`. No terrain
-    // data there: better left where they are, to drive over, than dropped from the sky.
+    // How long after a teleport the kart is summoned again (ms), and how often it looks again
+    // while the teleport is still landing (the client's ack, a far teleport's load).
+    constexpr uint32 KART_AGAIN_DELAY = 1500;
+    constexpr uint32 KART_AGAIN_RETRY = 500;
+
+    // The kart summoned once a teleport has landed. It runs on the player's own event queue,
+    // which ticks only while they are in a world, so after a far teleport's load as well.
+    class KartAgainEvent : public BasicEvent
+    {
+    public:
+        explicit KartAgainEvent(Player* player) : m_player(player) { }
+
+        bool Execute(uint64 /*e_time*/, uint32 /*p_time*/) override
+        {
+            if (m_player->IsBeingTeleported())
+                m_player->m_Events.AddEventAtOffset(new KartAgainEvent(m_player), KART_AGAIN_RETRY);
+            else if (m_player->IsInWorld() && m_player->IsAlive())
+                SummonKart(m_player);
+            return true;
+        }
+
+    private:
+        Player* m_player;
+    };
+
+    // To (x, y) on `map`, on the ground there, facing `o`, and in the kart once there if `kart`
+    // (onto a grid: a countdown follows, or no race). A driver going onto a grid is taken out of
+    // the kart for the teleport and put back in after it: on foot a teleport is the stock one,
+    // and the client starts the kart again where it put them rather than carrying the kart's old
+    // pose over it; the countdown's line gives the kart time to come back. Without `kart` (back
+    // to a checkpoint mid-race, where no countdown would cover the kart's absence) a driver stays
+    // in it. No terrain data there: better left where they are, to drive over, than dropped from
+    // the sky.
     static bool TeleportOnto(Player* player, uint32 map, float x, float y, float o, bool kart)
     {
         float ground = sTerrainMgr.LoadTerrain(map)->GetHeightStatic(x, y, 500.f);
         if (ground <= INVALID_HEIGHT)
             return false;
         if (kart)
-            SummonKart(player);
+            player->RemoveAurasDueToSpell(SPELL_SUMMON_KART);
         player->TeleportTo(map, x, y, ground + 0.5f, o);
+        if (kart)
+            player->m_Events.AddEventAtOffset(new KartAgainEvent(player), KART_AGAIN_DELAY);
         return true;
     }
 
