@@ -1,10 +1,10 @@
 //! Races between karts, refereed by the Kartcraft server (`Kartcraft.cpp`, "Races"). A course's
 //! Race Marshal hosts, joins and starts a race over gossip; a driver at a start is told so here.
-//! The server sends the course's checkpoints and a countdown: CTR's 3-2-1-GO, the kart held on
-//! the line, with CTR's start boost for an engine revved just before GO. Each checkpoint passed is
-//! reported, and the server checks it against where we really are; it relays everyone's progress,
-//! from which our place is worked out, and the finishes with their times. Checkpoints stand in the
-//! world as beams of light, the next one bright. The server keeps each character's best per course
+//! The server sends the course's checkpoints and a countdown: CTR's start lights, the kart held on
+//! the line revving, with CTR's start boost for the revs at GO (`ctr_kart::rev`). Each checkpoint
+//! passed is reported, and the server checks it against where we really are; it relays everyone's
+//! progress, from which our place is worked out, and the finishes with their times. Checkpoints
+//! stand in the world as beams of light, the next one bright. The server keeps each character's best per course
 //! and the course record: it sends both at the start (`Rec`), marks a finish that beats one
 //! (`F`'s sixth field), and the results board ends with them.
 //!
@@ -192,10 +192,6 @@ const RESULTS_SECS: f32 = 10.0;
 const FINISH_WAIT_SECS: f32 = 60.0;
 /// How long a race just entered waits for the kart the server is summoning (s).
 const KART_GRACE_SECS: f32 = 10.0;
-/// The start boost: revving this long before GO (s) is big, a little earlier small, earlier
-/// still bogs the engine down.
-const BOOST_BIG: std::ops::Range<f32> = 0.15..0.6;
-const BOOST_SMALL: std::ops::Range<f32> = 0.6..1.2;
 /// A checkpoint's beam: its height (yards) and radius.
 const BEAM_HEIGHT: f32 = 40.0;
 const BEAM_RADIUS: f32 = 1.2;
@@ -253,9 +249,8 @@ pub(crate) struct Active {
     /// A time trial (`TT`): us alone, no crates or items, and our ghost to race.
     time_trial: bool,
     done: bool,
-    /// When the gas went down during the countdown (local s), for the start boost.
-    revved_at: Option<f32>,
-    beeped: i32,
+    /// Last frame's start-light timer, for the lights' sounds.
+    lights: Option<i32>,
     /// The standings, leader first, as last worked out.
     order: Vec<String>,
     /// Where we were last frame (WoW x, y), to see a gate crossed.
@@ -280,9 +275,23 @@ impl Active {
         self.checkpoint = 0;
         self.progress.clear();
         self.finished.clear();
-        self.revved_at = None;
-        self.beeped = 0;
+        self.lights = None;
         self.grace_until = self.grace_until.max(now + KART_GRACE_SECS);
+    }
+
+    /// CTR's start lights `left` seconds before GO: their timer, and the sound of a light come
+    /// on since the last frame, each once (DotLights.c:91-136). A countdown that arrives late
+    /// still sounds the light it lands on.
+    fn start_lights(&mut self, left: f32, cues: &mut Vec<kartcraft::sound::Cue>) -> i32 {
+        use kartcraft::hud::{start_light_sound, StartSound, LIGHTS_TIMER_START};
+        let timer = kartcraft::hud::lights_timer(left);
+        let prev = self.lights.replace(timer).unwrap_or(LIGHTS_TIMER_START);
+        match start_light_sound(prev, timer) {
+            Some(StartSound::Red) => cues.push(kartcraft::sound::Cue::Countdown(false)),
+            Some(StartSound::Green) => cues.push(kartcraft::sound::Cue::Countdown(true)),
+            None => {}
+        }
+        timer
     }
 
     /// A frame with our kart aura read: `None` is no object of ours, a worldport's loading screen.
@@ -684,7 +693,7 @@ pub(crate) fn update(
     for f in std::mem::take(&mut races.inbox) {
         match races.hear(&f, now) {
             Heard::Nothing => {}
-            Heard::ReadyCheck => audio.cues.push(kartcraft::sound::Cue::Countdown(true)),
+            Heard::ReadyCheck => audio.cues.push(kartcraft::sound::Cue::Ready),
             Heard::LeftAll => {
                 *text = RaceText::default();
                 extras.lap = None;
@@ -697,6 +706,7 @@ pub(crate) fn update(
     // `WOW_KART_RACE` joins, hosts or starts for unattended runs, as the Race Marshal does.
     let press = auto.press(now, races);
     *text = RaceText::default();
+    extras.start_timer = None;
 
     // Out of the kart, out of the race; but not while the kart aura stays on us, as it does
     // through the Race Finder's teleport to the start.
@@ -770,38 +780,22 @@ pub(crate) fn update(
         );
         return;
     };
+    // CTR's start lights: their last 4 s to GO on the HUD, green with GO, and their sounds.
+    let timer = race.start_lights(go - now, &mut audio.cues);
+    let lights = kartcraft::hud::has_start_lights();
+    if timer >= kartcraft::hud::LIGHTS_TIMER_END {
+        extras.start_timer = Some(timer);
+    }
     if now < go {
-        let left = go - now;
-        let beat = left.ceil() as i32;
-        if beat <= 3 && beat != race.beeped {
-            race.beeped = beat;
-            audio.cues.push(kartcraft::sound::Cue::Countdown(false));
-        }
-        text.banner = countdown_banner(left, true);
-        // The gas held from when it went down.
-        if drive.revving {
-            race.revved_at.get_or_insert(now);
+        // The seconds to the start until the lights take over (the text's 3, 2, 1 without them).
+        text.banner = if lights && timer <= kartcraft::hud::LIGHTS_TIMER_START {
+            String::new()
         } else {
-            race.revved_at = None;
-        }
+            countdown_banner(go - now, true)
+        };
         return;
     }
-    if race.beeped != 0 {
-        race.beeped = 0;
-        audio.cues.push(kartcraft::sound::Cue::Countdown(true));
-        let early = race.revved_at.map(|t| go - t);
-        let boost = early.and_then(|e| {
-            if BOOST_BIG.contains(&e) {
-                Some(true)
-            } else if BOOST_SMALL.contains(&e) {
-                Some(false)
-            } else {
-                None
-            }
-        });
-        races_start_boost(boost);
-    }
-    if now - go < 1.0 {
+    if now - go < 1.0 && !lights {
         text.banner = "GO!".into();
     }
 
@@ -937,15 +931,6 @@ impl AutoRace {
             }
             _ => false,
         }
-    }
-}
-
-/// The start boost is fired by the kart update, which holds the session.
-pub(crate) static START_BOOST: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
-
-fn races_start_boost(boost: Option<bool>) {
-    if let Some(big) = boost {
-        *START_BOOST.lock().unwrap() = Some(big);
     }
 }
 
@@ -2167,6 +2152,68 @@ mod tests {
         assert_eq!(
             countdown_banner(0.4, false),
             "Getting to the start... race starts in 1"
+        );
+    }
+
+    #[test]
+    fn the_start_lights_beep_three_reds_and_a_green_at_go_once_each() {
+        use kartcraft::sound::Cue;
+        // A Race Finder countdown of 28 s, every frame at 60 Hz until 2 s after GO.
+        let mut race = Active::default();
+        race.count_down(100.0, 28000.0);
+        let go = race.go_at.unwrap();
+        let mut heard = Vec::new();
+        let mut shown = Vec::new();
+        let mut now = 100.0f32;
+        while now < go + 2.0 {
+            let mut cues = Vec::new();
+            let timer = race.start_lights(go - now, &mut cues);
+            heard.extend(cues.into_iter().map(|c| (c, go - now)));
+            if (kartcraft::hud::LIGHTS_TIMER_END..=kartcraft::hud::LIGHTS_TIMER_START)
+                .contains(&timer)
+            {
+                shown.push(go - now);
+            }
+            now += 1.0 / 60.0;
+        }
+        let cues: Vec<Cue> = heard.iter().map(|h| h.0).collect();
+        assert_eq!(
+            cues,
+            [
+                Cue::Countdown(false),
+                Cue::Countdown(false),
+                Cue::Countdown(false),
+                Cue::Countdown(true)
+            ]
+        );
+        // Each in the first frame at or past its second: 3, 2, 1 before GO, then GO.
+        for (&(_, left), at) in heard.iter().zip([3.0f32, 2.0, 1.0, 0.0]) {
+            assert!(
+                left <= at + 1e-3 && left > at - 1.0 / 60.0 - 1e-3,
+                "{left} {at}"
+            );
+        }
+        // The lights are up for CTR's last 4 s before GO and the second after it.
+        let (first, last) = (shown[0], *shown.last().unwrap());
+        assert!(
+            (first - 4.0).abs() < 0.02 && (last + 1.0).abs() < 0.02,
+            "{first} {last}"
+        );
+
+        // A countdown arriving 1.5 s before GO sounds the light it lands on, then GO.
+        let mut late = Active::default();
+        late.count_down(0.0, 1500.0);
+        let mut cues = Vec::new();
+        for t in [0.0f32, 0.1, 0.6, 1.0, 1.5, 1.6] {
+            late.start_lights(1.5 - t, &mut cues);
+        }
+        assert_eq!(
+            cues,
+            [
+                Cue::Countdown(false),
+                Cue::Countdown(false),
+                Cue::Countdown(true)
+            ]
         );
     }
 

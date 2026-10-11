@@ -8,6 +8,7 @@
 use glam::{Mat3, Vec3};
 
 use crate::collision::{Collision, GROUND_NORMAL_Y};
+use crate::rev::{RevEngine, RevState, StartBoost};
 use crate::stats::*;
 
 /// One frame's CTR-milliseconds at 30 fps.
@@ -100,6 +101,9 @@ pub enum Event {
     /// under it. Unless already blasted, the caller blasts this kart (a self-hit) and the 320 lu
     /// blast catches whoever else is near.
     TntExploded,
+    /// Revving on the grid, the engine held at its target too long: locked out of the start
+    /// boost (OtherFX 0xF, `VehStuckProc.c:1093-1099`).
+    OverRev,
 }
 
 /// What hit the kart: `VehPickState_NewState`'s damage types 1 to 3, and a TNT crate touched
@@ -530,6 +534,8 @@ pub struct Kart {
     camera_spin_rate: i32,
     /// A turbo was granted since the camera last looked (`VehFire.c`'s camera flag 0x80).
     camera_kick: bool,
+    /// Held on the grid before GO, revving (`KS_ENGINE_REVVING`).
+    rev: Option<RevEngine>,
 
     pub events: Vec<Event>,
 }
@@ -617,6 +623,7 @@ impl Kart {
             camera_spin: 0,
             camera_spin_rate: 0,
             camera_kick: false,
+            rev: None,
             events: Vec::new(),
         }
     }
@@ -647,6 +654,13 @@ impl Kart {
     /// The powerslide meter: 0 empty to 1 full, and whether it is in the red zone; `None` when
     /// not drifting or between attempts.
     pub fn turbo_meter(&self) -> Option<(f32, bool)> {
+        // Revving on the grid, it shows the revs, red from the acceleration speed up
+        // (`VehStuckProc.c:1236-1257`).
+        if let Some(rev) = &self.rev {
+            let room = rev.meter_room(TURBO_MAX_ROOM_MS, TURBO_LOW_ROOM_MS);
+            let filled = 1.0 - room as f32 / TURBO_MAX_ROOM_MS as f32;
+            return Some((filled, rev.state() == RevState::Ready));
+        }
         (self.state == State::Drifting && self.turbo_meter > 0).then(|| {
             let filled = 1.0 - self.turbo_meter as f32 / TURBO_MAX_ROOM_MS as f32;
             (filled, self.turbo_meter < TURBO_LOW_ROOM_MS)
@@ -775,7 +789,15 @@ impl Kart {
     fn engine_sound_tick(&mut self) {
         let mut target = self.fire_speed.abs();
         let drifting = self.state == State::Drifting;
-        if self.flags_prev & TOUCH_GROUND == 0 || drifting {
+        if let Some(rev) = &self.rev {
+            // Revving on the grid (`HOWL_Engine.c:170-181`): the pitch chases the revs, higher
+            // with the gas down.
+            let gas = if rev.gas() { 0x3000 } else { 0 };
+            target = (self.engine_pitch * 0x40 + gas * 0x30 + rev.level() * 0x90) >> 8;
+            if rev.gas() {
+                target += 0x1000;
+            }
+        } else if self.flags_prev & TOUCH_GROUND == 0 || drifting {
             target += 0xF00;
         } else {
             target = (target + self.speed_approx.abs()) >> 1;
@@ -861,6 +883,9 @@ impl Kart {
             // `VehPhysForce.c:1737-1740`: scale.y = 0, lifted up the drawn normal.
             scale.y = 0.0;
             offset = self.n2 * SQUISH_LIFT;
+        } else if let Some(rev) = &self.rev {
+            let (x, y, z) = rev.scale();
+            scale = Vec3::new(x, y, z);
         }
         Pose {
             position: self.pos,
@@ -1076,13 +1101,51 @@ impl Kart {
         true
     }
 
-    /// CTR's start-line boost (`VehStuckProc.c`): a second of turbo as the race starts, with a
-    /// big flame for an engine revved at the right moment, a small one for a fair try.
+    /// CTR's start-line boost (`VehStuckProc.c:968-983`): a second of turbo as the race starts,
+    /// a big flame for an engine pumped to its top, a small one for one merely revved.
     pub fn start_boost(&mut self, big: bool) {
-        let fire = if big { 0x80 } else { 0x20 };
-        if self.fire_increment(960, FireKind::Stack, fire) {
+        let fire = if big {
+            crate::rev::BIG_BOOST_FIRE
+        } else {
+            crate::rev::SMALL_BOOST_FIRE
+        };
+        if self.fire_increment(crate::rev::START_BOOST_RESERVES, FireKind::Stack, fire) {
             self.events.push(Event::Turbo);
         }
+    }
+
+    /// Holds the kart on the grid, revving, until GO (`VehStuckProc_RevEngine_Init`, waiting
+    /// on the traffic lights: `VehStuckProc.c:954-958`): the gas revs the engine instead of
+    /// driving. Let go (GO), the revs earn their start boost, which is returned.
+    pub fn hold_on_grid(&mut self, on: bool) -> Option<StartBoost> {
+        match (on, self.rev) {
+            (true, None) => {
+                self.rev = Some(RevEngine::new(self.stats.accel_speed));
+                None
+            }
+            (false, Some(rev)) => {
+                self.rev = None;
+                // `VehStuckProc.c:986-987`: the meter full, as driving starts.
+                self.turbo_meter = 0;
+                let boost = rev.release();
+                if let Some(b) = boost {
+                    self.start_boost(b == StartBoost::Big);
+                }
+                boost
+            }
+            _ => None,
+        }
+    }
+
+    /// Revving on the grid: the revs, `None` while not held there.
+    pub fn revs(&self) -> Option<&RevEngine> {
+        self.rev.as_ref()
+    }
+
+    /// The speedometer's needle (`speedometerNeedleValue`): the speed, or the revs while revving
+    /// on the grid (`VehStuckProc.c:1234`).
+    pub fn needle(&self) -> i32 {
+        self.rev.map_or(self.speed, |r| r.level())
     }
 
     /// The Turbo Boost ability: CTR's turbo item, stronger juiced.
@@ -1130,6 +1193,14 @@ impl Kart {
         mods: &Modifiers,
         others: &[OtherKart],
     ) {
+        // Held on the grid, the gas revs the engine and the kart stands, braked
+        // (`VehStuckProc_RevEngine_*`: no forces apply).
+        let held = Input {
+            brake: true,
+            ..Default::default()
+        };
+        let rev_gas = self.rev.map(|_| input.gas);
+        let input = if rev_gas.is_some() { &held } else { input };
         let tapped_r1 = input.r1 && !self.buttons_prev.0;
         let tapped_l1 = input.l1 && !self.buttons_prev.1;
         self.buttons_prev = (input.r1, input.l1);
@@ -1171,6 +1242,11 @@ impl Kart {
         let yaw = wrap(self.angle + self.turn_angle);
         self.facing = rot_axis_angle(self.n2, yaw);
         self.hang_time();
+        if let (Some(rev), Some(gas)) = (self.rev.as_mut(), rev_gas) {
+            if rev.tick(gas, MS) {
+                self.events.push(Event::OverRev);
+            }
+        }
         self.engine_sound_tick();
         self.camera_spin_tick();
         // ANIMATE: SpinStop hands back to driving once its animation is home.

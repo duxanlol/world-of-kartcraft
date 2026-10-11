@@ -1,11 +1,12 @@
 //! Kart sounds: the engine as a loop whose pitch follows the speed, a tyre skid looping through
 //! powerslides, the turbo's roar while reserves burn, and one-shots for the hop, landings, boosts,
-//! an early press's exhaust puff, a full meter and crashes; and the weapons' sounds ([`Sfx`]): the
-//! roulette's loop and its stop, crates, fruit, launches, explosions, the TNT, the shield and the
-//! mask, with loops while a missile, warp orb or bomb is on its way. Each sound comes from
-//! `kart-data/audio/<name>.wav` when present (the player's own CTR audio, converted at setup);
-//! the driving sounds are else synthesized here, the weapons' else silent. Played 2D: the driver
-//! is the listener, and the weapons' cues carry a gain for their distance.
+//! an early press's exhaust puff, a full meter, crashes and the start lights' beeps; and the
+//! weapons' sounds ([`Sfx`]): the roulette's loop and its stop, crates, fruit, launches,
+//! explosions, the TNT, the shield and the mask, with loops while a missile, warp orb or bomb is
+//! on its way. Each sound comes from `kart-data/audio/<name>.wav` when present (the player's own
+//! CTR audio, converted at setup); the driving sounds are else synthesized here, the weapons' else
+//! silent. Played 2D: the driver is the listener, and the weapons' cues carry a gain for their
+//! distance.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,8 +33,11 @@ pub enum Cue {
     MeterFull,
     Turbo,
     Crash,
-    /// A race countdown's beat; `true` for GO.
+    /// A start light comes on: CTR's countdown beep at each red (OtherFX 0x45), its green sound
+    /// at GO (`true`, 0x46) (DotLights.c:91-136).
     Countdown(bool),
+    /// A ready check pops (the Race Finder's; no CTR sound).
+    Ready,
     /// A weapon sound at a gain (its distance from us).
     Sfx(Sfx, f32),
 }
@@ -199,7 +203,8 @@ impl KartAudio {
             Event::Boost { stage, .. } => Cue::Boost(stage),
             Event::HangTime { .. } => Cue::Boost(1),
             Event::BoostEarly => Cue::Early,
-            Event::MeterFull => Cue::MeterFull,
+            // The same OtherFX 0xF (`VehPhysProc.c` meter full, `VehStuckProc.c:1098` over-rev).
+            Event::MeterFull | Event::OverRev => Cue::MeterFull,
             Event::Turbo => Cue::Turbo,
             Event::Slam { .. } | Event::SpinOut => Cue::Crash,
             Event::Hit {
@@ -343,6 +348,12 @@ fn beep() -> StaticSoundData {
     synth(0.12, |t, _| 0.3 * (TAU * 880.0 * t).sin() * env(t, 0.05))
 }
 
+/// The beep an octave up, for GO without the player's audio.
+fn go_beep() -> StaticSoundData {
+    use std::f32::consts::TAU;
+    synth(0.2, |t, _| 0.3 * (TAU * 1760.0 * t).sin() * env(t, 0.08))
+}
+
 fn crash() -> StaticSoundData {
     let mut lo = 0.0f32;
     synth(0.7, move |t, n| {
@@ -364,6 +375,9 @@ struct Bank {
     puff: StaticSoundData,
     beep: StaticSoundData,
     crash: StaticSoundData,
+    /// The start lights' red and green sounds.
+    countdown: StaticSoundData,
+    go: StaticSoundData,
     /// The weapons' one-shots and loops, those the player's audio has.
     sfx: std::collections::HashMap<Sfx, StaticSoundData>,
     roulette: Option<StaticSoundData>,
@@ -416,6 +430,8 @@ impl Bank {
             puff: one("boost_early", puff),
             beep: one("meter_full", beep),
             crash: one("crash", crash),
+            countdown: one("countdown", beep),
+            go: one("go", go_beep),
             sfx,
             roulette,
             missile,
@@ -674,15 +690,18 @@ impl Sounds {
                 Cue::MeterFull => (&bank.beep, 0.5),
                 Cue::Turbo => (&bank.boost[2], 1.0),
                 Cue::Crash => (&bank.crash, 0.6),
-                Cue::Countdown(_) => (&bank.beep, 0.9),
+                // CTR plays both at full volume (OtherFX_Play's default flags).
+                Cue::Countdown(false) => (&bank.countdown, 1.0),
+                Cue::Countdown(true) => (&bank.go, 1.0),
+                Cue::Ready => (&bank.beep, 0.9),
                 Cue::Sfx(sfx, gain) => match bank.sfx.get(&sfx) {
                     Some(data) => (data, gain.clamp(0.0, 1.0)),
                     None => continue,
                 },
             };
             let mut data = data.clone().volume(db(gain * sfx));
-            if let Cue::Countdown(go) = cue {
-                data = data.playback_rate(if go { 2.0 } else { 1.0 });
+            if cue == Cue::Ready {
+                data = data.playback_rate(2.0);
             }
             let _ = play(data);
         }
@@ -752,6 +771,8 @@ mod tests {
             land(true),
             boost(3),
             crash(),
+            beep(),
+            go_beep(),
         ] {
             assert!(!s.frames.is_empty());
             assert!(s

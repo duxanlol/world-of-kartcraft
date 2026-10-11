@@ -23,6 +23,11 @@ use crate::{Error, Result};
 /// Framebuffer size of the 1P race view.
 pub const SCREEN: [u32; 2] = [512, 216];
 
+/// The start lights' icons in `gGT->trafficLightIcon` order (zGlobal_RDATA.c:54-57 `s_lightredoff`
+/// ..; LOAD_TenStages.c:662-665): red off, red on, green off, green on.
+pub const START_LIGHT_ICONS: [&str; 4] =
+    ["lightredoff", "lightredon", "lightgreenoff", "lightgreenon"];
+
 #[derive(Serialize)]
 pub struct Sprite {
     pub name: String,
@@ -324,6 +329,19 @@ pub fn build(bf: &mut BigFile) -> Result<HudFile> {
         .map(|ic| b.sprite("lock_on_target", &ic))
         .ok_or_else(|| Error("shared.mpk has no icon 0x2D (target)".into()))?;
 
+    // Start lights: gGT->trafficLightIcon[0..4], found by name in the race pack's icon list
+    // (LOAD_TenStages.c:662-665, DecalGlobal_FindInMPK).
+    let start_lights = START_LIGHT_ICONS
+        .iter()
+        .map(|&name| {
+            let ic = icons
+                .iter()
+                .find(|i| i.icon.name == name)
+                .ok_or_else(|| Error(format!("shared.mpk has no icon {name}")))?;
+            Ok(b.sprite(&format!("start_{name}"), &ic.icon))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
     // Meshes: big rank digits (mesh i = rank i+1, chosen by the instance depth 0x100 + rank)
     // and the Wumpa fruit.
     let models = mpk::models(&mpk_file)?;
@@ -382,6 +400,11 @@ pub fn build(bf: &mut BigFile) -> Result<HudFile> {
     ];
 
     let elements = json!({
+        "start_lights": {
+            "source": "DotLights.c DotLights_AudioAndVideo / DotLights_Video; icons LOAD_TenStages.c:662-665",
+            "sprites": start_lights,
+            "rule": "sprites are trafficLightIcon[0..4] (red off, red on, green off, green on); four lights in a row, three red then green, each drawn at scale 1.0 (1P) with DecalHUD_DrawPolyFT4 opaque; x = (512 - 4 * w) / 2 + w * i, y = 72 * pos - h (w, h of red-off); timer (1/960 s) from 0xF00 to -0x3BF: slide in over 0xF00..0xB40 (pos = (0xF00 - t) / 960), red i lit at 0xB40 / 0x780 / 0x3C0 with OtherFX 0x45, green at 0 with OtherFX 0x46, slide out over 0..-0x3BF (pos = (t + 0x3C0) / 960)"
+        },
         "mode_note": "CTR's 1P race HUD has two modes toggled with Triangle (HudAndDebugFlags & 8): speedometer (with jump meter) or track map. This file describes speedometer mode.",
         "rank_list": {
             "source": "UI_Rank.c UI_DrawRankedDrivers (1P)",

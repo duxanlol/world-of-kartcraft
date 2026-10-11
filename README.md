@@ -163,8 +163,10 @@ character in the seat, their powerslides, flames, smoke and engine. Karts bump e
 CTR. Each driver's kart state reaches the players within 150 yards through the server.
 
 **Races.** Drive to a course's start and talk to the **Race Marshal** there: he hosts a race,
-lets drivers near you join it and lets the host start it. CTR's countdown follows: rev the engine
-(hold gas) just before GO for the start boost, too early and it bogs. Beams of light mark the
+lets drivers near you join it and lets the host start it. CTR's start lights count down while you
+rev on the grid as in CTR: the gas revs the engine, the meter shows the revs, and revs in the red
+at GO give the start boost (pump the gas first for the big one; hold it too long and the engine
+over-revs and gets none). Beams of light mark the
 checkpoints, the next one bright; the server checks each one against where you really are. Lap
 and place show on CTR's HUD, the music speeds up on the final lap, and a finish pays experience
 and Karting skill by place. **Leave race** on the minimap button's menu (or `/leaverace`) leaves.
