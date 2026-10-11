@@ -142,6 +142,11 @@ fn no_user_facing_sentence_is_written_in_rust_when_the_reference_ships_one() {
     let data = benilla_formats::wow_data_or_skip!();
     let mut chain = benilla_formats::open_chain(&data).expect("open chain");
     let mut shipped: HashMap<String, Vec<String>> = HashMap::new();
+    // An enUS chain's `Localize()` patches nothing (its body is a comment): its locale files may
+    // contribute no sentence; any other locale's must.
+    let en_us = chain
+        .read_file("Interface\\FrameXML\\Localization.lua")
+        .is_ok_and(|s| String::from_utf8_lossy(&s).contains("LOCALE_enUS = true"));
     // The base tables and the locale patches: where `Localize()` redefines a key, its wording is
     // the one the player reads.
     for file in [
@@ -166,8 +171,12 @@ fn no_user_facing_sentence_is_written_in_rust_when_the_reference_ships_one() {
             }
         }
         // Every source must contribute: the `Localize()` files wrap their assignments in a
-        // function, a shape the base tables never have.
-        assert!(taken > 0, "{file} contributed no sentences");
+        // function, a shape the base tables never have. An enUS chain's are empty.
+        let locale_patch = file.ends_with("Localization.lua");
+        assert!(
+            taken > 0 || (en_us && locale_patch),
+            "{file} contributed no sentences"
+        );
     }
 
     let mut sources = Vec::new();

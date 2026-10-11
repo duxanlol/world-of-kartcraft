@@ -804,7 +804,8 @@
                 glow:Hide()
             end
             if button.dragging then BenillaKartMinimap_Place(BenillaKartMinimap_CursorAngle()) end
-            if button.shownTip ~= button.tooltip and GameTooltip:IsOwned(button) then
+            -- GameTooltip is the stock UI's: an addon load without it (the harness) has none.
+            if button.shownTip ~= button.tooltip and GameTooltip and GameTooltip:IsOwned(button) then
                 BenillaKartMinimap_Tooltip()
             end
         end
