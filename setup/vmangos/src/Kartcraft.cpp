@@ -8,6 +8,7 @@
 #include "WorldSession.h"
 #include "World.h"
 #include "Creature.h"
+#include "ObjectMgr.h"
 #include "GossipDef.h"
 #include "ScriptMgr.h"
 #include "Database/DatabaseEnv.h"
@@ -164,6 +165,74 @@ namespace Kartcraft
 
     static void LeaveRaces(Player* player);
 
+    // ── Cross-faction ──────────────────────────────────────────────────────────────────────────
+    //
+    // A driver is friendly to everyone, and everyone to them: Horde and Alliance race the same
+    // courses, all in Alliance land. Faction template 35 (friendly to all, as the Race Marshal)
+    // covers players and creatures without a reputation; reactions to a faction with one go by
+    // reputation instead (WorldObject::GetReactionTo), so a Horde driver would still be
+    // Stormwind's guards'. Every such faction the player is below Friendly with or at war with is
+    // forced Friendly while the kart is out, as SPELL_AURA_FORCE_REACTION does. A faction already
+    // forced (a disguise's aura) is left to it, and leaving the kart lifts only the kart's own.
+    static constexpr uint32 FACTION_FRIENDLY_TO_ALL = 35;
+
+    // The factions each driver's kart forced, by low guid. Aura handlers run on map threads,
+    // and a cast of the kart may come from under s_mutex: this lock is its own.
+    static std::unordered_map<uint32, std::set<uint32>> s_forced;
+    static std::mutex s_forcedMutex;
+
+    static bool IsForced(ReputationMgr const& reputation, uint32 faction)
+    {
+        // The lookup reads only the template's faction.
+        FactionTemplateEntry probe{};
+        probe.faction = faction;
+        return reputation.GetForcedRankIfAny(&probe) != nullptr;
+    }
+
+    void OnMounted(Unit* target, uint32 spell, bool apply)
+    {
+        Player* player = target->ToPlayer();
+        if (!player || spell != SPELL_SUMMON_KART)
+            return;
+        ReputationMgr& reputation = player->GetReputationMgr();
+        std::set<uint32> ours;
+        {
+            std::lock_guard<std::mutex> lock(s_forcedMutex);
+            auto it = s_forced.find(player->GetGUIDLow());
+            if (it != s_forced.end())
+            {
+                ours = std::move(it->second);
+                s_forced.erase(it);
+            }
+        }
+        if (apply)
+        {
+            for (auto const& faction : sObjectMgr.GetFactionMap())
+            {
+                FactionEntry const& entry = faction.second;
+                if (!entry.CanHaveReputation() || IsForced(reputation, faction.first))
+                    continue;
+                FactionState const* state = reputation.GetState(&entry);
+                if (reputation.GetRank(&entry) >= REP_FRIENDLY && !(state && (state->Flags & FACTION_FLAG_AT_WAR)))
+                    continue;
+                reputation.ApplyForceReaction(faction.first, REP_FRIENDLY, true);
+                player->StopAttackFaction(faction.first);
+                ours.insert(faction.first);
+            }
+            std::lock_guard<std::mutex> lock(s_forcedMutex);
+            s_forced[player->GetGUIDLow()] = std::move(ours);
+        }
+        else
+            for (uint32 faction : ours)
+                reputation.ApplyForceReaction(faction, REP_FRIENDLY, false);
+        if (apply)
+            player->SetFactionTemplateId(FACTION_FRIENDLY_TO_ALL);
+        else
+            player->RestoreFaction();
+        if (player->IsInWorld())
+            reputation.SendForceReactions();
+    }
+
     void OnLogin(Player* player)
     {
         // The whole map discovered, every zone's every area, as `.explorecheat 1` sets it
@@ -174,6 +243,9 @@ namespace Kartcraft
         // A client logs in knowing of no race: it is out of any it was in, or a waiting race
         // would hold it (the marshal offers neither hosting nor joining) until it expired.
         LeaveRaces(player);
+        // A kart kept over the logout: its aura came back before the client was in the world.
+        if (player->HasAura(SPELL_SUMMON_KART))
+            OnMounted(player, SPELL_SUMMON_KART, true);
         if (!sSkillLineStore.LookupEntry(SKILL_KARTING))
             return;
         if (!player->HasSkill(SKILL_KARTING))

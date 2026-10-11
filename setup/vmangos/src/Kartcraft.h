@@ -35,6 +35,8 @@ namespace Kartcraft
     void LoadSpells();
     // On login: everyone can drive; abilities match the skill.
     void OnLogin(Player* player);
+    // The kart's aura on or off (Aura::HandleAuraMounted): a driver is friendly to everyone.
+    void OnMounted(Unit* target, uint32 spell, bool apply);
     // An addon message from the client; true when it was ours.
     bool HandleAddonMessage(Player* player, std::string const& message);
     // Extra cast checks for the kart spells. SPELL_CAST_OK otherwise.

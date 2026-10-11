@@ -149,6 +149,8 @@ if [ ! -f "$SERVER/compose.yaml" ]; then
     git -C "$SERVER" checkout --quiet "$SERVER_REV"
     cp "$SERVER/config/mangosd.conf.example" "$SERVER/config/mangosd.conf"
     cp "$SERVER/config/realmd.conf.example" "$SERVER/config/realmd.conf"
+    # Horde and Alliance race together: a PvP realm lets an account have both only with this.
+    sed -i 's/^AllowTwoSide\.Accounts = 0/AllowTwoSide.Accounts = 1/' "$SERVER/config/mangosd.conf"
     TZ_NAME=$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || echo Etc/UTC)
     sed -e "s#TZ=Etc/UTC#TZ=${TZ_NAME}#" -e "s#user: 1000:1000#user: $(id -u):$(id -g)#" \
         "$SERVER/compose.yaml.example" > "$SERVER/compose.yaml"

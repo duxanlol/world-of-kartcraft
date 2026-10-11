@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..5746d08
+index 0000000..8b586d2
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,2182 @@
+@@ -0,0 +1,2254 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -96,6 +96,7 @@ index 0000000..5746d08
 +#include "WorldSession.h"
 +#include "World.h"
 +#include "Creature.h"
++#include "ObjectMgr.h"
 +#include "GossipDef.h"
 +#include "ScriptMgr.h"
 +#include "Database/DatabaseEnv.h"
@@ -252,6 +253,74 @@ index 0000000..5746d08
 +
 +    static void LeaveRaces(Player* player);
 +
++    // ── Cross-faction ──────────────────────────────────────────────────────────────────────────
++    //
++    // A driver is friendly to everyone, and everyone to them: Horde and Alliance race the same
++    // courses, all in Alliance land. Faction template 35 (friendly to all, as the Race Marshal)
++    // covers players and creatures without a reputation; reactions to a faction with one go by
++    // reputation instead (WorldObject::GetReactionTo), so a Horde driver would still be
++    // Stormwind's guards'. Every such faction the player is below Friendly with or at war with is
++    // forced Friendly while the kart is out, as SPELL_AURA_FORCE_REACTION does. A faction already
++    // forced (a disguise's aura) is left to it, and leaving the kart lifts only the kart's own.
++    static constexpr uint32 FACTION_FRIENDLY_TO_ALL = 35;
++
++    // The factions each driver's kart forced, by low guid. Aura handlers run on map threads,
++    // and a cast of the kart may come from under s_mutex: this lock is its own.
++    static std::unordered_map<uint32, std::set<uint32>> s_forced;
++    static std::mutex s_forcedMutex;
++
++    static bool IsForced(ReputationMgr const& reputation, uint32 faction)
++    {
++        // The lookup reads only the template's faction.
++        FactionTemplateEntry probe{};
++        probe.faction = faction;
++        return reputation.GetForcedRankIfAny(&probe) != nullptr;
++    }
++
++    void OnMounted(Unit* target, uint32 spell, bool apply)
++    {
++        Player* player = target->ToPlayer();
++        if (!player || spell != SPELL_SUMMON_KART)
++            return;
++        ReputationMgr& reputation = player->GetReputationMgr();
++        std::set<uint32> ours;
++        {
++            std::lock_guard<std::mutex> lock(s_forcedMutex);
++            auto it = s_forced.find(player->GetGUIDLow());
++            if (it != s_forced.end())
++            {
++                ours = std::move(it->second);
++                s_forced.erase(it);
++            }
++        }
++        if (apply)
++        {
++            for (auto const& faction : sObjectMgr.GetFactionMap())
++            {
++                FactionEntry const& entry = faction.second;
++                if (!entry.CanHaveReputation() || IsForced(reputation, faction.first))
++                    continue;
++                FactionState const* state = reputation.GetState(&entry);
++                if (reputation.GetRank(&entry) >= REP_FRIENDLY && !(state && (state->Flags & FACTION_FLAG_AT_WAR)))
++                    continue;
++                reputation.ApplyForceReaction(faction.first, REP_FRIENDLY, true);
++                player->StopAttackFaction(faction.first);
++                ours.insert(faction.first);
++            }
++            std::lock_guard<std::mutex> lock(s_forcedMutex);
++            s_forced[player->GetGUIDLow()] = std::move(ours);
++        }
++        else
++            for (uint32 faction : ours)
++                reputation.ApplyForceReaction(faction, REP_FRIENDLY, false);
++        if (apply)
++            player->SetFactionTemplateId(FACTION_FRIENDLY_TO_ALL);
++        else
++            player->RestoreFaction();
++        if (player->IsInWorld())
++            reputation.SendForceReactions();
++    }
++
 +    void OnLogin(Player* player)
 +    {
 +        // The whole map discovered, every zone's every area, as `.explorecheat 1` sets it
@@ -262,6 +331,9 @@ index 0000000..5746d08
 +        // A client logs in knowing of no race: it is out of any it was in, or a waiting race
 +        // would hold it (the marshal offers neither hosting nor joining) until it expired.
 +        LeaveRaces(player);
++        // A kart kept over the logout: its aura came back before the client was in the world.
++        if (player->HasAura(SPELL_SUMMON_KART))
++            OnMounted(player, SPELL_SUMMON_KART, true);
 +        if (!sSkillLineStore.LookupEntry(SKILL_KARTING))
 +            return;
 +        if (!player->HasSkill(SKILL_KARTING))
@@ -2270,10 +2342,10 @@ index 0000000..5746d08
 +}
 diff --git a/src/game/Kartcraft.h b/src/game/Kartcraft.h
 new file mode 100644
-index 0000000..aff1e99
+index 0000000..6df638c
 --- /dev/null
 +++ b/src/game/Kartcraft.h
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,48 @@
 +/*
 + * World of Kartcraft: Karting, a secondary profession levelled by chaining kart turbos.
 + *
@@ -2311,6 +2383,8 @@ index 0000000..aff1e99
 +    void LoadSpells();
 +    // On login: everyone can drive; abilities match the skill.
 +    void OnLogin(Player* player);
++    // The kart's aura on or off (Aura::HandleAuraMounted): a driver is friendly to everyone.
++    void OnMounted(Unit* target, uint32 spell, bool apply);
 +    // An addon message from the client; true when it was ours.
 +    bool HandleAddonMessage(Player* player, std::string const& message);
 +    // Extra cast checks for the kart spells. SPELL_CAST_OK otherwise.
@@ -4929,6 +5003,26 @@ index eaaaaf1..abd1b5d 100644
      if (m_caster->IsPlayer() && m_caster->ToPlayer()->HasCheatOption(PLAYER_CHEAT_NO_CHECK_CAST))
          return SPELL_CAST_OK;
  
+diff --git a/src/game/Spells/SpellAuras.cpp b/src/game/Spells/SpellAuras.cpp
+index e4e3005..a4acf3f 100644
+--- a/src/game/Spells/SpellAuras.cpp
++++ b/src/game/Spells/SpellAuras.cpp
+@@ -51,6 +51,7 @@
+ #include "ZoneScript.h"
+ #include "LoveIsInTheAir.h"
+ #include "Utilities/Random.h"
++#include "Kartcraft.h"
+ 
+ using namespace Spells;
+ 
+@@ -2273,6 +2274,7 @@ void Aura::HandleAuraMounted(bool apply, bool Real)
+     }
+     else
+         target->Unmount(true);
++    Kartcraft::OnMounted(target, GetId(), apply);
+ }
+ 
+ void Aura::HandleAuraWaterWalk(bool apply, bool Real)
 diff --git a/src/game/Spells/SpellMgr.h b/src/game/Spells/SpellMgr.h
 index 924cea0..1499d17 100644
 --- a/src/game/Spells/SpellMgr.h
