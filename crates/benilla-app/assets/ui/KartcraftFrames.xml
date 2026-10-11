@@ -74,6 +74,10 @@
         -- The finder's state: what is ticked (by course key, so a scroll moves no tick), what we
         -- queued for and the server's word on it.
         BenillaKartFinder = { any = 1, picked = {}, beat = 0, noticeUntil = 0, search = "" }
+        -- While the finder is open: how many wait for each zone (by key) and the races hosted at a
+        -- start ({ id, course, host, racers }), from the server's "Lobby" answer every 2 s.
+        BenillaKartLobby = { counts = {}, races = {}, beat = 0 }
+        BENILLA_KART_LOBBY_ROWS = 3
 
         function BenillaKart_Send(body)
             SendAddonMessage(BENILLA_KART_PREFIX, "R\t" .. body, "PARTY")
@@ -217,6 +221,7 @@
                 BenillaKartFinderFrameClose:SetText("Close")
             end
             BenillaKartFinderFrameStatus:SetText(BenillaKartFinder_Status())
+            BenillaKartLobby_Update()
         end
 
         -- What the list shows: every entry whose name holds the search, any case.
@@ -259,7 +264,14 @@
                 if course then
                     row.key = course.key
                     local label = getglobal(row:GetName() .. "Text")
-                    if label then label:SetText(course.name) end
+                    local queued = BenillaKartLobby.counts[course.key]
+                    if label then
+                        if queued then
+                            label:SetText(course.name .. "  |cff40ff40(" .. queued .. " queued)|r")
+                        else
+                            label:SetText(course.name)
+                        end
+                    end
                     row:SetChecked(BenillaKartFinder.picked[course.key])
                     row:Show()
                 else
@@ -267,6 +279,60 @@
                     row:Hide()
                 end
             end
+        end
+
+        -- The server's "Lobby": "<key>=<n>,..." waiting for each zone, "<id>:<course>:<host>:<n>;..."
+        -- the hosted races still waiting for their host's start.
+        function BenillaKartLobby_Set(counts, races)
+            local l = BenillaKartLobby
+            l.counts, l.races = {}, {}
+            local items = BenillaKart_Split((string.gsub(counts or "", ",", "\t")))
+            for i = 1, table.getn(items) do
+                local eq = string.find(items[i], "=", 1, 1)
+                if eq then l.counts[string.sub(items[i], 1, eq - 1)] = tonumber(string.sub(items[i], eq + 1)) end
+            end
+            items = BenillaKart_Split((string.gsub(races or "", ";", "\t")))
+            for i = 1, table.getn(items) do
+                local f = BenillaKart_Split((string.gsub(items[i], ":", "\t")))
+                if f[4] then
+                    table.insert(l.races, { id = f[1], course = f[2], host = f[3], racers = tonumber(f[4]) or 0 })
+                end
+            end
+        end
+
+        -- The hosted races under the list, each with its Join; past the rows, a count.
+        -- ponytail: the first BENILLA_KART_LOBBY_ROWS only; scroll them if hosts get many.
+        function BenillaKartLobby_Update()
+            local races = BenillaKartLobby.races
+            local count = table.getn(races)
+            if count == 0 then
+                BenillaKartFinderFrameLobbies:SetText("Hosted races: none. A Race Marshal hosts one at a course's start.")
+            elseif count > BENILLA_KART_LOBBY_ROWS then
+                BenillaKartFinderFrameLobbies:SetText("Hosted races (" .. count .. ", the first " .. BENILLA_KART_LOBBY_ROWS .. ")")
+            else
+                BenillaKartFinderFrameLobbies:SetText("Hosted races")
+            end
+            for i = 1, BENILLA_KART_LOBBY_ROWS do
+                local row = getglobal("BenillaKartFinderFrameLobby" .. i)
+                local race = races[i]
+                if race then
+                    row.id = race.id
+                    local racers = race.racers .. " racers"
+                    if race.racers == 1 then racers = "1 racer" end
+                    getglobal(row:GetName() .. "Text"):SetText(format("%s: %s, %s",
+                        BenillaKart_CourseName(race.course), race.host, racers))
+                    row:Show()
+                else
+                    row.id = nil
+                    row:Hide()
+                end
+            end
+        end
+
+        -- Into a hosted race from the list, from anywhere: the server puts us in the kart and on
+        -- its roster, and the host's start brings everyone to the grid.
+        function BenillaKartLobby_Join(row)
+            if row and row.id then BenillaKart_Send("LJ\t" .. row.id) end
         end
 
         function BenillaKartFinder_OnMouseWheel(delta)
@@ -754,6 +820,8 @@
             elseif verb == "Tracks" then
                 -- The Race Marshal's "Browse the tracks", at her own course.
                 BenillaKartTrackBrowser_Open(line[3] ~= "" and line[3] or nil)
+            elseif verb == "Lobby" then
+                BenillaKartLobby_Set(line[3], line[4])
             elseif verb == "Ux" then
                 BenillaKart_Say(format("Unstuck: you can use it again in %d seconds.",
                     tonumber(line[3]) or 0))
@@ -1268,6 +1336,12 @@
                 f.beat = GetTime() + BENILLA_KART_HEARTBEAT
                 BenillaKart_Send("W")
             end
+            -- The queue and the lobbies, while the finder is open to show them.
+            local l = BenillaKartLobby
+            if BenillaKartFinderFrame:IsVisible() and GetTime() >= l.beat then
+                l.beat = GetTime() + BENILLA_KART_HEARTBEAT
+                BenillaKart_Send("Lobby")
+            end
         end
         -- The stock tables last, and only where they exist: a load without the stock interface
         -- (a dev build's harness) still defines everything above.
@@ -1323,8 +1397,28 @@
         </Scripts>
     </CheckButton>
 
+    <!-- A hosted race in the Race Finder: its course, host and racers, and a Join. -->
+    <Frame name="BenillaKartLobbyRowTemplate" virtual="true" hidden="true">
+        <Size><AbsDimension x="272" y="22"/></Size>
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentText" inherits="GameFontHighlightSmall" justifyH="LEFT">
+                    <Size><AbsDimension x="206" y="22"/></Size>
+                    <Anchors><Anchor point="LEFT"/></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <Button name="$parentJoin" inherits="UIPanelButtonTemplate" text="Join">
+                <Size><AbsDimension x="60" y="20"/></Size>
+                <Anchors><Anchor point="RIGHT"/></Anchors>
+                <Scripts><OnClick>BenillaKartLobby_Join(this:GetParent())</OnClick></Scripts>
+            </Button>
+        </Frames>
+    </Frame>
+
     <Frame name="BenillaKartFinderFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="320" y="374"/></Size>
+        <Size><AbsDimension x="320" y="464"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="80"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -1355,6 +1449,10 @@
                 <FontString name="$parentStatus" inherits="GameFontHighlightSmall" justifyH="LEFT" justifyV="TOP">
                     <Size><AbsDimension x="252" y="32"/></Size>
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-292"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentLobbies" inherits="GameFontNormalSmall" justifyH="LEFT">
+                    <Size><AbsDimension x="272" y="14"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-332"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
@@ -1412,6 +1510,16 @@
                     <OnVerticalScroll>FauxScrollFrame_OnVerticalScroll(BENILLA_KART_ROW_HEIGHT, BenillaKartFinder_UpdateList)</OnVerticalScroll>
                 </Scripts>
             </ScrollFrame>
+            <!-- The hosted races, each with its Join (BenillaKartLobby_Update). -->
+            <Frame name="$parentLobby1" inherits="BenillaKartLobbyRowTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-350"/></Offset></Anchor></Anchors>
+            </Frame>
+            <Frame name="$parentLobby2" inherits="BenillaKartLobbyRowTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-374"/></Offset></Anchor></Anchors>
+            </Frame>
+            <Frame name="$parentLobby3" inherits="BenillaKartLobbyRowTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-398"/></Offset></Anchor></Anchors>
+            </Frame>
             <Button name="$parentQueue" inherits="UIPanelButtonTemplate" text="Find race">
                 <Size><AbsDimension x="120" y="22"/></Size>
                 <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="18"/></Offset></Anchor></Anchors>
@@ -1434,6 +1542,8 @@
             </OnLoad>
             <OnShow>
                 PlaySound("igMainMenuOpen")
+                -- Ask for the queue and the lobbies at once.
+                BenillaKartLobby.beat = 0
                 BenillaKartFinder_Refresh()
             </OnShow>
             <OnHide>PlaySound("igMainMenuClose")</OnHide>

@@ -29,9 +29,14 @@ fn courses(s: &mut UiScript, n: usize) {
     s.tick(0.0);
 }
 
-/// The addon lines the VM sent since the last call, as `prefix\tmessage`.
+/// The addon lines the VM sent since the last call, as `prefix\tmessage`, but the open finder's
+/// background poll for the queue and the lobbies.
 fn sent(s: &mut UiScript) -> Vec<String> {
-    s.take_addon_sends().into_iter().map(|a| a.text).collect()
+    s.take_addon_sends()
+        .into_iter()
+        .map(|a| a.text)
+        .filter(|t| t != "KARTCRAFT\tR\tLobby")
+        .collect()
 }
 
 /// The server's line to us, as the client hands it to Lua.
@@ -1409,4 +1414,63 @@ fn the_race_map_draws_the_track_and_the_racers_on_it() {
     assert!(s
         .eval::<bool>("return BenillaKartMapFrame:IsMovable() == 1")
         .unwrap());
+}
+
+#[test]
+fn the_finder_shows_the_queue_and_the_hosted_races_and_joins_one() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 3);
+    let text = |s: &UiScript, name: &str| -> String {
+        s.eval(&format!("return {name}:GetText() or ''")).unwrap()
+    };
+    let shown = |s: &UiScript, frame: &str| -> bool {
+        s.eval(&format!("return {frame}:IsVisible() == 1")).unwrap()
+    };
+
+    // Open, it asks for the queue and the lobbies at once.
+    s.run("BenillaKartFinderFrame:Show()").unwrap();
+    s.tick(0.1);
+    assert!(s
+        .take_addon_sends()
+        .iter()
+        .any(|a| a.text == "KARTCRAFT\tR\tLobby"));
+
+    // Two wait for Elwynn; two races are hosted.
+    from_server(
+        &mut s,
+        "R\tLobby\telwynn=2\t7:elwynn:Hosty:3;9:sprint:Gnome:1",
+    );
+    assert_eq!(
+        text(&s, "BenillaKartFinderFrameRow2Text"),
+        "Elwynn Loop  |cff40ff40(2 queued)|r"
+    );
+    assert_eq!(
+        text(&s, "BenillaKartFinderFrameRow1Text"),
+        "Northshire Sprint"
+    );
+    assert_eq!(text(&s, "BenillaKartFinderFrameLobbies"), "Hosted races");
+    assert_eq!(
+        text(&s, "BenillaKartFinderFrameLobby1Text"),
+        "Elwynn Loop: Hosty, 3 racers"
+    );
+    assert_eq!(
+        text(&s, "BenillaKartFinderFrameLobby2Text"),
+        "Northshire Sprint: Gnome, 1 racer"
+    );
+    assert!(!shown(&s, "BenillaKartFinderFrameLobby3"));
+
+    // Join asks the server for that race.
+    sent(&mut s);
+    s.run("BenillaKartFinderFrameLobby1Join:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tLJ\t7"]);
+
+    // Nobody waiting, nothing hosted.
+    from_server(&mut s, "R\tLobby\t\t");
+    assert_eq!(text(&s, "BenillaKartFinderFrameRow2Text"), "Elwynn Loop");
+    assert!(text(&s, "BenillaKartFinderFrameLobbies").starts_with("Hosted races: none."));
+    assert!(!shown(&s, "BenillaKartFinderFrameLobby1"));
 }

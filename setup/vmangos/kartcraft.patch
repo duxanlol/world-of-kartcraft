@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..91178fd
+index 0000000..5daaa21
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,2295 @@
+@@ -0,0 +1,2379 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -1335,6 +1335,10 @@ index 0000000..91178fd
 +    // and raced as above. A no or a timeout ends it ("R\tPop-\t<pop>"); those who said yes queue
 +    // again at the front. ponytail: matching runs on the queued clients' heartbeats, not a world
 +    // timer; add an update hook if queues get busy.
++    //
++    // The open Race Finder also shows the queue and the lobbies ("R\tLobby", SendLobby): how many
++    // wait for each zone, and the races hosted at a start; one of those is joined from anywhere
++    // ("R\tLJ\t<race>"), and the host's start brings everyone to its grid.
 +
 +    constexpr uint32 FILL_WAIT = 30 * IN_MILLISECONDS;
 +    // The wait in force: a GM sets it for testing ("R\tFillWait\t<secs>", /racewait), until the
@@ -1653,6 +1657,72 @@ index 0000000..91178fd
 +            SendTo(q.guid, check);
 +    }
 +
++    // Out of every race still waiting to start; false, and nothing left, when one is under way.
++    static bool LeaveWaitingRaces(Player* player)
++    {
++        ObjectGuid guid = player->GetObjectGuid();
++        for (auto const& entry : s_races)
++            for (Racer const& x : entry.second.racers)
++                if (x.guid == guid && !x.finished && entry.second.start)
++                    return false;
++        for (auto it = s_races.begin(); it != s_races.end();)
++        {
++            Race& r = it->second;
++            auto x = std::find_if(r.racers.begin(), r.racers.end(), [guid](Racer const& m) { return m.guid == guid; });
++            if (x == r.racers.end() || x->finished)
++            {
++                it = std::next(it);
++                continue;
++            }
++            RemoveRacer(r, x);
++            SendLine(player, "KARTCRAFT\tR\tL\t" + std::to_string(it->first) + "\t");
++            if (r.racers.empty())
++                it = s_races.erase(it);
++            else
++            {
++                SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(it->first) + "\t" + Roster(r));
++                it = std::next(it);
++            }
++        }
++        return true;
++    }
++
++    // What the Race Finder shows while it is open ("R\tLobby", every 2 s): each zone's queued
++    // players, "z<index>=<n>" for those with any, and the races hosted at a start that wait for
++    // their host, "<id>:<course>:<host>:<racers>". Answered "R\tLobby\t<zones,...>\t<races;...>".
++    static void SendLobby(Player* player)
++    {
++        std::vector<std::string> const& zones = Zones();
++        std::string counts;
++        for (size_t z = 0; z < zones.size(); ++z)
++        {
++            size_t n = 0;
++            for (Queued const& q : s_queue)
++                for (size_t i = 0; i < COURSES.size(); ++i)
++                    if (q.courses[i] && zones[z] == COURSES[i].zone)
++                    {
++                        ++n;
++                        break;
++                    }
++            if (n)
++                counts += (counts.empty() ? "z" : ",z") + std::to_string(z) + "=" + std::to_string(n);
++        }
++        std::string open;
++        for (auto const& entry : s_races)
++        {
++            Race const& r = entry.second;
++            if (r.start || r.racers.empty())
++                continue;
++            std::string host = r.racers.front().name;
++            for (Racer const& x : r.racers)
++                if (x.guid == r.host)
++                    host = x.name;
++            open += (open.empty() ? "" : ";") + std::to_string(entry.first) + ":" + r.course->key + ":" +
++                host + ":" + std::to_string(r.racers.size());
++        }
++        SendLine(player, "KARTCRAFT\tR\tLobby\t" + counts + "\t" + open);
++    }
++
 +    // The finder's verbs; false when the line is not one of them.
 +    static bool HandleFinder(Player* player, std::vector<std::string> const& f, uint32 now)
 +    {
@@ -1681,34 +1751,45 @@ index 0000000..91178fd
 +                return true;
 +            // A race still waiting to start is left for the queue; one under way is not: a pop
 +            // would teleport them off the course, so they are told why instead.
-+            for (auto it = s_races.begin(); it != s_races.end();)
++            if (!LeaveWaitingRaces(player))
 +            {
-+                Race& r = it->second;
-+                auto x = std::find_if(r.racers.begin(), r.racers.end(), [guid](Racer const& m) { return m.guid == guid; });
-+                if (x == r.racers.end() || x->finished)
-+                {
-+                    it = std::next(it);
-+                    continue;
-+                }
-+                if (r.start)
-+                {
-+                    SendLine(player, "KARTCRAFT\tR\tQx\tracing");
-+                    return true;
-+                }
-+                RemoveRacer(r, x);
-+                SendLine(player, "KARTCRAFT\tR\tL\t" + std::to_string(it->first) + "\t");
-+                if (r.racers.empty())
-+                    it = s_races.erase(it);
-+                else
-+                {
-+                    SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(it->first) + "\t" + Roster(r));
-+                    it = std::next(it);
-+                }
++                SendLine(player, "KARTCRAFT\tR\tQx\tracing");
++                return true;
 +            }
 +            if (mine != s_queue.end())
 +                mine->courses = mask;
 +            else
 +                s_queue.push_back({ guid, mask, now, now });
++        }
++        else if (verb == "Lobby")
++            SendLobby(player);
++        else if (verb == "LJ" && f.size() > 2)
++        {
++            // A hosted race joined from the Race Finder's list, from anywhere: in the kart and on
++            // the roster where they are, as a pop's racer; the host's start puts everyone on the
++            // grid. Out of the queue and any other race still waiting.
++            uint32 id = uint32(std::strtoul(f[2].c_str(), nullptr, 10));
++            auto race = s_races.find(id);
++            if (race == s_races.end() || race->second.start || race->second.racers.size() >= MAX_RACERS ||
++                !CanBeRacedOff(player) ||
++                std::any_of(race->second.racers.begin(), race->second.racers.end(),
++                    [guid](Racer const& x) { return x.guid == guid; }))
++                return true;
++            if (!LeaveWaitingRaces(player))
++            {
++                SendLine(player, "KARTCRAFT\tR\tQx\tracing");
++                return true;
++            }
++            // Leaving may have emptied and erased races; this one had others in it, but look again.
++            race = s_races.find(id);
++            if (race == s_races.end())
++                return true;
++            if (mine != s_queue.end())
++                s_queue.erase(mine);
++            SummonKart(player);
++            Race& r = race->second;
++            r.racers.push_back({ guid, player->GetName() });
++            SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(race->first) + "\t" + Roster(r));
 +        }
 +        else if (verb == "Q-")
 +        {
@@ -2012,9 +2093,12 @@ index 0000000..91178fd
 +            // Everyone to a grid slot behind the start, as a Race Finder race lines up, whether
 +            // they joined on foot or drove up in the kart; the countdown waits for the settle.
 +            size_t slot = 0;
++            bool far = false;
 +            for (Racer const& x : r.racers)
 +                if (Player* p = ObjectAccessor::FindPlayer(x.guid))
 +                {
++                    // One who joined from the Race Finder's list may be on another map.
++                    far |= p->GetMapId() != r.course->map;
 +                    // A racer still fighting would be refused the teleport (CanBeRacedOff); the
 +                    // race's shield ends the fight anyway, so it ends before the grid.
 +                    if (p->IsInCombat())
@@ -2024,7 +2108,7 @@ index 0000000..91178fd
 +                    }
 +                    TeleportToGrid(p, *r.course, slot++);
 +                }
-+            StartRace(id, r, now, GRID_COUNTDOWN);
++            StartRace(id, r, now, far ? GRID_COUNTDOWN + FAR_SETTLE : GRID_COUNTDOWN);
 +        }
 +        else if (verb == "K" && race != s_races.end() && f.size() > 3)
 +        {
