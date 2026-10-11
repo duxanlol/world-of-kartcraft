@@ -165,6 +165,11 @@ namespace Kartcraft
 
     void OnLogin(Player* player)
     {
+        // The whole map discovered, every zone's every area, as `.explorecheat 1` sets it
+        // (CharacterCommands.cpp): the courses are all over the world, and the track browser
+        // draws them on it. Saved with the character, so it holds offline too.
+        for (uint8 i = 0; i < PLAYER_EXPLORED_ZONES_SIZE; ++i)
+            player->SetFlag(PLAYER_EXPLORED_ZONES_1 + i, 0xFFFFFFFF);
         // A client logs in knowing of no race: it is out of any it was in, or a waiting race
         // would hold it (the marshal offers neither hosting nor joining) until it expired.
         LeaveRaces(player);
