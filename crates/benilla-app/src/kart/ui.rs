@@ -1,12 +1,17 @@
 //! What the kart puts on screen through the client's UI layer, as a model value: the race's
-//! banner and results, the chain score and the Karting skill (for the garage's tiers).
+//! banner and results, the chain score, the Karting skill (for the garage's tiers), and the race
+//! map's track and racers.
 //! `crate::ui_kart` hands it to the
 //! layer's frames (`assets/ui/KartcraftFrames.xml`), which draw it in WoW's own fonts.
 
 use bevy::prelude::*;
 
-use super::race::RaceText;
+use benilla_assets::coords::bevy_to_wow;
+
+use super::race::{RaceMap, RaceText, Races};
+use super::remote::RemoteKarts;
 use super::score::KartScore;
+use super::KartDrive;
 
 /// The chain score's lines: text and colour for the trick and the points, the experience and
 /// skill earned, and the shared alpha (in steps of 1/50, so a fade changes it at most fifty times).
@@ -19,6 +24,18 @@ pub(crate) struct ScoreLines {
     pub(crate) alpha: f32,
 }
 
+/// A racer on the race map: WoW x, y; their place (0 before the standings have them); whether
+/// it is us; and whether the position is their kart's own (relayed, near) or only the last
+/// checkpoint the server has them past (too far off for their kart to be relayed).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RacerDot {
+    pub(crate) name: String,
+    pub(crate) at: [f32; 2],
+    pub(crate) place: u8,
+    pub(crate) me: bool,
+    pub(crate) near: bool,
+}
+
 #[derive(Resource, Default)]
 pub(crate) struct KartOverlay {
     pub(crate) banner: String,
@@ -26,14 +43,79 @@ pub(crate) struct KartOverlay {
     pub(crate) score: Option<ScoreLines>,
     /// Our Karting skill; `None` before the line is ours.
     pub(crate) skill: Option<u16>,
+    /// The race map: the race's track, and its racers, us among them.
+    pub(crate) track: Option<RaceMap>,
+    pub(crate) racers: Vec<RacerDot>,
 }
 
+/// Each racer's dot: us where our kart is, another at their relayed kart when it is `near`, else
+/// at the last checkpoint the server has them past.
+pub(crate) fn racer_dots(
+    map: &RaceMap,
+    me: &str,
+    me_at: Option<[f32; 2]>,
+    near: &[(String, [f32; 2])],
+) -> Vec<RacerDot> {
+    map.checkpoints
+        .iter()
+        .map(|(name, checkpoint)| {
+            let place = map
+                .order
+                .iter()
+                .position(|o| o == name)
+                .map_or(0, |i| (i + 1).min(255) as u8);
+            let mine = name == me;
+            let seen = if mine {
+                me_at
+            } else {
+                near.iter().find(|(n, _)| n == name).map(|(_, at)| *at)
+            };
+            RacerDot {
+                name: name.clone(),
+                at: seen.unwrap_or(*checkpoint),
+                place,
+                me: mine,
+                near: seen.is_some(),
+            }
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn publish(
     time: Res<Time>,
     text: Res<RaceText>,
     score: Res<KartScore>,
+    races: Res<Races>,
+    drive: Res<KartDrive>,
+    remotes: Res<RemoteKarts>,
+    names: Option<Res<crate::names::NameCache>>,
     mut overlay: ResMut<KartOverlay>,
 ) {
+    // The race map: the track once its course line is here, and every racer on it.
+    let track = races.map();
+    let racers = track.as_ref().map_or_else(Vec::new, |map| {
+        let to_wow = |p: Vec3| {
+            let w = bevy_to_wow(p);
+            [w[0], w[1]]
+        };
+        let near: Vec<(String, [f32; 2])> = remotes
+            .karts
+            .values()
+            .filter_map(|k| {
+                let name = names.as_ref()?.peek(k.guid)?;
+                Some((name.to_string(), to_wow(k.position)))
+            })
+            .collect();
+        let me_at = drive.active.then(|| to_wow(drive.pos));
+        racer_dots(map, &races.me, me_at, &near)
+    });
+    if overlay.track != track {
+        overlay.track = track;
+    }
+    if overlay.racers != racers {
+        overlay.racers = racers;
+    }
     if overlay.banner != text.banner {
         overlay.banner.clone_from(&text.banner);
     }
@@ -56,5 +138,48 @@ pub(super) fn publish(
     });
     if overlay.score != lines {
         overlay.score = lines;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn racers_are_where_their_karts_are_or_at_their_last_checkpoint() {
+        let map = RaceMap {
+            name: "Elwynn Loop".into(),
+            laps: 3,
+            points: vec![[0.0, 0.0], [100.0, 0.0], [100.0, 100.0]],
+            order: vec!["Gnome".into(), "Probesix".into(), "Goblin".into()],
+            checkpoints: vec![
+                ("Probesix".into(), [100.0, 0.0]),
+                ("Goblin".into(), [0.0, 0.0]),
+                ("Gnome".into(), [100.0, 100.0]),
+            ],
+        };
+        let near = [("Goblin".to_string(), [10.0, 5.0])];
+        let dots = racer_dots(&map, "Probesix", Some([90.0, 2.0]), &near);
+        let dot = |n: &str| dots.iter().find(|d| d.name == n).unwrap().clone();
+        // We are where our kart is, second.
+        assert_eq!(
+            dot("Probesix"),
+            RacerDot {
+                name: "Probesix".into(),
+                at: [90.0, 2.0],
+                place: 2,
+                me: true,
+                near: true,
+            }
+        );
+        // A racer near enough to be relayed is at their kart.
+        assert!(dot("Goblin").near && dot("Goblin").at == [10.0, 5.0]);
+        assert_eq!(dot("Goblin").place, 3);
+        // One too far off is at the last checkpoint the server has them past.
+        assert!(!dot("Gnome").near && dot("Gnome").at == [100.0, 100.0]);
+        assert_eq!(dot("Gnome").place, 1);
+        // Out of the kart, we are at our checkpoint too.
+        let off = racer_dots(&map, "Probesix", None, &near);
+        assert_eq!(off.iter().find(|d| d.me).unwrap().at, [100.0, 0.0]);
     }
 }

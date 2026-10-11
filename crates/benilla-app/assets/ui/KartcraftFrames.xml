@@ -594,6 +594,135 @@
             BenillaKartTrackBrowser_Refresh()
         end
 
+        -- ── The race map ───────────────────────────────────────────────────────────────────────
+        -- The race's track fitted in a square, north up (WoW x up the screen, y right to left), a
+        -- dot every few pixels along it; the racers on it, us on top: from BENILLA_KART_TRACKMAP
+        -- (the track; an empty name, no race) and BENILLA_KART_RACERS (a line each:
+        -- name, x, y, place, me, near). A racer too far off to be relayed is at their last
+        -- checkpoint, dimmed.
+        BENILLA_KART_MAP_SIZE = 172
+        BENILLA_KART_MAP_STEP = 5
+        BenillaKartMap = { route = {}, racers = {}, labels = {} }
+
+        function BenillaKartMap_At(x, y)
+            local m = BenillaKartMap
+            local half = BENILLA_KART_MAP_SIZE / 2
+            return half + (m.cy - y) * m.scale, half + (m.cx - x) * m.scale
+        end
+
+        function BenillaKartMap_Place(tex, x, y, size, r, g, b, a)
+            local px, py = BenillaKartMap_At(x, y)
+            tex:SetTexture(r, g, b)
+            tex:SetAlpha(a or 1)
+            tex:SetWidth(size)
+            tex:SetHeight(size)
+            tex:ClearAllPoints()
+            tex:SetPoint("CENTER", BenillaKartMapFrameCanvas, "TOPLEFT", px, -py)
+            tex:Show()
+        end
+
+        function BenillaKartMap_Dot(pool, n, parent, layer)
+            if not pool[n] then pool[n] = parent:CreateTexture(nil, layer) end
+            return pool[n]
+        end
+
+        function BenillaKartMap_SetTrack(name, laps, list)
+            local m = BenillaKartMap
+            if not name or name == "" then
+                BenillaKartMapFrame:Hide()
+                return
+            end
+            local points = {}
+            local items = BenillaKart_Split(string.gsub(list or "", ";", "\t"))
+            for i = 1, table.getn(items) do
+                local comma = string.find(items[i], ",", 1, 1)
+                if comma then
+                    table.insert(points, { tonumber(string.sub(items[i], 1, comma - 1)),
+                        tonumber(string.sub(items[i], comma + 1)) })
+                end
+            end
+            local count = table.getn(points)
+            if count < 2 then
+                BenillaKartMapFrame:Hide()
+                return
+            end
+            local minx, maxx, miny, maxy = points[1][1], points[1][1], points[1][2], points[1][2]
+            for i = 2, count do
+                minx = math.min(minx, points[i][1]); maxx = math.max(maxx, points[i][1])
+                miny = math.min(miny, points[i][2]); maxy = math.max(maxy, points[i][2])
+            end
+            m.cx, m.cy = (minx + maxx) / 2, (miny + maxy) / 2
+            m.scale = BENILLA_KART_MAP_SIZE * 0.88 / math.max(maxx - minx, maxy - miny, 1)
+            BenillaKartMapFrameTitle:SetText(name)
+            -- The trail: a circuit back round to its start, a sprint to its finish.
+            local legs = count - 1
+            if (tonumber(laps) or 0) > 0 then legs = count end
+            local n = 0
+            for i = 1, legs do
+                local a, b = points[i], points[mod(i, count) + 1]
+                local ax, ay = BenillaKartMap_At(a[1], a[2])
+                local bx, by = BenillaKartMap_At(b[1], b[2])
+                local steps = math.max(1, floor(math.sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay)) / BENILLA_KART_MAP_STEP))
+                for k = 0, steps - 1 do
+                    local t = k / steps
+                    n = n + 1
+                    BenillaKartMap_Place(BenillaKartMap_Dot(m.route, n, BenillaKartMapFrameCanvas, "ARTWORK"),
+                        a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, 2, 0.85, 0.75, 0.55, 0.9)
+                end
+            end
+            if legs < count then
+                n = n + 1
+                BenillaKartMap_Place(BenillaKartMap_Dot(m.route, n, BenillaKartMapFrameCanvas, "ARTWORK"),
+                    points[count][1], points[count][2], 6, 0.9, 0.2, 0.2)
+            end
+            n = n + 1
+            BenillaKartMap_Place(BenillaKartMap_Dot(m.route, n, BenillaKartMapFrameCanvas, "ARTWORK"),
+                points[1][1], points[1][2], 6, 0.2, 1, 0.2)
+            for i = n + 1, table.getn(m.route) do m.route[i]:Hide() end
+            BenillaKartMapFrame:Show()
+        end
+
+        function BenillaKartMap_SetRacers(list)
+            local m = BenillaKartMap
+            local n, seen = 0, nil
+            local lines = BenillaKart_Split(string.gsub(list or "", "\n", "\t"))
+            if m.scale then
+                for i = 1, table.getn(lines) - 5, 6 do
+                    local x, y = tonumber(lines[i + 1]), tonumber(lines[i + 2])
+                    local place, me, near = tonumber(lines[i + 3]) or 0, lines[i + 4] == "1", lines[i + 5] == "1"
+                    if x and y then
+                        n = n + 1
+                        local alpha = 1
+                        if not near then alpha = 0.45 end
+                        if me then
+                            -- Us on a layer of our own, above everyone else.
+                            if not m.me then m.me = BenillaKartMapFrameCanvasTop:CreateTexture(nil, "OVERLAY") end
+                            BenillaKartMap_Place(m.me, x, y, 9, 1, 0.9, 0.2, 1)
+                            seen = 1
+                            if m.racers[n] then m.racers[n]:Hide() end
+                        else
+                            BenillaKartMap_Place(BenillaKartMap_Dot(m.racers, n, BenillaKartMapFrameCanvas, "OVERLAY"),
+                                x, y, 7, 0.95, 0.25, 0.2, alpha)
+                        end
+                        local label = m.labels[n]
+                        if not label then
+                            label = BenillaKartMapFrameCanvasTop:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                            m.labels[n] = label
+                        end
+                        local px, py = BenillaKartMap_At(x, y)
+                        label:ClearAllPoints()
+                        label:SetPoint("LEFT", BenillaKartMapFrameCanvas, "TOPLEFT", px + 6, -py)
+                        if place > 0 then label:SetText(place) else label:SetText("") end
+                        label:SetAlpha(alpha)
+                        label:Show()
+                    end
+                end
+            end
+            for i = n + 1, table.getn(m.racers) do m.racers[i]:Hide() end
+            for i = n + 1, table.getn(m.labels) do m.labels[i]:Hide() end
+            if m.me and not seen then m.me:Hide() end
+        end
+
         -- The server's replies.
         function BenillaKartFinder_OnLine(message)
             local f = BenillaKartFinder
@@ -716,6 +845,10 @@
                 BenillaKartRace_Show(arg1, arg2)
             elseif event == "BENILLA_KART_SCORE" then
                 BenillaKartScore_Show(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11)
+            elseif event == "BENILLA_KART_TRACKMAP" then
+                BenillaKartMap_SetTrack(arg1, arg2, arg3)
+            elseif event == "BENILLA_KART_RACERS" then
+                BenillaKartMap_SetRacers(arg1)
             elseif event == "BENILLA_KART_TRACKS" then
                 BenillaKartTracks_Set(arg1)
             elseif event == "BENILLA_KART_COURSES" then
@@ -1854,6 +1987,43 @@
         </Scripts>
     </Frame>
 
+    <!-- The race map: the track and the racers on it, us on top; dragged to where it suits. -->
+    <Frame name="BenillaKartMapFrame" parent="UIParent" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" frameStrata="MEDIUM">
+        <Size><AbsDimension x="200" y="214"/></Size>
+        <Anchors><Anchor point="RIGHT"><Offset><AbsDimension x="-30" y="60"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+            <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>
+            <TileSize><AbsValue val="16"/></TileSize>
+            <EdgeSize><AbsValue val="16"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentTitle" inherits="GameFontNormalSmall">
+                    <Size><AbsDimension x="180" y="14"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <Frame name="$parentCanvas">
+                <Size><AbsDimension x="172" y="172"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="14" y="-28"/></Offset></Anchor></Anchors>
+                <Frames>
+                    <Frame name="$parentTop" setAllPoints="true"/>
+                </Frames>
+            </Frame>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                this:SetBackdropColor(0, 0, 0, 0.75)
+                BenillaKart_Movable(this)
+                BenillaKartMapFrameCanvasTop:SetFrameLevel(BenillaKartMapFrameCanvas:GetFrameLevel() + 2)
+            </OnLoad>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+
     <!-- The turbo chain's score: the trick, the points, then the experience and skill it earned. -->
     <Frame name="BenillaKartScoreFrame" parent="UIParent" hidden="true" frameStrata="LOW">
         <Size><AbsDimension x="400" y="100"/></Size>
@@ -1891,6 +2061,8 @@
                 this:RegisterEvent("BENILLA_KART_SCORE")
                 this:RegisterEvent("BENILLA_KART_COURSES")
                 this:RegisterEvent("BENILLA_KART_TRACKS")
+                this:RegisterEvent("BENILLA_KART_TRACKMAP")
+                this:RegisterEvent("BENILLA_KART_RACERS")
                 this:RegisterEvent("BENILLA_KART_COURSE_NAMES")
                 this:RegisterEvent("BENILLA_KART_GARAGE")
             </OnLoad>
