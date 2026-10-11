@@ -306,6 +306,293 @@
             end
         end
 
+        -- ── The track browser ─────────────────────────────────────────────────────────────────
+        -- Every course from BENILLA_KART_TRACKS: { key, name, zone, map, laps, text, points },
+        -- searchable; "Show on map" opens the world map at the course's zone and draws its route,
+        -- which GetWorldLocMapPosition puts on whatever map is displayed. The route goes when the
+        -- map closes or another course is shown.
+        BenillaKartTracks = {}
+        BENILLA_KART_TRACK_ROWS = 10
+        BENILLA_KART_TRACK_ROW_HEIGHT = 18
+        -- The trail's dot every this many yards along the route.
+        BENILLA_KART_ROUTE_STEP = 15
+        BenillaKartTrackBrowser = { search = "" }
+        -- The course on the map (its key), and its dots.
+        BenillaKartRoute = { dots = {} }
+
+        function BenillaKartTracks_Set(list)
+            BenillaKartTracks = {}
+            local lines = BenillaKart_Split(string.gsub(list or "", "\n", "\t"))
+            for i = 1, table.getn(lines) - 6, 7 do
+                local points = {}
+                local items = BenillaKart_Split(string.gsub(lines[i + 6], ";", "\t"))
+                for j = 1, table.getn(items) do
+                    local comma = string.find(items[j], ",", 1, 1)
+                    if comma then
+                        table.insert(points, { tonumber(string.sub(items[j], 1, comma - 1)),
+                            tonumber(string.sub(items[j], comma + 1)) })
+                    end
+                end
+                table.insert(BenillaKartTracks, { key = lines[i], name = lines[i + 1],
+                    zone = lines[i + 2], map = tonumber(lines[i + 3]) or 0,
+                    laps = tonumber(lines[i + 4]) or 0, text = lines[i + 5], points = points })
+            end
+            BenillaKartTrackBrowser_Refresh()
+        end
+
+        function BenillaKartTrack(key)
+            for i = 1, table.getn(BenillaKartTracks) do
+                if BenillaKartTracks[i].key == key then return BenillaKartTracks[i] end
+            end
+        end
+
+        -- The list: every track whose name or zone holds the search, any case.
+        function BenillaKartTrackBrowser_Shown()
+            local search = string.lower(BenillaKartTrackBrowser.search or "")
+            if search == "" then return BenillaKartTracks end
+            local shown = {}
+            for i = 1, table.getn(BenillaKartTracks) do
+                local t = BenillaKartTracks[i]
+                if string.find(string.lower(t.name .. " " .. t.zone), search, 1, 1) then
+                    table.insert(shown, t)
+                end
+            end
+            return shown
+        end
+
+        function BenillaKartTrackBrowser_Search(text)
+            BenillaKartTrackBrowser.search = text or ""
+            local bar = getglobal("BenillaKartTracksFrameScrollScrollBar")
+            if bar then bar:SetValue(0) end
+            BenillaKartTrackBrowser_Refresh()
+        end
+
+        -- Opens the browser at `key` (the Race Marshal's own course), its row brought into view.
+        function BenillaKartTrackBrowser_Open(key)
+            BenillaKartTrackBrowser.selected = key or BenillaKartTrackBrowser.selected
+            BenillaKart_Open(BenillaKartTracksFrame)
+            if not BenillaKartTracksFrame:IsVisible() then return end
+            if key then
+                local list = BenillaKartTrackBrowser_Shown()
+                for i = 1, table.getn(list) do
+                    if list[i].key == key then
+                        local bar = getglobal("BenillaKartTracksFrameScrollScrollBar")
+                        if bar and i > BENILLA_KART_TRACK_ROWS then
+                            bar:SetValue((i - 1) * BENILLA_KART_TRACK_ROW_HEIGHT)
+                        end
+                    end
+                end
+            end
+            BenillaKartTrackBrowser_Refresh()
+        end
+
+        function BenillaKartTrackBrowser_Toggle()
+            if BenillaKartTracksFrame:IsVisible() then
+                BenillaKartTracksFrame:Hide()
+            else
+                BenillaKartTrackBrowser_Open()
+            end
+        end
+
+        function BenillaKartTrackBrowser_Select(key)
+            BenillaKartTrackBrowser.selected = key
+            BenillaKartTrackBrowser_Refresh()
+        end
+
+        function BenillaKartTrackBrowser_Refresh()
+            local frame = BenillaKartTracksFrame
+            if not frame or not frame:IsVisible() then return end
+            local list = BenillaKartTrackBrowser_Shown()
+            local offset = 0
+            if FauxScrollFrame_Update then
+                local scroll = BenillaKartTracksFrameScroll
+                FauxScrollFrame_Update(scroll, table.getn(list), BENILLA_KART_TRACK_ROWS,
+                    BENILLA_KART_TRACK_ROW_HEIGHT)
+                if BenillaScrollTrough_Follow then BenillaScrollTrough_Follow(scroll:GetName()) end
+                offset = FauxScrollFrame_GetOffset(scroll)
+            end
+            local selected = BenillaKartTrackBrowser.selected
+            for i = 1, BENILLA_KART_TRACK_ROWS do
+                local row = getglobal("BenillaKartTracksFrameRow" .. i)
+                local track = list[offset + i]
+                if track then
+                    row.key = track.key
+                    getglobal(row:GetName() .. "Name"):SetText(track.name)
+                    getglobal(row:GetName() .. "Zone"):SetText(track.zone)
+                    if track.key == selected then row:LockHighlight() else row:UnlockHighlight() end
+                    row:Show()
+                else
+                    row.key = nil
+                    row:Hide()
+                end
+            end
+            local track = selected and BenillaKartTrack(selected)
+            if track then
+                BenillaKartTracksFrameTitle:SetText(track.name)
+                BenillaKartTracksFrameText:SetText(track.text)
+                BenillaKartTracksFrameShow:Enable()
+            else
+                BenillaKartTracksFrameTitle:SetText("")
+                BenillaKartTracksFrameText:SetText("Pick a track to read about it and see it on the map.")
+                BenillaKartTracksFrameShow:Disable()
+            end
+            if BenillaKartRoute.key and BenillaKartRoute.key == selected then
+                BenillaKartTracksFrameShow:SetText("Shown on the map")
+            else
+                BenillaKartTracksFrameShow:SetText("Show on map")
+            end
+        end
+
+        function BenillaKartTrackBrowser_OnMouseWheel(delta)
+            if BenillaFauxScrollFrame_OnMouseWheel then
+                BenillaFauxScrollFrame_OnMouseWheel(BenillaKartTracksFrameScroll, delta)
+            end
+        end
+
+        -- The route's layer on the world map's canvas, made on first use; it hides with the map,
+        -- and its OnHide takes the route away.
+        function BenillaKartRoute_Layer()
+            if BenillaKartRouteFrame then return BenillaKartRouteFrame end
+            if not WorldMapButton then return nil end
+            local layer = CreateFrame("Frame", "BenillaKartRouteFrame", WorldMapButton)
+            layer:SetAllPoints(WorldMapButton)
+            layer:SetFrameLevel(WorldMapButton:GetFrameLevel() + 2)
+            layer:RegisterEvent("WORLD_MAP_UPDATE")
+            layer:SetScript("OnEvent", function() BenillaKartRoute_Draw() end)
+            layer:SetScript("OnHide", function()
+                BenillaKartRoute_Clear()
+                -- A browser that rode on the map goes back to the screen, still open.
+                if BenillaKartTracksFrame:GetParent() == WorldMapFrame then
+                    BenillaKartTracksFrame:SetParent(UIParent)
+                    BenillaKartTracksFrame:SetFrameStrata("FULLSCREEN_DIALOG")
+                end
+            end)
+            return layer
+        end
+
+        function BenillaKartRoute_Clear()
+            for i = 1, table.getn(BenillaKartRoute.dots) do
+                BenillaKartRoute.dots[i]:Hide()
+            end
+            if BenillaKartRouteStart then BenillaKartRouteStart:Hide() end
+            BenillaKartRoute.key = nil
+            BenillaKartTrackBrowser_Refresh()
+        end
+
+        -- A dot of the trail, the pool grown as a route needs.
+        function BenillaKartRoute_Dot(layer, n)
+            local dot = BenillaKartRoute.dots[n]
+            if not dot then
+                dot = layer:CreateTexture(nil, "OVERLAY")
+                BenillaKartRoute.dots[n] = dot
+            end
+            return dot
+        end
+
+        -- Puts a dot at world (x, y) on the displayed map, or hides it off the map.
+        function BenillaKartRoute_Place(layer, dot, map, x, y, size, r, g, b)
+            local u, v = GetWorldLocMapPosition(map, x, y)
+            if u == 0 and v == 0 then
+                dot:Hide()
+                return
+            end
+            dot:SetTexture(r, g, b, 1)
+            dot:SetWidth(size)
+            dot:SetHeight(size)
+            dot:ClearAllPoints()
+            dot:SetPoint("CENTER", layer, "TOPLEFT", u * layer:GetWidth(), -v * layer:GetHeight())
+            dot:Show()
+        end
+
+        -- The shown course's trail on the displayed map: a dot each ROUTE_STEP yards along it,
+        -- bigger at the checkpoints, the start marked; again at every map change.
+        function BenillaKartRoute_Draw()
+            local track = BenillaKartRoute.key and BenillaKartTrack(BenillaKartRoute.key)
+            local layer = BenillaKartRouteFrame
+            if not track or not layer then return end
+            local points = track.points
+            local count = table.getn(points)
+            local n = 0
+            -- A circuit runs back to its first checkpoint; a sprint ends at its last.
+            local legs = count - 1
+            if track.laps > 0 then legs = count end
+            for i = 1, legs do
+                local a, b = points[i], points[mod(i, count) + 1]
+                local length = math.sqrt((b[1] - a[1]) ^ 2 + (b[2] - a[2]) ^ 2)
+                local steps = math.max(1, floor(length / BENILLA_KART_ROUTE_STEP))
+                for k = 0, steps - 1 do
+                    local t = k / steps
+                    n = n + 1
+                    local size, r, g, bl = 3, 1, 0.55, 0.1
+                    if k == 0 then size, r, g, bl = 6, 1, 0.85, 0.1 end
+                    BenillaKartRoute_Place(layer, BenillaKartRoute_Dot(layer, n), track.map,
+                        a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, size, r, g, bl)
+                end
+            end
+            if legs < count and count > 0 then
+                n = n + 1
+                local last = points[count]
+                BenillaKartRoute_Place(layer, BenillaKartRoute_Dot(layer, n), track.map,
+                    last[1], last[2], 8, 0.9, 0.2, 0.2)
+            end
+            for i = n + 1, table.getn(BenillaKartRoute.dots) do
+                BenillaKartRoute.dots[i]:Hide()
+            end
+            if not BenillaKartRouteStart then
+                BenillaKartRouteStart = layer:CreateTexture("BenillaKartRouteStart", "OVERLAY")
+            end
+            if count > 0 then
+                BenillaKartRoute_Place(layer, BenillaKartRouteStart, track.map, points[1][1],
+                    points[1][2], 10, 0.2, 1, 0.2)
+            end
+        end
+
+        -- The world map's zone for a course: its continent by map id, its zone by name.
+        function BenillaKartRoute_Zoom(track)
+            if not GetMapContinents or not SetMapZoom then return end
+            local want = "Eastern Kingdoms"
+            if track.map == 1 then want = "Kalimdor" end
+            local continents = { GetMapContinents() }
+            for c = 1, table.getn(continents) do
+                if continents[c] == want then
+                    local zones = { GetMapZones(c) }
+                    for z = 1, table.getn(zones) do
+                        if zones[z] == track.zone then
+                            SetMapZoom(c, z)
+                            return
+                        end
+                    end
+                    SetMapZoom(c)
+                    return
+                end
+            end
+        end
+
+        -- "Show on map": the world map opens at the course's zone with its route, the last one
+        -- taken away.
+        function BenillaKartRoute_Show(key)
+            local track = BenillaKartTrack(key)
+            if not track then return end
+            local layer = BenillaKartRoute_Layer()
+            if not layer then return end
+            BenillaKartRoute_Clear()
+            if WorldMapFrame and not WorldMapFrame:IsVisible() then
+                -- The map is a full-screen panel: it hides UIParent and every window with it. The
+                -- browser rides on the map while it is up, and goes back when it closes.
+                local browsing = BenillaKartTracksFrame:IsVisible()
+                if ToggleWorldMap then ToggleWorldMap() else WorldMapFrame:Show() end
+                if browsing then
+                    BenillaKartTracksFrame:SetParent(WorldMapFrame)
+                    BenillaKartTracksFrame:SetFrameStrata("FULLSCREEN_DIALOG")
+                    BenillaKartTracksFrame:Show()
+                end
+            end
+            BenillaKartRoute.key = key
+            BenillaKartRoute_Zoom(track)
+            BenillaKartRoute_Draw()
+            BenillaKartTrackBrowser_Refresh()
+        end
+
         -- The server's replies.
         function BenillaKartFinder_OnLine(message)
             local f = BenillaKartFinder
@@ -331,6 +618,9 @@
             elseif verb == "Finder" then
                 -- The Race Marshal's "Open the Race Finder".
                 BenillaKart_Open(BenillaKartFinderFrame)
+            elseif verb == "Tracks" then
+                -- The Race Marshal's "Browse the tracks", at her own course.
+                BenillaKartTrackBrowser_Open(line[3] ~= "" and line[3] or nil)
             elseif verb == "X" then
                 -- Out of every race and the queue (/leaverace, the minimap button's menu).
                 f.check, f.queued, f.waiting, f.waited = nil, nil, nil, nil
@@ -407,6 +697,8 @@
                 BenillaKartRace_Show(arg1, arg2)
             elseif event == "BENILLA_KART_SCORE" then
                 BenillaKartScore_Show(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11)
+            elseif event == "BENILLA_KART_TRACKS" then
+                BenillaKartTracks_Set(arg1)
             elseif event == "BENILLA_KART_COURSES" then
                 BenillaKartCourses_Set(arg1)
             elseif event == "BENILLA_KART_COURSE_NAMES" then
@@ -521,6 +813,7 @@
             local entries = {
                 { text = "World of Kartcraft", isTitle = 1 },
                 { text = "Race Finder", func = BenillaKartFinder_Toggle },
+                { text = "Track browser", func = BenillaKartTrackBrowser_Toggle },
                 { text = "Leave race", func = BenillaKart_LeaveRace },
             }
             if BenillaKartFinder.queued then
@@ -851,6 +1144,8 @@
             SlashCmdList["BENILLA_LEAVERACE"] = function() BenillaKart_LeaveRace() end
             SLASH_BENILLA_KARTCRAFT1 = "/kartcraft"
             SlashCmdList["BENILLA_KARTCRAFT"] = function() BenillaKartSettings_Toggle() end
+            SLASH_BENILLA_TRACKS1 = "/tracks"
+            SlashCmdList["BENILLA_TRACKS"] = function() BenillaKartTrackBrowser_Toggle() end
             SLASH_BENILLA_GARAGE1 = "/garage"
             SlashCmdList["BENILLA_GARAGE"] = function() BenillaKartGarage_Toggle() end
             -- GMs: the Race Finder's wait for a second racer, in seconds (the server checks).
@@ -1349,6 +1644,149 @@
     </Frame>
 
     <!-- The race's banner (the prompt at a start, the countdown, the result) and the results. -->
+    <!-- The track browser: a course a row (its name, its zone), the picked one's description,
+         and its route on the world map. -->
+    <Button name="BenillaKartTrackRowTemplate" virtual="true">
+        <Size><AbsDimension x="276" y="18"/></Size>
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentName" inherits="GameFontNormalSmall" justifyH="LEFT">
+                    <Size><AbsDimension x="176" y="18"/></Size>
+                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="6" y="0"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentZone" inherits="GameFontDisableSmall" justifyH="RIGHT">
+                    <Size><AbsDimension x="92" y="18"/></Size>
+                    <Anchors><Anchor point="RIGHT"><Offset><AbsDimension x="-4" y="0"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <HighlightTexture file="Interface\QuestFrame\UI-QuestTitleHighlight" alphaMode="ADD"/>
+        <Scripts>
+            <OnClick>if this.key then BenillaKartTrackBrowser_Select(this.key) end</OnClick>
+            <OnDoubleClick>if this.key then BenillaKartRoute_Show(this.key) end</OnDoubleClick>
+        </Scripts>
+    </Button>
+
+    <!-- Over the world map, which it opens, so another track can be picked with the map up. -->
+    <Frame name="BenillaKartTracksFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="FULLSCREEN_DIALOG">
+        <Size><AbsDimension x="340" y="470"/></Size>
+        <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="-220" y="40"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
+            <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
+            <TileSize><AbsValue val="32"/></TileSize>
+            <EdgeSize><AbsValue val="32"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="BACKGROUND">
+                <!-- The windows' own ground, as the finder's: 0.88 opaque with the dialog tile. -->
+                <Texture name="$parentGroundDim">
+                    <Anchors>
+                        <Anchor point="TOPLEFT"><Offset><AbsDimension x="15" y="-15"/></Offset></Anchor>
+                        <Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-15" y="15"/></Offset></Anchor>
+                    </Anchors>
+                    <Color r="0" g="0" b="0" a="0.7"/>
+                </Texture>
+            </Layer>
+            <Layer level="ARTWORK">
+                <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
+                    <Size><AbsDimension x="256" y="64"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
+                </Texture>
+                <FontString inherits="GameFontNormal" text="Tracks">
+                    <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentTitle" inherits="GameFontNormalLarge" justifyH="LEFT">
+                    <Size><AbsDimension x="290" y="20"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-276"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentText" inherits="GameFontHighlightSmall" justifyH="LEFT" justifyV="TOP">
+                    <Size><AbsDimension x="290" y="100"/></Size>
+                    <Anchors><Anchor point="TOPLEFT" relativeTo="$parentTitle" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-6"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <EditBox name="$parentSearch" inherits="InputBoxTemplate" autoFocus="false" letters="40">
+                <Size><AbsDimension x="220" y="20"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="80" y="-34"/></Offset></Anchor></Anchors>
+                <Layers>
+                    <Layer level="ARTWORK">
+                        <FontString inherits="GameFontNormalSmall" text="Search">
+                            <Anchors><Anchor point="RIGHT" relativePoint="LEFT"><Offset><AbsDimension x="-10" y="0"/></Offset></Anchor></Anchors>
+                        </FontString>
+                    </Layer>
+                </Layers>
+                <Scripts>
+                    <OnTextChanged>BenillaKartTrackBrowser_Search(this:GetText())</OnTextChanged>
+                    <OnEscapePressed>this:ClearFocus()</OnEscapePressed>
+                    <OnEnterPressed>this:ClearFocus()</OnEnterPressed>
+                </Scripts>
+            </EditBox>
+            <Button name="$parentRow1" inherits="BenillaKartTrackRowTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="20" y="-62"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentRow2" inherits="BenillaKartTrackRowTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow1" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentRow3" inherits="BenillaKartTrackRowTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow2" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentRow4" inherits="BenillaKartTrackRowTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow3" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentRow5" inherits="BenillaKartTrackRowTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow4" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentRow6" inherits="BenillaKartTrackRowTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow5" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentRow7" inherits="BenillaKartTrackRowTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow6" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentRow8" inherits="BenillaKartTrackRowTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow7" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentRow9" inherits="BenillaKartTrackRowTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow8" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentRow10" inherits="BenillaKartTrackRowTemplate">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow9" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <ScrollFrame name="$parentScroll" inherits="FauxScrollFrameTemplate">
+                <Size><AbsDimension x="276" y="180"/></Size>
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow1"/></Anchors>
+                <Scripts>
+                    <OnVerticalScroll>FauxScrollFrame_OnVerticalScroll(BENILLA_KART_TRACK_ROW_HEIGHT, BenillaKartTrackBrowser_Refresh)</OnVerticalScroll>
+                </Scripts>
+            </ScrollFrame>
+            <Button name="$parentShow" inherits="UIPanelButtonTemplate" text="Show on map">
+                <Size><AbsDimension x="140" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="18"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartRoute_Show(BenillaKartTrackBrowser.selected)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-24" y="18"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartTracksFrame:Hide()</OnClick></Scripts>
+            </Button>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
+                BenillaKart_Movable(this)
+                this:EnableMouseWheel(1)
+            </OnLoad>
+            <OnShow>
+                PlaySound("igMainMenuOpen")
+                BenillaKartTrackBrowser_Refresh()
+            </OnShow>
+            <OnHide>PlaySound("igMainMenuClose")</OnHide>
+            <OnMouseWheel>BenillaKartTrackBrowser_OnMouseWheel(arg1)</OnMouseWheel>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+
     <Frame name="BenillaKartRaceFrame" parent="UIParent" setAllPoints="true" frameStrata="LOW">
         <Layers>
             <Layer level="OVERLAY">
@@ -1424,6 +1862,7 @@
                 this:RegisterEvent("BENILLA_KART_RACE")
                 this:RegisterEvent("BENILLA_KART_SCORE")
                 this:RegisterEvent("BENILLA_KART_COURSES")
+                this:RegisterEvent("BENILLA_KART_TRACKS")
                 this:RegisterEvent("BENILLA_KART_COURSE_NAMES")
                 this:RegisterEvent("BENILLA_KART_GARAGE")
             </OnLoad>
