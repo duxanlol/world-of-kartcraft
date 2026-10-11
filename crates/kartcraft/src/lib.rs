@@ -46,14 +46,13 @@ pub fn model_scale() -> f32 {
 }
 
 /// How the host frames the kart: how much bigger than its physics the model is drawn (a WoW
-/// character is taller than the CTR racer the kart was built for), how far below CTR's aim the
-/// chase camera looks (lu; WoW's action bars cover the bottom of the screen, where CTR puts the
-/// kart), how much of the window's bottom (a fraction) the HUD keeps clear of, and how far above
-/// CTR's racer's head (meters, the model's frame) the driver's head is, where a TNT sits.
+/// character is taller than the CTR racer the kart was built for), how much of the window's
+/// bottom (a fraction) the HUD keeps clear of, and how far above CTR's racer's head (meters, the
+/// model's frame) the driver's head is, where a TNT sits. The chase camera's own shape is the
+/// session's [`camera::CameraTuning`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Framing {
     pub model_size: f32,
-    pub look_drop: f32,
     pub hud_bottom_inset: f32,
     pub head_lift: f32,
 }
@@ -62,7 +61,6 @@ impl Framing {
     /// CTR's own: the demo.
     pub const CTR: Framing = Framing {
         model_size: 1.0,
-        look_drop: 0.0,
         hud_bottom_inset: 0.0,
         head_lift: 0.0,
     };

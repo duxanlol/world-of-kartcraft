@@ -18,7 +18,7 @@ mod race;
 mod remote;
 mod score;
 mod seat;
-mod settings;
+pub(crate) mod settings;
 mod sound;
 mod ui;
 pub(crate) use garage::{class_list, racer_list};
@@ -56,15 +56,27 @@ pub(crate) struct KartDrive {
     pub(crate) speed: f32,
     /// The chase camera, Bevy world.
     pub(crate) camera: Option<Transform>,
+    /// The chase camera's vertical field of view, radians (`KartCamFov`).
+    pub(crate) fov: f32,
     /// Drive with the chase camera rather than our follow camera (`KartChaseCamera`).
     pub(crate) engine_camera: bool,
     /// The gas is down (a race's countdown holds the kart but times the start boost by it).
     pub(crate) revving: bool,
 }
 
+/// The kart's drive for the frame, which writes [`KartDrive`].
+#[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct KartDriveSet;
+
 impl KartDrive {
     pub(crate) fn moving(&self) -> bool {
         self.speed > MOVING_SPEED
+    }
+
+    /// The field of view the world camera takes while the chase camera drives it.
+    pub(crate) fn camera_fov(&self) -> Option<f32> {
+        (self.active && self.engine_camera && self.camera.is_some() && self.fov > 0.0)
+            .then_some(self.fov)
     }
 }
 
@@ -317,6 +329,8 @@ fn update(
         cvars.set("KartFarCamera", if far { "1" } else { "0" });
     }
     host.session.set_camera(far, controls.look_back);
+    // The camera window's tuning, live.
+    host.session.tune_camera(settings.camera);
     // ○ fires the held item; the autopilot fires now and then while it holds one, and again
     // with its bomb rolling or its shield up.
     let holding = matches!(
@@ -327,6 +341,7 @@ fn update(
         || (input::autopilot_on() && holding && input::autofire(now, time.delta_secs()));
     arms.press(fire, controls.reverse);
     arms.camera = view.camera;
+    arms.camera_fov = view.fov;
     // Wumpa from the race's fruit, or all ten under Wumpa Juice.
     let wumpa = if auras.juice { 10 } else { arms.wumpa() };
     extras.wumpa = wumpa;
@@ -412,6 +427,7 @@ fn update(
     drive.yaw = view.yaw;
     drive.speed = view.speed;
     drive.camera = view.camera;
+    drive.fov = view.fov;
 }
 
 /// Our character in the kart's seat: the body takes the kart's tilt and sits its chair pose's
@@ -485,10 +501,10 @@ fn seat_nudge() -> Vec3 {
 const MODEL_SIZE: f32 = 1.25;
 
 pub(crate) fn plugin(app: &mut App) {
-    // A WoW character in the kart, and WoW's action bars along the bottom of the screen.
+    // A WoW character in the kart, and WoW's action bars along the bottom of the screen (the
+    // chase camera's aim over them is its tuning's, `settings::KartSettings::camera`).
     kartcraft::set_framing(kartcraft::Framing {
         model_size: MODEL_SIZE,
-        look_drop: 70.0,
         hud_bottom_inset: 0.075,
         // A WoW character's head stands above a CTR racer's in the seat.
         head_lift: 0.5,
@@ -536,7 +552,7 @@ pub(crate) fn plugin(app: &mut App) {
             (
                 input::log_pads,
                 race_name,
-                update,
+                update.in_set(KartDriveSet),
                 race::update,
                 ghost::update,
                 weapons::update,

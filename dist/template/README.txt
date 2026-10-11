@@ -56,11 +56,18 @@ X are WoW's as ever.
 
 Everything else is WoW's own interface. The Kartcraft button on the minimap (the mechanostrider)
 opens the Race Finder on a click; right-click it for Race Finder, Leave race, Leave queue,
-Kart garage, Kartcraft settings and Hide minimap button; drag it to move it round the minimap.
+Kart garage, Kartcraft settings, Kart camera and Hide minimap button; drag it to move it round
+the minimap.
 Kartcraft settings (or /kartcraft): the pace notes (show, size, Move sign, Reset sign), CTR's
 chase camera or your WoW camera, near or far, the race music and its volume, the ghost of your
 best run, and the minimap button.
-Slash commands: /racefinder, /tracks, /leaverace (/lr), /unstuck, /kartcraft, /garage.
+Kart camera (its Camera... button, or /kartcam): a preset (Kartcraft, Smooth follow, CTR
+classic) and a slider for everything that shapes the chase camera: distance, height, angle,
+look-at height, field of view, side offset, how it turns (the kart's body or its direction of
+travel, the powerslide swing, smoothing, its angle round the kart), the tilt on slopes, the bank,
+the turbo push-back and walls. Changes apply at once, so tune it while you drive; Reset to
+Kartcraft puts it back.
+Slash commands: /racefinder, /tracks, /leaverace (/lr), /unstuck, /kartcraft, /kartcam, /garage.
 
 In a race the pace notes call each turn as you come to it, the way a rally co-driver does: EASY,
 MEDIUM, HARD or HAIRPIN, LEFT or RIGHT, LONG for a long bend, and the turn after it when it comes
