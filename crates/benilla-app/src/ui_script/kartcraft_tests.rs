@@ -634,6 +634,7 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
             "Race Finder",
             "Race mode",
             "Track browser",
+            "Show Race Marshals",
             "Leave race",
             "Unstuck",
             "Kart garage...",
@@ -1717,4 +1718,31 @@ fn the_finder_shows_the_queue_and_the_hosted_races_and_joins_one() {
     assert_eq!(text(&s, "BenillaKartFinderFrameRow2Text"), "Elwynn Loop");
     assert!(text(&s, "BenillaKartFinderFrameLobbies").starts_with("Hosted races: none."));
     assert!(!shown(&s, "BenillaKartFinderFrameLobby1"));
+}
+
+#[test]
+fn the_minimap_menu_toggles_the_race_marshals() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let ticked = |s: &mut UiScript| -> bool {
+        menu(s);
+        s.eval(
+            "for i = 1, UIDROPDOWNMENU_MAXBUTTONS do \
+             local b = getglobal('DropDownList1Button' .. i) \
+             if b and b:IsVisible() and b:GetText() == 'Show Race Marshals' then \
+             return getglobal(b:GetName() .. 'Check'):IsVisible() == 1 end end return false",
+        )
+        .unwrap()
+    };
+    // On by default; the entry turns the CVar off and on again.
+    assert!(ticked(&mut s));
+    pick(&mut s, "Show Race Marshals");
+    assert_eq!(s.cvar("KartRaceMarshals").as_deref(), Some("0"));
+    assert!(!ticked(&mut s));
+    pick(&mut s, "Show Race Marshals");
+    assert_eq!(s.cvar("KartRaceMarshals").as_deref(), Some("1"));
+    assert!(ticked(&mut s));
 }

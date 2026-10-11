@@ -358,7 +358,7 @@ fn emit_minimap(
         names,
         go_templates,
         locks,
-        poi_marker,
+        (poi_marker, marshals),
         pois,
         mut ping,
         script,
@@ -653,6 +653,7 @@ fn emit_minimap(
             blips::emit_landmarks(
                 ctx,
                 pois.as_ref().map(|p| &p.0),
+                marshals.on_map(map.0),
                 poi_marker.on_map(map.0),
                 map.0,
                 &assets.rim_arrows,

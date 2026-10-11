@@ -911,6 +911,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "190",
         "Kartcraft's own — its minimap button; 1.12 has no kart",
     ),
+    // The Race Marshals as landmarks on the minimap and the world map (`kart::marshals`).
+    ours(
+        "KartRaceMarshals",
+        "1",
+        "Kartcraft's own — the Race Marshals on the maps; 1.12 has no kart",
+    ),
     // `lastCharacterIndex` (`0x402d93`, "0" `0x82e570`, category 4, handle `[0x882674]`), help
     // "Last character selected": a 0-based row (the selection cell `[0x83856c]` under `"%d"`), so
     // "0" is the first character. It mirrors [`crate::char_select::Roster::pending_index`].

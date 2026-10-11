@@ -26,8 +26,9 @@
         config.toml: the guide arrow (KartArrowShow, KartArrowSize, KartArrowX, KartArrowY, and
         KartArrowMove while it is being placed), the camera (KartChaseCamera, and KartFarCamera
         for CTR's far chase camera, which the camera binding also swaps), the music
-        (KartMusic, KartMusicVolume), the minimap button (KartMinimapButton, KartMinimapAngle)
-        and the ghost of the best run on a course (KartGhost).
+        (KartMusic, KartMusicVolume), the minimap button (KartMinimapButton, KartMinimapAngle),
+        the Race Marshals on the maps (KartRaceMarshals, kart/marshals.rs) and the ghost of the
+        best run on a course (KartGhost).
 
         The kart garage (/garage) picks the engine class (KartClass) and whose kart we drive
         (KartRacer). The kart sends BENILLA_KART_GARAGE at load and whenever the Karting skill
@@ -1049,6 +1050,15 @@
             end
         end
 
+        -- The Race Marshals on the maps (KartRaceMarshals), as a tracking type is toggled.
+        function BenillaKart_MarshalsToggle()
+            if GetCVar("KartRaceMarshals") == "0" then
+                SetCVar("KartRaceMarshals", "1")
+            else
+                SetCVar("KartRaceMarshals", "0")
+            end
+        end
+
         -- The right-click menu, in the stock kit's MENU look.
         function BenillaKartMinimapMenu_Init()
             local entries = {
@@ -1057,6 +1067,9 @@
                 { text = "Race mode", func = BenillaKart_RaceModeToggle, checkable = 1, checked = BenillaKartRaceMode,
                   tooltipTitle = "Race mode", tooltipText = "Nobody can target or attack you, and you can't attack anyone: for waiting in the queue." },
                 { text = "Track browser", func = BenillaKartTrackBrowser_Toggle },
+                { text = "Show Race Marshals", func = BenillaKart_MarshalsToggle, checkable = 1,
+                  checked = GetCVar("KartRaceMarshals") ~= "0", keepShownOnClick = 1,
+                  tooltipTitle = "Show Race Marshals", tooltipText = "The Race Marshals on the minimap and the world map, where every course starts." },
                 { text = "Leave race", func = BenillaKart_LeaveRace },
                 { text = "Unstuck", func = BenillaKart_Unstuck },
             }

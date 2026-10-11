@@ -13,6 +13,7 @@ mod autotest;
 mod bindings;
 mod garage;
 mod ghost;
+pub(crate) mod marshals;
 mod profession;
 mod race;
 mod remote;
@@ -510,6 +511,7 @@ pub(crate) fn plugin(app: &mut App) {
         head_lift: 0.5,
     });
     autotest::plugin(app);
+    marshals::plugin(app);
     bindings::plugin(app);
     app.init_resource::<Host>()
         .init_resource::<KartDrive>()

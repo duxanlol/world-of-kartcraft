@@ -167,7 +167,11 @@ pub(super) type BlipInputs<'w, 's> = (
     Res<'w, NameCache>,
     Res<'w, GameObjectTemplates>,
     Option<Res<'w, crate::go_templates::Locks>>,
-    Res<'w, crate::poi_marker::PoiMarker>,
+    // The guard's directions and the Race Marshals, the landmarks the DBC rows do not hold.
+    (
+        Res<'w, crate::poi_marker::PoiMarker>,
+        Res<'w, crate::kart::marshals::RaceMarshals>,
+    ),
     Option<Res<'w, crate::area_poi::AreaPoiRes>>,
     ResMut<'w, super::MinimapPing>,
     Option<NonSendMut<'w, UiScript>>,
@@ -272,18 +276,23 @@ fn poi_icon_cell(icon: u32) -> Option<[f32; 4]> {
 }
 
 /// Draw the in-range POI icons, then the rim arrows; the later-drawn hover hit wins.
-pub(super) fn emit_landmarks(
+#[allow(clippy::too_many_arguments)]
+pub(super) fn emit_landmarks<'a>(
     ctx: &BlipCtx,
-    cat: Option<&AreaPoiCatalog>,
-    marker: Option<&AreaPoi>,
+    cat: Option<&'a AreaPoiCatalog>,
+    extra: impl Iterator<Item = &'a AreaPoi>,
+    marker: Option<&'a AreaPoi>,
     map_id: u32,
     arrows: &RimArrowArt,
     poi_icons: Option<&Handle<Image>>,
     quads: &mut UiQuads,
     hover: &mut MinimapBlipHover,
 ) {
+    // Our own landmarks (the Race Marshals) rank and draw as DBC rows do.
     let sel = select_landmarks(
-        cat.into_iter().flat_map(|c| c.rows().map(|(_, p)| p)),
+        cat.into_iter()
+            .flat_map(|c| c.rows().map(|(_, p)| p))
+            .chain(extra),
         marker,
         map_id,
         ctx.wx,
