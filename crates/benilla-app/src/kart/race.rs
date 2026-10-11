@@ -636,6 +636,18 @@ fn left_without_kart(kart_aura: Option<bool>, now: f32, grace_until: f32) -> boo
     kart_aura == Some(false) && now >= grace_until
 }
 
+/// The banner while the race counts down, `left` seconds to GO: the seconds to the start, then
+/// CTR's 3, 2, 1 in the kart; on the way to the grid (out of the kart, a teleport's load), the
+/// seconds still.
+fn countdown_banner(left: f32, in_kart: bool) -> String {
+    let secs = left.ceil().max(1.0) as u32;
+    match (in_kart, secs) {
+        (true, 1..=3) => secs.to_string(),
+        (true, _) => format!("Race starts in {secs}"),
+        (false, _) => format!("Getting to the start... race starts in {secs}"),
+    }
+}
+
 /// Where a racer stands in the race, for ordering: laps, then checkpoints, then who got there
 /// first.
 fn standing(progress: &(u8, u8, f32), points: usize) -> (i64, f32) {
@@ -703,8 +715,11 @@ pub(crate) fn update(
         extras.lap = None;
         extras.place = None;
         audio.music_rate = 1.0;
-        if races.race.is_some() {
-            text.banner = "Getting to the start...".into();
+        if let Some(race) = &races.race {
+            text.banner = match race.go_at {
+                Some(go) if now < go => countdown_banner(go - now, false),
+                _ => "Getting to the start...".into(),
+            };
         }
         return;
     }
@@ -762,11 +777,7 @@ pub(crate) fn update(
             race.beeped = beat;
             audio.cues.push(kartcraft::sound::Cue::Countdown(false));
         }
-        text.banner = if beat <= 3 {
-            beat.to_string()
-        } else {
-            "Ready".into()
-        };
+        text.banner = countdown_banner(left, true);
         // The gas held from when it went down.
         if drive.revving {
             race.revved_at.get_or_insert(now);
@@ -2141,6 +2152,22 @@ mod tests {
             125.0 + KART_GRACE_SECS,
             race.grace_until
         ));
+    }
+
+    #[test]
+    fn the_countdown_banner_shows_the_seconds_to_the_start() {
+        assert_eq!(countdown_banner(24.2, true), "Race starts in 25");
+        assert_eq!(countdown_banner(3.5, true), "Race starts in 4");
+        assert_eq!(countdown_banner(2.1, true), "3");
+        assert_eq!(countdown_banner(0.2, true), "1");
+        assert_eq!(
+            countdown_banner(17.0, false),
+            "Getting to the start... race starts in 17"
+        );
+        assert_eq!(
+            countdown_banner(0.4, false),
+            "Getting to the start... race starts in 1"
+        );
     }
 
     #[test]
