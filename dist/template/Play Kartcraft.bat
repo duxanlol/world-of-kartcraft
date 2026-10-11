@@ -115,11 +115,11 @@ for /d %%d in ("%HERE%*") do if exist "%%~fd\Data\dbc.MPQ" (
 )
 exit /b 0
 
-rem A CTR disc image under this folder: a .bin of a disc's size (the US disc is about 500 MB).
+rem A CTR disc image under this folder: a .bin or .iso of a disc's size (the US disc is about 500 MB).
 rem Once: if it does not convert, the question comes as before.
 :findctr
 set "CTR_SEARCHED=1"
-for /r "%HERE%." %%f in (*.bin) do if %%~zf GTR 300000000 (
+for /r "%HERE%." %%f in (*.bin *.iso) do if %%~zf GTR 300000000 (
     set "CTR_DISC=%%~ff"
     echo Found a Crash Team Racing image: %%~ff
     exit /b 0
