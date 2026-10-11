@@ -10,6 +10,7 @@ pub(super) fn update(
     drive: Res<KartDrive>,
     mut audio: ResMut<KartAudio>,
     config: Option<Res<crate::sound::SoundConfig>>,
+    settings: Res<super::settings::KartSettings>,
     output: Option<NonSendMut<crate::sound::SoundOutput>>,
     mut sounds: Local<Sounds>,
 ) {
@@ -20,9 +21,11 @@ pub(super) fn update(
     let sfx = config
         .as_ref()
         .map_or(1.0, |c| if c.enabled { c.sfx } else { 0.0 });
+    // CTR's music at its own share (`KartMusic`, `KartMusicVolume`) of the client's music volume.
     audio.music = config
         .as_ref()
-        .map_or(1.0, |c| if c.enabled { c.music } else { 0.0 });
+        .map_or(1.0, |c| if c.enabled { c.music } else { 0.0 })
+        * settings.music_level();
     sounds.update(&mut audio, drive.active, sfx, |data| {
         mixer.play_2d(data).ok()
     });

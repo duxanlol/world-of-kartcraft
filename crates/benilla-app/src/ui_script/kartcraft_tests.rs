@@ -1,6 +1,7 @@
-//! World of Kartcraft's race windows (`assets/ui/KartcraftFrames.xml`) on the production load:
-//! the Race Finder queues and answers over the addon channel, the ready check is the stock popup,
-//! and the kart's race and score events reach their frames.
+//! World of Kartcraft's windows (`assets/ui/KartcraftFrames.xml`) on the production load: the
+//! minimap button and its menu, the Race Finder queuing and answering over the addon channel, the
+//! ready check as the stock popup, the kart's race and score events reaching their frames, and the
+//! settings window writing its CVars.
 
 use benilla_ui::script::{ScriptValue, UiScript};
 
@@ -56,11 +57,11 @@ fn the_finder_queues_keeps_its_place_and_answers_the_ready_check() {
     let mut s = loaded();
     courses(&mut s, 3);
 
-    // I opens it, in the stock widgets, with "Any course" ticked and the courses named.
+    // The minimap button opens it, in the stock widgets, with "Any course" ticked and the courses named.
     assert!(!s
         .eval::<bool>("return BenillaKartFinderFrame:IsVisible() == 1")
         .unwrap());
-    s.fire_event("BENILLA_KART_FINDER_TOGGLE", Vec::new());
+    s.run("BenillaKartMinimapButton:Click()").unwrap();
     s.tick(0.0);
     assert!(s
         .eval::<bool>("return BenillaKartFinderFrame:IsVisible() == 1")
@@ -148,7 +149,7 @@ fn a_declined_check_leaves_the_queue_and_a_racer_is_told_why() {
     assert_eq!(
         s.eval::<String>("return BenillaKartFinderFrameStatus:GetText()")
             .unwrap(),
-        "You're in a race: finish it, or leave it with F6, first."
+        "You're in a race: finish it, or leave it with /leaverace, first."
     );
 }
 
@@ -310,7 +311,7 @@ fn the_search_narrows_the_list() {
 }
 
 #[test]
-fn closing_while_queued_minimizes_to_the_queue_button() {
+fn closing_while_queued_minimizes_to_the_minimap_button() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK
         .lock()
@@ -322,8 +323,10 @@ fn closing_while_queued_minimizes_to_the_queue_button() {
     let shown = |s: &UiScript, frame: &str| -> bool {
         s.eval(&format!("return {frame}:IsVisible() == 1")).unwrap()
     };
+    let tooltip =
+        |s: &UiScript| -> String { s.eval("return BenillaKartMinimapButton.tooltip").unwrap() };
 
-    // Not queued: Close closes, and nothing stays on screen.
+    // Not queued: Close closes, and the minimap button has no queue to tell or glow for.
     assert_eq!(
         s.eval::<String>("return BenillaKartFinderFrameClose:GetText()")
             .unwrap(),
@@ -331,9 +334,11 @@ fn closing_while_queued_minimizes_to_the_queue_button() {
     );
     s.run("BenillaKartFinderFrameClose:Click()").unwrap();
     s.tick(0.0);
-    assert!(!shown(&s, "BenillaKartFinderFrame") && !shown(&s, "BenillaKartQueueButton"));
+    assert!(!shown(&s, "BenillaKartFinderFrame"));
+    assert_eq!(tooltip(&s), "World of Kartcraft");
+    assert!(!shown(&s, "BenillaKartMinimapButtonGlow"));
 
-    // Queued: Close reads Minimize, and the queue button shows the server's status.
+    // Queued: Close reads Minimize, and the minimap button tells the server's status and glows.
     s.run("BenillaKartFinderFrame:Show() BenillaKartFinderFrameQueue:Click()")
         .unwrap();
     from_server(&mut s, "R\tQs\t3\t65");
@@ -345,21 +350,27 @@ fn closing_while_queued_minimizes_to_the_queue_button() {
     s.run("BenillaKartFinderFrameClose:Click()").unwrap();
     s.tick(0.0);
     assert!(!shown(&s, "BenillaKartFinderFrame"));
-    assert!(shown(&s, "BenillaKartQueueButton"));
-    assert_eq!(
-        s.eval::<String>("return BenillaKartQueueButtonText:GetText()")
-            .unwrap(),
-        "Race Finder: 1:05, 3 waiting"
+    assert_eq!(tooltip(&s), "Race Finder: 1:05, 3 waiting");
+    assert!(shown(&s, "BenillaKartMinimapButtonGlow"));
+    s.run("BenillaKartMinimap_Tooltip()").unwrap();
+    assert!(
+        s.eval::<bool>(
+            "return GameTooltip:IsVisible() == 1 \
+             and GameTooltipTextLeft2:GetText() == 'Race Finder: 1:05, 3 waiting'"
+        )
+        .unwrap(),
+        "the tooltip tells the queue"
     );
 
-    // A click opens the window again; leaving the queue retires the button.
-    s.run("BenillaKartQueueButton:Click()").unwrap();
+    // A click opens the window again; leaving the queue puts the glow out.
+    s.run("BenillaKartMinimapButton:Click()").unwrap();
     s.tick(0.0);
-    assert!(shown(&s, "BenillaKartFinderFrame") && !shown(&s, "BenillaKartQueueButton"));
+    assert!(shown(&s, "BenillaKartFinderFrame"));
     s.run("BenillaKartFinderFrameQueue:Click() BenillaKartFinderFrame:Hide()")
         .unwrap();
     s.tick(0.0);
-    assert!(!shown(&s, "BenillaKartQueueButton"));
+    assert!(!shown(&s, "BenillaKartMinimapButtonGlow"));
+    assert_eq!(tooltip(&s), "World of Kartcraft");
 }
 
 #[test]
@@ -405,10 +416,10 @@ fn the_results_are_a_board_and_the_widgets_move() {
     race(&mut s, "", "");
     assert!(!shown(&s, "BenillaKartResultsFrame"));
 
-    // The finder, its queue button and the board drag, and a dragged one keeps its place.
+    // The finder, the settings and the board drag, and a dragged one keeps its place.
     for frame in [
         "BenillaKartFinderFrame",
-        "BenillaKartQueueButton",
+        "BenillaKartSettingsFrame",
         "BenillaKartResultsFrame",
     ] {
         assert!(
@@ -434,7 +445,7 @@ fn leaverace_leaves_everything_and_the_answer_clears_the_finder() {
     courses(&mut s, 3);
 
     // Queued, with a ready check up.
-    s.fire_event("BENILLA_KART_FINDER_TOGGLE", Vec::new());
+    s.run("BenillaKartFinderFrame:Show()").unwrap();
     s.tick(0.0);
     s.run("BenillaKartFinderFrameQueue:Click()").unwrap();
     from_server(&mut s, "R\tPop\t7\tsprint\t2\t20");
@@ -453,4 +464,266 @@ fn leaverace_leaves_everything_and_the_answer_clears_the_finder() {
     assert!(s
         .eval::<bool>("return BenillaKartFinder.queued == nil and BenillaKartFinder.check == nil")
         .unwrap());
+}
+
+/// The labels of the minimap button's menu, opened afresh.
+fn menu(s: &mut UiScript) -> Vec<String> {
+    s.run("CloseDropDownMenus() BenillaKartMinimapButton:Click('RightButton')")
+        .unwrap();
+    s.tick(0.0);
+    s.eval(
+        "local out = {} for i = 1, UIDROPDOWNMENU_MAXBUTTONS do \
+         local b = getglobal('DropDownList1Button' .. i) \
+         if b and b:IsVisible() then table.insert(out, b:GetText()) end \
+         end return out",
+    )
+    .unwrap()
+}
+
+/// The open menu's entry labelled `text`, clicked.
+fn pick(s: &mut UiScript, text: &str) {
+    s.run(&format!(
+        "for i = 1, UIDROPDOWNMENU_MAXBUTTONS do \
+         local b = getglobal('DropDownList1Button' .. i) \
+         if b and b:IsVisible() and b:GetText() == '{text}' then b:Click() return end \
+         end error('no menu entry {text}')"
+    ))
+    .unwrap();
+    s.tick(0.0);
+}
+
+#[test]
+fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 3);
+    let shown = |s: &UiScript, frame: &str| -> bool {
+        s.eval(&format!("return {frame}:IsVisible() == 1")).unwrap()
+    };
+
+    // On the minimap, at its ring, with the stock tracking border round an install icon.
+    assert!(shown(&s, "BenillaKartMinimapButton"));
+    assert!(s
+        .eval::<bool>("return BenillaKartMinimapButton:GetParent() == Minimap")
+        .unwrap());
+    assert_eq!(
+        s.eval::<String>("return BenillaKartMinimapButtonBorder:GetTexture()")
+            .unwrap()
+            .to_ascii_lowercase(),
+        "interface\\minimap\\minimap-trackingborder"
+    );
+    let ring = |s: &UiScript| -> (f64, f64) {
+        let v: Vec<f64> = s
+            .eval(
+                "local x, y = BenillaKartMinimapButton:GetCenter() \
+                 local cx, cy = Minimap:GetCenter() \
+                 return { x - cx, y - cy }",
+            )
+            .unwrap();
+        (
+            v[0].hypot(v[1]),
+            v[1].atan2(v[0]).to_degrees().rem_euclid(360.0),
+        )
+    };
+    let (radius, angle) = ring(&s);
+    assert!((radius - 80.0).abs() < 0.5, "radius {radius}");
+    assert!((angle - 190.0).abs() < 0.5, "angle {angle}");
+
+    // Moved round the ring, it stays on it and keeps its angle in KartMinimapAngle.
+    s.run("BenillaKartSettings_Set('KartMinimapAngle', 90.2, 0) BenillaKartMinimap_Place()")
+        .unwrap();
+    let (radius, angle) = ring(&s);
+    assert!((radius - 80.0).abs() < 0.5 && (angle - 90.0).abs() < 0.5);
+    assert_eq!(s.cvar("KartMinimapAngle").as_deref(), Some("90"));
+
+    // A left click toggles the finder.
+    s.run("BenillaKartMinimapButton:Click('LeftButton')")
+        .unwrap();
+    assert!(shown(&s, "BenillaKartFinderFrame"));
+    s.run("BenillaKartMinimapButton:Click('LeftButton')")
+        .unwrap();
+    assert!(!shown(&s, "BenillaKartFinderFrame"));
+
+    // The right click's menu; Leave queue only while queued.
+    assert_eq!(
+        menu(&mut s),
+        [
+            "World of Kartcraft",
+            "Race Finder",
+            "Leave race",
+            "Kartcraft settings...",
+            "Hide minimap button",
+        ]
+    );
+    pick(&mut s, "Race Finder");
+    assert!(shown(&s, "BenillaKartFinderFrame"));
+    s.run("BenillaKartFinderFrameQueue:Click() BenillaKartFinderFrame:Hide()")
+        .unwrap();
+    sent(&mut s);
+    assert!(menu(&mut s).contains(&"Leave queue".to_string()));
+    pick(&mut s, "Leave queue");
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tQ-"]);
+
+    // Leave race asks the server to let us go from everything, as /leaverace does.
+    menu(&mut s);
+    pick(&mut s, "Leave race");
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tX"]);
+
+    menu(&mut s);
+    pick(&mut s, "Kartcraft settings...");
+    assert!(shown(&s, "BenillaKartSettingsFrame"));
+    s.run("BenillaKartSettingsFrame:Hide()").unwrap();
+
+    // Hidden from the menu; the settings window's box brings it back.
+    menu(&mut s);
+    pick(&mut s, "Hide minimap button");
+    assert!(!shown(&s, "BenillaKartMinimapButton"));
+    assert_eq!(s.cvar("KartMinimapButton").as_deref(), Some("0"));
+    s.run("SlashCmdList['BENILLA_KARTCRAFT']('')").unwrap();
+    assert!(!s
+        .eval::<bool>("return BenillaKartSettingsFrameMinimapButton:GetChecked() == 1")
+        .unwrap());
+    s.run("BenillaKartSettingsFrameMinimapButton:Click()")
+        .unwrap();
+    assert!(shown(&s, "BenillaKartMinimapButton"));
+    assert_eq!(s.cvar("KartMinimapButton").as_deref(), Some("1"));
+}
+
+#[test]
+fn the_settings_window_sets_the_kart_s_cvars() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    s.take_cvar_changes();
+    let shown = |s: &UiScript, frame: &str| -> bool {
+        s.eval(&format!("return {frame}:IsVisible() == 1")).unwrap()
+    };
+
+    // /kartcraft opens it at the CVars' values, and opening it writes nothing.
+    s.run("SlashCmdList['BENILLA_KARTCRAFT']('')").unwrap();
+    s.tick(0.0);
+    assert!(shown(&s, "BenillaKartSettingsFrame"));
+    assert_eq!(
+        s.eval::<String>("return SLASH_BENILLA_KARTCRAFT1").unwrap(),
+        "/kartcraft"
+    );
+    for (name, label) in [
+        ("ArrowShow", "Show the guide arrow in a race"),
+        ("ChaseCamera", "CTR chase camera (off: your WoW camera)"),
+        ("Music", "Play CTR race music"),
+        ("MinimapButton", "Show the minimap button"),
+    ] {
+        let frame = format!("BenillaKartSettingsFrame{name}");
+        assert!(
+            s.eval::<bool>(&format!("return {frame}:GetChecked() == 1"))
+                .unwrap(),
+            "{name} starts on"
+        );
+        assert_eq!(
+            s.eval::<String>(&format!("return {frame}Text:GetText()"))
+                .unwrap(),
+            label
+        );
+    }
+    assert_eq!(
+        s.eval::<f64>("return BenillaKartSettingsFrameArrowSize:GetValue()")
+            .unwrap(),
+        1.0
+    );
+    assert!(
+        s.take_cvar_changes().is_empty(),
+        "showing the window wrote a CVar"
+    );
+
+    // Each control writes its CVar, which the host hears.
+    s.run(
+        "BenillaKartSettingsFrameArrowShow:Click() \
+         BenillaKartSettingsFrameChaseCamera:Click() \
+         BenillaKartSettingsFrameMusic:Click() \
+         BenillaKartSettingsFrameArrowSize:SetValue(1.5) \
+         BenillaKartSettingsFrameMusicVolume:SetValue(0.25)",
+    )
+    .unwrap();
+    for (name, value) in [
+        ("KartArrowShow", "0"),
+        ("KartChaseCamera", "0"),
+        ("KartMusic", "0"),
+        ("KartArrowSize", "1.5"),
+        ("KartMusicVolume", "0.25"),
+    ] {
+        assert_eq!(s.cvar(name).as_deref(), Some(value), "{name}");
+    }
+    let changes = s.take_cvar_changes();
+    assert!(
+        changes
+            .iter()
+            .any(|(n, v)| n.eq_ignore_ascii_case("KartChaseCamera") && v == "0"),
+        "the host hears the camera: {changes:?}"
+    );
+
+    // Move arrow: the window steps aside for the arrow's box, which places the arrow while it is
+    // up; the wheel sizes it, Done brings the window back.
+    s.run("BenillaKartSettingsFrameMoveArrow:Click()").unwrap();
+    s.tick(0.0);
+    assert!(!shown(&s, "BenillaKartSettingsFrame") && shown(&s, "BenillaKartArrowMover"));
+    assert_eq!(s.cvar("KartArrowMove").as_deref(), Some("1"));
+    let at: Vec<f64> = s
+        .eval(
+            "local x, y = BenillaKartArrowMover:GetCenter() \
+             return { x / UIParent:GetWidth(), 1 - y / UIParent:GetHeight() }",
+        )
+        .unwrap();
+    assert!(
+        (at[0] - 0.5).abs() < 0.01 && (at[1] - 0.22).abs() < 0.01,
+        "the box stands where the arrow is: {at:?}"
+    );
+    s.run(
+        "BenillaKartArrowMover:ClearAllPoints() \
+         BenillaKartArrowMover:SetPoint('CENTER', 'UIParent', 'TOPLEFT', \
+             UIParent:GetWidth() / 4, -UIParent:GetHeight() * 3 / 4) \
+         BenillaKartArrowMover_Save() BenillaKartArrowMover_Wheel(1)",
+    )
+    .unwrap();
+    assert_eq!(s.cvar("KartArrowX").as_deref(), Some("0.25"));
+    assert_eq!(s.cvar("KartArrowY").as_deref(), Some("0.75"));
+    assert_eq!(s.cvar("KartArrowSize").as_deref(), Some("1.65"));
+    s.run("BenillaKartArrowMoverDone:Click()").unwrap();
+    s.tick(0.0);
+    assert_eq!(s.cvar("KartArrowMove").as_deref(), Some("0"));
+    assert!(shown(&s, "BenillaKartSettingsFrame") && !shown(&s, "BenillaKartArrowMover"));
+
+    // Reset arrow puts it back where it starts.
+    s.run("BenillaKartSettingsFrameResetArrow:Click()").unwrap();
+    for (name, value) in [
+        ("KartArrowX", "0.5"),
+        ("KartArrowY", "0.22"),
+        ("KartArrowSize", "1"),
+    ] {
+        assert_eq!(s.cvar(name).as_deref(), Some(value), "{name}");
+    }
+}
+
+#[test]
+fn the_race_marshal_opens_the_finder() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 3);
+    let open = |s: &UiScript| -> bool {
+        s.eval("return BenillaKartFinderFrame:IsVisible() == 1")
+            .unwrap()
+    };
+    assert!(!open(&s));
+    from_server(&mut s, "R\tFinder");
+    assert!(open(&s));
+    // Again: it stays open.
+    from_server(&mut s, "R\tFinder");
+    assert!(open(&s));
 }

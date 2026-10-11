@@ -4,12 +4,14 @@
 //! (read by `player::controller`), our character holds the saddle pose in the kart's seat
 //! ([`seat`]) and the kart is drawn under it (`kartcraft::model`). Banked turbo chains feed the
 //! Karting profession ([`profession`]) and the score on screen ([`score`]). In a race CTR's
-//! weapons are live ([`weapons`]): crates, items, shots and hits through the server.
+//! weapons are live ([`weapons`]): crates, items, shots and hits through the server. Its settings
+//! are CVars the layer's settings window writes ([`settings`]).
 
 mod profession;
 mod race;
 mod remote;
 mod score;
+mod settings;
 mod sound;
 mod ui;
 pub(crate) use race::{COURSES, ZONES};
@@ -45,7 +47,7 @@ pub(crate) struct KartDrive {
     pub(crate) speed: f32,
     /// The chase camera, Bevy world.
     pub(crate) camera: Option<Transform>,
-    /// Drive with the chase camera rather than our follow camera (`K` toggles).
+    /// Drive with the chase camera rather than our follow camera (`KartChaseCamera`).
     pub(crate) engine_camera: bool,
     /// The gas is down (a race's countdown holds the kart but times the start boost by it).
     pub(crate) revving: bool,
@@ -137,6 +139,7 @@ fn update(
     mut audio: ResMut<sound::KartAudio>,
     profession: profession::Profession,
     mut score: ResMut<score::KartScore>,
+    settings: Res<settings::KartSettings>,
     (remotes, mut extras, races, mut arms): (
         Res<remote::RemoteKarts>,
         ResMut<kartcraft::hud::HudExtras>,
@@ -156,9 +159,7 @@ fn update(
         info!("kart: out of the kart for now: {}", player.drive_refusal());
         stop(host, &mut drive, &mut view);
     }
-    if keys.just_pressed(KeyCode::KeyK) && !ui.typing && drive.active {
-        drive.engine_camera = !drive.engine_camera;
-    }
+    drive.engine_camera = settings.chase_camera();
     // Test hook: `WOW_KART_AUTOSTART=<seconds>` presses `J` once, that long after we may drive.
     let autostart = autostart_after().is_some_and(|after| {
         if !player.may_drive() || host.autostarted {
@@ -173,6 +174,7 @@ fn update(
     let mut started = false;
     // The test hook only ever climbs in: a kart aura kept over a logout already has us in it.
     let autostart = autostart && !drive.active && !auras.kart;
+    // `J` is a raw key, not a binding: the spellbook's Summon Kart is the same toggle.
     if (keys.just_pressed(KeyCode::KeyJ) && !ui.typing) || autostart {
         if server_kart {
             if drive.active || auras.kart {
@@ -201,8 +203,6 @@ fn update(
     }
     if started {
         drive.active = true;
-        // `WOW_KART_CAM=wow` starts on our own follow camera; the chase camera is the default.
-        drive.engine_camera = std::env::var("WOW_KART_CAM").map_or(true, |v| v != "wow");
         // Weapons stow on the back, out of the seat's way.
         if let Ok(entity) = body.single() {
             sheath.write(crate::creature_anim::SheathRequest {
@@ -435,7 +435,10 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<race::Races>()
         .init_resource::<race::RaceText>()
         .init_resource::<ui::KartOverlay>()
+        // Before `CvarLoad`'s boot fold, which fires their observer.
         .init_resource::<race::GuideHud>()
+        .init_resource::<settings::KartSettings>()
+        .add_observer(settings::on_cvar)
         .add_systems(
             Startup,
             (kartcraft::hud::spawn, |_: Commands| {
@@ -452,7 +455,6 @@ pub(crate) fn plugin(app: &mut App) {
                 race::update,
                 weapons::update,
                 race::beams,
-                race::place_guide,
                 race::guide,
                 model::update,
                 sound::update,

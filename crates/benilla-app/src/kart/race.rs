@@ -1,17 +1,16 @@
-//! Races between karts, refereed by the Kartcraft server (`Kartcraft.cpp`, "Races"). At a
-//! course's start F5 hosts a race; drivers near it see the offer and F5 joins; the host's F5
-//! starts it. The server sends the course's checkpoints and a countdown: CTR's 3-2-1-GO, the kart
-//! held on the line, with CTR's start boost for an engine revved just before GO. Each checkpoint
-//! passed is reported, and the server checks it against where we really are; it relays everyone's
-//! progress, from which our place is worked out, and the finishes with their times. Checkpoints
-//! stand in the world as beams of light, the next one bright. F6 leaves a race. Where two
-//! courses share a start, F7 picks which one F5 hosts.
+//! Races between karts, refereed by the Kartcraft server (`Kartcraft.cpp`, "Races"). A course's
+//! Race Marshal hosts, joins and starts a race over gossip; a driver at a start is told so here.
+//! The server sends the course's checkpoints and a countdown: CTR's 3-2-1-GO, the kart held on
+//! the line, with CTR's start boost for an engine revved just before GO. Each checkpoint passed is
+//! reported, and the server checks it against where we really are; it relays everyone's progress,
+//! from which our place is worked out, and the finishes with their times. Checkpoints stand in the
+//! world as beams of light, the next one bright.
 //!
-//! The Race Finder is a WoW window in the client's UI layer (`assets/ui/KartcraftFrames.xml`, `I`)
-//! that queues, keeps its place and answers the ready check over the addon channel itself. Here
-//! only a pending ready check is remembered (`Pop`, `Pop-`), so the race it starts keeps us
-//! through the teleport to the start. The banner and results below go to the layer's race frame
-//! (`super::ui`).
+//! The Race Finder is a WoW window in the client's UI layer (`assets/ui/KartcraftFrames.xml`,
+//! opened from its minimap button or `/racefinder`) that queues, keeps its place, answers the
+//! ready check and leaves races (`/leaverace`) over the addon channel itself. Here only a pending
+//! ready check is remembered (`Pop`, `Pop-`), so the race it starts keeps us through the teleport
+//! to the start. The banner and results below go to the layer's race frame (`super::ui`).
 
 use std::collections::HashMap;
 
@@ -219,8 +218,6 @@ pub(crate) struct Races {
     pub(crate) offer: Option<Offer>,
     /// A Race Finder ready check is out (`Pop` until `Pop-` or the race's roster).
     check_pending: bool,
-    /// Which of the courses sharing a start F5 hosts (F7 steps it).
-    pick: usize,
     pub(crate) race: Option<Active>,
     /// Our character's name, to find ourselves in rosters.
     pub(crate) me: String,
@@ -289,12 +286,10 @@ pub(crate) struct RaceText {
     pub(crate) lines: Vec<String>,
 }
 
-/// Handles the server's lines, the keys, the countdown, checkpoints and standings.
+/// Handles the server's lines, the countdown, checkpoints and standings.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update(
     time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
-    ui: Res<crate::ui_script::UiKeyboardCapture>,
     drive: Res<super::KartDrive>,
     mut races: ResMut<Races>,
     mut text: ResMut<RaceText>,
@@ -316,7 +311,7 @@ pub(crate) fn update(
                 audio.cues.push(kartcraft::sound::Cue::Countdown(true));
             }
             Some("Pop-") => races.check_pending = false,
-            // Out of everything (`/leaverace`, F6): the server has let us go, so whatever we
+            // Out of everything (`/leaverace`): the server has let us go, so whatever we
             // thought we were in goes too.
             Some("X") => {
                 info!("kart race: left every race and the queue");
@@ -410,9 +405,8 @@ pub(crate) fn update(
         }
     }
 
-    // F5: join, host, or start; F6: leave. `WOW_KART_RACE` presses F5 for unattended runs.
-    let f5 = (keys.just_pressed(KeyCode::F5) && !ui.typing) || auto.press(now, races);
-    let f6 = keys.just_pressed(KeyCode::F6) && !ui.typing;
+    // `WOW_KART_RACE` joins, hosts or starts for unattended runs, as the Race Marshal does.
+    let press = auto.press(now, races);
     *text = RaceText::default();
 
     // Out of the kart, out of the race; but not while the kart aura stays on us, as it does
@@ -437,21 +431,13 @@ pub(crate) fn update(
     let at = [wow[0], wow[1]];
     let near = |p: [f32; 2], r: f32| (p[0] - at[0]).hypot(p[1] - at[1]) <= r;
 
-    // The courses starting here; F7 steps through them where several share a start.
-    let here: Vec<_> = COURSES
+    // The courses starting here.
+    let here: Vec<&Course> = COURSES
         .iter()
         .filter(|c| near(c.start(), START_RADIUS))
         .collect();
-    if keys.just_pressed(KeyCode::F7) && !ui.typing && here.len() > 1 {
-        races.pick += 1;
-    }
-    let host_here = (!here.is_empty()).then(|| here[races.pick % here.len()]);
-    if f6 {
-        // Leaves every race and the queue, here and on the server, whatever either thinks.
-        races.race = None;
-        profession.send("KARTCRAFT\tR\tX".into());
-    } else if f5 {
-        match (&races.race, &races.offer, host_here) {
+    if press {
+        match (&races.race, &races.offer, here.first()) {
             (Some(race), _, _) if race.host && race.go_at.is_none() => {
                 profession.send(format!("KARTCRAFT\tR\tS\t{}", race.id));
             }
@@ -470,17 +456,9 @@ pub(crate) fn update(
         extras.lap = None;
         extras.place = None;
         audio.music_rate = 1.0;
-        text.banner = match (&races.offer, host_here) {
-            (Some(o), _) => format!("{}'s {} — F5 to join", o.host, o.name),
-            (None, Some(c)) if here.len() > 1 => {
-                let other = here[(races.pick + 1) % here.len()];
-                format!(
-                    "{} starts here — F5 to host a race, F7 for {}",
-                    c.name, other.name
-                )
-            }
-            (None, Some(c)) => format!("{} starts here — F5 to host a race", c.name),
-            _ => String::new(),
+        text.banner = match &races.offer {
+            Some(o) => format!("{}'s {} — talk to the Race Marshal to join", o.host, o.name),
+            None => start_banner(&here),
         };
         return;
     };
@@ -489,9 +467,9 @@ pub(crate) fn update(
             "Waiting to race: {}{}",
             race.roster.join(", "),
             if race.host {
-                " — F5 to start, F6 to leave"
+                " — talk to the Race Marshal to start, /leaverace to leave"
             } else {
-                " — F6 to leave"
+                " — /leaverace to leave"
             }
         );
         return;
@@ -595,7 +573,7 @@ pub(crate) fn update(
         .collect();
 
     // Over: once everyone is in (or the stragglers have had their minute), the results stay up a
-    // while and then we leave the race, as F6 would.
+    // while and then we leave the race.
     if race.done {
         let finished_at = *race.finished_at.get_or_insert(now);
         let everyone = race
@@ -618,7 +596,8 @@ pub(crate) fn update(
 }
 
 /// `WOW_KART_RACE=host:<course>` hosts at that course's start and starts once another racer is
-/// in; `WOW_KART_RACE=join` joins the first race offered. A test hook: it presses F5.
+/// in; `WOW_KART_RACE=join` joins the first race offered. A test hook: it sends what the Race
+/// Marshal's gossip would.
 #[derive(Default)]
 pub(crate) struct AutoRace {
     since: Option<f32>,
@@ -664,6 +643,17 @@ fn races_start_boost(boost: Option<bool>) {
     if let Some(big) = boost {
         *START_BOOST.lock().unwrap() = Some(big);
     }
+}
+
+/// The banner at a start: the courses that start here, and who races them.
+fn start_banner(here: &[&Course]) -> String {
+    let names: Vec<&str> = here.iter().map(|c| c.name.as_str()).collect();
+    let (verb, names) = match names.as_slice() {
+        [] => return String::new(),
+        [one] => ("starts", (*one).to_string()),
+        [first @ .., last] => ("start", format!("{} and {last}", first.join(", "))),
+    };
+    format!("{names} {verb} here — talk to the Race Marshal to race")
 }
 
 fn ordinal(place: u8) -> String {
@@ -901,14 +891,17 @@ fn checkpoint_name(race: &Active, next: usize) -> String {
 }
 
 /// Where the guide arrow sits on screen and how big it is: `x`, `y` across and down the screen
-/// (0 to 1), `scale` times its standard size. F8 toggles placing it: drag it with the mouse,
-/// the wheel resizes it, and F8 again keeps it (`local_state::kart_hud_path`).
+/// (0 to 1), `scale` times its standard size, and whether it shows. The settings window places
+/// it (`/kartcraft`, "Move arrow"): its CVars, read by [`super::settings::on_cvar`].
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub(crate) struct GuideHud {
     pub(crate) x: f32,
     pub(crate) y: f32,
     pub(crate) scale: f32,
-    editing: bool,
+    /// Shown in a race (`KartArrowShow`).
+    pub(crate) shown: bool,
+    /// Being placed (`KartArrowMove`): shown, pointing north, race or not.
+    pub(crate) editing: bool,
 }
 
 impl Default for GuideHud {
@@ -917,41 +910,15 @@ impl Default for GuideHud {
             x: 0.5,
             y: 0.22,
             scale: 1.0,
+            shown: true,
             editing: false,
         }
     }
 }
 
 impl GuideHud {
-    const MIN_SCALE: f32 = 0.4;
-    const MAX_SCALE: f32 = 3.0;
-
-    /// The saved placement, `x y scale`, or the default.
-    fn load() -> Self {
-        let read =
-            crate::local_state::kart_hud_path().and_then(|p| std::fs::read_to_string(p).ok());
-        read.and_then(|s| Self::parse(&s)).unwrap_or_default()
-    }
-
-    fn parse(s: &str) -> Option<Self> {
-        let mut v = s.split_whitespace().map(|w| w.parse::<f32>().ok());
-        let (x, y, scale) = (v.next()??, v.next()??, v.next()??);
-        Some(Self {
-            x: x.clamp(0.0, 1.0),
-            y: y.clamp(0.0, 1.0),
-            scale: scale.clamp(Self::MIN_SCALE, Self::MAX_SCALE),
-            editing: false,
-        })
-    }
-
-    fn save(&self) {
-        if let Some(path) = crate::local_state::kart_hud_path() {
-            let line = format!("{:.4} {:.4} {:.3}\n", self.x, self.y, self.scale);
-            if let Err(e) = crate::local_state::write_atomic(&path, &line) {
-                warn!("kart: could not save the guide arrow's place: {e}");
-            }
-        }
-    }
+    pub(crate) const MIN_SCALE: f32 = 0.4;
+    pub(crate) const MAX_SCALE: f32 = 3.0;
 
     /// The arrow's place in front of a camera looking down −Z with this vertical field of view
     /// and aspect, `distance` ahead: the point under (x, y) on screen.
@@ -965,85 +932,12 @@ impl GuideHud {
     }
 }
 
-/// The text shown while the guide arrow is being placed.
-#[derive(Component)]
-pub(crate) struct GuideHint;
-
 /// How far in front of the camera the guide arrow floats (yards), and its length there at
 /// scale 1.
 const GUIDE_DISTANCE: f32 = 4.0;
 const GUIDE_SIZE: f32 = 0.7;
 
-/// F8 places the guide arrow: the mouse drags it, the wheel resizes it, F8 again keeps it.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn place_guide(
-    mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
-    ui: Res<crate::ui_script::UiKeyboardCapture>,
-    drive: Res<super::KartDrive>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    mut hud: ResMut<GuideHud>,
-    hints: Query<Entity, With<GuideHint>>,
-    mut loaded: Local<bool>,
-) {
-    if !*loaded {
-        *loaded = true;
-        *hud = GuideHud::load();
-    }
-    let steps: f32 = wheel.read().map(|w| w.y.signum()).sum();
-    if keys.just_pressed(KeyCode::F8) && !ui.typing && drive.active {
-        hud.editing = !hud.editing;
-        if hud.editing {
-            commands.spawn((
-                GuideHint,
-                Text::new("Guide arrow: drag it with the mouse, the wheel resizes it, F8 keeps it"),
-                TextFont {
-                    font_size: 18.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(1.0, 0.85, 0.3)),
-                Node {
-                    position_type: PositionType::Absolute,
-                    bottom: Val::Percent(30.0),
-                    width: Val::Percent(100.0),
-                    justify_content: JustifyContent::Center,
-                    ..default()
-                },
-                TextLayout::new_with_justify(Justify::Center),
-            ));
-        } else {
-            hud.save();
-        }
-    }
-    if !hud.editing || !drive.active {
-        if hud.editing {
-            hud.editing = false;
-            hud.save();
-        }
-        for e in &hints {
-            commands.entity(e).despawn();
-        }
-        return;
-    }
-    if steps != 0.0 {
-        hud.scale =
-            (hud.scale * 1.1f32.powf(steps)).clamp(GuideHud::MIN_SCALE, GuideHud::MAX_SCALE);
-    }
-    if mouse.pressed(MouseButton::Left) {
-        if let Some((w, at)) = windows
-            .single()
-            .ok()
-            .and_then(|w| Some((w, w.cursor_position()?)))
-        {
-            hud.x = (at.x / w.width()).clamp(0.0, 1.0);
-            hud.y = (at.y / w.height()).clamp(0.0, 1.0);
-        }
-    }
-}
-
-/// In a race (or while it is being placed): the arrow towards the next checkpoint, a child of
+/// In a race (or while it is being placed, race or not): the arrow towards the next checkpoint, a child of
 /// the camera so it holds its place on screen; and that checkpoint on the minimap, in the slot a
 /// guard's directions use (`crate::poi_marker`).
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -1086,13 +980,18 @@ pub(crate) fn guide(
         }
     }
 
-    // The arrow: towards the next checkpoint, or north while it is being placed.
-    let towards = match target {
-        Some((race, next)) => Some(ground_at(&collide, race.points[next], drive.pos.y)),
-        None if hud.editing && drive.active => Some(drive.pos + wow_to_bevy([100.0, 0.0, 0.0])),
-        None => None,
+    // The arrow: north while it is being placed, else towards the next checkpoint if it shows.
+    let cam = camera.single().ok();
+    let towards = match (target, cam) {
+        (_, Some((_, cam_at, _))) if hud.editing => {
+            Some(cam_at.translation() + wow_to_bevy([100.0, 0.0, 0.0]))
+        }
+        (Some((race, next)), _) if hud.shown => {
+            Some(ground_at(&collide, race.points[next], drive.pos.y))
+        }
+        _ => None,
     };
-    let (Some(towards), Ok((cam, cam_at, projection))) = (towards, camera.single()) else {
+    let (Some(towards), Some((cam, cam_at, projection))) = (towards, cam) else {
         for (e, ..) in &arrows {
             commands.entity(e).despawn();
         }
@@ -1216,15 +1115,7 @@ mod tests {
     }
 
     #[test]
-    fn the_guide_arrow_keeps_its_place_and_lands_where_it_is_put() {
-        let hud = GuideHud::parse("0.25 0.75 9.0\n").unwrap();
-        assert_eq!((hud.x, hud.y), (0.25, 0.75));
-        assert_eq!(
-            hud.scale,
-            GuideHud::MAX_SCALE,
-            "an out-of-range size is clamped"
-        );
-        assert_eq!(GuideHud::parse("garbage"), None);
+    fn the_guide_arrow_lands_where_it_is_put() {
         // The screen's centre is straight ahead; its top-left corner is up and to the left.
         let centre = GuideHud {
             x: 0.5,
@@ -1241,6 +1132,25 @@ mod tests {
         .local_position(1.0, 2.0, 4.0);
         let half = 0.5f32.tan() * 4.0;
         assert!(corner.abs_diff_eq(Vec3::new(-half * 2.0, half, -4.0), 1e-4));
+    }
+
+    #[test]
+    fn a_start_names_its_courses_and_sends_the_driver_to_the_race_marshal() {
+        let course = |key: &str| COURSES.iter().find(|c| c.key == key).unwrap();
+        assert_eq!(start_banner(&[]), "");
+        assert_eq!(
+            start_banner(&[course("sprint")]),
+            "Northshire Sprint starts here — talk to the Race Marshal to race"
+        );
+        assert_eq!(
+            start_banner(&[
+                course("sprint"),
+                course("stormwind"),
+                course("elwynn-goldshire-crystal")
+            ]),
+            "Northshire Sprint, Road to Stormwind and Goldshire & Crystal Lake start here — talk \
+             to the Race Marshal to race"
+        );
     }
 
     #[test]

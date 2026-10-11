@@ -4,7 +4,6 @@
 //! - `BENILLA_KART_RACE(banner, results)`: the banner, and the results one per line.
 //! - `BENILLA_KART_SCORE(trick, r, g, b, points, r, g, b, xp, skill, alpha)`, or no arguments
 //!   when there is nothing to show.
-//! - `BENILLA_KART_FINDER_TOGGLE`: `I` was pressed.
 //! - `BENILLA_KART_COURSES(list)`: what the Race Finder offers, one `key<TAB>name` a line, once
 //!   per VM: the zones that have courses, as `z<place>` and "Westfall (8)", which the server takes
 //!   for every course in that zone. One argument, so the list can grow past what an event's
@@ -29,7 +28,7 @@ pub(crate) struct Sent {
 }
 
 pub(crate) fn feed(
-    mut overlay: ResMut<KartOverlay>,
+    overlay: Res<KartOverlay>,
     script: Option<NonSendMut<UiScript>>,
     mut sent: Local<VmMemo<Sent>>,
 ) {
@@ -45,10 +44,6 @@ pub(crate) fn feed(
         script.fire_event("BENILLA_KART_COURSES", vec![ScriptValue::Str(zone_list())]);
         sent.courses = true;
     }
-    if std::mem::take(&mut overlay.toggle_finder) {
-        script.fire_event("BENILLA_KART_FINDER_TOGGLE", Vec::new());
-    }
-
     let race = (overlay.banner.clone(), overlay.results.clone());
     if sent.race.as_ref() != Some(&race) {
         script.fire_event(

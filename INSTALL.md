@@ -50,7 +50,10 @@ your system configuration.
    so a changed patch builds a new one). This takes a while the first time.
 6. **Extracts map data from your WoW client** for the server. **The extraction takes several
    hours** and uses a couple of CPU cores; leave it running. It only happens once.
-7. **Starts the server** and waits until the world server is healthy.
+7. **Starts the server** and waits until the world server is healthy. Before that it copies the
+   Race Marshals (`setup/vmangos/sql/kartcraft.sql`, the NPCs at each course start) into
+   `server/storage/database/custom-sql/`, which the database runs on every start; a changed file
+   restarts the database ([docs/courses.md](docs/courses.md#race-marshals)).
 8. **Creates your game account.** It asks for a name and a password. The account is a GM.
 9. **Builds the game**: `benilla` (the WoW client with the kart) and `kart-demo` (the offline
    demo). The first build takes several minutes.
@@ -135,7 +138,9 @@ image. You run the server and send them a ready-built client folder.
 - *This PC:* in `server\compose.yaml`, set `VMANGOS_REALMLIST_ADDRESS` to your public IP, then
   restart the server. Forward TCP 3724 (login) and 8085 (world) on your router.
 - *A cloud VM* (any Linux host with Docker, e.g. Azure):
-  1. Copy `server\` there: `compose.yaml`, `config\` and `storage\`.
+  1. Copy `server\` there: `compose.yaml`, `config\` and `storage\` (with
+     `storage\database\custom-sql\kartcraft.sql`, the Race Marshals; after updating that file,
+     restart the database container, then the world server).
   2. Copy the server image with `docker save` and `docker load`.
   3. Optionally copy the `world-of-kartcraft_vmangos-database` volume to keep your characters.
   4. Start it with `docker compose -p world-of-kartcraft up -d`.

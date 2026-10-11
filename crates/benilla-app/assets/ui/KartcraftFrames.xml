@@ -1,8 +1,9 @@
 <Ui>
     <!--
-        World of Kartcraft's race windows, in the stock widgets and fonts: the Race Finder (I, or
-        /racefinder), its ready check as a stock popup, and the race's banner, results and chain
-        score at the top of the screen.
+        World of Kartcraft's windows, in the stock widgets and fonts: a minimap button as an
+        addon's is (a click opens the Race Finder, a right-click its menu), the Race Finder
+        (/racefinder), its ready check as a stock popup, the race's banner, results and chain score
+        at the top of the screen, and the settings window (/kartcraft).
 
         The finder is a plain addon over the addon channel, as a 1.12 group-finder addon is: it
         sends the server's verbs with SendAddonMessage ("KARTCRAFT", "R\t<verb>...") and reads its
@@ -10,12 +11,17 @@
         it says it is still there every two seconds or the server drops it after ten.
 
         The race and score come from the kart (kart/ui.rs) as BENILLA_KART_RACE and
-        BENILLA_KART_SCORE when they change; BENILLA_KART_FINDER_TOGGLE is the I key, and
-        BENILLA_KART_COURSES names what the finder offers once per load, one "key<TAB>name" a line:
+        BENILLA_KART_SCORE when they change, and BENILLA_KART_COURSES names what the finder offers once per load, one "key<TAB>name" a line:
         the zones that have courses ("z3", "Westfall (8)"; the server takes a zone for all its
         courses), and BENILLA_KART_COURSE_NAMES names every course, for a ready check. The list
         scrolls: a fixed set of rows over it, as the stock long lists are (FriendsFrame,
-        QuestLog), so it takes any number of zones.
+        QuestLog), so it takes any number of zones. The server opens the finder too, with
+        "R<TAB>Finder" (the Race Marshal's gossip).
+
+        The settings are CVars, which the kart reads (kart/settings.rs) and the client keeps in
+        config.toml: the guide arrow (KartArrowShow, KartArrowSize, KartArrowX, KartArrowY, and
+        KartArrowMove while it is being placed), the camera (KartChaseCamera), the music
+        (KartMusic, KartMusicVolume) and the minimap button (KartMinimapButton, KartMinimapAngle).
     -->
     <Script><![CDATA[
         BENILLA_KART_PREFIX = "KARTCRAFT"
@@ -28,7 +34,7 @@
         BENILLA_KART_ROWS = 8
         BENILLA_KART_ROW_HEIGHT = 24
         BENILLA_KART_HEARTBEAT = 2
-        BENILLA_KART_RACING = "You're in a race: finish it, or leave it with F6, first."
+        BENILLA_KART_RACING = "You're in a race: finish it, or leave it with /leaverace, first."
         BENILLA_KART_XP_COLOR = { r = 111 / 255, g = 111 / 255, b = 1 }
         BENILLA_KART_SKILL_COLOR = { r = 0.4, g = 0.8, b = 1 }
 
@@ -38,6 +44,11 @@
 
         function BenillaKart_Send(body)
             SendAddonMessage(BENILLA_KART_PREFIX, "R\t" .. body, "PARTY")
+        end
+
+        -- Out of every race and the queue, whatever the kart or the server thinks.
+        function BenillaKart_LeaveRace()
+            BenillaKart_Send("X")
         end
 
         -- `text` cut at each TAB.
@@ -272,8 +283,11 @@
                 if f.check and not f.check.answered then f.queued = nil end
                 f.check = nil
                 if StaticPopup_Hide then StaticPopup_Hide("BENILLA_KART_READY") end
+            elseif verb == "Finder" then
+                -- The Race Marshal's "Open the Race Finder".
+                BenillaKartFinderFrame:Show()
             elseif verb == "X" then
-                -- Out of every race and the queue (/leaverace, F6).
+                -- Out of every race and the queue (/leaverace, the minimap button's menu).
                 f.check, f.queued, f.waiting, f.waited = nil, nil, nil, nil
                 if StaticPopup_Hide then StaticPopup_Hide("BENILLA_KART_READY") end
                 if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("You left every race and the Race Finder queue.", 1, 0.82, 0) end
@@ -337,34 +351,265 @@
                 BenillaKartCourses_Set(arg1)
             elseif event == "BENILLA_KART_COURSE_NAMES" then
                 BenillaKartCourseNames_Set(arg1)
-            elseif event == "BENILLA_KART_FINDER_TOGGLE" then
+            end
+        end
+
+        -- The queue in a line, for the minimap button's tooltip: nil when there is none.
+        function BenillaKartFinder_Brief()
+            local f = BenillaKartFinder
+            if f.check then return "Race Finder: race ready" end
+            if not f.queued then return nil end
+            if not f.waited then return "Race Finder: in queue" end
+            return format("Race Finder: %d:%02d, %d waiting", floor(f.waited / 60),
+                mod(f.waited, 60), f.waiting or 0)
+        end
+
+        -- ── The minimap button, on the ring as an addon's is ──
+
+        -- Its centre's distance from the minimap's: the ring the stock buttons sit on.
+        BENILLA_KART_MINIMAP_RADIUS = 80
+
+        -- At `angle` (degrees counter-clockwise from east), else at KartMinimapAngle.
+        function BenillaKartMinimap_Place(angle)
+            angle = math.rad(angle or tonumber(GetCVar("KartMinimapAngle")) or 190)
+            local button = BenillaKartMinimapButton
+            button:ClearAllPoints()
+            button:SetPoint("CENTER", "Minimap", "CENTER", BENILLA_KART_MINIMAP_RADIUS * math.cos(angle),
+                BENILLA_KART_MINIMAP_RADIUS * math.sin(angle))
+        end
+
+        -- The cursor's angle about the minimap's centre, 0 to 360.
+        function BenillaKartMinimap_CursorAngle()
+            local x, y = GetCursorPosition()
+            local scale = Minimap:GetEffectiveScale()
+            local cx, cy = Minimap:GetCenter()
+            local angle = math.deg(math.atan2(y / scale - cy, x / scale - cx))
+            if angle < 0 then angle = angle + 360 end
+            return angle
+        end
+
+        function BenillaKartMinimap_DragStop()
+            local button = BenillaKartMinimapButton
+            button.dragging = nil
+            BenillaKartSettings_Set("KartMinimapAngle", BenillaKartMinimap_CursorAngle(), 0)
+            BenillaKartMinimap_Place()
+        end
+
+        -- Shown as KartMinimapButton says.
+        function BenillaKartMinimap_Apply()
+            if GetCVar("KartMinimapButton") == "0" then
+                BenillaKartMinimapButton:Hide()
+            else
+                BenillaKartMinimapButton:Show()
+            end
+        end
+
+        function BenillaKartMinimap_Hide()
+            SetCVar("KartMinimapButton", "0")
+            BenillaKartMinimap_Apply()
+            if DEFAULT_CHAT_FRAME then
+                DEFAULT_CHAT_FRAME:AddMessage("Kartcraft's minimap button is hidden: /kartcraft shows it again.", 1, 0.82, 0)
+            end
+        end
+
+        function BenillaKartMinimap_OnClick(button)
+            GameTooltip:Hide()
+            if button == "RightButton" then
+                ToggleDropDownMenu(1, nil, BenillaKartMinimapDropDown, "BenillaKartMinimapButton", 10, -5)
+            else
                 BenillaKartFinder_Toggle()
             end
         end
 
-        -- The finder minimized: queued (or a ready check out) with the window shut, a small button
-        -- shows the queue and opens the window again.
-        function BenillaKartQueueButton_Update()
+        function BenillaKartMinimap_Tooltip()
+            local button = BenillaKartMinimapButton
+            GameTooltip:SetOwner(button, "ANCHOR_LEFT")
+            GameTooltip:SetText("World of Kartcraft")
+            local brief = BenillaKartFinder_Brief()
+            if brief then GameTooltip:AddLine(brief, 1, 1, 1) end
+            GameTooltip:AddLine("Click for the Race Finder, right-click for more; drag to move.", 0.8, 0.8, 0.8)
+            GameTooltip:Show()
+            button.shownTip = button.tooltip
+        end
+
+        -- Each frame: the tooltip's line (the stock queue button's `tooltip`), the glow while
+        -- queued and its flash while a race is ready, and the drag around the ring.
+        function BenillaKartMinimap_Update()
+            local button = BenillaKartMinimapButton
             local f = BenillaKartFinder
-            local button = BenillaKartQueueButton
-            if (f.queued or f.check) and not BenillaKartFinderFrame:IsVisible() then
-                local text = "Race Finder: in queue"
-                if f.check then
-                    text = "Race Finder: race ready"
-                elseif f.waited then
-                    text = format("Race Finder: %d:%02d, %d waiting", floor(f.waited / 60),
-                        mod(f.waited, 60), f.waiting or 0)
-                end
-                BenillaKartQueueButtonText:SetText(text)
-                button:Show()
+            button.tooltip = BenillaKartFinder_Brief() or "World of Kartcraft"
+            local glow = BenillaKartMinimapButtonGlow
+            if f.check then
+                glow:SetAlpha(0.5 + 0.5 * math.sin(GetTime() * 10))
+                glow:Show()
+            elseif f.queued then
+                glow:SetAlpha(0.4 + 0.3 * math.sin(GetTime() * 3))
+                glow:Show()
             else
-                button:Hide()
+                glow:Hide()
+            end
+            if button.dragging then BenillaKartMinimap_Place(BenillaKartMinimap_CursorAngle()) end
+            if button.shownTip ~= button.tooltip and GameTooltip:IsOwned(button) then
+                BenillaKartMinimap_Tooltip()
+            end
+        end
+
+        -- The right-click menu, in the stock kit's MENU look.
+        function BenillaKartMinimapMenu_Init()
+            local entries = {
+                { text = "World of Kartcraft", isTitle = 1 },
+                { text = "Race Finder", func = BenillaKartFinder_Toggle },
+                { text = "Leave race", func = BenillaKart_LeaveRace },
+            }
+            if BenillaKartFinder.queued then
+                table.insert(entries, { text = "Leave queue", func = BenillaKartFinder_QueueClick })
+            end
+            table.insert(entries, { text = "Kartcraft settings...", func = BenillaKartSettings_Toggle })
+            table.insert(entries, { text = "Hide minimap button", func = BenillaKartMinimap_Hide })
+            for i = 1, table.getn(entries) do
+                entries[i].notCheckable = 1
+                UIDropDownMenu_AddButton(entries[i])
+            end
+        end
+
+        -- ── The settings window ──
+
+        -- A number as a CVar's text: `places` decimals and no trailing zeros, so 1.00 is "1".
+        function BenillaKart_Number(value, places)
+            local text = format("%." .. places .. "f", value)
+            if string.find(text, ".", 1, 1) then
+                text = string.gsub(text, "0+$", "")
+                text = string.gsub(text, "%.$", "")
+            end
+            return text
+        end
+
+        -- A numeric setting, written only when it moves.
+        function BenillaKartSettings_Set(cvar, value, places)
+            local text = BenillaKart_Number(value, places)
+            if GetCVar(cvar) ~= text then SetCVar(cvar, text) end
+        end
+
+        function BenillaKart_Flag(cvar)
+            if GetCVar(cvar) == "0" then return nil end
+            return 1
+        end
+
+        function BenillaKartSettings_Toggle()
+            if BenillaKartSettingsFrame:IsVisible() then
+                BenillaKartSettingsFrame:Hide()
+            else
+                BenillaKartSettingsFrame:Show()
+            end
+        end
+
+        -- The controls from the CVars; `refreshing` keeps a slider's echo from writing back.
+        function BenillaKartSettings_Refresh()
+            local frame = BenillaKartSettingsFrame
+            frame.refreshing = 1
+            BenillaKartSettingsFrameArrowShow:SetChecked(BenillaKart_Flag("KartArrowShow"))
+            BenillaKartSettingsFrameArrowSize:SetValue(tonumber(GetCVar("KartArrowSize")) or 1)
+            BenillaKartSettingsFrameChaseCamera:SetChecked(BenillaKart_Flag("KartChaseCamera"))
+            BenillaKartSettingsFrameMusic:SetChecked(BenillaKart_Flag("KartMusic"))
+            BenillaKartSettingsFrameMusicVolume:SetValue(tonumber(GetCVar("KartMusicVolume")) or 1)
+            BenillaKartSettingsFrameMinimapButton:SetChecked(BenillaKart_Flag("KartMinimapButton"))
+            frame.refreshing = nil
+        end
+
+        -- A check box's CVar, "1" or "0".
+        function BenillaKartSettings_Check(box, cvar)
+            if box:GetChecked() then
+                SetCVar(cvar, "1")
+                PlaySound("igMainMenuOptionCheckBoxOn")
+            else
+                SetCVar(cvar, "0")
+                PlaySound("igMainMenuOptionCheckBoxOff")
+            end
+            if cvar == "KartMinimapButton" then BenillaKartMinimap_Apply() end
+        end
+
+        -- A slider's CVar, two decimals.
+        function BenillaKartSettings_Slide(slider, cvar)
+            if BenillaKartSettingsFrame.refreshing then return end
+            BenillaKartSettings_Set(cvar, slider:GetValue(), 2)
+        end
+
+        -- A stock options slider's range and labels, set without writing its CVar.
+        function BenillaKartSettings_SetupSlider(slider, label, min, max, step, low, high)
+            BenillaKartSettingsFrame.refreshing = 1
+            getglobal(slider:GetName() .. "Text"):SetText(label)
+            getglobal(slider:GetName() .. "Low"):SetText(low)
+            getglobal(slider:GetName() .. "High"):SetText(high)
+            slider:SetMinMaxValues(min, max)
+            slider:SetValueStep(step)
+            BenillaKartSettingsFrame.refreshing = nil
+        end
+
+        function BenillaKartSettings_ResetArrow()
+            SetCVar("KartArrowX", "0.5")
+            SetCVar("KartArrowY", "0.22")
+            SetCVar("KartArrowSize", "1")
+            BenillaKartSettings_Refresh()
+        end
+
+        -- "Move arrow": the window steps aside while the arrow's box is placed, and comes back.
+        function BenillaKartSettings_MoveArrow()
+            BenillaKartArrowMover.reopen = 1
+            BenillaKartSettingsFrame:Hide()
+            BenillaKartArrowMover:Show()
+        end
+
+        -- ── The guide arrow's box: dragged where the arrow goes, the wheel sizes it ──
+
+        -- The box's side at size 1, about the arrow's own on a 768-high screen.
+        BENILLA_KART_ARROW_BOX = 90
+
+        -- Where KartArrowX and KartArrowY put it (across and down the screen, 0 to 1), as big as
+        -- KartArrowSize.
+        function BenillaKartArrowMover_Place()
+            local frame = BenillaKartArrowMover
+            local x = tonumber(GetCVar("KartArrowX")) or 0.5
+            local y = tonumber(GetCVar("KartArrowY")) or 0.22
+            local size = BENILLA_KART_ARROW_BOX * (tonumber(GetCVar("KartArrowSize")) or 1)
+            frame:SetWidth(size)
+            frame:SetHeight(size)
+            frame:ClearAllPoints()
+            frame:SetPoint("CENTER", "UIParent", "TOPLEFT", x * UIParent:GetWidth(), -y * UIParent:GetHeight())
+        end
+
+        function BenillaKartArrowMover_Save()
+            local cx, cy = BenillaKartArrowMover:GetCenter()
+            if not cx then return end
+            BenillaKartSettings_Set("KartArrowX", cx / UIParent:GetWidth(), 4)
+            BenillaKartSettings_Set("KartArrowY", 1 - cy / UIParent:GetHeight(), 4)
+        end
+
+        function BenillaKartArrowMover_Wheel(delta)
+            local size = (tonumber(GetCVar("KartArrowSize")) or 1) * math.pow(1.1, delta)
+            if size < 0.4 then size = 0.4 end
+            if size > 3 then size = 3 end
+            BenillaKartSettings_Set("KartArrowSize", size, 2)
+            BenillaKartArrowMover_Place()
+        end
+
+        function BenillaKartArrowMover_OnShow()
+            BenillaKartArrowMover_Place()
+            SetCVar("KartArrowMove", "1")
+        end
+
+        function BenillaKartArrowMover_OnHide()
+            local frame = BenillaKartArrowMover
+            frame.moving = nil
+            SetCVar("KartArrowMove", "0")
+            if frame.reopen then
+                frame.reopen = nil
+                BenillaKartSettingsFrame:Show()
             end
         end
 
         -- The heartbeat, and the end of a ready check nobody answered.
         function BenillaKartEvents_OnUpdate()
-            BenillaKartQueueButton_Update()
+            BenillaKartMinimap_Update()
             local f = BenillaKartFinder
             if (f.queued or f.check) and GetTime() >= f.beat then
                 f.beat = GetTime() + BENILLA_KART_HEARTBEAT
@@ -391,7 +636,9 @@
             -- Out of every race and the queue, whatever the kart or the server thinks.
             SLASH_BENILLA_LEAVERACE1 = "/leaverace"
             SLASH_BENILLA_LEAVERACE2 = "/lr"
-            SlashCmdList["BENILLA_LEAVERACE"] = function() BenillaKart_Send("X") end
+            SlashCmdList["BENILLA_LEAVERACE"] = function() BenillaKart_LeaveRace() end
+            SLASH_BENILLA_KARTCRAFT1 = "/kartcraft"
+            SlashCmdList["BENILLA_KARTCRAFT"] = function() BenillaKartSettings_Toggle() end
         end
     ]]></Script>
 
@@ -510,10 +757,173 @@
         </Scripts>
     </Frame>
 
-    <!-- The finder minimized while queued: its status, a click opens it again. -->
-    <Button name="BenillaKartQueueButton" parent="UIParent" movable="true" clampedToScreen="true" hidden="true" frameStrata="MEDIUM">
-        <Size><AbsDimension x="200" y="28"/></Size>
-        <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-20" y="-200"/></Offset></Anchor></Anchors>
+    <!-- The minimap button, built as the stock queue button is (MiniMapBattlefieldFrame): the
+         icon under the tracking ring, a click for the finder, a right-click for its menu; the
+         queue in its tooltip and a glow while queued. It drags around the ring. -->
+    <Button name="BenillaKartMinimapButton" parent="Minimap" frameStrata="MEDIUM" enableMouse="true">
+        <Size><AbsDimension x="33" y="33"/></Size>
+        <Anchors><Anchor point="CENTER"/></Anchors>
+        <Layers>
+            <Layer level="BACKGROUND">
+                <Texture name="$parentIcon" file="Interface\Icons\Ability_Mount_MechaStrider">
+                    <Size><AbsDimension x="20" y="20"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="7" y="-6"/></Offset></Anchor></Anchors>
+                    <TexCoords left="0.075" right="0.925" top="0.075" bottom="0.925"/>
+                </Texture>
+            </Layer>
+            <Layer level="ARTWORK">
+                <Texture name="$parentBorder" file="Interface\Minimap\MiniMap-TrackingBorder">
+                    <Size><AbsDimension x="52" y="52"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"/></Anchors>
+                </Texture>
+            </Layer>
+            <Layer level="OVERLAY">
+                <Texture name="$parentGlow" file="Interface\Minimap\UI-Minimap-ZoomButton-Highlight" alphaMode="ADD" hidden="true">
+                    <Size><AbsDimension x="33" y="33"/></Size>
+                    <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="0"/></Offset></Anchor></Anchors>
+                </Texture>
+            </Layer>
+        </Layers>
+        <HighlightTexture file="Interface\Minimap\UI-Minimap-ZoomButton-Highlight" alphaMode="ADD"/>
+        <Frames>
+            <Frame name="BenillaKartMinimapDropDown" inherits="UIDropDownMenuTemplate" id="1" hidden="true">
+                <Scripts>
+                    <OnLoad>UIDropDownMenu_Initialize(this, BenillaKartMinimapMenu_Init, "MENU")</OnLoad>
+                </Scripts>
+            </Frame>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                this:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+                this:RegisterForDrag("LeftButton")
+                this:SetFrameLevel(this:GetFrameLevel() + 1)
+                BenillaKartMinimap_Place()
+                BenillaKartMinimap_Apply()
+            </OnLoad>
+            <OnClick>BenillaKartMinimap_OnClick(arg1)</OnClick>
+            <OnDragStart>
+                GameTooltip:Hide()
+                this.dragging = 1
+            </OnDragStart>
+            <OnDragStop>BenillaKartMinimap_DragStop()</OnDragStop>
+            <OnEnter>BenillaKartMinimap_Tooltip()</OnEnter>
+            <OnLeave>GameTooltip:Hide()</OnLeave>
+        </Scripts>
+    </Button>
+
+    <CheckButton name="BenillaKartSettingsCheckTemplate" inherits="OptionsCheckButtonTemplate" virtual="true">
+        <Scripts>
+            <OnClick>BenillaKartSettings_Check(this, this.cvar)</OnClick>
+        </Scripts>
+    </CheckButton>
+
+    <!-- The settings: the guide arrow, the camera, the music and the minimap button, each a CVar
+         set as it is clicked, as the stock option boxes are. -->
+    <Frame name="BenillaKartSettingsFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
+        <Size><AbsDimension x="320" y="392"/></Size>
+        <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
+            <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
+            <TileSize><AbsValue val="32"/></TileSize>
+            <EdgeSize><AbsValue val="32"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
+                    <Size><AbsDimension x="256" y="64"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
+                </Texture>
+                <FontString inherits="GameFontNormal" text="Kartcraft Settings">
+                    <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentArrowTitle" inherits="GameFontNormal" text="Guide arrow">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-34"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentCameraTitle" inherits="GameFontNormal" text="Camera">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-168"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentMusicTitle" inherits="GameFontNormal" text="Music">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-222"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <CheckButton name="$parentArrowShow" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-48"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <Slider name="$parentArrowSize" inherits="OptionsSliderTemplate">
+                <Size><AbsDimension x="240" y="17"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="38" y="-100"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnValueChanged>BenillaKartSettings_Slide(this, "KartArrowSize")</OnValueChanged>
+                </Scripts>
+            </Slider>
+            <Button name="$parentMoveArrow" inherits="UIPanelButtonTemplate" text="Move arrow">
+                <Size><AbsDimension x="128" y="22"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-132"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartSettings_MoveArrow()</OnClick></Scripts>
+            </Button>
+            <Button name="$parentResetArrow" inherits="UIPanelButtonTemplate" text="Reset arrow">
+                <Size><AbsDimension x="128" y="22"/></Size>
+                <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-132"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartSettings_ResetArrow()</OnClick></Scripts>
+            </Button>
+            <CheckButton name="$parentChaseCamera" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-182"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentMusic" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-236"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <Slider name="$parentMusicVolume" inherits="OptionsSliderTemplate">
+                <Size><AbsDimension x="240" y="17"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="38" y="-288"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnValueChanged>BenillaKartSettings_Slide(this, "KartMusicVolume")</OnValueChanged>
+                </Scripts>
+            </Slider>
+            <CheckButton name="$parentMinimapButton" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-316"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartSettingsFrame:Hide()</OnClick></Scripts>
+            </Button>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                -- Each box's CVar and label (the check template's), and each slider's range.
+                local boxes = {
+                    { "ArrowShow", "KartArrowShow", "Show the guide arrow in a race" },
+                    { "ChaseCamera", "KartChaseCamera", "CTR chase camera (off: your WoW camera)" },
+                    { "Music", "KartMusic", "Play CTR race music" },
+                    { "MinimapButton", "KartMinimapButton", "Show the minimap button" },
+                }
+                for i = 1, table.getn(boxes) do
+                    local box = getglobal(this:GetName() .. boxes[i][1])
+                    box.cvar = boxes[i][2]
+                    getglobal(box:GetName() .. "Text"):SetText(boxes[i][3])
+                end
+                BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameArrowSize, "Arrow size", 0.4, 3, 0.1, "Small", "Large")
+                BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameMusicVolume, "Music volume", 0, 1, 0.05, "Quiet", "Loud")
+                if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
+                BenillaKart_Movable(this)
+            </OnLoad>
+            <OnShow>
+                PlaySound("igMainMenuOpen")
+                BenillaKartSettings_Refresh()
+            </OnShow>
+            <OnHide>PlaySound("igMainMenuClose")</OnHide>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+
+    <!-- The guide arrow's place while it is set: a box the player drags where the arrow goes, the
+         arrow itself drawn inside it (KartArrowMove); the wheel sizes both. -->
+    <Frame name="BenillaKartArrowMover" parent="UIParent" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" frameStrata="DIALOG">
+        <Size><AbsDimension x="90" y="90"/></Size>
+        <Anchors><Anchor point="CENTER"/></Anchors>
         <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
             <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>
             <TileSize><AbsValue val="16"/></TileSize>
@@ -521,21 +931,43 @@
         </Backdrop>
         <Layers>
             <Layer level="ARTWORK">
-                <FontString name="$parentText" inherits="GameFontNormalSmall">
-                    <Anchors><Anchor point="CENTER"/></Anchors>
+                <FontString name="$parentTitle" inherits="GameFontNormal" text="Guide arrow">
+                    <Anchors><Anchor point="BOTTOM" relativePoint="TOP"><Offset><AbsDimension x="0" y="4"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentHint" inherits="GameFontHighlightSmall" text="Drag it where the arrow goes; the wheel sizes it.">
+                    <Anchors><Anchor point="TOP" relativePoint="BOTTOM"><Offset><AbsDimension x="0" y="-4"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
+        <Frames>
+            <Button name="$parentDone" inherits="UIPanelButtonTemplate" text="Done">
+                <Size><AbsDimension x="80" y="22"/></Size>
+                <Anchors><Anchor point="TOP" relativeTo="$parentHint" relativePoint="BOTTOM"><Offset><AbsDimension x="0" y="-4"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartArrowMover:Hide()</OnClick></Scripts>
+            </Button>
+        </Frames>
         <Scripts>
             <OnLoad>
-                this:SetBackdropColor(0, 0, 0, 0.8)
+                this:SetBackdropColor(0, 0, 0, 0.15)
+                this:EnableMouseWheel(1)
+                if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
                 BenillaKart_Movable(this)
             </OnLoad>
-            <OnClick>BenillaKartFinderFrame:Show()</OnClick>
-            <OnDragStart>this:StartMoving()</OnDragStart>
-            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+            <OnShow>BenillaKartArrowMover_OnShow()</OnShow>
+            <OnHide>BenillaKartArrowMover_OnHide()</OnHide>
+            <OnDragStart>
+                this:StartMoving()
+                this.moving = 1
+            </OnDragStart>
+            <OnDragStop>
+                this:StopMovingOrSizing()
+                this.moving = nil
+                BenillaKartArrowMover_Save()
+            </OnDragStop>
+            <OnUpdate>if this.moving then BenillaKartArrowMover_Save() end</OnUpdate>
+            <OnMouseWheel>BenillaKartArrowMover_Wheel(arg1)</OnMouseWheel>
         </Scripts>
-    </Button>
+    </Frame>
 
     <!-- The race's banner (the prompt at a start, the countdown, the result) and the results. -->
     <Frame name="BenillaKartRaceFrame" parent="UIParent" setAllPoints="true" frameStrata="LOW">
@@ -612,7 +1044,6 @@
                 this:RegisterEvent("CHAT_MSG_ADDON")
                 this:RegisterEvent("BENILLA_KART_RACE")
                 this:RegisterEvent("BENILLA_KART_SCORE")
-                this:RegisterEvent("BENILLA_KART_FINDER_TOGGLE")
                 this:RegisterEvent("BENILLA_KART_COURSES")
                 this:RegisterEvent("BENILLA_KART_COURSE_NAMES")
             </OnLoad>

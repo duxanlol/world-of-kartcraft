@@ -711,6 +711,64 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "benilla's own — 1.12 has no player-side perf log; its nearest thing is the \
          Ctrl+R framerate label, a number with no file behind it",
     ),
+    // World of Kartcraft's settings, the layer's settings window (`KartcraftFrames.xml`,
+    // `/kartcraft`) and minimap button. The race's guide arrow: shown, its size and its place
+    // across and down the screen ([`crate::kart`]'s `GuideHud`); `KartArrowMove` is its
+    // placement mode, held for the session only (`load_config`).
+    ours(
+        "KartArrowShow",
+        "1",
+        "Kartcraft's own — the race's guide arrow; 1.12 has no kart",
+    ),
+    ours(
+        "KartArrowSize",
+        "1",
+        "Kartcraft's own — the race's guide arrow; 1.12 has no kart",
+    ),
+    ours(
+        "KartArrowX",
+        "0.5",
+        "Kartcraft's own — the race's guide arrow; 1.12 has no kart",
+    ),
+    ours(
+        "KartArrowY",
+        "0.22",
+        "Kartcraft's own — the race's guide arrow; 1.12 has no kart",
+    ),
+    ours(
+        "KartArrowMove",
+        "0",
+        "Kartcraft's own — the guide arrow's placement mode; 1.12 has no kart",
+    ),
+    // CTR's chase camera while driving, else the follow camera.
+    ours(
+        "KartChaseCamera",
+        "1",
+        "Kartcraft's own — the kart's camera; 1.12 has no kart",
+    ),
+    // CTR's race music, a share of `MusicVolume`.
+    ours(
+        "KartMusic",
+        "1",
+        "Kartcraft's own — CTR's race music; 1.12 has no kart",
+    ),
+    ours(
+        "KartMusicVolume",
+        "1",
+        "Kartcraft's own — CTR's race music; 1.12 has no kart",
+    ),
+    // The minimap button: shown, and its place on the ring in degrees counter-clockwise from east,
+    // as an addon's minimap button keeps it.
+    ours(
+        "KartMinimapButton",
+        "1",
+        "Kartcraft's own — its minimap button; 1.12 has no kart",
+    ),
+    ours(
+        "KartMinimapAngle",
+        "190",
+        "Kartcraft's own — its minimap button; 1.12 has no kart",
+    ),
     // `lastCharacterIndex` (`0x402d93`, "0" `0x82e570`, category 4, handle `[0x882674]`), help
     // "Last character selected": a 0-based row (the selection cell `[0x83856c]` under `"%d"`), so
     // "0" is the first character. It mirrors [`crate::char_select::Roster::pending_index`].

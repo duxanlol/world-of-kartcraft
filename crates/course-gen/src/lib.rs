@@ -3,13 +3,14 @@
 //! [`roads`] traces its road network into a graph in WoW world coordinates. On those, [`cost`]
 //! builds a drivability field, [`generate`] lays circuits and sprints over it, [`metrics`]
 //! measures them, [`drivetest`] drives them with the CTR-physics bot, [`select`] keeps the best and
-//! [`preview`] draws them.
+//! [`preview`] draws them; [`marshal`] places the Race Marshal at each course start.
 
 pub mod cost;
 pub mod drivetest;
 pub mod export;
 pub mod generate;
 pub mod geom;
+pub mod marshal;
 pub mod metrics;
 pub mod preview;
 pub mod render;

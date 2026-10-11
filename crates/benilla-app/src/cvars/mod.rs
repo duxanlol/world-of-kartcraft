@@ -619,6 +619,8 @@ fn load_config(world: &mut World) {
         // `gxApi` is the render backend, a fact about the machine that `sync_cvars` pushes live, so
         // it is never persisted.
         cvars.own_for_session("gxApi", None);
+        // The guide arrow's placement mode lasts while its window is up, never past a quit.
+        cvars.own_for_session("KartArrowMove", None);
         match stored {
             StoredConfig::Absent => {} // no file, hermetic capture, or no install
             StoredConfig::Bad(msg) => {
@@ -2192,7 +2194,7 @@ mod tests {
     /// `benilla-ui`'s code, or a `LUA_ONLY` entry naming its stock reader. Test files do not count.
     #[test]
     fn every_registered_row_has_a_reader_in_the_source() {
-        /// Rows whose only reader is the stock interface.
+        /// Rows whose only reader is the stock interface or the layer.
         const LUA_ONLY: &[(&str, &str)] = &[
             (
                 "statusBarText",
@@ -2234,6 +2236,14 @@ mod tests {
             ("gxCursor", "OptionsFrame.lua's Hardware Cursor box"),
             ("gxFixLag", "OptionsFrame.lua's Fix Input Lag box"),
             ("gxRefresh", "OptionsFrame.lua's refresh-rate dropdown"),
+            (
+                "KartMinimapButton",
+                "the layer's KartcraftFrames.xml shows or hides its minimap button by it",
+            ),
+            (
+                "KartMinimapAngle",
+                "the layer's KartcraftFrames.xml places its minimap button on the ring by it",
+            ),
         ];
         let app_src = crate::test_support::src_dir();
         let ui_src = app_src

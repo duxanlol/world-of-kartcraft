@@ -42,12 +42,14 @@ CONTROLS
   Hop / powerslide    R1            RB          Space (hold through a turn)
   Boost (meter red)   L1            LB          Shift
   Abilities           D-pad         D-pad       1-4
-  Climb in / out                                J
-  Camera                                        K
-  Race: host / join / start                     F5
-  Race: leave                                   F6
-  Race Finder                                   I
-  Race: other course at a shared start          F7
+  Climb in / out                                J (or Summon Kart, spellbook)
+
+Everything else is WoW's own interface. The Kartcraft button on the minimap (the mechanostrider)
+opens the Race Finder on a click; right-click it for Race Finder, Leave race, Leave queue,
+Kartcraft settings and Hide minimap button; drag it to move it round the minimap.
+Kartcraft settings (or /kartcraft): the guide arrow (show, size, Move arrow, Reset arrow), CTR's
+chase camera or your WoW camera, the race music and its volume, and the minimap button.
+Slash commands: /racefinder, /leaverace (/lr), /kartcraft.
 
 Powerslide: hop and hold while steering into a turn; the turbo meter by the speedometer fills.
 Press the other shoulder when it turns red for a boost, up to three per slide. The exhaust smokes
@@ -56,11 +58,11 @@ dark when it is time. Too early and the engine puffs; hold the turn too long and
 
 RACES
 -----
-Drive to a course's start and press F5 to host; drivers near you press F5 to join; the host's F5
-starts it. Rev the engine just before GO for a start boost. Beams of light mark the checkpoints.
-Where two courses share a start, F7 picks which one F5 hosts.
+Drive to a course's start and talk to the Race Marshal: he hosts a race, lets drivers near you
+join it and lets the host start it. Rev the engine just before GO for a start boost. Beams of
+light mark the checkpoints. Leave race (minimap menu) or /leaverace leaves.
 
-Or press I anywhere for the Race Finder: tick courses (or Any course) and Find race. When two or
+Or click the minimap button anywhere for the Race Finder: tick courses (or Any course) and Find race. When two or
 more players match (it waits up to 30 seconds for more), a ready check pops up: Accept or
 Decline. When everyone accepts, you are put in your kart and teleported to the starting grid.
   Northshire Sprint   in front of Northshire Abbey, down to Goldshire

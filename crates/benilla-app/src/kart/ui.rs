@@ -1,5 +1,5 @@
 //! What the kart puts on screen through the client's UI layer, as a model value: the race's
-//! banner and results, the chain score and the Race Finder key. `crate::ui_kart` hands it to the
+//! banner and results and the chain score. `crate::ui_kart` hands it to the
 //! layer's frames (`assets/ui/KartcraftFrames.xml`), which draw it in WoW's own fonts.
 
 use bevy::prelude::*;
@@ -23,21 +23,14 @@ pub(crate) struct KartOverlay {
     pub(crate) banner: String,
     pub(crate) results: Vec<String>,
     pub(crate) score: Option<ScoreLines>,
-    /// `I` was pressed and the Race Finder has not been told yet.
-    pub(crate) toggle_finder: bool,
 }
 
 pub(super) fn publish(
     time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
-    ui: Res<crate::ui_script::UiKeyboardCapture>,
     text: Res<RaceText>,
     score: Res<KartScore>,
     mut overlay: ResMut<KartOverlay>,
 ) {
-    if keys.just_pressed(KeyCode::KeyI) && !ui.typing {
-        overlay.toggle_finder = true;
-    }
     if overlay.banner != text.banner {
         overlay.banner.clone_from(&text.banner);
     }

@@ -94,10 +94,15 @@ Northshire straight from your WoW install, no server, login or character, to fee
 | Hop; hold through a turn to **powerslide** | R1 | RB | Space |
 | **Boost** while sliding, when the meter goes red | L1 | LB | Shift |
 | Abilities: Wumpa Juice, Turbo Boost, Super Engine, Aku Aku | D-pad ↑ → ↓ ← | D-pad | 1–4 |
-| Climb in / out | | | **J** |
-| Chase camera / your WoW camera | | | **K** |
-| Races: host / join / start · leave | | | **F5** · **F6** |
-| Race Finder · course at a shared start | | | **I** · **F7** |
+| Climb in / out | | | **J** (or Summon Kart in your spellbook) |
+
+Everything else is WoW's own interface. The **Kartcraft button on the minimap** (the
+mechanostrider) opens the **Race Finder** on a click; a right-click gives a menu with Race Finder,
+Leave race, Leave queue (while queued), Kartcraft settings and Hide minimap button. Drag it to move
+it round the minimap. **Kartcraft settings** (also `/kartcraft`) has the guide arrow (show it, its
+size, Move arrow to drag it where you want it, Reset arrow), CTR's chase camera or your WoW camera,
+the race music and its volume, and the minimap button itself. Slash commands: `/racefinder`,
+`/leaverace` (`/lr`), `/kartcraft`.
 
 ### How it drives
 
@@ -146,15 +151,15 @@ Other drivers on your server are drawn in their own karts, in their racer's colo
 character in the seat, their powerslides, flames, smoke and engine. Karts bump each other as in
 CTR. Each driver's kart state reaches the players within 150 yards through the server.
 
-**Races.** Drive to a course's start and press **F5** to host a race there; drivers near you see
-it and press **F5** to join; the host's **F5** starts it. CTR's countdown follows: rev the engine
+**Races.** Drive to a course's start and talk to the **Race Marshal** there: he hosts a race,
+lets drivers near you join it and lets the host start it. CTR's countdown follows: rev the engine
 (hold gas) just before GO for the start boost, too early and it bogs. Beams of light mark the
 checkpoints, the next one bright; the server checks each one against where you really are. Lap
 and place show on CTR's HUD, the music speeds up on the final lap, and a finish pays experience
-and Karting skill by place. **F6** leaves. Where two courses share a start, **F7** picks which one
-**F5** hosts.
+and Karting skill by place. **Leave race** on the minimap button's menu (or `/leaverace`) leaves.
 
-**Race Finder.** Press **I** anywhere (or type `/racefinder`), tick the courses you want (or Any course) and **Find race**,
+**Race Finder.** Click the Kartcraft minimap button anywhere (or type `/racefinder`, or ask a
+Race Marshal), tick the courses you want (or Any course) and **Find race**,
 like the dungeon finder. Once two or more players share a course (it waits up to 30 seconds for
 more, up to eight), everyone gets a ready check, WoW's own popup: **Accept** or **Decline**. When all accept,
 the server puts each of you in your kart and teleports you to a slot on the starting grid, and

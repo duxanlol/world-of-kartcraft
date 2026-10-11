@@ -207,6 +207,20 @@ if (-not (Test-Path (Join-Path $Server 'storage\mangosd\extracted-data\maps'))) 
             -v "${Extracted}:/opt/vmangos/storage/extracted-data" $Image extract-client-data
     }
 }
+# The Race Marshals (setup\vmangos\sql\kartcraft.sql): the database container runs custom-sql\ on
+# every start, so a changed file restarts it, with the world server stopped meanwhile.
+$MarshalSql = Join-Path $Root 'setup\vmangos\sql\kartcraft.sql'
+$CustomSql = Join-Path $Server 'storage\database\custom-sql\kartcraft.sql'
+$sqlText = [System.IO.File]::ReadAllText($MarshalSql).Replace("`r`n", "`n")
+if (-not (Test-Path $CustomSql) -or [System.IO.File]::ReadAllText($CustomSql) -ne $sqlText) {
+    New-Item -ItemType Directory -Force -Path (Split-Path $CustomSql) | Out-Null
+    [System.IO.File]::WriteAllText($CustomSql, $sqlText, (New-Object System.Text.UTF8Encoding $false))
+    Write-Host '  Race Marshals: storage\database\custom-sql\kartcraft.sql'
+    if (Invoke-Compose ps -q database) {
+        Invoke-Native 'stopping the world server' { Invoke-Compose stop mangosd }
+        Invoke-Native 'restarting the database' { Invoke-Compose restart database }
+    }
+}
 Step 'Starting the server'
 Invoke-Native 'starting the server' { Invoke-Compose up -d }
 Write-Host -NoNewline '  waiting for the world server'

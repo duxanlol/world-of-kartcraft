@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..667131b
+index 0000000..d02712b
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,1537 @@
+@@ -0,0 +1,1746 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -95,6 +95,9 @@ index 0000000..667131b
 +#include "ObjectAccessor.h"
 +#include "WorldSession.h"
 +#include "World.h"
++#include "Creature.h"
++#include "GossipDef.h"
++#include "ScriptMgr.h"
 +
 +#include <cmath>
 +#include <string>
@@ -333,6 +336,8 @@ index 0000000..667131b
 +        std::vector<float> gates;
 +        // The crate layout; empty for the one built from the checkpoints (Layout).
 +        std::vector<CrateSpot> crates;
++        // Where its Race Marshal stands (WoW x, y): courses sharing a start share the marshal.
++        std::pair<float, float> marshal;
 +    };
 +
 +    // The courses: courses/courses.json, made into this table by setup/vmangos/pack.py.
@@ -1181,6 +1186,16 @@ index 0000000..667131b
 +            !player->GetMap()->Instanceable();
 +    }
 +
++    // Puts a driver on foot (or on another mount) in the kart: a triggered cast, with no cast bar
++    // to interrupt; the kart aura lands when the cast time has run.
++    static void SummonKart(Player* player)
++    {
++        if (player->HasAura(SPELL_SUMMON_KART))
++            return;
++        player->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
++        player->CastSpell(player, SPELL_SUMMON_KART, true);
++    }
++
 +    static void TeleportToGrid(Player* player, Course const& c, size_t slot)
 +    {
 +        // Their situation may have changed since they said yes: then they stay where they are.
@@ -1200,11 +1215,7 @@ index 0000000..667131b
 +        if (ground <= INVALID_HEIGHT)
 +            return;
 +        float z = ground + 0.5f;
-+        if (!player->HasAura(SPELL_SUMMON_KART))
-+        {
-+            player->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
-+            player->CastSpell(player, SPELL_SUMMON_KART, true);
-+        }
++        SummonKart(player);
 +        player->TeleportTo(c.map, x, y, z, std::atan2(dy, dx));
 +    }
 +
@@ -1443,7 +1454,9 @@ index 0000000..667131b
 +        return true;
 +    }
 +
-+    static void HandleRace(Player* player, std::string const& body)
++    // `marshal`: the line comes from a Race Marshal's menu (MarshalSelect), which the player used
++    // standing at the start: the start's distance and the kart are not asked for.
++    static void HandleRace(Player* player, std::string const& body, bool marshal)
 +    {
 +        uint32 now = WorldTimer::getMSTime();
 +        for (auto it = s_races.begin(); it != s_races.end();)
@@ -1458,8 +1471,8 @@ index 0000000..667131b
 +                tab = body.size();
 +            f.push_back(body.substr(at, tab - at));
 +        }
-+        // The finder's verbs work on foot; the rest need the kart.
-+        if (f.size() < 2 || HandleFinder(player, f, now) || !player->HasAura(SPELL_SUMMON_KART))
++        // The finder's verbs work on foot; the rest need the kart, but for a marshal's.
++        if (f.size() < 2 || HandleFinder(player, f, now) || (!marshal && !player->HasAura(SPELL_SUMMON_KART)))
 +            return;
 +        std::string const& verb = f[1];
 +        uint32 id = f.size() > 2 ? uint32(std::strtoul(f[2].c_str(), nullptr, 10)) : 0;
@@ -1468,7 +1481,7 @@ index 0000000..667131b
 +        if (verb == "H" && f.size() > 2)
 +        {
 +            Course const* course = FindCourse(f[2]);
-+            if (!course || player->GetMapId() != course->map || DistanceTo(player, course->points[0]) > START_RADIUS)
++            if (!course || player->GetMapId() != course->map || (!marshal && DistanceTo(player, course->points[0]) > START_RADIUS))
 +                return;
 +            // A race already waiting on this course takes them in: who arrives after the offer
 +            // (sent once, to those near) still races with the host rather than alone.
@@ -1503,7 +1516,8 @@ index 0000000..667131b
 +        else if (verb == "J" && race != s_races.end())
 +        {
 +            Race& r = race->second;
-+            if (r.start || r.racers.size() >= MAX_RACERS || DistanceTo(player, r.course->points[0]) > START_RADIUS)
++            if (r.start || r.racers.size() >= MAX_RACERS || player->GetMapId() != r.course->map ||
++                (!marshal && DistanceTo(player, r.course->points[0]) > START_RADIUS))
 +                return;
 +            for (Racer const& x : r.racers)
 +                if (x.guid == player->GetObjectGuid())
@@ -1577,12 +1591,11 @@ index 0000000..667131b
 +        }
 +    }
 +
-+    bool HandleAddonMessage(Player* player, std::string const& message)
++    static std::string const PREFIX = "KARTCRAFT\t";
++
++    // One Kartcraft line, without its prefix; `marshal` as for HandleRace.
++    static void HandleLine(Player* player, std::string const& body, bool marshal)
 +    {
-+        static std::string const prefix = "KARTCRAFT\t";
-+        if (message.compare(0, prefix.size(), prefix) != 0)
-+            return false;
-+        std::string body = message.substr(prefix.size());
 +        std::lock_guard<std::mutex> lock(s_mutex);
 +        TickWeapons(WorldTimer::getMSTime());
 +        if (body.compare(0, 2, "L\t") == 0)
@@ -1592,14 +1605,210 @@ index 0000000..667131b
 +                LandLine(player, points);
 +        }
 +        else if (body.compare(0, 2, "S\t") == 0)
-+            RelayState(player, message);
++            RelayState(player, PREFIX + body);
 +        else if (body.compare(0, 2, "R\t") == 0)
-+            HandleRace(player, body);
++            HandleRace(player, body, marshal);
 +        else if (body.compare(0, 2, "W\t") == 0)
 +            HandleWeapon(player, body);
 +        // After the line: a finish or a leave in it frees the racer at once.
 +        TickShields(WorldTimer::getMSTime());
++    }
++
++    bool HandleAddonMessage(Player* player, std::string const& message)
++    {
++        if (message.compare(0, PREFIX.size(), PREFIX) != 0)
++            return false;
++        HandleLine(player, message.substr(PREFIX.size()), false);
 +        return true;
++    }
++
++    // ── Race Marshal ───────────────────────────────────────────────────────────────────────────
++    //
++    // A gossip NPC beside every course start (setup/vmangos/sql/kartcraft.sql, placed by
++    // `course-gen marshals`): its menu hosts, joins, starts and leaves races there, and opens the
++    // client's Race Finder ("R\tFinder"). Gossip runs on the player's map thread, and maps update
++    // in parallel: the menu only reads the races, under the lock, and a choice is posted to the
++    // world's messager, which runs it between map updates as the addon line it stands for, so a
++    // choice and its key do the same thing.
++
++    constexpr uint32 MARSHAL_TEXT = 190000;      // npc_text: the greeting
++    constexpr uint32 MARSHAL_HELP_TEXT = 190001; // npc_text: "How do races work?"
++    // A marshal belongs to the courses whose "marshal" spot is its spawn point, this near (yards).
++    constexpr float MARSHAL_MATCH = 2.f;
++
++    enum MarshalOption : uint32
++    {
++        MARSHAL_HOST = 1, // action: the course's index in COURSES
++        MARSHAL_JOIN,     // action: the race id
++        MARSHAL_START,    // action: the race id
++        MARSHAL_LEAVE,
++        MARSHAL_FINDER,
++        MARSHAL_HELP,
++        MARSHAL_BACK,
++    };
++
++    // The courses that start at this marshal: those placed with it, else (a marshal spawned
++    // anywhere else) those whose start is within START_RADIUS of it.
++    static std::vector<size_t> MarshalCourses(Creature* marshal)
++    {
++        float x, y, z;
++        marshal->GetRespawnCoord(x, y, z);
++        std::vector<size_t> here, near;
++        for (size_t i = 0; i < COURSES.size(); ++i)
++        {
++            Course const& c = COURSES[i];
++            if (c.map != marshal->GetMapId())
++                continue;
++            if (std::hypot(c.marshal.first - x, c.marshal.second - y) <= MARSHAL_MATCH)
++                here.push_back(i);
++            else if (std::hypot(c.points[0].first - x, c.points[0].second - y) <= START_RADIUS)
++                near.push_back(i);
++        }
++        return here.empty() ? near : here;
++    }
++
++    static bool AtMarshal(std::vector<size_t> const& here, Course const* course)
++    {
++        return std::any_of(here.begin(), here.end(), [course](size_t i) { return &COURSES[i] == course; });
++    }
++
++    static bool MarshalHello(Player* player, Creature* marshal)
++    {
++        std::vector<size_t> const here = MarshalCourses(marshal);
++        ObjectGuid const guid = player->GetObjectGuid();
++        PlayerMenu* talk = player->PlayerTalkClass;
++        talk->ClearMenus();
++        GossipMenu& menu = talk->GetGossipMenu();
++        // Room for the three lines every menu ends with.
++        size_t room = GOSSIP_MAX_MENU_ITEMS - 3;
++        bool busy = false;
++        {
++            std::lock_guard<std::mutex> lock(s_mutex);
++            uint32 const now = WorldTimer::getMSTime();
++            busy = std::any_of(s_queue.begin(), s_queue.end(), [guid](Queued const& q) { return q.guid == guid; });
++            for (auto const& p : s_pops)
++                for (Queued const& q : p.second.members)
++                    busy |= q.guid == guid;
++            std::vector<Course const*> waiting;
++            std::vector<std::pair<uint32, Race const*>> joinable;
++            for (auto const& entry : s_races)
++            {
++                Race const& r = entry.second;
++                bool in = std::any_of(r.racers.begin(), r.racers.end(), [guid](Racer const& x) { return x.guid == guid; });
++                busy |= in;
++                if (r.start || WorldTimer::getMSTimeDiff(r.created, now) > RACE_LIFETIME || !AtMarshal(here, r.course))
++                    continue;
++                waiting.push_back(r.course);
++                if (r.host == guid && room)
++                {
++                    menu.AddMenuItem(GOSSIP_ICON_BATTLE, "Start the race on " + std::string(r.course->name) + " (" +
++                        std::to_string(r.racers.size()) + (r.racers.size() == 1 ? " racer)" : " racers)"),
++                        MARSHAL_START, entry.first, "", false);
++                    --room;
++                }
++                else if (!in && r.racers.size() < MAX_RACERS)
++                    joinable.emplace_back(entry.first, &r);
++            }
++            for (auto const& j : joinable)
++            {
++                if (!room)
++                    break;
++                Race const& r = *j.second;
++                std::string host = r.racers.front().name;
++                for (Racer const& x : r.racers)
++                    if (x.guid == r.host)
++                        host = x.name;
++                menu.AddMenuItem(GOSSIP_ICON_TALK, "Join " + host + "'s race on " + r.course->name + " (" +
++                    std::to_string(r.racers.size()) + (r.racers.size() == 1 ? " racer)" : " racers)"),
++                    MARSHAL_JOIN, j.first, "", false);
++                --room;
++            }
++            // A course with a race waiting is joined, not hosted again (as "R\tH" itself does).
++            for (size_t i : here)
++            {
++                Course const& c = COURSES[i];
++                if (!room)
++                    break;
++                if (std::find(waiting.begin(), waiting.end(), &c) != waiting.end())
++                    continue;
++                menu.AddMenuItem(GOSSIP_ICON_BATTLE, "Host a race: " + std::string(c.name) + " (" +
++                    (c.laps ? std::to_string(c.laps) + (c.laps == 1 ? " lap)" : " laps)") : std::string("sprint)")),
++                    MARSHAL_HOST, uint32(i), "", false);
++                --room;
++            }
++        }
++        if (busy)
++            menu.AddMenuItem(GOSSIP_ICON_CHAT, "Leave the race", MARSHAL_LEAVE, 0, "", false);
++        menu.AddMenuItem(GOSSIP_ICON_DOT, "Open the Race Finder", MARSHAL_FINDER, 0, "", false);
++        menu.AddMenuItem(GOSSIP_ICON_CHAT, "How do races work?", MARSHAL_HELP, 0, "", false);
++        talk->SendGossipMenu(MARSHAL_TEXT, marshal->GetObjectGuid());
++        return true;
++    }
++
++    static bool MarshalSelect(Player* player, Creature* marshal, uint32 sender, uint32 action)
++    {
++        std::string line;
++        switch (sender)
++        {
++            case MARSHAL_HOST:
++                if (action < COURSES.size() && AtMarshal(MarshalCourses(marshal), &COURSES[action]))
++                    line = std::string("R\tH\t") + COURSES[action].key;
++                break;
++            case MARSHAL_JOIN:
++            case MARSHAL_START:
++            {
++                std::vector<size_t> const here = MarshalCourses(marshal);
++                std::lock_guard<std::mutex> lock(s_mutex);
++                auto race = s_races.find(action);
++                if (race != s_races.end() && AtMarshal(here, race->second.course))
++                    line = (sender == MARSHAL_JOIN ? "R\tJ\t" : "R\tS\t") + std::to_string(action);
++                break;
++            }
++            case MARSHAL_LEAVE:
++                line = "R\tX";
++                break;
++            case MARSHAL_FINDER:
++                line = "R\tFinder";
++                break;
++            case MARSHAL_HELP:
++                player->PlayerTalkClass->GetGossipMenu().AddMenuItem(GOSSIP_ICON_CHAT, "Back", MARSHAL_BACK, 0, "", false);
++                player->PlayerTalkClass->SendGossipMenu(MARSHAL_HELP_TEXT, marshal->GetObjectGuid());
++                return true;
++            case MARSHAL_BACK:
++                return MarshalHello(player, marshal);
++        }
++        player->PlayerTalkClass->CloseGossip();
++        if (line.empty())
++            return true;
++        ObjectGuid const guid = player->GetObjectGuid();
++        sWorld.GetMessager().AddMessage([guid, line](World*)
++        {
++            Player* p = ObjectAccessor::FindPlayer(guid);
++            if (!p || !p->IsInWorld())
++                return;
++            if (line == "R\tFinder")
++            {
++                // The client opens its Race Finder at this line.
++                SendLine(p, PREFIX + line);
++                return;
++            }
++            // Hosting or joining on foot: into the kart first, as a Race Finder pop does.
++            bool const enters = line.compare(0, 4, "R\tH\t") == 0 || line.compare(0, 4, "R\tJ\t") == 0;
++            if (enters && CanBeRacedOff(p))
++                SummonKart(p);
++            HandleLine(p, line, true);
++        });
++        return true;
++    }
++
++    void RegisterScripts()
++    {
++        // ScriptMgr keeps it only if creature_template names it (sql/kartcraft.sql), and frees it.
++        Script* marshal = new Script;
++        marshal->Name = "npc_kartcraft_marshal";
++        marshal->pGossipHello = &MarshalHello;
++        marshal->pGossipSelect = &MarshalSelect;
++        marshal->RegisterSelf(true);
 +    }
 +
 +    SpellCastResult CheckCast(Unit const* caster, SpellEntry const* spell)
@@ -1625,10 +1834,10 @@ index 0000000..667131b
 +}
 diff --git a/src/game/Kartcraft.h b/src/game/Kartcraft.h
 new file mode 100644
-index 0000000..c12c7d5
+index 0000000..aff1e99
 --- /dev/null
 +++ b/src/game/Kartcraft.h
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,46 @@
 +/*
 + * World of Kartcraft: Karting, a secondary profession levelled by chaining kart turbos.
 + *
@@ -1670,15 +1879,17 @@ index 0000000..c12c7d5
 +    bool HandleAddonMessage(Player* player, std::string const& message);
 +    // Extra cast checks for the kart spells. SPELL_CAST_OK otherwise.
 +    SpellCastResult CheckCast(Unit const* caster, SpellEntry const* spell);
++    // After ScriptMgr::Initialize: the Race Marshal's gossip (npc_kartcraft_marshal).
++    void RegisterScripts();
 +}
 +
 +#endif
 diff --git a/src/game/KartcraftCourses.h b/src/game/KartcraftCourses.h
 new file mode 100644
-index 0000000..2fb49b4
+index 0000000..0d2710a
 --- /dev/null
 +++ b/src/game/KartcraftCourses.h
-@@ -0,0 +1,2370 @@
+@@ -0,0 +1,2577 @@
 +// Generated by setup/vmangos/pack.py from courses/courses.json (docs/courses.md): edit
 +// that file and rerun pack.py. Included by Kartcraft.cpp inside namespace Kartcraft,
 +// after Course and CrateSpot.
@@ -1690,14 +1901,16 @@ index 0000000..2fb49b4
 +          { { -8930.f, -118.f }, { -8989.f, -96.f }, { -9040.f, -60.f }, { -9076.f, -46.f },
 +            { -9123.f, -84.f }, { -9228.f, -105.f }, { -9346.f, -45.f }, { -9436.f, 59.f } },
 +          {},
-+          {} },
++          {},
++          { -8933.5f, -127.4f } },
 +        // Road to Stormwind (Elwynn Forest): From Goldshire up the road to the city's gate guard
 +        // 99140.
 +        { "stormwind", "Road to Stormwind", "Elwynn Forest", 0, 0,
 +          { { -9436.f, 59.f }, { -9350.f, 150.f }, { -9250.f, 260.f }, { -9165.f, 352.f },
 +            { -9121.f, 395.f }, { -9073.f, 427.f } },
 +          {},
-+          {} },
++          {},
++          { -9443.3f, 65.9f } },
 +        // Goldshire & Crystal Lake (Elwynn Forest): Generated by course-gen (Goldshire & Crystal
 +        // Lake Circuit, seed 1001260): 2.38 km, test lap 66.6s.
 +        { "elwynn-goldshire-crystal", "Goldshire & Crystal Lake", "Elwynn Forest", 0, 3,
@@ -1709,7 +1922,8 @@ index 0000000..2fb49b4
 +          { 15.f, 17.7f, 15.f, 17.f, 25.f, 15.f, 23.f, 15.f,
 +            15.f, 15.f, 18.4f, 15.f, 25.f, 15.f, 17.f, 25.f,
 +            15.f, 15.f, 15.f },
-+          {} },
++          {},
++          { -9372.9f, -14.3f } },
 +        // Crystal Lake & Tower of Azora (Elwynn Forest): Generated by course-gen (Crystal Lake &
 +        // Tower of Azora Circuit, seed 1001063): 2.22 km, test lap 64.2s.
 +        { "elwynn-crystal-azora", "Crystal Lake & Tower of Azora", "Elwynn Forest", 0, 3,
@@ -1722,7 +1936,8 @@ index 0000000..2fb49b4
 +          { 15.f, 17.7f, 15.f, 25.f, 25.f, 15.f, 17.f, 15.f,
 +            17.7f, 20.3f, 15.f, 15.f, 20.3f, 15.f, 25.f, 21.2f,
 +            15.8f, 22.5f, 20.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -9597.1f, -478.8f } },
 +        // The Stonefield Farm & Fargodeep Mine (Elwynn Forest): Generated by course-gen (The
 +        // Stonefield Farm & Fargodeep Mine Circuit, seed 1002378): 1.83 km, test lap 51.4s.
 +        { "elwynn-stonefield-fargodeep", "The Stonefield Farm & Fargodeep Mine", "Elwynn Forest", 0, 3,
@@ -1732,7 +1947,8 @@ index 0000000..2fb49b4
 +            { -9888.4f, 280.3f }, { -9934.7f, 383.9f }, { -10024.6f, 437.8f } },
 +          { 25.f, 25.f, 24.2f, 25.f, 23.f, 15.f, 17.f, 15.8f,
 +            15.f, 15.f, 22.5f, 25.f, 15.f, 20.3f, 25.f },
-+          {} },
++          {},
++          { -9997.8f, 318.8f } },
 +        // Fargodeep Mine & The Maclure Vineyards (Elwynn Forest): Generated by course-gen
 +        // (Fargodeep Mine & The Maclure Vineyards Circuit, seed 1001039): 2.62 km, test lap 76.1s.
 +        { "elwynn-fargodeep-maclure", "Fargodeep Mine & The Maclure Vineyards", "Elwynn Forest", 0, 3,
@@ -1745,7 +1961,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 15.f, 15.f, 25.f, 15.f, 15.f, 15.f,
 +            15.f, 23.f, 15.f, 15.f, 15.f, 25.f, 15.f, 15.f,
 +            17.f, 15.f, 15.f, 22.5f, 17.4f },
-+          {} },
++          {},
++          { -9608.3f, -79.f } },
 +        // The Maclure Vineyards & Crystal Lake (Elwynn Forest): Generated by course-gen (The
 +        // Maclure Vineyards & Crystal Lake Circuit, seed 1001561): 2.56 km, test lap 70.8s.
 +        { "elwynn-maclure-crystal", "The Maclure Vineyards & Crystal Lake", "Elwynn Forest", 0, 3,
@@ -1758,7 +1975,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 17.f, 25.f, 15.f, 15.f, 25.f, 25.f,
 +            15.f, 20.f, 24.2f, 15.f, 15.f, 25.f, 25.f, 15.f,
 +            15.8f, 18.4f, 15.f, 24.2f, 20.f, 20.f },
-+          {} },
++          {},
++          { -9680.4f, -541.5f } },
 +        // Tower of Azora & Jasperlode Mine (Elwynn Forest): Generated by course-gen (Tower of Azora
 +        // & Jasperlode Mine Circuit, seed 1002884): 1.11 km, test lap 30.9s.
 +        { "elwynn-azora-jasperlode", "Tower of Azora & Jasperlode Mine", "Elwynn Forest", 0, 3,
@@ -1767,7 +1985,8 @@ index 0000000..2fb49b4
 +            { -9358.5f, -598.4f }, { -9486.3f, -587.3f } },
 +          { 20.f, 25.f, 25.f, 15.f, 15.f, 15.f, 25.f, 21.2f,
 +            25.f, 20.f },
-+          {} },
++          {},
++          { -9613.f, -585.f } },
 +        // Brackwell Pumpkin Patch & Tower of Azora (Elwynn Forest): Generated by course-gen
 +        // (Brackwell Pumpkin Patch & Tower of Azora Circuit, seed 1000507): 1.62 km, test lap
 +        // 46.8s.
@@ -1778,7 +1997,8 @@ index 0000000..2fb49b4
 +            { -9552.3f, -632.8f }, { -9594.1f, -468.2f } },
 +          { 21.2f, 15.f, 15.f, 20.f, 15.f, 15.f, 15.f, 20.f,
 +            23.f, 15.f, 25.f, 15.f, 15.f, 15.f },
-+          {} },
++          {},
++          { -9662.7f, -429.9f } },
 +        // Brackwell Pumpkin Patch to Elwynn Forest (Elwynn Forest): Generated by course-gen
 +        // (Brackwell Pumpkin Patch to Elwynn Forest Sprint, seed 1002781): 1.54 km, test lap 42.4s.
 +        { "elwynn-brackwell-wilds-sprint", "Brackwell Pumpkin Patch to Elwynn Forest", "Elwynn Forest", 0, 0,
@@ -1788,7 +2008,8 @@ index 0000000..2fb49b4
 +            { -9082.f, 416.7f } },
 +          { 25.f, 15.f, 25.f, 25.f, 15.f, 15.f, 25.f, 25.f,
 +            15.f, 17.4f, 15.f, 15.f, 25.f },
-+          {} },
++          {},
++          { -9808.5f, -867.7f } },
 +        // Jangolode Mine & Saldean's Farm (Westfall): Generated by course-gen (Jangolode Mine &
 +        // Saldean's Farm Circuit, seed 1001133): 2.03 km, test lap 54.5s.
 +        { "westfall-jangolode-saldean", "Jangolode Mine & Saldean's Farm", "Westfall", 0, 3,
@@ -1800,7 +2021,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 23.f,
 +            25.f, 17.7f, 25.f, 25.f, 23.f, 17.4f, 25.f, 23.2f,
 +            25.f },
-+          {} },
++          {},
++          { -9956.f, 1637.8f } },
 +        // Longshore & Saldean's Farm (Westfall): Generated by course-gen (Longshore & Saldean's
 +        // Farm Circuit, seed 1000823): 2.13 km, test lap 59.2s.
 +        { "westfall-longshore-saldean", "Longshore & Saldean's Farm", "Westfall", 0, 3,
@@ -1812,7 +2034,8 @@ index 0000000..2fb49b4
 +          { 25.f, 15.f, 25.f, 18.4f, 25.f, 17.7f, 25.f, 25.f,
 +            25.f, 15.f, 15.f, 25.f, 15.f, 25.f, 25.f, 25.f,
 +            25.f },
-+          {} },
++          {},
++          { -9869.4f, 1631.6f } },
 +        // Stendel's Pond & Sentinel Hill (Westfall): Generated by course-gen (Stendel's Pond &
 +        // Sentinel Hill Circuit, seed 1001101): 2.21 km, test lap 61.0s.
 +        { "westfall-stendel-sentinel", "Stendel's Pond & Sentinel Hill", "Westfall", 0, 3,
@@ -1824,7 +2047,8 @@ index 0000000..2fb49b4
 +          { 25.f, 15.8f, 25.f, 25.f, 25.f, 25.f, 25.f, 17.4f,
 +            25.f, 25.f, 25.f, 24.2f, 25.f, 25.f, 15.f, 25.f,
 +            20.f, 25.f },
-+          {} },
++          {},
++          { -10805.8f, 1270.7f } },
 +        // Longshore & Demont's Place (Westfall): Generated by course-gen (Longshore & Demont's
 +        // Place Circuit, seed 1001390): 3.07 km, test lap 82.7s.
 +        { "westfall-longshore-demont", "Longshore & Demont's Place", "Westfall", 0, 3,
@@ -1839,7 +2063,8 @@ index 0000000..2fb49b4
 +            25.f, 25.f, 15.f, 25.f, 20.f, 25.f, 25.f, 25.f,
 +            25.f, 15.f, 25.f, 21.2f, 25.f, 25.f, 25.f, 25.f,
 +            15.f },
-+          {} },
++          {},
++          { -10861.8f, 1583.7f } },
 +        // Demont's Place & The Dust Plains (Westfall): Generated by course-gen (Demont's Place &
 +        // The Dust Plains Circuit, seed 1000666): 2.99 km, test lap 82.8s.
 +        { "westfall-demont-dust", "Demont's Place & The Dust Plains", "Westfall", 0, 3,
@@ -1852,7 +2077,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 15.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 20.f,
 +            23.2f, 20.f, 25.f, 25.f, 15.f, 15.f, 25.f },
-+          {} },
++          {},
++          { -10672.5f, 1383.4f } },
 +        // Longshore & Furlbrow's Pumpkin Farm (Westfall): Generated by course-gen (Longshore &
 +        // Furlbrow's Pumpkin Farm Circuit, seed 1002077): 2.42 km, test lap 65.2s.
 +        { "westfall-longshore-furlbrow", "Longshore & Furlbrow's Pumpkin Farm", "Westfall", 0, 3,
@@ -1864,7 +2090,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 20.3f, 25.f,
 +            21.2f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            15.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -10344.7f, 1630.4f } },
 +        // Longshore & Alexston Farmstead (Westfall): Generated by course-gen (Longshore & Alexston
 +        // Farmstead Circuit, seed 1001602): 3.07 km, test lap 84.1s.
 +        { "westfall-longshore-alexston", "Longshore & Alexston Farmstead", "Westfall", 0, 3,
@@ -1877,7 +2104,8 @@ index 0000000..2fb49b4
 +          { 23.2f, 15.f, 25.f, 15.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 15.f, 25.f, 25.f, 15.f, 25.f,
 +            25.f, 15.f, 25.f, 15.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -10724.1f, 1034.3f } },
 +        // The Molsen Farm & Sentinel Hill (Westfall): Generated by course-gen (The Molsen Farm &
 +        // Sentinel Hill Circuit, seed 1002842): 2.16 km, test lap 59.1s.
 +        { "westfall-molsen-sentinel", "The Molsen Farm & Sentinel Hill", "Westfall", 0, 3,
@@ -1889,7 +2117,8 @@ index 0000000..2fb49b4
 +          { 25.f, 20.f, 25.f, 25.f, 22.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 15.f, 23.2f, 25.f,
 +            25.f, 25.f },
-+          {} },
++          {},
++          { -10081.8f, 935.3f } },
 +        // Misty Pine Refuge to Dun Morogh Sprint (Dun Morogh): Generated by course-gen (Misty Pine
 +        // Refuge to Dun Morogh Sprint, seed 1000616): 3.08 km, test lap 93.1s.
 +        { "dunmorogh-misty-wilds-sprint", "Misty Pine Refuge to Dun Morogh Sprint", "Dun Morogh", 0, 0,
@@ -1904,7 +2133,8 @@ index 0000000..2fb49b4
 +            15.f, 15.f, 15.f, 23.f, 25.f, 25.f, 25.f, 25.f,
 +            15.f, 25.f, 15.8f, 25.f, 15.f, 25.f, 25.f, 17.7f,
 +            25.f },
-+          {} },
++          {},
++          { -5347.8f, -988.5f } },
 +        // Iceflow Lake & Brewnall Village (Dun Morogh): Generated by course-gen (Iceflow Lake &
 +        // Brewnall Village Circuit, seed 1000255): 1.48 km, test lap 45.3s.
 +        { "dunmorogh-iceflow-brewnall", "Iceflow Lake & Brewnall Village", "Dun Morogh", 0, 3,
@@ -1914,7 +2144,8 @@ index 0000000..2fb49b4
 +            { -5060.1f, 76.1f }, { -5033.9f, 194.f }, { -5122.1f, 221.1f } },
 +          { 25.f, 25.f, 25.f, 25.f, 15.f, 15.f, 25.f, 20.f,
 +            25.f, 15.f, 25.f, 15.f, 25.f, 18.4f, 20.f },
-+          {} },
++          {},
++          { -5200.5f, 276.4f } },
 +        // Algaz Station to Farstrider Lodge Sprint (Loch Modan): Generated by course-gen (Algaz
 +        // Station to The Farstrider Lodge Sprint, seed 1000538): 3.54 km, test lap 100.3s.
 +        { "lochmodan-algaz-farstride-sprint", "Algaz Station to Farstrider Lodge Sprint", "Loch Modan", 0, 0,
@@ -1929,7 +2160,8 @@ index 0000000..2fb49b4
 +            25.f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f, 17.f,
 +            15.f, 15.f, 15.f, 15.8f, 15.f, 18.4f, 24.f, 25.f,
 +            15.f, 25.f, 15.f, 25.f },
-+          {} },
++          {},
++          { -4862.9f, -2742.1f } },
 +        // Silver Stream Mine & Thelsamar (Loch Modan): Generated by course-gen (Silver Stream Mine
 +        // & Thelsamar Circuit, seed 1001424): 1.93 km, test lap 62.7s.
 +        { "lochmodan-silver-thelsamar", "Silver Stream Mine & Thelsamar", "Loch Modan", 0, 3,
@@ -1939,7 +2171,8 @@ index 0000000..2fb49b4
 +            { -4840.6f, -2717.2f }, { -4937.5f, -2763.8f }, { -5040.3f, -2764.f }, { -5156.2f, -2818.7f } },
 +          { 25.f, 17.f, 25.f, 25.f, 15.f, 25.f, 15.f, 15.f,
 +            25.f, 15.f, 25.f, 15.f, 18.4f, 22.f, 15.f, 15.f },
-+          {} },
++          {},
++          { -5280.1f, -2813.1f } },
 +        // Mo'grosh Stronghold & The Loch (Loch Modan): Generated by course-gen (Mo'grosh Stronghold
 +        // & The Loch Circuit, seed 1001203): 1.50 km, test lap 46.6s.
 +        { "lochmodan-mo-loch", "Mo'grosh Stronghold & The Loch", "Loch Modan", 0, 3,
@@ -1949,7 +2182,8 @@ index 0000000..2fb49b4
 +            { -5082.3f, -3773.9f } },
 +          { 25.f, 15.f, 25.f, 25.f, 22.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 15.f, 22.5f, 15.f },
-+          {} },
++          {},
++          { -5150.4f, -3863.8f } },
 +        // Ironband's Excavation Site & The Loch (Loch Modan): Generated by course-gen (Ironband's
 +        // Excavation Site & The Loch Circuit, seed 1001293): 1.27 km, test lap 42.1s.
 +        { "lochmodan-ironband-loch", "Ironband's Excavation Site & The Loch", "Loch Modan", 0, 3,
@@ -1958,7 +2192,8 @@ index 0000000..2fb49b4
 +            { -5544.9f, -3732.5f }, { -5646.7f, -3680.1f }, { -5540.2f, -3688.3f } },
 +          { 25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 25.f, 25.f,
 +            25.f, 15.f, 17.f },
-+          {} },
++          {},
++          { -5424.9f, -3725.5f } },
 +        // Silver Stream Mine (Loch Modan): Generated by course-gen (Silver Stream Mine Circuit,
 +        // seed 1001385): 1.09 km, test lap 38.8s.
 +        { "lochmodan-silver", "Silver Stream Mine", "Loch Modan", 0, 3,
@@ -1967,7 +2202,8 @@ index 0000000..2fb49b4
 +            { -4992.3f, -2833.9f }, { -4931.2f, -2742.8f }, { -5024.f, -2756.2f } },
 +          { 22.5f, 15.f, 23.f, 25.f, 25.f, 15.f, 17.f, 21.2f,
 +            21.2f, 15.f, 24.2f },
-+          {} },
++          {},
++          { -5105.4f, -2810.7f } },
 +        // The Hushed Bank & The Darkened Bank (Duskwood): Generated by course-gen (The Hushed Bank
 +        // & The Darkened Bank Circuit, seed 1000698): 1.89 km, test lap 55.5s.
 +        { "duskwood-hushed-darkened", "The Hushed Bank & The Darkened Bank", "Duskwood", 0, 3,
@@ -1977,7 +2213,8 @@ index 0000000..2fb49b4
 +            { -10455.3f, 609.7f }, { -10566.2f, 558.5f }, { -10674.4f, 496.8f }, { -10636.8f, 405.4f } },
 +          { 25.f, 25.f, 25.f, 17.7f, 23.f, 15.f, 20.f, 24.f,
 +            25.f, 22.5f, 15.f, 25.f, 25.f, 25.f, 15.f, 15.f },
-+          {} },
++          {},
++          { -10654.1f, 273.1f } },
 +        // Brightwood Grove & The Darkened Bank (Duskwood): Generated by course-gen (Brightwood
 +        // Grove & The Darkened Bank Circuit, seed 1000516): 1.57 km, test lap 49.6s.
 +        { "duskwood-brightwood-darkened", "Brightwood Grove & The Darkened Bank", "Duskwood", 0, 3,
@@ -1987,7 +2224,8 @@ index 0000000..2fb49b4
 +            { -10535.2f, -922.9f } },
 +          { 25.f, 25.f, 17.7f, 21.2f, 25.f, 25.f, 25.f, 20.3f,
 +            15.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -10400.6f, -957.6f } },
 +        // The Darkened Bank & The Hushed Bank (Duskwood): Generated by course-gen (The Darkened
 +        // Bank & The Hushed Bank Circuit, seed 1000509): 1.29 km, test lap 44.1s.
 +        { "duskwood-darkened-hushed", "The Darkened Bank & The Hushed Bank", "Duskwood", 0, 3,
@@ -1996,7 +2234,8 @@ index 0000000..2fb49b4
 +            { -10222.6f, 225.2f }, { -10244.7f, 132.3f }, { -10177.4f, 172.8f }, { -10162.6f, 260.3f } },
 +          { 25.f, 25.f, 25.f, 15.f, 15.f, 25.f, 20.f, 25.f,
 +            21.2f, 25.f, 15.f, 15.f },
-+          {} },
++          {},
++          { -10245.4f, 375.2f } },
 +        // Addle's Stead to Brightwood Grove Sprint (Duskwood): Generated by course-gen (Addle's
 +        // Stead to Brightwood Grove Sprint, seed 1001426): 2.28 km, test lap 63.6s.
 +        { "duskwood-addle-brightwood-sprint", "Addle's Stead to Brightwood Grove Sprint", "Duskwood", 0, 0,
@@ -2008,7 +2247,8 @@ index 0000000..2fb49b4
 +          { 25.f, 15.8f, 15.f, 18.4f, 21.2f, 24.2f, 17.4f, 15.f,
 +            15.f, 25.f, 15.f, 25.f, 15.f, 25.f, 15.8f, 20.f,
 +            25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -10845.5f, 216.f } },
 +        // The Darkened Bank & Brightwood Grove (Duskwood): Generated by course-gen (The Darkened
 +        // Bank & Brightwood Grove Circuit, seed 1001033): 1.29 km, test lap 39.1s.
 +        { "duskwood-darkened-brightwood", "The Darkened Bank & Brightwood Grove", "Duskwood", 0, 3,
@@ -2017,7 +2257,8 @@ index 0000000..2fb49b4
 +            { -9986.4f, -795.4f }, { -9975.f, -677.6f }, { -9957.4f, -567.3f } },
 +          { 25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 15.f, 17.f,
 +            17.f, 25.f, 15.f },
-+          {} },
++          {},
++          { -10028.6f, -709.f } },
 +        // The Green Belt & Ironbeard's Tomb (Wetlands): Generated by course-gen (The Green Belt &
 +        // Ironbeard's Tomb Circuit, seed 1000699): 2.26 km, test lap 66.4s.
 +        { "wetlands-green-ironbeard", "The Green Belt & Ironbeard's Tomb", "Wetlands", 0, 3,
@@ -2029,7 +2270,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 23.f, 25.f,
 +            15.f, 15.f, 25.f, 15.f, 15.f, 25.f, 25.f, 25.f,
 +            15.f, 15.f },
-+          {} },
++          {},
++          { -3179.6f, -2783.4f } },
 +        // Thandol Span to Sundown Marsh Sprint (Wetlands): Generated by course-gen (Thandol Span to
 +        // Sundown Marsh Sprint, seed 1000303): 1.90 km, test lap 56.8s.
 +        { "wetlands-thandol-sundown-sprint", "Thandol Span to Sundown Marsh Sprint", "Wetlands", 0, 0,
@@ -2041,7 +2283,8 @@ index 0000000..2fb49b4
 +          { 24.f, 20.f, 15.f, 15.f, 17.4f, 25.f, 25.f, 24.f,
 +            17.4f, 25.f, 25.f, 25.f, 18.4f, 25.f, 15.f, 25.f,
 +            25.f },
-+          {} },
++          {},
++          { -2456.6f, -2474.3f } },
 +        // Dragonmaw Gates to Dun Modr Sprint (Wetlands): Generated by course-gen (Dragonmaw Gates
 +        // to Dun Modr Sprint, seed 1000622): 1.73 km, test lap 47.1s.
 +        { "wetlands-dragonmaw-dun-sprint", "Dragonmaw Gates to Dun Modr Sprint", "Wetlands", 0, 0,
@@ -2051,7 +2294,8 @@ index 0000000..2fb49b4
 +            { -2758.f, -2517.2f }, { -2619.3f, -2472.7f } },
 +          { 25.f, 25.f, 17.f, 25.f, 25.f, 25.f, 23.f, 15.f,
 +            25.f, 25.f, 25.f, 23.f, 15.f, 25.f },
-+          {} },
++          {},
++          { -3473.3f, -3663.9f } },
 +        // Wetlands to Thandol Span Sprint (Wetlands): Generated by course-gen (Wetlands to Thandol
 +        // Span Sprint, seed 1001319): 1.52 km, test lap 45.3s.
 +        { "wetlands-wilds-thandol-sprint", "Wetlands to Thandol Span Sprint", "Wetlands", 0, 0,
@@ -2061,7 +2305,8 @@ index 0000000..2fb49b4
 +            { -2583.3f, -2498.1f }, { -2463.3f, -2504.7f } },
 +          { 25.f, 21.2f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            15.8f, 15.8f, 25.f, 15.f, 20.f, 25.f },
-+          {} },
++          {},
++          { -3412.5f, -2984.f } },
 +        // Mosshide Fen & The Green Belt (Wetlands): Generated by course-gen (Mosshide Fen & The
 +        // Green Belt Circuit, seed 1000520): 1.34 km, test lap 39.4s.
 +        { "wetlands-mosshide-green", "Mosshide Fen & The Green Belt", "Wetlands", 0, 3,
@@ -2070,7 +2315,8 @@ index 0000000..2fb49b4
 +            { -3562.1f, -2979.4f }, { -3692.2f, -3031.f }, { -3827.6f, -3052.8f } },
 +          { 25.f, 25.f, 25.f, 15.8f, 25.f, 25.f, 25.f, 17.4f,
 +            25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -3698.5f, -3129.9f } },
 +        // Wetlands to Dragonmaw Gates Sprint (Wetlands): Generated by course-gen (Wetlands to
 +        // Dragonmaw Gates Sprint, seed 1001295): 1.93 km, test lap 52.5s.
 +        { "wetlands-wilds-dragonmaw-sprint", "Wetlands to Dragonmaw Gates Sprint", "Wetlands", 0, 0,
@@ -2080,7 +2326,8 @@ index 0000000..2fb49b4
 +            { -3440.1f, -3367.4f }, { -3450.1f, -3513.8f }, { -3463.3f, -3664.7f } },
 +          { 25.f, 24.f, 25.f, 20.f, 15.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 15.8f, 25.f, 25.f },
-+          {} },
++          {},
++          { -2701.5f, -1802.4f } },
 +        // Thandol Span to Raptor Ridge Sprint (Wetlands): Generated by course-gen (Thandol Span to
 +        // Raptor Ridge Sprint, seed 1001017): 1.82 km, test lap 53.2s.
 +        { "wetlands-thandol-raptor-sprint", "Thandol Span to Raptor Ridge Sprint", "Wetlands", 0, 0,
@@ -2090,7 +2337,8 @@ index 0000000..2fb49b4
 +            { -3406.9f, -3537.6f }, { -3310.6f, -3475.f }, { -3239.3f, -3364.7f } },
 +          { 24.f, 20.f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 23.f, 18.4f, 17.7f, 15.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -2456.6f, -2474.3f } },
 +        // Circle of Inner Binding & Boulder'gor (Arathi Highlands): Generated by course-gen (Circle
 +        // of Inner Binding & Boulder'gor Circuit, seed 1001366): 2.28 km, test lap 70.5s.
 +        { "arathi-circle-boulder", "Circle of Inner Binding & Boulder'gor", "Arathi Highlands", 0, 3,
@@ -2102,7 +2350,8 @@ index 0000000..2fb49b4
 +          { 25.f, 15.f, 25.f, 15.f, 25.f, 25.f, 15.f, 17.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 17.7f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 24.2f },
-+          {} },
++          {},
++          { -1557.1f, -2221.6f } },
 +        // Boulderfist Hall & Circle Outer Binding (Arathi Highlands): Generated by course-gen
 +        // (Boulderfist Hall & Circle of Outer Binding Circuit, seed 1001293): 1.79 km, test lap
 +        // 51.9s.
@@ -2113,7 +2362,8 @@ index 0000000..2fb49b4
 +            { -1362.5f, -2548.8f }, { -1474.5f, -2540.5f } },
 +          { 22.f, 25.f, 15.f, 23.f, 15.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -1582.1f, -2508.1f } },
 +        // Circle of Inner Binding & Boulder'gor II (Arathi Highlands): Generated by course-gen
 +        // (Circle of Inner Binding & Boulder'gor Circuit II, seed 1001186): 2.84 km, test lap
 +        // 80.2s.
@@ -2127,7 +2377,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 25.f, 25.f,
 +            15.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 21.2f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -1061.7f, -2311.1f } },
 +        // Witherbark Village & Go'Shek Farm (Arathi Highlands): Generated by course-gen (Witherbark
 +        // Village & Go'Shek Farm Circuit, seed 1000235): 2.00 km, test lap 60.8s.
 +        { "arathi-witherbark-gohek", "Witherbark Village & Go'Shek Farm", "Arathi Highlands", 0, 3,
@@ -2137,7 +2388,8 @@ index 0000000..2fb49b4
 +            { -1242.4f, -3365.9f }, { -1218.f, -3246.8f }, { -1232.f, -3119.5f }, { -1306.2f, -3015.6f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 15.f, 17.4f, 15.f,
 +            22.f, 15.f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -1421.9f, -2961.9f } },
 +        // Circle of Inner Binding & Refuge Pointe (Arathi Highlands): Generated by course-gen
 +        // (Circle of Inner Binding & Refuge Pointe Circuit, seed 1000103): 2.10 km, test lap 63.3s.
 +        { "arathi-circle-refuge", "Circle of Inner Binding & Refuge Pointe", "Arathi Highlands", 0, 3,
@@ -2147,7 +2399,8 @@ index 0000000..2fb49b4
 +            { -1599.3f, -2252.7f }, { -1489.7f, -2262.3f }, { -1412.1f, -2385.4f }, { -1271.2f, -2426.8f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 15.f,
 +            25.f, 15.f, 22.f, 25.f, 21.2f, 15.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -1129.8f, -2483.7f } },
 +        // Go'Shek Farm & Refuge Pointe (Arathi Highlands): Generated by course-gen (Go'Shek Farm &
 +        // Refuge Pointe Circuit, seed 1000364): 1.96 km, test lap 54.4s.
 +        { "arathi-gohek-refuge", "Go'Shek Farm & Refuge Pointe", "Arathi Highlands", 0, 3,
@@ -2157,7 +2410,8 @@ index 0000000..2fb49b4
 +            { -1514.5f, -2693.4f }, { -1624.2f, -2661.1f }, { -1693.1f, -2765.8f }, { -1704.7f, -2893.8f } },
 +          { 25.f, 17.4f, 25.f, 24.2f, 25.f, 25.f, 25.f, 25.f,
 +            15.f, 15.f, 25.f, 25.f, 20.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -1704.f, -3021.2f } },
 +        // Northfold Manor & Refuge Pointe (Arathi Highlands): Generated by course-gen (Northfold
 +        // Manor & Refuge Pointe Circuit, seed 1000800): 2.51 km, test lap 69.3s.
 +        { "arathi-northfold-refuge", "Northfold Manor & Refuge Pointe", "Arathi Highlands", 0, 3,
@@ -2170,7 +2424,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 18.4f, 25.f, 25.f,
 +            25.f, 15.f, 25.f, 25.f, 25.f, 23.f, 25.f, 25.f,
 +            15.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -1368.6f, -1995.4f } },
 +        // Go'Shek Farm & Circle of Outer Binding (Arathi Highlands): Generated by course-gen
 +        // (Go'Shek Farm & Circle of Outer Binding Circuit, seed 1000609): 2.81 km, test lap 78.9s.
 +        { "arathi-gohek-circle", "Go'Shek Farm & Circle of Outer Binding", "Arathi Highlands", 0, 3,
@@ -2183,7 +2438,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 15.f, 25.f, 25.f, 25.f, 15.8f, 15.f,
 +            21.2f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -1252.f, -2803.4f } },
 +        // Hillsbrad Fields & Southshore (Hillsbrad Foothills): Generated by course-gen (Hillsbrad
 +        // Fields & Southshore Circuit, seed 1000982): 2.15 km, test lap 59.1s.
 +        { "hillsbrad-fields-southshore", "Hillsbrad Fields & Southshore", "Hillsbrad Foothills", 0, 3,
@@ -2195,7 +2451,8 @@ index 0000000..2fb49b4
 +          { 25.f, 23.f, 25.f, 24.2f, 25.f, 25.f, 25.f, 23.2f,
 +            20.f, 25.f, 23.2f, 15.f, 15.f, 25.f, 22.5f, 25.f,
 +            25.f, 25.f },
-+          {} },
++          {},
++          { -330.5f, -107.3f } },
 +        // Tarren Mill & Darrow Hill (Hillsbrad Foothills): Generated by course-gen (Tarren Mill &
 +        // Darrow Hill Circuit, seed 1001166): 1.87 km, test lap 54.9s.
 +        { "hillsbrad-tarren-darrow", "Tarren Mill & Darrow Hill", "Hillsbrad Foothills", 0, 3,
@@ -2207,7 +2464,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 15.f, 25.f, 25.f, 15.f, 25.f,
 +            25.f, 25.f, 22.f, 15.f, 15.f, 25.f, 25.f, 25.f,
 +            17.f },
-+          {} },
++          {},
++          { -274.3f, -629.2f } },
 +        // Tarren Mill to Western Strand Sprint (Hillsbrad Foothills): Generated by course-gen
 +        // (Tarren Mill to Western Strand Sprint, seed 1000294): 1.71 km, test lap 47.3s.
 +        { "hillsbrad-tarren-western-sprint", "Tarren Mill to Western Strand Sprint", "Hillsbrad Foothills", 0, 0,
@@ -2217,7 +2475,8 @@ index 0000000..2fb49b4
 +            { -949.f, -106.3f }, { -1002.1f, -133.9f }, { -1044.7f, -58.f } },
 +          { 25.f, 15.f, 25.f, 15.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 15.f, 25.f, 25.f, 15.f, 15.f, 25.f },
-+          {} },
++          {},
++          { -177.f, -1064.f } },
 +        // Hillsbrad Fields & Darrow Hill (Hillsbrad Foothills): Generated by course-gen (Hillsbrad
 +        // Fields & Darrow Hill Circuit, seed 1000581): 1.58 km, test lap 45.1s.
 +        { "hillsbrad-fields-darrow", "Hillsbrad Fields & Darrow Hill", "Hillsbrad Foothills", 0, 3,
@@ -2227,7 +2486,8 @@ index 0000000..2fb49b4
 +            { -605.9f, -493.9f } },
 +          { 25.f, 25.f, 25.f, 15.f, 25.f, 25.f, 23.f, 25.f,
 +            25.f, 20.3f, 25.f, 15.f, 25.f },
-+          {} },
++          {},
++          { -441.f, -519.5f } },
 +        // Hillsbrad Fields & Azurelode Mine (Hillsbrad Foothills): Generated by course-gen
 +        // (Hillsbrad Fields & Azurelode Mine Circuit, seed 1000556): 2.01 km, test lap 58.7s.
 +        { "hillsbrad-fields-azurelode", "Hillsbrad Fields & Azurelode Mine", "Hillsbrad Foothills", 0, 3,
@@ -2237,7 +2497,8 @@ index 0000000..2fb49b4
 +            { -565.2f, 513.9f }, { -600.f, 371.3f }, { -602.7f, 216.6f }, { -667.f, 157.7f } },
 +          { 25.f, 25.f, 25.f, 25.f, 24.2f, 15.f, 15.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 20.f, 15.8f, 15.f, 25.f },
-+          {} },
++          {},
++          { -749.3f, 110.6f } },
 +        // Hillsbrad Fields & Southshore II (Hillsbrad Foothills): Generated by course-gen
 +        // (Hillsbrad Fields & Southshore Circuit II, seed 1000823): 2.00 km, test lap 63.3s.
 +        { "hillsbrad-fields-southshore-2", "Hillsbrad Fields & Southshore II", "Hillsbrad Foothills", 0, 3,
@@ -2249,7 +2510,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 20.3f, 22.f, 24.2f,
 +            15.f, 17.f, 25.f, 17.7f, 15.f, 25.f, 25.f, 15.f,
 +            25.f },
-+          {} },
++          {},
++          { -303.3f, -571.f } },
 +        // Darrow Hill & Southshore (Hillsbrad Foothills): Generated by course-gen (Darrow Hill &
 +        // Southshore Circuit, seed 1000266): 1.87 km, test lap 56.1s.
 +        { "hillsbrad-darrow-southshore", "Darrow Hill & Southshore", "Hillsbrad Foothills", 0, 3,
@@ -2259,7 +2521,8 @@ index 0000000..2fb49b4
 +            { -371.9f, -631.5f }, { -294.8f, -536.2f }, { -200.8f, -455.3f }, { -287.8f, -428.2f } },
 +          { 25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 25.f, 20.f,
 +            15.f, 20.f, 25.f, 25.f, 23.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -378.2f, -394.4f } },
 +        // Hillsbrad Fields & Azurelode Mine II (Hillsbrad Foothills): Generated by course-gen
 +        // (Hillsbrad Fields & Azurelode Mine Circuit II, seed 1001120): 1.19 km, test lap 39.0s.
 +        { "hillsbrad-fields-azurelode-2", "Hillsbrad Fields & Azurelode Mine II", "Hillsbrad Foothills", 0, 3,
@@ -2268,7 +2531,8 @@ index 0000000..2fb49b4
 +            { -906.2f, -202.8f }, { -811.9f, -203.5f }, { -704.5f, -202.9f } },
 +          { 15.8f, 25.f, 25.f, 25.f, 24.f, 25.f, 25.f, 25.f,
 +            25.f, 24.2f, 25.f },
-+          {} },
++          {},
++          { -600.6f, -198.f } },
 +        // Dalaran & Lordamere Internment Camp (Alterac Mountains): Generated by course-gen (Dalaran
 +        // & Lordamere Internment Camp Circuit, seed 1000856): 1.33 km, test lap 39.1s.
 +        { "alterac-dalaran-lordamere", "Dalaran & Lordamere Internment Camp", "Alterac Mountains", 0, 3,
@@ -2277,7 +2541,8 @@ index 0000000..2fb49b4
 +            { -34.4f, 38.9f }, { 32.4f, -62.5f }, { 134.f, -6.3f } },
 +          { 25.f, 23.f, 21.2f, 25.f, 25.f, 15.f, 24.2f, 25.f,
 +            15.f, 25.f, 25.f },
-+          {} },
++          {},
++          { 232.1f, 66.8f } },
 +        // Stranglethorn Vale to Wild Shore Sprint (Stranglethorn Vale): Generated by course-gen
 +        // (Stranglethorn Vale to Wild Shore Sprint, seed 1000919): 3.58 km, test lap 99.5s.
 +        { "stv-wilds-wild-sprint", "Stranglethorn Vale to Wild Shore Sprint", "Stranglethorn Vale", 0, 0,
@@ -2293,7 +2558,8 @@ index 0000000..2fb49b4
 +            25.f, 18.4f, 25.f, 23.f, 15.f, 25.f, 25.f, 22.5f,
 +            25.f, 22.5f, 15.f, 15.f, 25.f, 20.f, 20.f, 15.f,
 +            22.5f, 25.f, 20.3f, 25.f, 25.f },
-+          {} },
++          {},
++          { -11704.6f, -473.5f } },
 +        // Venture Co. Base Camp & Ziata'jai Ruins (Stranglethorn Vale): Generated by course-gen
 +        // (Venture Co. Base Camp & Ziata'jai Ruins Circuit, seed 1001121): 2.19 km, test lap 62.2s.
 +        { "stv-venture-ziata", "Venture Co. Base Camp & Ziata'jai Ruins", "Stranglethorn Vale", 0, 3,
@@ -2305,7 +2571,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 15.f, 25.f, 25.f, 15.f, 25.f, 23.f,
 +            15.f, 25.f, 15.f, 25.f, 17.f, 15.f, 15.f, 25.f,
 +            25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -12046.5f, -667.7f } },
 +        // Venture Co. Base Camp & Balia'mah Ruins (Stranglethorn Vale): Generated by course-gen
 +        // (Venture Co. Base Camp & Balia'mah Ruins Circuit, seed 1001022): 1.54 km, test lap 50.8s.
 +        { "stv-venture-balia", "Venture Co. Base Camp & Balia'mah Ruins", "Stranglethorn Vale", 0, 3,
@@ -2315,7 +2582,8 @@ index 0000000..2fb49b4
 +            { -12417.2f, -562.7f }, { -12538.9f, -466.5f } },
 +          { 25.f, 25.f, 15.f, 25.f, 25.f, 15.f, 25.f, 15.f,
 +            25.f, 15.f, 15.f, 15.8f, 17.f, 15.f },
-+          {} },
++          {},
++          { -12570.2f, -593.2f } },
 +        // Ziata'jai Ruins & Balia'mah Ruins (Stranglethorn Vale): Generated by course-gen
 +        // (Ziata'jai Ruins & Balia'mah Ruins Circuit, seed 1001204): 2.12 km, test lap 63.3s.
 +        { "stv-ziata-balia", "Ziata'jai Ruins & Balia'mah Ruins", "Stranglethorn Vale", 0, 3,
@@ -2327,7 +2595,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 20.f, 15.8f, 15.f, 25.f, 15.f, 20.f,
 +            25.f, 25.f, 15.f, 25.f, 15.f, 25.f, 24.f, 15.f,
 +            15.f, 25.f },
-+          {} },
++          {},
++          { -12797.8f, -194.7f } },
 +        // Venture Co. Base Camp (Stranglethorn Vale): Generated by course-gen (Venture Co. Base
 +        // Camp Circuit, seed 1001025): 1.66 km, test lap 54.8s.
 +        { "stv-venture", "Venture Co. Base Camp", "Stranglethorn Vale", 0, 3,
@@ -2337,7 +2606,8 @@ index 0000000..2fb49b4
 +            { -12260.5f, -564.3f }, { -12401.3f, -596.2f } },
 +          { 25.f, 25.f, 22.f, 15.f, 25.f, 25.f, 25.f, 15.f,
 +            15.f, 15.8f, 15.f, 15.f, 25.f, 15.f },
-+          {} },
++          {},
++          { -12320.3f, -685.2f } },
 +        // Ruins of Zul'Mamwe to Gurubashi Arena (Stranglethorn Vale): Generated by course-gen
 +        // (Ruins of Zul'Mamwe to Gurubashi Arena Sprint, seed 1000653): 1.78 km, test lap 53.1s.
 +        { "stv-zul-gurubashi-sprint", "Ruins of Zul'Mamwe to Gurubashi Arena", "Stranglethorn Vale", 0, 0,
@@ -2347,7 +2617,8 @@ index 0000000..2fb49b4
 +            { -13174.7f, 208.4f }, { -13319.f, 159.2f }, { -13451.3f, 86.f } },
 +          { 25.f, 25.f, 15.f, 15.f, 25.f, 25.f, 15.f, 23.f,
 +            15.f, 25.f, 25.f, 17.f, 25.f, 15.f, 25.f },
-+          {} },
++          {},
++          { -12821.8f, -878.4f } },
 +        // Gurubashi Arena & Cape of Stranglethorn (Stranglethorn Vale): Generated by course-gen
 +        // (Gurubashi Arena & The Cape of Stranglethorn Circuit, seed 1001033): 2.07 km, test lap
 +        // 67.7s.
@@ -2358,7 +2629,8 @@ index 0000000..2fb49b4
 +            { -13033.5f, 263.8f }, { -12910.1f, 176.3f }, { -12901.f, 272.1f }, { -13030.2f, 313.9f } },
 +          { 25.f, 22.5f, 15.8f, 15.f, 24.f, 25.f, 15.f, 15.f,
 +            25.f, 15.f, 15.f, 25.f, 17.f, 20.f, 15.f, 25.f },
-+          {} },
++          {},
++          { -13149.6f, 391.2f } },
 +        // Balia'mah Ruins & Ziata'jai Ruins (Stranglethorn Vale): Generated by course-gen
 +        // (Balia'mah Ruins & Ziata'jai Ruins Circuit, seed 1000217): 1.42 km, test lap 41.5s.
 +        { "stv-balia-ziata", "Balia'mah Ruins & Ziata'jai Ruins", "Stranglethorn Vale", 0, 3,
@@ -2367,7 +2639,8 @@ index 0000000..2fb49b4
 +            { -12532.4f, -841.9f }, { -12414.8f, -789.9f }, { -12339.9f, -690.8f }, { -12410.5f, -590.6f } },
 +          { 25.f, 25.f, 25.f, 15.8f, 25.f, 25.f, 25.f, 15.f,
 +            25.f, 24.f, 15.f, 24.f },
-+          {} },
++          {},
++          { -12455.7f, -475.f } },
 +        // The Dark Portal & Rise of the Defiler (Blasted Lands): Generated by course-gen (The Dark
 +        // Portal & Rise of the Defiler Circuit, seed 1001418): 2.20 km, test lap 75.3s.
 +        { "blasted-dark-rise", "The Dark Portal & Rise of the Defiler", "Blasted Lands", 0, 3,
@@ -2379,14 +2652,16 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 15.f, 25.f, 25.f, 25.f, 25.f, 15.f,
 +            15.f, 15.f, 22.5f, 25.f, 25.f, 25.f, 25.f, 15.f,
 +            15.f, 15.f },
-+          {} },
++          {},
++          { -11127.4f, -2946.3f } },
 +        // Dreadmaul Post & Rise of the Defiler (Blasted Lands): Generated by course-gen (Dreadmaul
 +        // Post & Rise of the Defiler Circuit, seed 1000927): 1.03 km, test lap 37.7s.
 +        { "blasted-dreadmaul-rise", "Dreadmaul Post & Rise of the Defiler", "Blasted Lands", 0, 3,
 +          { { -11606.1f, -2770.3f }, { -11733.5f, -2828.2f }, { -11604.3f, -2829.1f }, { -11464.4f, -2848.5f },
 +            { -11415.9f, -2991.5f }, { -11364.9f, -2885.9f }, { -11352.6f, -2764.5f }, { -11489.f, -2693.3f } },
 +          { 25.f, 15.f, 24.f, 23.2f, 25.f, 15.f, 25.f, 15.f },
-+          {} },
++          {},
++          { -11602.f, -2779.4f } },
 +        // Dustwind Gulch & The Dustbowl (Badlands): Generated by course-gen (Dustwind Gulch & The
 +        // Dustbowl Circuit, seed 1000449): 2.10 km, test lap 58.7s.
 +        { "badlands-dustwind-dustbowl", "Dustwind Gulch & The Dustbowl", "Badlands", 0, 3,
@@ -2398,7 +2673,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 15.f, 25.f, 25.f, 23.f, 25.f, 25.f,
 +            25.f, 25.f, 15.f, 25.f, 15.f, 25.f, 15.f, 15.f,
 +            25.f, 25.f },
-+          {} },
++          {},
++          { -6917.5f, -3484.f } },
 +        // The Dustbowl & Mirage Flats (Badlands): Generated by course-gen (The Dustbowl & Mirage
 +        // Flats Circuit, seed 1000828): 1.76 km, test lap 52.0s.
 +        { "badlands-dustbowl-mirage", "The Dustbowl & Mirage Flats", "Badlands", 0, 3,
@@ -2408,7 +2684,8 @@ index 0000000..2fb49b4
 +            { -6935.3f, -2404.9f }, { -6911.6f, -2500.f }, { -6850.6f, -2591.4f } },
 +          { 25.f, 25.f, 25.f, 15.8f, 25.f, 25.f, 25.f, 24.f,
 +            17.f, 25.f, 25.f, 20.f, 15.f, 24.2f, 17.7f },
-+          {} },
++          {},
++          { -6888.1f, -2704.8f } },
 +        // Valley of Fangs & Mirage Flats (Badlands): Generated by course-gen (Valley of Fangs &
 +        // Mirage Flats Circuit, seed 1001349): 1.68 km, test lap 50.7s.
 +        { "badlands-fangs-mirage", "Valley of Fangs & Mirage Flats", "Badlands", 0, 3,
@@ -2418,7 +2695,8 @@ index 0000000..2fb49b4
 +            { -6782.f, -3136.9f }, { -6794.3f, -3025.8f }, { -6922.3f, -3021.f }, { -7041.f, -3089.5f } },
 +          { 25.f, 17.f, 25.f, 25.f, 25.f, 25.f, 25.f, 15.f,
 +            25.f, 25.f, 25.f, 15.f, 18.4f, 25.f, 25.f, 20.3f },
-+          {} },
++          {},
++          { -7060.3f, -3218.3f } },
 +        // Agmond's End & Camp Boff (Badlands): Generated by course-gen (Agmond's End & Camp Boff
 +        // Circuit, seed 1000814): 1.51 km, test lap 44.1s.
 +        { "badlands-agmond-boff", "Agmond's End & Camp Boff", "Badlands", 0, 3,
@@ -2427,7 +2705,8 @@ index 0000000..2fb49b4
 +            { -6729.1f, -3614.3f }, { -6698.7f, -3480.9f }, { -6595.6f, -3346.1f }, { -6732.7f, -3362.8f } },
 +          { 25.f, 17.f, 25.f, 25.f, 25.f, 15.f, 20.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -6886.5f, -3393.2f } },
 +        // The Dustbowl & Apocryphan's Rest (Badlands): Generated by course-gen (The Dustbowl &
 +        // Apocryphan's Rest Circuit, seed 1000878): 2.47 km, test lap 72.0s.
 +        { "badlands-dustbowl-apocryphan", "The Dustbowl & Apocryphan's Rest", "Badlands", 0, 3,
@@ -2439,7 +2718,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 20.f, 25.f, 25.f, 17.f, 17.4f, 25.f,
 +            25.f, 15.f, 15.f, 15.f, 15.f, 25.f, 21.2f, 25.f,
 +            25.f, 25.f },
-+          {} },
++          {},
++          { -7048.1f, -3109.9f } },
 +        // Mirage Flats & The Dustbowl (Badlands): Generated by course-gen (Mirage Flats & The
 +        // Dustbowl Circuit, seed 1000665): 2.17 km, test lap 58.4s.
 +        { "badlands-mirage-dustbowl", "Mirage Flats & The Dustbowl", "Badlands", 0, 3,
@@ -2451,7 +2731,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 24.2f, 15.8f, 23.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 17.7f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 23.2f },
-+          {} },
++          {},
++          { -6788.5f, -3415.7f } },
 +        // Lethlor Ravine to Mirage Flats Sprint (Badlands): Generated by course-gen (Lethlor Ravine
 +        // to Mirage Flats Sprint, seed 1000206): 1.70 km, test lap 46.4s.
 +        { "badlands-lethlor-mirage-sprint", "Lethlor Ravine to Mirage Flats Sprint", "Badlands", 0, 0,
@@ -2461,7 +2742,8 @@ index 0000000..2fb49b4
 +            { -7039.2f, -3069.7f }, { -6997.7f, -2930.6f }, { -6934.f, -2803.3f } },
 +          { 25.f, 25.f, 15.f, 15.f, 15.f, 15.f, 20.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -6706.5f, -4101.3f } },
 +        // Apocryphan's Rest to Lethlor Ravine (Badlands): Generated by course-gen (Apocryphan's
 +        // Rest to Lethlor Ravine Sprint, seed 1001066): 1.80 km, test lap 50.3s.
 +        { "badlands-apocryph-lethlor-sprint", "Apocryphan's Rest to Lethlor Ravine", "Badlands", 0, 0,
@@ -2471,7 +2753,8 @@ index 0000000..2fb49b4
 +            { -6755.9f, -3870.7f }, { -6854.5f, -3908.9f }, { -6962.f, -3935.3f } },
 +          { 25.f, 25.f, 25.f, 22.5f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 24.2f, 15.f, 17.f, 25.f },
-+          {} },
++          {},
++          { -6944.7f, -2379.5f } },
 +        // The Sea of Cinders & Grimesilt Dig Site (Searing Gorge): Generated by course-gen (The Sea
 +        // of Cinders & Grimesilt Dig Site Circuit, seed 1001145): 1.04 km, test lap 32.3s.
 +        { "searing-sea-grimesilt", "The Sea of Cinders & Grimesilt Dig Site", "Searing Gorge", 0, 3,
@@ -2480,7 +2763,8 @@ index 0000000..2fb49b4
 +            { -6897.1f, -1689.3f }, { -6882.8f, -1591.4f } },
 +          { 25.f, 25.f, 25.f, 17.f, 25.f, 25.f, 15.f, 25.f,
 +            15.8f, 25.f },
-+          {} },
++          {},
++          { -7004.6f, -1492.2f } },
 +        // Draco'dar & Blackrock Mountain (Burning Steppes): Generated by course-gen (Draco'dar &
 +        // Blackrock Mountain Circuit, seed 1001112): 1.94 km, test lap 55.6s.
 +        { "steppes-draco-blackrock", "Draco'dar & Blackrock Mountain", "Burning Steppes", 0, 3,
@@ -2492,7 +2776,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 15.f, 25.f, 25.f, 17.7f, 23.2f,
 +            15.f, 25.f, 20.3f, 25.f, 25.f, 22.5f, 15.f, 15.f,
 +            15.f },
-+          {} },
++          {},
++          { -8029.f, -1524.8f } },
 +        // Blackrock Mountain to Blackrock Pass (Burning Steppes): Generated by course-gen
 +        // (Blackrock Mountain to Blackrock Pass Sprint, seed 1000268): 2.38 km, test lap 67.7s.
 +        { "steppes-blackroc-blackroc-sprint", "Blackrock Mountain to Blackrock Pass", "Burning Steppes", 0, 0,
@@ -2505,7 +2790,8 @@ index 0000000..2fb49b4
 +          { 25.f, 15.f, 17.f, 15.f, 25.f, 24.f, 25.f, 17.f,
 +            25.f, 20.f, 15.f, 25.f, 15.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 15.8f, 25.f },
-+          {} },
++          {},
++          { -7901.1f, -1098.2f } },
 +        // Terror Wing Path & Dreadmaul Rock (Burning Steppes): Generated by course-gen (Terror Wing
 +        // Path & Dreadmaul Rock Circuit, seed 1000013): 2.72 km, test lap 77.1s.
 +        { "steppes-terror-dreadmaul", "Terror Wing Path & Dreadmaul Rock", "Burning Steppes", 0, 3,
@@ -2518,7 +2804,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 15.f, 24.2f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            18.4f, 25.f, 15.f, 17.4f, 15.f, 25.f, 23.2f },
-+          {} },
++          {},
++          { -8046.2f, -2002.5f } },
 +        // Ruins of Thaurissan (Burning Steppes): Generated by course-gen (Ruins of Thaurissan
 +        // Circuit, seed 1000990): 1.24 km, test lap 38.3s.
 +        { "steppes-thaurissan", "Ruins of Thaurissan", "Burning Steppes", 0, 3,
@@ -2528,7 +2815,8 @@ index 0000000..2fb49b4
 +            { -7973.3f, -1946.7f } },
 +          { 25.f, 15.8f, 17.7f, 15.f, 15.f, 22.f, 15.f, 25.f,
 +            15.f, 17.f, 15.f, 20.3f, 25.f },
-+          {} },
++          {},
++          { -8046.2f, -2002.5f } },
 +        // The Pillar of Ash (Burning Steppes): Generated by course-gen (The Pillar of Ash Circuit,
 +        // seed 1000997): 1.31 km, test lap 39.2s.
 +        { "steppes-pillar", "The Pillar of Ash", "Burning Steppes", 0, 3,
@@ -2537,7 +2825,8 @@ index 0000000..2fb49b4
 +            { -8029.f, -1925.7f }, { -7983.4f, -1787.5f }, { -7972.7f, -1645.7f } },
 +          { 25.f, 25.f, 15.f, 15.f, 15.f, 25.f, 20.f, 17.f,
 +            25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -8029.f, -1524.8f } },
 +        // Northridge Lumber Camp to Bulwark Sprint (Western Plaguelands): Generated by course-gen
 +        // (Northridge Lumber Camp to The Bulwark Sprint, seed 1000343): 1.69 km, test lap 51.8s.
 +        { "wpl-northridge-bulwark-sprint", "Northridge Lumber Camp to Bulwark Sprint", "Western Plaguelands", 0, 0,
@@ -2547,7 +2836,8 @@ index 0000000..2fb49b4
 +            { 1566.3f, -983.6f }, { 1674.f, -936.7f } },
 +          { 25.f, 18.4f, 23.2f, 15.f, 20.3f, 15.f, 15.f, 15.f,
 +            23.2f, 15.f, 15.f, 24.f, 15.f, 25.f },
-+          {} },
++          {},
++          { 2384.5f, -1570.4f } },
 +        // Darrowshire (Eastern Plaguelands): Generated by course-gen (Darrowshire Circuit, seed
 +        // 1000806): 1.82 km, test lap 55.7s.
 +        { "epl-darrowshire", "Darrowshire", "Eastern Plaguelands", 0, 3,
@@ -2559,7 +2849,8 @@ index 0000000..2fb49b4
 +          { 25.f, 24.f, 15.f, 25.f, 15.f, 15.f, 15.f, 25.f,
 +            25.f, 15.f, 20.f, 15.f, 15.8f, 15.f, 22.5f, 24.2f,
 +            25.f },
-+          {} },
++          {},
++          { 1768.3f, -3874.2f } },
 +        // Northdale to Darrowshire Sprint (Eastern Plaguelands): Generated by course-gen (Northdale
 +        // to Darrowshire Sprint, seed 1000323): 2.38 km, test lap 66.0s.
 +        { "epl-northdale-darrowshire-sprint", "Northdale to Darrowshire Sprint", "Eastern Plaguelands", 0, 0,
@@ -2571,7 +2862,8 @@ index 0000000..2fb49b4
 +          { 25.f, 23.2f, 25.f, 24.2f, 20.f, 15.f, 15.f, 15.f,
 +            25.f, 15.f, 17.f, 15.f, 15.f, 17.f, 20.f, 17.f,
 +            21.2f, 25.f, 15.f, 15.8f },
-+          {} },
++          {},
++          { 2966.f, -5030.7f } },
 +        // Light's Hope Chapel & The Infectis Scar (Eastern Plaguelands): Generated by course-gen
 +        // (Light's Hope Chapel & The Infectis Scar Circuit, seed 1000062): 3.48 km, test lap
 +        // 106.1s.
@@ -2587,7 +2879,8 @@ index 0000000..2fb49b4
 +            20.f, 25.f, 15.f, 20.f, 17.4f, 24.2f, 25.f, 15.f,
 +            17.f, 25.f, 25.f, 15.f, 23.2f, 15.f, 25.f, 25.f,
 +            25.f, 15.f, 15.f, 21.2f },
-+          {} },
++          {},
++          { 1893.7f, -4198.3f } },
 +        // Plaguewood to Northdale Sprint (Eastern Plaguelands): Generated by course-gen (Plaguewood
 +        // to Northdale Sprint, seed 1000919): 1.77 km, test lap 49.8s.
 +        { "epl-plaguewood-northdale-sprint", "Plaguewood to Northdale Sprint", "Eastern Plaguelands", 0, 0,
@@ -2597,7 +2890,8 @@ index 0000000..2fb49b4
 +            { 2865.6f, -4915.9f }, { 2856.5f, -5033.f }, { 2966.f, -5020.7f } },
 +          { 22.5f, 15.f, 25.f, 25.f, 23.2f, 25.f, 15.f, 25.f,
 +            24.2f, 20.f, 25.f, 22.5f, 15.f, 15.f, 25.f },
-+          {} },
++          {},
++          { 3028.2f, -3800.9f } },
 +        // Lake Mereldar & Corin's Crossing (Eastern Plaguelands): Generated by course-gen (Lake
 +        // Mereldar & Corin's Crossing Circuit, seed 1001453): 2.20 km, test lap 66.6s.
 +        { "epl-mereldar-corin", "Lake Mereldar & Corin's Crossing", "Eastern Plaguelands", 0, 3,
@@ -2609,7 +2903,8 @@ index 0000000..2fb49b4
 +          { 25.f, 15.f, 15.f, 22.5f, 25.f, 25.f, 20.3f, 15.f,
 +            15.8f, 15.f, 15.f, 15.f, 22.f, 15.f, 15.f, 15.f,
 +            23.f, 24.2f },
-+          {} },
++          {},
++          { 2032.5f, -4968.3f } },
 +        // Darrowshire to Northpass Tower Sprint (Eastern Plaguelands): Generated by course-gen
 +        // (Darrowshire to Northpass Tower Sprint, seed 1000984): 2.02 km, test lap 61.8s.
 +        { "epl-darrowshire-northpass-sprint", "Darrowshire to Northpass Tower Sprint", "Eastern Plaguelands", 0, 0,
@@ -2621,7 +2916,8 @@ index 0000000..2fb49b4
 +          { 15.8f, 15.f, 25.f, 18.4f, 15.f, 15.8f, 25.f, 21.2f,
 +            15.f, 15.f, 23.2f, 15.f, 15.8f, 15.f, 25.f, 25.f,
 +            25.f },
-+          {} },
++          {},
++          { 1426.6f, -3695.3f } },
 +        // Crown Guard Tower & The Undercroft (Eastern Plaguelands): Generated by course-gen (Crown
 +        // Guard Tower & The Undercroft Circuit, seed 1001268): 1.64 km, test lap 57.6s.
 +        { "epl-crown-undercroft", "Crown Guard Tower & The Undercroft", "Eastern Plaguelands", 0, 3,
@@ -2631,7 +2927,8 @@ index 0000000..2fb49b4
 +            { 1701.5f, -3500.3f }, { 1739.7f, -3608.5f } },
 +          { 23.f, 15.f, 15.f, 25.f, 15.f, 23.f, 15.f, 25.f,
 +            22.5f, 15.f, 15.f, 15.f, 25.f, 23.f },
-+          {} },
++          {},
++          { 1752.4f, -3729.1f } },
 +        // Plaguewood to Northdale Sprint II (Eastern Plaguelands): Generated by course-gen
 +        // (Plaguewood to Northdale Sprint II, seed 1001076): 1.79 km, test lap 52.2s.
 +        { "epl-plaguewoo-northdale-sprint-2", "Plaguewood to Northdale Sprint II", "Eastern Plaguelands", 0, 0,
@@ -2641,7 +2938,8 @@ index 0000000..2fb49b4
 +            { 2606.7f, -4912.2f }, { 2737.8f, -4932.2f }, { 2839.8f, -5020.4f }, { 2966.f, -5020.7f } },
 +          { 22.5f, 15.f, 15.8f, 25.f, 25.f, 25.f, 15.f, 17.f,
 +            24.2f, 18.4f, 15.f, 18.4f, 17.7f, 25.f, 23.f, 25.f },
-+          {} },
++          {},
++          { 3028.2f, -3800.9f } },
 +        // Quel'Danil Lodge & Valorwind Lake (The Hinterlands): Generated by course-gen (Quel'Danil
 +        // Lodge & Valorwind Lake Circuit, seed 1000449): 1.95 km, test lap 59.6s.
 +        { "hinterlands-quel-valorwind", "Quel'Danil Lodge & Valorwind Lake", "The Hinterlands", 0, 3,
@@ -2651,7 +2949,8 @@ index 0000000..2fb49b4
 +            { 152.f, -3007.7f }, { 271.8f, -2914.5f }, { 176.3f, -2847.1f } },
 +          { 17.f, 15.8f, 24.f, 15.f, 20.f, 24.f, 25.f, 24.f,
 +            15.8f, 20.f, 25.f, 15.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { 103.5f, -2746.3f } },
 +        // Skulk Rock & Shaol'watha (The Hinterlands): Generated by course-gen (Skulk Rock &
 +        // Shaol'watha Circuit, seed 1000102): 2.65 km, test lap 75.2s.
 +        { "hinterlands-skulk-shaol", "Skulk Rock & Shaol'watha", "The Hinterlands", 0, 3,
@@ -2664,7 +2963,8 @@ index 0000000..2fb49b4
 +          { 25.f, 15.f, 25.f, 25.f, 25.f, 15.f, 15.f, 25.f,
 +            25.f, 21.2f, 25.f, 20.f, 18.4f, 15.f, 25.f, 17.f,
 +            15.f, 20.f, 25.f, 25.f, 20.f, 17.f },
-+          {} },
++          {},
++          { 66.5f, -3984.4f } },
 +        // The Altar of Zul & Valorwind Lake (The Hinterlands): Generated by course-gen (The Altar
 +        // of Zul & Valorwind Lake Circuit, seed 1000537): 2.30 km, test lap 72.2s.
 +        { "hinterlands-altar-valorwind", "The Altar of Zul & Valorwind Lake", "The Hinterlands", 0, 3,
@@ -2676,7 +2976,8 @@ index 0000000..2fb49b4
 +          { 24.f, 20.f, 24.f, 25.f, 15.f, 25.f, 23.2f, 17.4f,
 +            18.4f, 25.f, 15.f, 15.f, 25.f, 25.f, 25.f, 15.f,
 +            25.f, 24.2f, 22.f, 25.f },
-+          {} },
++          {},
++          { 317.4f, -3446.9f } },
 +        // Valorwind Lake & The Creeping Ruin (The Hinterlands): Generated by course-gen (Valorwind
 +        // Lake & The Creeping Ruin Circuit, seed 1000088): 2.13 km, test lap 62.5s.
 +        { "hinterlands-valorwind-creeping", "Valorwind Lake & The Creeping Ruin", "The Hinterlands", 0, 3,
@@ -2688,7 +2989,8 @@ index 0000000..2fb49b4
 +          { 25.f, 24.f, 25.f, 15.f, 25.f, 20.f, 20.3f, 15.f,
 +            25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 15.f, 18.4f,
 +            15.f },
-+          {} },
++          {},
++          { 129.4f, -3869.8f } },
 +        // The Altar of Zul & Valorwind Lake II (The Hinterlands): Generated by course-gen (The
 +        // Altar of Zul & Valorwind Lake Circuit II, seed 1000652): 1.11 km, test lap 33.9s.
 +        { "hinterlands-altar-valorwind-2", "The Altar of Zul & Valorwind Lake II", "The Hinterlands", 0, 3,
@@ -2697,7 +2999,8 @@ index 0000000..2fb49b4
 +            { -149.2f, -3457.8f }, { -113.2f, -3557.2f } },
 +          { 25.f, 15.8f, 25.f, 15.f, 25.f, 15.f, 15.f, 15.f,
 +            25.f, 25.f },
-+          {} },
++          {},
++          { -15.3f, -3452.8f } },
 +        // Skulk Rock (The Hinterlands): Generated by course-gen (Skulk Rock Circuit, seed 1001312):
 +        // 1.55 km, test lap 46.4s.
 +        { "hinterlands-skulk", "Skulk Rock", "The Hinterlands", 0, 3,
@@ -2706,7 +3009,8 @@ index 0000000..2fb49b4
 +            { 208.7f, -4124.7f }, { 260.2f, -4269.4f }, { 287.6f, -4161.3f }, { 238.4f, -4036.4f } },
 +          { 25.f, 25.f, 15.f, 15.f, 20.3f, 18.4f, 18.4f, 25.f,
 +            25.f, 15.f, 18.4f, 20.f },
-+          {} },
++          {},
++          { 251.9f, -3899.9f } },
 +        // Agol'watha & Valorwind Lake (The Hinterlands): Generated by course-gen (Agol'watha &
 +        // Valorwind Lake Circuit, seed 1000026): 1.34 km, test lap 39.1s.
 +        { "hinterlands-agol-valorwind", "Agol'watha & Valorwind Lake", "The Hinterlands", 0, 3,
@@ -2715,7 +3019,8 @@ index 0000000..2fb49b4
 +            { -19.9f, -3476.8f }, { 4.f, -3576.3f }, { 141.1f, -3607.1f }, { 253.7f, -3695.4f } },
 +          { 25.f, 17.f, 25.f, 25.f, 25.f, 17.f, 25.f, 20.3f,
 +            25.f, 15.f, 25.f, 15.f },
-+          {} },
++          {},
++          { 329.2f, -3566.3f } },
 +        // Skulk Rock II (The Hinterlands): Generated by course-gen (Skulk Rock Circuit II, seed
 +        // 1000866): 1.04 km, test lap 31.0s.
 +        { "hinterlands-skulk-2", "Skulk Rock II", "The Hinterlands", 0, 3,
@@ -2724,7 +3029,8 @@ index 0000000..2fb49b4
 +            { 171.9f, -4005.9f } },
 +          { 25.f, 20.f, 25.f, 17.f, 23.2f, 15.f, 25.f, 15.f,
 +            20.f },
-+          {} },
++          {},
++          { 195.8f, -4121.8f } },
 +        // Teldrassil Sprint (Teldrassil): Generated by course-gen (Teldrassil Sprint, seed
 +        // 1000812): 1.85 km, test lap 51.3s.
 +        { "teldrassil-wilds-sprint", "Teldrassil Sprint", "Teldrassil", 1, 0,
@@ -2734,7 +3040,8 @@ index 0000000..2fb49b4
 +            { 10722.4f, 1478.5f }, { 10864.2f, 1457.4f }, { 10980.7f, 1374.f } },
 +          { 25.f, 25.f, 15.f, 25.f, 22.5f, 20.f, 15.f, 15.f,
 +            20.3f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { 9966.6f, 1934.1f } },
 +        // Teldrassil to Pools of Arlithrien Sprint (Teldrassil): Generated by course-gen
 +        // (Teldrassil to Pools of Arlithrien Sprint, seed 1000955): 2.00 km, test lap 58.2s.
 +        { "teldrassil-wilds-pools-sprint", "Teldrassil to Pools of Arlithrien Sprint", "Teldrassil", 1, 0,
@@ -2746,7 +3053,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 20.3f, 17.f, 15.f, 25.f, 15.f,
 +            17.f, 17.4f, 15.f, 24.2f, 17.7f, 25.f, 17.f, 25.f,
 +            25.f },
-+          {} },
++          {},
++          { 9470.4f, 546.3f } },
 +        // Ameth'Aran & Twilight Shore (Darkshore): Generated by course-gen (Ameth'Aran & Twilight
 +        // Shore Circuit, seed 1001249): 1.89 km, test lap 58.3s.
 +        { "darkshore-ameth-twilight", "Ameth'Aran & Twilight Shore", "Darkshore", 1, 3,
@@ -2758,7 +3066,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 15.f, 20.f, 15.f, 15.f, 15.f, 25.f,
 +            15.f, 15.f, 15.f, 15.f, 15.f, 25.f, 25.f, 23.2f,
 +            23.f },
-+          {} },
++          {},
++          { 5614.2f, 443.2f } },
 +        // Mist's Edge to Ameth'Aran Sprint (Darkshore): Generated by course-gen (Mist's Edge to
 +        // Ameth'Aran Sprint, seed 1001239): 2.04 km, test lap 60.6s.
 +        { "darkshore-mist-ameth-sprint", "Mist's Edge to Ameth'Aran Sprint", "Darkshore", 1, 0,
@@ -2770,7 +3079,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 15.f, 25.f, 17.4f, 25.f, 25.f,
 +            15.f, 25.f, 22.5f, 15.f, 25.f, 25.f, 15.f, 15.f,
 +            25.f },
-+          {} },
++          {},
++          { 7207.3f, 181.6f } },
 +        // Mist's Edge & Bashal'Aran (Darkshore): Generated by course-gen (Mist's Edge & Bashal'Aran
 +        // Circuit, seed 1000272): 2.03 km, test lap 64.1s.
 +        { "darkshore-mist-bashal", "Mist's Edge & Bashal'Aran", "Darkshore", 1, 3,
@@ -2782,7 +3092,8 @@ index 0000000..2fb49b4
 +          { 22.5f, 25.f, 15.f, 25.f, 15.f, 15.f, 15.f, 20.f,
 +            25.f, 25.f, 23.f, 15.f, 25.f, 25.f, 15.f, 17.7f,
 +            15.f, 15.f },
-+          {} },
++          {},
++          { 6813.3f, 39.6f } },
 +        // Darkshore to Remtravel's Excavation (Darkshore): Generated by course-gen (Darkshore to
 +        // Remtravel's Excavation Sprint, seed 1000294): 2.53 km, test lap 75.1s.
 +        { "darkshore-wilds-remtravel-sprint", "Darkshore to Remtravel's Excavation", "Darkshore", 1, 0,
@@ -2795,7 +3106,8 @@ index 0000000..2fb49b4
 +          { 22.5f, 17.f, 15.f, 15.f, 23.f, 25.f, 15.8f, 22.5f,
 +            25.f, 25.f, 18.4f, 25.f, 25.f, 20.f, 15.f, 21.2f,
 +            17.f, 15.f, 25.f, 15.f, 15.f, 25.f },
-+          {} },
++          {},
++          { 6094.8f, -118.f } },
 +        // Twilight Vale & Twilight Shore (Darkshore): Generated by course-gen (Twilight Vale &
 +        // Twilight Shore Circuit, seed 1000037): 1.92 km, test lap 58.5s.
 +        { "darkshore-twilight-twilight", "Twilight Vale & Twilight Shore", "Darkshore", 1, 3,
@@ -2805,7 +3117,8 @@ index 0000000..2fb49b4
 +            { 5294.4f, 363.9f }, { 5192.6f, 478.7f }, { 5038.2f, 491.4f }, { 4949.2f, 383.7f } },
 +          { 25.f, 15.f, 15.f, 15.f, 15.f, 15.f, 24.2f, 15.f,
 +            15.f, 15.8f, 24.2f, 15.f, 25.f, 20.f, 25.f, 17.7f },
-+          {} },
++          {},
++          { 4916.2f, 241.7f } },
 +        // Wildbend River to Twilight Vale Sprint (Darkshore): Generated by course-gen (Wildbend
 +        // River to Twilight Vale Sprint, seed 1000411): 1.85 km, test lap 56.1s.
 +        { "darkshore-wildben-twiligh-sprint", "Wildbend River to Twilight Vale Sprint", "Darkshore", 1, 0,
@@ -2817,7 +3130,8 @@ index 0000000..2fb49b4
 +          { 25.f, 15.f, 25.f, 17.f, 25.f, 15.f, 18.4f, 20.f,
 +            25.f, 15.f, 15.f, 25.f, 25.f, 15.f, 25.f, 25.f,
 +            15.f, 25.f },
-+          {} },
++          {},
++          { 5149.8f, 202.6f } },
 +        // Mist's Edge & Bashal'Aran II (Darkshore): Generated by course-gen (Mist's Edge &
 +        // Bashal'Aran Circuit II, seed 1000300): 1.69 km, test lap 50.3s.
 +        { "darkshore-mist-bashal-2", "Mist's Edge & Bashal'Aran II", "Darkshore", 1, 3,
@@ -2827,7 +3141,8 @@ index 0000000..2fb49b4
 +            { 7278.7f, -71.1f } },
 +          { 25.f, 25.f, 23.f, 25.f, 23.f, 15.f, 25.f, 25.f,
 +            25.f, 15.f, 15.f, 18.4f, 17.7f },
-+          {} },
++          {},
++          { 7306.7f, 76.f } },
 +        // Twilight Vale & Twilight Shore II (Darkshore): Generated by course-gen (Twilight Vale &
 +        // Twilight Shore Circuit II, seed 1001118): 3.09 km, test lap 88.5s.
 +        { "darkshore-twilight-twilight-2", "Twilight Vale & Twilight Shore II", "Darkshore", 1, 3,
@@ -2842,7 +3157,8 @@ index 0000000..2fb49b4
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 15.f,
 +            25.f, 15.f, 18.4f, 25.f, 15.f, 24.f, 15.f, 15.f,
 +            15.f, 25.f, 25.f },
-+          {} },
++          {},
++          { 5822.3f, 264.7f } },
 +        // Ashenvale Sprint (Ashenvale): Generated by course-gen (Ashenvale Sprint, seed 1001259):
 +        // 2.88 km, test lap 82.7s.
 +        { "ashenvale-wilds-sprint", "Ashenvale Sprint", "Ashenvale", 1, 0,
@@ -2857,7 +3173,8 @@ index 0000000..2fb49b4
 +            25.f, 17.f, 22.f, 15.f, 24.2f, 15.f, 25.f, 25.f,
 +            15.f, 25.f, 25.f, 22.5f, 25.f, 15.f, 25.f, 20.f,
 +            25.f },
-+          {} },
++          {},
++          { 2084.2f, -1646.4f } },
 +        // Shrine of Aessina to Nightsong Woods (Ashenvale): Generated by course-gen (The Shrine of
 +        // Aessina to Nightsong Woods Sprint, seed 1001151): 3.32 km, test lap 97.2s.
 +        { "ashenvale-shrine-nightson-sprint", "Shrine of Aessina to Nightsong Woods", "Ashenvale", 1, 0,
@@ -2872,7 +3189,8 @@ index 0000000..2fb49b4
 +            15.f, 25.f, 15.f, 15.f, 25.f, 25.f, 20.3f, 24.2f,
 +            15.f, 25.f, 25.f, 23.2f, 15.f, 15.8f, 15.f, 25.f,
 +            23.f, 25.f, 25.f },
-+          {} },
++          {},
++          { 2476.3f, 610.7f } },
 +        // Night Run to Silverwind Refuge Sprint (Ashenvale): Generated by course-gen (Night Run to
 +        // Silverwind Refuge Sprint, seed 1000701): 2.94 km, test lap 81.4s.
 +        { "ashenvale-night-silverwin-sprint", "Night Run to Silverwind Refuge Sprint", "Ashenvale", 1, 0,
@@ -2887,7 +3205,8 @@ index 0000000..2fb49b4
 +            22.f, 23.f, 15.f, 25.f, 15.f, 20.3f, 25.f, 25.f,
 +            15.8f, 22.5f, 15.f, 15.f, 17.f, 25.f, 25.f, 22.5f,
 +            25.f },
-+          {} },
++          {},
++          { 2746.7f, -2227.6f } },
 +        // Ashenvale to Thistlefur Village Sprint (Ashenvale): Generated by course-gen (Ashenvale to
 +        // Thistlefur Village Sprint, seed 1000687): 1.71 km, test lap 46.5s.
 +        { "ashenvale-wilds-thistlefu-sprint", "Ashenvale to Thistlefur Village Sprint", "Ashenvale", 1, 0,
@@ -2897,7 +3216,8 @@ index 0000000..2fb49b4
 +            { 3148.4f, -404.9f }, { 3156.5f, -263.9f }, { 3232.7f, -227.3f } },
 +          { 25.f, 20.3f, 23.2f, 15.f, 25.f, 25.f, 17.4f, 17.f,
 +            25.f, 25.f, 23.2f, 22.5f, 20.f, 20.f, 25.f },
-+          {} },
++          {},
++          { 2912.5f, -1256.4f } },
 +        // Stonetalon Mountains to Windshear Crag (Stonetalon Mountains): Generated by course-gen
 +        // (Stonetalon Mountains to Windshear Crag Sprint, seed 1001213): 2.34 km, test lap 71.0s.
 +        { "stonetalon-wilds-windshea-sprint", "Stonetalon Mountains to Windshear Crag", "Stonetalon Mountains", 1, 0,
@@ -2909,7 +3229,8 @@ index 0000000..2fb49b4
 +          { 25.f, 15.f, 25.f, 15.f, 15.f, 20.3f, 25.f, 15.f,
 +            15.f, 15.f, 15.8f, 17.7f, 18.4f, 15.f, 15.f, 15.f,
 +            17.f, 15.f, 15.f, 24.f },
-+          {} },
++          {},
++          { 2050.7f, 987.3f } },
 +        // Kolkar Village & Scrabblescrew's Camp (Desolace): Generated by course-gen (Kolkar Village
 +        // & Scrabblescrew's Camp Circuit, seed 1001406): 3.20 km, test lap 87.7s.
 +        { "desolace-kolkar-scrabblescrew", "Kolkar Village & Scrabblescrew's Camp", "Desolace", 1, 3,
@@ -2924,7 +3245,8 @@ index 0000000..2fb49b4
 +            25.f, 25.f, 15.f, 25.f, 25.f, 23.f, 25.f, 15.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 17.4f, 25.f, 15.f,
 +            25.f, 25.f },
-+          {} },
++          {},
++          { -1151.f, 1582.9f } },
 +        // Magram Village & Mannoroc Coven (Desolace): Generated by course-gen (Magram Village &
 +        // Mannoroc Coven Circuit, seed 1001315): 3.34 km, test lap 94.0s.
 +        { "desolace-magram-mannoroc", "Magram Village & Mannoroc Coven", "Desolace", 1, 3,
@@ -2939,7 +3261,8 @@ index 0000000..2fb49b4
 +            20.f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 15.f, 25.f, 25.f, 17.4f, 25.f, 15.f,
 +            25.f },
-+          {} },
++          {},
++          { -1025.4f, 1764.4f } },
 +        // Ghost Walker Post & Scrabblescrew's Camp (Desolace): Generated by course-gen (Ghost
 +        // Walker Post & Scrabblescrew's Camp Circuit, seed 1000020): 3.04 km, test lap 87.4s.
 +        { "desolace-ghost-scrabblescrew", "Ghost Walker Post & Scrabblescrew's Camp", "Desolace", 1, 3,
@@ -2952,7 +3275,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 22.5f, 23.2f, 25.f, 25.f, 25.f,
 +            25.f, 15.f, 25.f, 25.f, 23.f, 25.f, 25.f, 25.f,
 +            15.f, 25.f, 15.f, 20.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -1065.3f, 2012.9f } },
 +        // Ethel Rethor & Sar'theris Strand (Desolace): Generated by course-gen (Ethel Rethor &
 +        // Sar'theris Strand Circuit, seed 1000810): 3.10 km, test lap 91.3s.
 +        { "desolace-ethel-sar", "Ethel Rethor & Sar'theris Strand", "Desolace", 1, 3,
@@ -2967,7 +3291,8 @@ index 0000000..2fb49b4
 +            25.f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 15.f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f },
-+          {} },
++          {},
++          { -1061.3f, 1871.9f } },
 +        // Kolkar Village & Thunder Axe Fortress (Desolace): Generated by course-gen (Kolkar Village
 +        // & Thunder Axe Fortress Circuit, seed 1001109): 2.19 km, test lap 61.7s.
 +        { "desolace-kolkar-thunder", "Kolkar Village & Thunder Axe Fortress", "Desolace", 1, 3,
@@ -2979,7 +3304,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 23.2f, 25.f, 15.f, 25.f, 18.4f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 25.f,
 +            25.f, 25.f, 15.f },
-+          {} },
++          {},
++          { -798.3f, 1300.2f } },
 +        // Ethel Rethor & Ghost Walker Post (Desolace): Generated by course-gen (Ethel Rethor &
 +        // Ghost Walker Post Circuit, seed 1000495): 2.83 km, test lap 78.1s.
 +        { "desolace-ethel-ghost", "Ethel Rethor & Ghost Walker Post", "Desolace", 1, 3,
@@ -2992,7 +3318,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 15.f, 17.4f, 23.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 24.f, 25.f,
 +            25.f, 15.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -990.6f, 1821.5f } },
 +        // Thunder Axe Fortress & Ghost Walker Post (Desolace): Generated by course-gen (Thunder Axe
 +        // Fortress & Ghost Walker Post Circuit, seed 1001238): 2.66 km, test lap 78.5s.
 +        { "desolace-thunder-ghost", "Thunder Axe Fortress & Ghost Walker Post", "Desolace", 1, 3,
@@ -3005,7 +3332,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 15.f, 25.f, 23.f, 25.f, 25.f, 15.f,
 +            25.f, 20.f, 15.8f, 25.f, 25.f, 20.f, 15.f, 24.f,
 +            25.f, 25.f, 25.f, 25.f, 15.f },
-+          {} },
++          {},
++          { -1061.4f, 2058.1f } },
 +        // Mannoroc Coven & Scrabblescrew's Camp (Desolace): Generated by course-gen (Mannoroc Coven
 +        // & Scrabblescrew's Camp Circuit, seed 1000794): 2.60 km, test lap 76.2s.
 +        { "desolace-mannoroc-scrabblescrew", "Mannoroc Coven & Scrabblescrew's Camp", "Desolace", 1, 3,
@@ -3018,7 +3346,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 24.f, 17.4f, 25.f, 25.f, 25.f, 25.f,
 +            15.f, 18.4f, 25.f, 20.f, 25.f, 25.f, 15.f, 25.f,
 +            25.f, 15.f, 25.f, 20.f, 15.f, 25.f },
-+          {} },
++          {},
++          { -1786.4f, 1390.7f } },
 +        // Feralas Fields (Feralas): Generated by course-gen (Feralas Fields Circuit, seed 1000071):
 +        // 1.99 km, test lap 53.5s.
 +        { "feralas-fields", "Feralas Fields", "Feralas", 1, 3,
@@ -3028,7 +3357,8 @@ index 0000000..2fb49b4
 +            { -4094.9f, 1509.5f }, { -4071.1f, 1361.5f }, { -4000.f, 1219.3f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -3920.f, 1081.6f } },
 +        // Feralas Fields II (Feralas): Generated by course-gen (Feralas Fields Circuit II, seed
 +        // 1001434): 1.96 km, test lap 53.3s.
 +        { "feralas-fields-2", "Feralas Fields II", "Feralas", 1, 3,
@@ -3038,7 +3368,8 @@ index 0000000..2fb49b4
 +            { -3378.1f, 1194.1f }, { -3391.3f, 1321.5f }, { -3518.6f, 1328.1f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -3644.f, 1379.2f } },
 +        // Feralas Fields III (Feralas): Generated by course-gen (Feralas Fields Circuit III, seed
 +        // 1000590): 1.95 km, test lap 52.6s.
 +        { "feralas-fields-3", "Feralas Fields III", "Feralas", 1, 3,
@@ -3048,7 +3379,8 @@ index 0000000..2fb49b4
 +            { -4096.6f, 1320.5f }, { -4081.6f, 1209.1f }, { -4120.8f, 1140.5f }, { -4035.f, 1079.8f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 24.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -3931.1f, 1039.f } },
 +        // Feralas Fields 4 (Feralas): Generated by course-gen (Feralas Fields Circuit 4, seed
 +        // 1001400): 1.33 km, test lap 36.9s.
 +        { "feralas-fields-4", "Feralas Fields 4", "Feralas", 1, 3,
@@ -3057,7 +3389,8 @@ index 0000000..2fb49b4
 +            { -3866.3f, 1108.5f }, { -3838.9f, 1226.7f }, { -3802.f, 1343.4f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -3954.5f, 1360.1f } },
 +        // Feralas Fields 5 (Feralas): Generated by course-gen (Feralas Fields Circuit 5, seed
 +        // 1001096): 2.28 km, test lap 60.8s.
 +        { "feralas-fields-5", "Feralas Fields 5", "Feralas", 1, 3,
@@ -3069,7 +3402,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            17.4f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f },
-+          {} },
++          {},
++          { -3755.9f, 1356.3f } },
 +        // Feralas Fields 6 (Feralas): Generated by course-gen (Feralas Fields Circuit 6, seed
 +        // 1000888): 1.89 km, test lap 50.5s.
 +        { "feralas-fields-6", "Feralas Fields 6", "Feralas", 1, 3,
@@ -3079,7 +3413,8 @@ index 0000000..2fb49b4
 +            { -3851.1f, 957.6f }, { -3770.3f, 830.9f }, { -3683.2f, 856.1f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -3604.6f, 906.5f } },
 +        // Mirage Raceway & The Shimmering Flats (Thousand Needles): Generated by course-gen (Mirage
 +        // Raceway & The Shimmering Flats Circuit, seed 1000750): 1.81 km, test lap 53.2s.
 +        { "needles-mirage-shimmering", "Mirage Raceway & The Shimmering Flats", "Thousand Needles", 1, 3,
@@ -3089,7 +3424,8 @@ index 0000000..2fb49b4
 +            { -6360.4f, -3538.f }, { -6462.4f, -3578.4f }, { -6601.3f, -3507.7f }, { -6587.4f, -3591.2f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 24.2f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -6536.9f, -3669.9f } },
 +        // Mirage Raceway & The Shimmering Flats II (Thousand Needles): Generated by course-gen
 +        // (Mirage Raceway & The Shimmering Flats Circuit II, seed 1000103): 1.77 km, test lap
 +        // 51.0s.
@@ -3100,7 +3436,8 @@ index 0000000..2fb49b4
 +            { -6570.8f, -4011.9f }, { -6460.8f, -4051.1f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 15.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -6348.8f, -4095.5f } },
 +        // Mirage Raceway & Shimmering Flats III (Thousand Needles): Generated by course-gen (Mirage
 +        // Raceway & The Shimmering Flats Circuit III, seed 1001330): 1.90 km, test lap 53.3s.
 +        { "needles-mirage-shimmering-3", "Mirage Raceway & Shimmering Flats III", "Thousand Needles", 1, 3,
@@ -3110,7 +3447,8 @@ index 0000000..2fb49b4
 +            { -6374.2f, -3672.8f }, { -6341.7f, -3775.3f }, { -6319.4f, -3885.9f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -6309.3f, -3999.9f } },
 +        // The Shimmering Flats & Mirage Raceway (Thousand Needles): Generated by course-gen (The
 +        // Shimmering Flats & Mirage Raceway Circuit, seed 1000714): 1.92 km, test lap 52.8s.
 +        { "needles-shimmering-mirage", "The Shimmering Flats & Mirage Raceway", "Thousand Needles", 1, 3,
@@ -3120,7 +3458,8 @@ index 0000000..2fb49b4
 +            { -5561.3f, -4081.1f }, { -5539.3f, -3936.4f }, { -5545.f, -3783.9f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 24.f, 25.f, 25.f, 20.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -5616.9f, -3650.5f } },
 +        // Mirage Raceway & The Shimmering Flats 4 (Thousand Needles): Generated by course-gen
 +        // (Mirage Raceway & The Shimmering Flats Circuit 4, seed 1000777): 2.15 km, test lap 58.2s.
 +        { "needles-mirage-shimmering-4", "Mirage Raceway & The Shimmering Flats 4", "Thousand Needles", 1, 3,
@@ -3130,7 +3469,8 @@ index 0000000..2fb49b4
 +            { -6425.7f, -3852.6f }, { -6462.5f, -3986.3f }, { -6346.f, -4052.2f }, { -6208.1f, -4055.3f } },
 +          { 25.f, 25.f, 17.f, 25.f, 25.f, 25.f, 25.f, 23.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -6067.1f, -4045.3f } },
 +        // Mirage Raceway & The Shimmering Flats 5 (Thousand Needles): Generated by course-gen
 +        // (Mirage Raceway & The Shimmering Flats Circuit 5, seed 1000665): 2.03 km, test lap 54.7s.
 +        { "needles-mirage-shimmering-5", "Mirage Raceway & The Shimmering Flats 5", "Thousand Needles", 1, 3,
@@ -3140,7 +3480,8 @@ index 0000000..2fb49b4
 +            { -5992.4f, -3627.6f }, { -6129.6f, -3651.3f }, { -6271.7f, -3664.6f }, { -6319.1f, -3768.f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 24.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -6309.3f, -3888.1f } },
 +        // Mirage Raceway & The Shimmering Flats 6 (Thousand Needles): Generated by course-gen
 +        // (Mirage Raceway & The Shimmering Flats Circuit 6, seed 1000823): 1.43 km, test lap 43.2s.
 +        { "needles-mirage-shimmering-6", "Mirage Raceway & The Shimmering Flats 6", "Thousand Needles", 1, 3,
@@ -3149,7 +3490,8 @@ index 0000000..2fb49b4
 +            { -6336.1f, -3910.8f }, { -6428.f, -3999.6f }, { -6535.f, -4071.1f }, { -6448.f, -4178.5f } },
 +          { 25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 25.f, 22.f,
 +            25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -6324.3f, -4247.7f } },
 +        // Mirage Raceway & The Shimmering Flats 7 (Thousand Needles): Generated by course-gen
 +        // (Mirage Raceway & The Shimmering Flats Circuit 7, seed 1000596): 1.42 km, test lap 38.7s.
 +        { "needles-mirage-shimmering-7", "Mirage Raceway & The Shimmering Flats 7", "Thousand Needles", 1, 3,
@@ -3159,7 +3501,8 @@ index 0000000..2fb49b4
 +            { -6322.5f, -3590.1f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -6367.4f, -3701.7f } },
 +        // Abyssal Sands & The Noxious Lair (Tanaris): Generated by course-gen (Abyssal Sands & The
 +        // Noxious Lair Circuit, seed 1001358): 2.22 km, test lap 60.2s.
 +        { "tanaris-abyssal-noxious", "Abyssal Sands & The Noxious Lair", "Tanaris", 1, 3,
@@ -3171,7 +3514,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 23.2f, 25.f,
 +            25.f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f, 15.f,
 +            25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -7402.8f, -3034.6f } },
 +        // The Noxious Lair & Abyssal Sands (Tanaris): Generated by course-gen (The Noxious Lair &
 +        // Abyssal Sands Circuit, seed 1000655): 1.94 km, test lap 59.0s.
 +        { "tanaris-noxious-abyssal", "The Noxious Lair & Abyssal Sands", "Tanaris", 1, 3,
@@ -3183,7 +3527,8 @@ index 0000000..2fb49b4
 +          { 25.f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            24.f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f },
-+          {} },
++          {},
++          { -7874.1f, -2471.f } },
 +        // The Noxious Lair & Thistleshrub Valley (Tanaris): Generated by course-gen (The Noxious
 +        // Lair & Thistleshrub Valley Circuit, seed 1001413): 1.70 km, test lap 47.0s.
 +        { "tanaris-noxious-thistleshrub", "The Noxious Lair & Thistleshrub Valley", "Tanaris", 1, 3,
@@ -3193,7 +3538,8 @@ index 0000000..2fb49b4
 +            { -8284.3f, -2363.7f }, { -8161.2f, -2396.8f }, { -8084.7f, -2354.f }, { -8167.7f, -2301.2f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 15.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 15.f, 25.f },
-+          {} },
++          {},
++          { -8260.8f, -2265.7f } },
 +        // The Gaping Chasm (Tanaris): Generated by course-gen (The Gaping Chasm Circuit, seed
 +        // 1000794): 1.91 km, test lap 55.4s.
 +        { "tanaris-gaping", "The Gaping Chasm", "Tanaris", 1, 3,
@@ -3203,7 +3549,8 @@ index 0000000..2fb49b4
 +            { -8875.8f, -3943.3f }, { -8756.3f, -3936.6f }, { -8637.7f, -3910.6f }, { -8553.5f, -3963.8f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            15.f, 25.f, 25.f, 25.f, 25.f, 25.f, 15.f, 25.f },
-+          {} },
++          {},
++          { -8474.3f, -4028.8f } },
 +        // The Gaping Chasm & Eastmoon Ruins (Tanaris): Generated by course-gen (The Gaping Chasm &
 +        // Eastmoon Ruins Circuit, seed 1000876): 1.95 km, test lap 53.8s.
 +        { "tanaris-gaping-eastmoon", "The Gaping Chasm & Eastmoon Ruins", "Tanaris", 1, 3,
@@ -3213,7 +3560,8 @@ index 0000000..2fb49b4
 +            { -8827.7f, -3578.9f }, { -8879.5f, -3470.9f }, { -8969.5f, -3387.3f }, { -9084.7f, -3369.5f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 15.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -9193.3f, -3434.2f } },
 +        // The Noxious Lair & Dunemaul Compound (Tanaris): Generated by course-gen (The Noxious Lair
 +        // & Dunemaul Compound Circuit, seed 1000761): 2.64 km, test lap 71.7s.
 +        { "tanaris-noxious-dunemaul", "The Noxious Lair & Dunemaul Compound", "Tanaris", 1, 3,
@@ -3226,7 +3574,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 24.2f, 15.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 20.3f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -8050.9f, -3038.6f } },
 +        // The Noxious Lair & Dunemaul Compound II (Tanaris): Generated by course-gen (The Noxious
 +        // Lair & Dunemaul Compound Circuit II, seed 1000340): 2.41 km, test lap 66.6s.
 +        { "tanaris-noxious-dunemaul-2", "The Noxious Lair & Dunemaul Compound II", "Tanaris", 1, 3,
@@ -3238,7 +3587,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 15.f, 22.5f, 25.f, 25.f,
 +            25.f, 17.4f, 25.f },
-+          {} },
++          {},
++          { -8376.1f, -2525.9f } },
 +        // The Gaping Chasm & Eastmoon Ruins II (Tanaris): Generated by course-gen (The Gaping Chasm
 +        // & Eastmoon Ruins Circuit II, seed 1001067): 1.99 km, test lap 57.1s.
 +        { "tanaris-gaping-eastmoon-2", "The Gaping Chasm & Eastmoon Ruins II", "Tanaris", 1, 3,
@@ -3248,7 +3598,8 @@ index 0000000..2fb49b4
 +            { -8923.5f, -3879.9f }, { -8835.7f, -3767.7f }, { -8817.f, -3628.3f }, { -8951.9f, -3565.5f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 15.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -9104.9f, -3574.7f } },
 +        // The Marshlands & The Slithering Scar (Un'Goro Crater): Generated by course-gen (The
 +        // Marshlands & The Slithering Scar Circuit, seed 1001448): 2.04 km, test lap 57.8s.
 +        { "ungoro-marshlands-slithering", "The Marshlands & The Slithering Scar", "Un'Goro Crater", 1, 3,
@@ -3260,7 +3611,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 23.f, 25.f,
 +            15.f, 25.f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f },
-+          {} },
++          {},
++          { -7878.f, -1494.9f } },
 +        // Terror Run & Golakka Hot Springs (Un'Goro Crater): Generated by course-gen (Terror Run &
 +        // Golakka Hot Springs Circuit, seed 1000065): 2.22 km, test lap 60.3s.
 +        { "ungoro-terror-golakka", "Terror Run & Golakka Hot Springs", "Un'Goro Crater", 1, 3,
@@ -3272,7 +3624,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 20.f, 25.f, 23.f, 25.f,
 +            25.f, 25.f, 25.f, 24.2f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 22.f },
-+          {} },
++          {},
++          { -7072.5f, -685.1f } },
 +        // The Marshlands & The Slithering Scar II (Un'Goro Crater): Generated by course-gen (The
 +        // Marshlands & The Slithering Scar Circuit II, seed 1000107): 1.80 km, test lap 50.1s.
 +        { "ungoro-marshlands-slithering-2", "The Marshlands & The Slithering Scar II", "Un'Goro Crater", 1, 3,
@@ -3282,7 +3635,8 @@ index 0000000..2fb49b4
 +            { -7350.8f, -1545.f }, { -7452.9f, -1484.9f }, { -7571.8f, -1496.2f }, { -7677.9f, -1555.5f } },
 +          { 25.f, 15.f, 25.f, 15.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 15.8f, 17.f },
-+          {} },
++          {},
++          { -7798.1f, -1523.7f } },
 +        // Terror Run & Golakka Hot Springs II (Un'Goro Crater): Generated by course-gen (Terror Run
 +        // & Golakka Hot Springs Circuit II, seed 1000468): 2.49 km, test lap 67.8s.
 +        { "ungoro-terror-golakka-2", "Terror Run & Golakka Hot Springs II", "Un'Goro Crater", 1, 3,
@@ -3294,7 +3648,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 20.f, 25.f, 23.f,
 +            25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -6868.f, -756.4f } },
 +        // Terror Run & Golakka Hot Springs III (Un'Goro Crater): Generated by course-gen (Terror
 +        // Run & Golakka Hot Springs Circuit III, seed 1000769): 2.52 km, test lap 70.4s.
 +        { "ungoro-terror-golakka-3", "Terror Run & Golakka Hot Springs III", "Un'Goro Crater", 1, 3,
@@ -3307,7 +3662,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 17.f, 25.f, 25.f,
 +            25.f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 24.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -7535.3f, -556.5f } },
 +        // The Marshlands & Fire Plume Ridge (Un'Goro Crater): Generated by course-gen (The
 +        // Marshlands & Fire Plume Ridge Circuit, seed 1001032): 2.11 km, test lap 58.1s.
 +        { "ungoro-marshlands-fire", "The Marshlands & Fire Plume Ridge", "Un'Goro Crater", 1, 3,
@@ -3317,7 +3673,8 @@ index 0000000..2fb49b4
 +            { -7452.5f, -1294.1f }, { -7345.8f, -1191.8f }, { -7238.3f, -1086.5f }, { -7168.f, -965.4f } },
 +          { 25.f, 25.f, 15.8f, 15.8f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -7327.9f, -1016.8f } },
 +        // Golakka Hot Springs & Fire Plume Ridge (Un'Goro Crater): Generated by course-gen (Golakka
 +        // Hot Springs & Fire Plume Ridge Circuit, seed 1000484): 2.27 km, test lap 66.2s.
 +        { "ungoro-golakka-fire", "Golakka Hot Springs & Fire Plume Ridge", "Un'Goro Crater", 1, 3,
@@ -3329,7 +3686,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 20.f, 15.f, 25.f, 25.f, 23.f, 25.f,
 +            25.f, 25.f, 25.f, 15.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 15.f, 25.f },
-+          {} },
++          {},
++          { -7002.9f, -535.4f } },
 +        // Terror Run & The Marshlands (Un'Goro Crater): Generated by course-gen (Terror Run & The
 +        // Marshlands Circuit, seed 1000450): 2.66 km, test lap 72.6s.
 +        { "ungoro-terror-marshlands", "Terror Run & The Marshlands", "Un'Goro Crater", 1, 3,
@@ -3342,7 +3700,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 24.2f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 20.f, 25.f, 25.f, 21.2f },
-+          {} },
++          {},
++          { -7990.6f, -1461.f } },
 +        // Southwind Village & The Swarming Pillar (Silithus): Generated by course-gen (Southwind
 +        // Village & The Swarming Pillar Circuit, seed 1001243): 1.85 km, test lap 51.1s.
 +        { "silithus-southwind-swarming", "Southwind Village & The Swarming Pillar", "Silithus", 1, 3,
@@ -3352,7 +3711,8 @@ index 0000000..2fb49b4
 +            { -7159.9f, 511.4f }, { -7079.6f, 409.f }, { -6962.5f, 362.f }, { -6932.7f, 457.5f } },
 +          { 25.f, 25.f, 25.f, 25.f, 20.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -6942.7f, 562.5f } },
 +        // Hive'Ashi & The Swarming Pillar (Silithus): Generated by course-gen (Hive'Ashi & The
 +        // Swarming Pillar Circuit, seed 1001427): 2.16 km, test lap 69.2s.
 +        { "silithus-hive-swarming", "Hive'Ashi & The Swarming Pillar", "Silithus", 1, 3,
@@ -3364,7 +3724,8 @@ index 0000000..2fb49b4
 +          { 25.f, 15.f, 25.f, 20.f, 15.f, 25.f, 25.f, 25.f,
 +            25.f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f, 21.2f,
 +            15.f, 15.f },
-+          {} },
++          {},
++          { -6753.9f, 1017.9f } },
 +        // Hive'Ashi & The Swarming Pillar II (Silithus): Generated by course-gen (Hive'Ashi & The
 +        // Swarming Pillar Circuit II, seed 1000663): 2.01 km, test lap 56.1s.
 +        { "silithus-hive-swarming-2", "Hive'Ashi & The Swarming Pillar II", "Silithus", 1, 3,
@@ -3376,7 +3737,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 15.f, 20.f, 25.f, 25.f, 15.f,
 +            25.f, 25.f, 25.f, 15.f, 25.f, 25.f, 25.f, 25.f,
 +            15.f },
-+          {} },
++          {},
++          { -7253.f, 1018.3f } },
 +        // Southwind Village & Hive'Ashi (Silithus): Generated by course-gen (Southwind Village &
 +        // Hive'Ashi Circuit, seed 1001432): 1.96 km, test lap 54.3s.
 +        { "silithus-southwind-hive", "Southwind Village & Hive'Ashi", "Silithus", 1, 3,
@@ -3388,7 +3750,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 18.4f, 20.3f, 17.7f, 18.4f, 15.f, 15.f,
 +            25.f },
-+          {} },
++          {},
++          { -7330.3f, 629.6f } },
 +        // Hive'Ashi & The Swarming Pillar III (Silithus): Generated by course-gen (Hive'Ashi & The
 +        // Swarming Pillar Circuit III, seed 1001424): 2.22 km, test lap 61.9s.
 +        { "silithus-hive-swarming-3", "Hive'Ashi & The Swarming Pillar III", "Silithus", 1, 3,
@@ -3400,7 +3763,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 15.f, 25.f, 25.f, 15.f, 23.2f,
 +            25.f, 25.f, 20.f, 25.f, 25.f, 25.f, 15.f, 25.f,
 +            25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -7019.4f, 573.3f } },
 +        // Hive'Ashi & The Swarming Pillar 4 (Silithus): Generated by course-gen (Hive'Ashi & The
 +        // Swarming Pillar Circuit 4, seed 1000024): 1.97 km, test lap 56.2s.
 +        { "silithus-hive-swarming-4", "Hive'Ashi & The Swarming Pillar 4", "Silithus", 1, 3,
@@ -3410,7 +3774,8 @@ index 0000000..2fb49b4
 +            { -6960.2f, 833.4f }, { -6920.2f, 714.7f }, { -6849.4f, 609.1f }, { -6716.6f, 631.8f } },
 +          { 25.f, 25.f, 25.f, 15.f, 17.7f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 24.f, 17.f, 15.f, 21.2f, 15.f, 25.f },
-+          {} },
++          {},
++          { -6616.3f, 725.8f } },
 +        // Hive'Ashi & The Swarming Pillar 5 (Silithus): Generated by course-gen (Hive'Ashi & The
 +        // Swarming Pillar Circuit 5, seed 1001112): 2.09 km, test lap 61.4s.
 +        { "silithus-hive-swarming-5", "Hive'Ashi & The Swarming Pillar 5", "Silithus", 1, 3,
@@ -3422,7 +3787,8 @@ index 0000000..2fb49b4
 +          { 25.f, 18.4f, 25.f, 25.f, 25.f, 25.f, 25.f, 15.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 21.2f, 25.f, 25.f,
 +            25.f },
-+          {} },
++          {},
++          { -7159.f, 1216.3f } },
 +        // Staghelm Point (Silithus): Generated by course-gen (Staghelm Point Circuit, seed
 +        // 1001400): 1.83 km, test lap 56.7s.
 +        { "silithus-staghelm", "Staghelm Point", "Silithus", 1, 3,
@@ -3432,7 +3798,8 @@ index 0000000..2fb49b4
 +            { -6816.6f, -26.1f }, { -6673.2f, -109.8f }, { -6711.5f, 11.4f }, { -6715.f, 142.2f } },
 +          { 25.f, 24.f, 15.f, 15.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f, 24.f },
-+          {} },
++          {},
++          { -6637.5f, 252.3f } },
 +        // Lake Kel'Theril & Winterfall Village (Winterspring): Generated by course-gen (Lake
 +        // Kel'Theril & Winterfall Village Circuit, seed 1000666): 3.37 km, test lap 98.5s.
 +        { "winterspring-kel-winterfall", "Lake Kel'Theril & Winterfall Village", "Winterspring", 1, 3,
@@ -3447,7 +3814,8 @@ index 0000000..2fb49b4
 +            25.f, 25.f, 15.f, 24.2f, 20.f, 20.f, 15.f, 25.f,
 +            17.f, 25.f, 25.f, 15.f, 25.f, 15.f, 15.f, 15.f,
 +            25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { 7063.2f, -5005.f } },
 +        // Frostsaber Rock (Winterspring): Generated by course-gen (Frostsaber Rock Circuit, seed
 +        // 1000781): 2.35 km, test lap 68.6s.
 +        { "winterspring-frostsaber", "Frostsaber Rock", "Winterspring", 1, 3,
@@ -3460,7 +3828,8 @@ index 0000000..2fb49b4
 +          { 25.f, 24.f, 25.f, 15.f, 25.f, 25.f, 15.f, 24.2f,
 +            25.f, 15.f, 15.f, 20.3f, 25.f, 15.f, 15.f, 25.f,
 +            25.f, 25.f, 23.2f, 25.f, 15.f },
-+          {} },
++          {},
++          { 7537.7f, -4068.3f } },
 +        // Starfall Village (Winterspring): Generated by course-gen (Starfall Village Circuit, seed
 +        // 1000852): 2.10 km, test lap 66.5s.
 +        { "winterspring-starfall", "Starfall Village", "Winterspring", 1, 3,
@@ -3472,7 +3841,8 @@ index 0000000..2fb49b4
 +          { 25.f, 15.f, 25.f, 15.f, 21.2f, 20.f, 15.f, 25.f,
 +            25.f, 15.f, 24.f, 15.f, 25.f, 25.f, 15.f, 25.f,
 +            15.f, 24.2f, 25.f },
-+          {} },
++          {},
++          { 7119.4f, -4330.7f } },
 +        // Frostfire Hot Springs & Timbermaw Post (Winterspring): Generated by course-gen (Frostfire
 +        // Hot Springs & Timbermaw Post Circuit, seed 1001178): 1.78 km, test lap 55.5s.
 +        { "winterspring-frostfire-timbermaw", "Frostfire Hot Springs & Timbermaw Post", "Winterspring", 1, 3,
@@ -3482,7 +3852,8 @@ index 0000000..2fb49b4
 +            { 6586.7f, -2816.9f }, { 6655.6f, -2678.2f }, { 6754.5f, -2665.3f }, { 6760.3f, -2503.1f } },
 +          { 25.f, 15.f, 25.f, 22.5f, 15.f, 18.4f, 18.4f, 25.f,
 +            15.f, 25.f, 15.f, 15.f, 15.8f, 15.f, 15.f, 25.f },
-+          {} },
++          {},
++          { 6655.7f, -2495.6f } },
 +        // Frostsaber Rock II (Winterspring): Generated by course-gen (Frostsaber Rock Circuit II,
 +        // seed 1000189): 2.25 km, test lap 68.4s.
 +        { "winterspring-frostsaber-2", "Frostsaber Rock II", "Winterspring", 1, 3,
@@ -3494,7 +3865,8 @@ index 0000000..2fb49b4
 +          { 25.f, 15.8f, 15.f, 15.f, 22.f, 15.f, 20.f, 25.f,
 +            25.f, 25.f, 15.f, 15.f, 15.f, 15.f, 15.f, 15.f,
 +            17.f, 15.f, 15.f },
-+          {} },
++          {},
++          { 7438.7f, -4617.4f } },
 +        // Winterspring to Owl Wing Thicket Sprint (Winterspring): Generated by course-gen
 +        // (Winterspring to Owl Wing Thicket Sprint, seed 1000462): 2.00 km, test lap 57.6s.
 +        { "winterspring-wilds-owl-sprint", "Winterspring to Owl Wing Thicket Sprint", "Winterspring", 1, 0,
@@ -3506,7 +3878,8 @@ index 0000000..2fb49b4
 +          { 25.f, 15.f, 25.f, 25.f, 23.f, 25.f, 25.f, 15.f,
 +            25.f, 15.f, 24.2f, 25.f, 25.f, 25.f, 17.4f, 15.f,
 +            25.f },
-+          {} },
++          {},
++          { 7046.7f, -4226.6f } },
 +        // Ice Thistle Hills & Mazthoril (Winterspring): Generated by course-gen (Ice Thistle Hills
 +        // & Mazthoril Circuit, seed 1000866): 2.67 km, test lap 74.2s.
 +        { "winterspring-ice-mazthoril", "Ice Thistle Hills & Mazthoril", "Winterspring", 1, 3,
@@ -3519,7 +3892,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 21.2f, 25.f, 25.f, 15.f, 20.3f, 25.f,
 +            25.f, 25.f, 15.f, 25.f, 25.f, 15.f, 15.8f, 20.f,
 +            24.2f, 25.f, 25.f, 15.f, 24.f, 25.f },
-+          {} },
++          {},
++          { 5976.9f, -4507.8f } },
 +        // Winterfall Village & Everlook (Winterspring): Generated by course-gen (Winterfall Village
 +        // & Everlook Circuit, seed 1000700): 2.40 km, test lap 67.5s.
 +        { "winterspring-winterfall-everlook", "Winterfall Village & Everlook", "Winterspring", 1, 3,
@@ -3531,7 +3905,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 20.f, 15.f, 25.f, 15.f, 23.f, 15.f,
 +            15.f, 25.f, 20.f, 21.2f, 22.f, 22.f, 25.f, 25.f,
 +            25.f, 25.f, 22.5f },
-+          {} },
++          {},
++          { 7284.8f, -4421.2f } },
 +        // Talonbranch Glade to Jadefire Run Sprint (Felwood): Generated by course-gen (Talonbranch
 +        // Glade  to Jadefire Run Sprint, seed 1000711): 2.15 km, test lap 61.9s.
 +        { "felwood-talonbra-jadefire-sprint", "Talonbranch Glade to Jadefire Run Sprint", "Felwood", 1, 0,
@@ -3543,7 +3918,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 15.f, 25.f, 15.f, 15.f, 15.f, 22.f,
 +            17.f, 15.f, 25.f, 23.f, 25.f, 15.f, 15.f, 15.f,
 +            25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { 6272.5f, -1979.6f } },
 +        // Ursolan & Timbermaw Hold (Azshara): Generated by course-gen (Ursolan & Timbermaw Hold
 +        // Circuit, seed 1001257): 1.87 km, test lap 57.2s.
 +        { "azshara-ursolan-timbermaw", "Ursolan & Timbermaw Hold", "Azshara", 1, 3,
@@ -3555,7 +3931,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 15.f, 25.f, 25.f, 17.7f, 25.f, 22.5f,
 +            24.2f, 17.f, 17.4f, 21.2f, 17.f, 23.f, 15.f, 25.f,
 +            25.f },
-+          {} },
++          {},
++          { 4549.9f, -5557.3f } },
 +        // Legash Encampment & Thalassian Base Camp (Azshara): Generated by course-gen (Legash
 +        // Encampment & Thalassian Base Camp Circuit, seed 1000904): 2.46 km, test lap 68.1s.
 +        { "azshara-legash-thalassian", "Legash Encampment & Thalassian Base Camp", "Azshara", 1, 3,
@@ -3567,7 +3944,8 @@ index 0000000..2fb49b4
 +          { 25.f, 15.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 20.f, 25.f, 15.f, 20.3f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { 4559.9f, -6391.6f } },
 +        // Bitter Reaches & Legash Encampment (Azshara): Generated by course-gen (Bitter Reaches &
 +        // Legash Encampment Circuit, seed 1000069): 2.92 km, test lap 82.5s.
 +        { "azshara-bitter-legash", "Bitter Reaches & Legash Encampment", "Azshara", 1, 3,
@@ -3580,7 +3958,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 23.f, 25.f, 25.f, 25.f, 20.f,
 +            23.f, 25.f, 25.f, 25.f, 25.f, 25.f, 23.f, 15.f,
 +            25.f, 25.f, 15.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { 4551.6f, -7671.7f } },
 +        // Legash Encampment & Bitter Reaches (Azshara): Generated by course-gen (Legash Encampment
 +        // & Bitter Reaches Circuit, seed 1000866): 2.01 km, test lap 58.6s.
 +        { "azshara-legash-bitter", "Legash Encampment & Bitter Reaches", "Azshara", 1, 3,
@@ -3592,7 +3971,8 @@ index 0000000..2fb49b4
 +          { 25.f, 24.f, 25.f, 15.f, 25.f, 15.f, 25.f, 25.f,
 +            15.f, 15.f, 25.f, 25.f, 18.4f, 25.f, 25.f, 25.f,
 +            25.f, 15.f },
-+          {} },
++          {},
++          { 4559.9f, -6391.6f } },
 +        // Azshara to Ursolan Sprint (Azshara): Generated by course-gen (Azshara to Ursolan Sprint,
 +        // seed 1000191): 1.58 km, test lap 44.6s.
 +        { "azshara-wilds-ursolan-sprint", "Azshara to Ursolan Sprint", "Azshara", 1, 0,
@@ -3602,7 +3982,8 @@ index 0000000..2fb49b4
 +            { 4446.f, -5703.3f } },
 +          { 25.f, 25.f, 15.f, 25.f, 25.f, 25.f, 25.f, 24.f,
 +            25.f, 25.f, 25.f, 15.f, 25.f },
-+          {} },
++          {},
++          { 3408.2f, -4685.5f } },
 +        // Haldarr Encampment & Valormok (Azshara): Generated by course-gen (Haldarr Encampment &
 +        // Valormok Circuit, seed 1000185): 1.68 km, test lap 48.5s.
 +        { "azshara-haldarr-valormok", "Haldarr Encampment & Valormok", "Azshara", 1, 3,
@@ -3612,7 +3993,8 @@ index 0000000..2fb49b4
 +            { 3172.3f, -4353.3f }, { 3168.6f, -4430.2f }, { 3246.5f, -4504.6f } },
 +          { 25.f, 21.2f, 17.4f, 24.2f, 15.f, 25.f, 25.f, 23.2f,
 +            25.f, 17.4f, 25.f, 25.f, 17.f, 15.f, 15.f },
-+          {} },
++          {},
++          { 3332.4f, -4575.9f } },
 +        // Bear's Head to Shattered Strand Sprint (Azshara): Generated by course-gen (Bear's Head to
 +        // The Shattered Strand Sprint, seed 1001084): 3.02 km, test lap 82.2s.
 +        { "azshara-bear-shattered-sprint", "Bear's Head to Shattered Strand Sprint", "Azshara", 1, 0,
@@ -3625,7 +4007,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 23.2f, 15.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 15.f, 20.f, 25.f, 25.f },
-+          {} },
++          {},
++          { 3854.8f, -5038.5f } },
 +        // Ursolan & Legash Encampment (Azshara): Generated by course-gen (Ursolan & Legash
 +        // Encampment Circuit, seed 1000872): 1.79 km, test lap 49.0s.
 +        { "azshara-ursolan-legash", "Ursolan & Legash Encampment", "Azshara", 1, 3,
@@ -3635,7 +4018,8 @@ index 0000000..2fb49b4
 +            { 4278.2f, -5739.f }, { 4310.4f, -5856.1f }, { 4388.7f, -5940.9f } },
 +          { 25.f, 25.f, 25.f, 22.5f, 25.f, 25.f, 20.f, 15.f,
 +            25.f, 25.f, 25.f, 25.f, 24.f, 25.f, 17.4f },
-+          {} },
++          {},
++          { 4491.9f, -6013.7f } },
 +        // Stillwater Pond & Agamand Mills (Tirisfal Glades): Generated by course-gen (Stillwater
 +        // Pond & Agamand Mills Circuit, seed 1001000): 3.06 km, test lap 87.0s.
 +        { "tirisfal-stillwater-agamand", "Stillwater Pond & Agamand Mills", "Tirisfal Glades", 0, 3,
@@ -3650,7 +4034,8 @@ index 0000000..2fb49b4
 +            25.f, 17.f, 25.f, 20.f, 25.f, 25.f, 25.f, 21.2f,
 +            25.f, 25.f, 15.f, 23.f, 15.8f, 25.f, 25.f, 15.f,
 +            17.f },
-+          {} },
++          {},
++          { 2542.6f, 883.9f } },
 +        // Scarlet Watch Post & The North Coast (Tirisfal Glades): Generated by course-gen (Scarlet
 +        // Watch Post & The North Coast Circuit, seed 1000352): 3.50 km, test lap 103.7s.
 +        { "tirisfal-scarlet-north", "Scarlet Watch Post & The North Coast", "Tirisfal Glades", 0, 3,
@@ -3666,7 +4051,8 @@ index 0000000..2fb49b4
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 15.f, 25.f,
 +            23.f, 15.f, 17.f, 25.f, 15.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 15.f, 25.f, 25.f, 15.f },
-+          {} },
++          {},
++          { 2508.f, 315.5f } },
 +        // Venomweb Vale & Balnir Farmstead (Tirisfal Glades): Generated by course-gen (Venomweb
 +        // Vale & Balnir Farmstead Circuit, seed 1000081): 2.40 km, test lap 79.7s.
 +        { "tirisfal-venomweb-balnir", "Venomweb Vale & Balnir Farmstead", "Tirisfal Glades", 0, 3,
@@ -3678,7 +4064,8 @@ index 0000000..2fb49b4
 +          { 25.f, 17.f, 25.f, 23.2f, 15.f, 17.f, 25.f, 25.f,
 +            25.f, 15.f, 25.f, 25.f, 15.f, 25.f, 21.2f, 25.f,
 +            25.f, 21.2f, 15.f },
-+          {} },
++          {},
++          { 1941.f, -221.8f } },
 +        // Nightmare Vale & Stillwater Pond (Tirisfal Glades): Generated by course-gen (Nightmare
 +        // Vale & Stillwater Pond Circuit, seed 1000271): 2.40 km, test lap 71.5s.
 +        { "tirisfal-nightmare-stillwater", "Nightmare Vale & Stillwater Pond", "Tirisfal Glades", 0, 3,
@@ -3690,7 +4077,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 24.2f, 18.4f, 25.f,
 +            15.f, 25.f, 25.f, 25.f, 22.f, 25.f, 25.f, 15.f,
 +            24.2f, 25.f, 25.f },
-+          {} },
++          {},
++          { 2542.6f, 883.9f } },
 +        // Garren's Haunt & The North Coast (Tirisfal Glades): Generated by course-gen (Garren's
 +        // Haunt & The North Coast Circuit, seed 1001219): 2.71 km, test lap 76.2s.
 +        { "tirisfal-garren-north", "Garren's Haunt & The North Coast", "Tirisfal Glades", 0, 3,
@@ -3703,7 +4091,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 20.f, 23.2f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 21.2f, 20.f, 15.f, 25.f, 25.f, 17.f, 20.f,
 +            15.f, 17.7f, 18.4f, 21.2f, 15.f, 25.f, 25.f },
-+          {} },
++          {},
++          { 2102.5f, -95.1f } },
 +        // Garren's Haunt & Brightwater Lake (Tirisfal Glades): Generated by course-gen (Garren's
 +        // Haunt & Brightwater Lake Circuit, seed 1000855): 2.05 km, test lap 58.1s.
 +        { "tirisfal-garren-brightwater", "Garren's Haunt & Brightwater Lake", "Tirisfal Glades", 0, 3,
@@ -3713,7 +4102,8 @@ index 0000000..2fb49b4
 +            { 2242.2f, -7.8f }, { 2359.2f, 79.2f }, { 2409.7f, 216.3f } },
 +          { 21.2f, 15.f, 15.f, 15.f, 15.f, 20.3f, 25.f, 25.f,
 +            25.f, 25.f, 15.f, 25.f, 17.f, 25.f, 15.f },
-+          {} },
++          {},
++          { 2508.f, 315.5f } },
 +        // Ruins of Lordaeron & Stillwater Pond (Tirisfal Glades): Generated by course-gen (Ruins of
 +        // Lordaeron & Stillwater Pond Circuit, seed 1000634): 2.76 km, test lap 80.8s.
 +        { "tirisfal-lordaeron-stillwater", "Ruins of Lordaeron & Stillwater Pond", "Tirisfal Glades", 0, 3,
@@ -3726,7 +4116,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 23.f, 15.f, 25.f, 24.f, 25.f, 25.f,
 +            15.8f, 25.f, 25.f, 15.f, 25.f, 25.f, 20.f, 25.f,
 +            20.f, 25.f, 15.8f, 25.f, 23.f },
-+          {} },
++          {},
++          { 1941.f, -221.8f } },
 +        // Venomweb Vale to Tirisfal Glades Sprint (Tirisfal Glades): Generated by course-gen
 +        // (Venomweb Vale to Tirisfal Glades Sprint, seed 1000928): 1.92 km, test lap 52.5s.
 +        { "tirisfal-venomweb-wilds-sprint", "Venomweb Vale to Tirisfal Glades Sprint", "Tirisfal Glades", 0, 0,
@@ -3738,7 +4129,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 24.2f, 25.f, 17.f, 25.f,
 +            22.5f, 15.f, 20.f, 24.f, 25.f, 25.f, 25.f, 25.f,
 +            23.f },
-+          {} },
++          {},
++          { 2228.9f, -844.5f } },
 +        // Ambermill & The Greymane Wall (Silverpine Forest): Generated by course-gen (Ambermill &
 +        // The Greymane Wall Circuit, seed 1000585): 2.04 km, test lap 75.4s.
 +        { "silverpine-ambermill-greymane", "Ambermill & The Greymane Wall", "Silverpine Forest", 0, 3,
@@ -3750,7 +4142,8 @@ index 0000000..2fb49b4
 +          { 25.f, 15.f, 23.f, 15.f, 25.f, 24.2f, 25.f, 15.f,
 +            15.f, 25.f, 15.f, 15.f, 15.f, 25.f, 25.f, 15.f,
 +            15.f },
-+          {} },
++          {},
++          { -444.2f, 1411.8f } },
 +        // North Tide's Hollow & The Dead Field (Silverpine Forest): Generated by course-gen (North
 +        // Tide's Hollow & The Dead Field Circuit, seed 1000526): 1.32 km, test lap 39.0s.
 +        { "silverpine-north-dead", "North Tide's Hollow & The Dead Field", "Silverpine Forest", 0, 3,
@@ -3759,7 +4152,8 @@ index 0000000..2fb49b4
 +            { 962.4f, 1759.3f }, { 999.3f, 1913.3f } },
 +          { 25.f, 24.f, 15.f, 15.f, 15.f, 20.f, 15.f, 25.f,
 +            15.f, 25.f },
-+          {} },
++          {},
++          { 903.6f, 1800.6f } },
 +        // Tiragarde Keep & Sen'jin Village (Durotar): Generated by course-gen (Tiragarde Keep &
 +        // Sen'jin Village Circuit, seed 1000179): 2.53 km, test lap 70.8s.
 +        { "durotar-tiragarde-sen", "Tiragarde Keep & Sen'jin Village", "Durotar", 1, 3,
@@ -3772,7 +4166,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 15.f, 25.f, 25.f, 25.f, 15.f,
 +            24.f, 25.f, 25.f, 17.7f, 25.f, 15.f, 25.f, 22.5f,
 +            20.3f, 25.f, 15.f, 15.f, 25.f },
-+          {} },
++          {},
++          { -657.f, -4928.8f } },
 +        // Jaggedswine Farm & Rocktusk Farm (Durotar): Generated by course-gen (Jaggedswine Farm &
 +        // Rocktusk Farm Circuit, seed 1001205): 2.34 km, test lap 66.8s.
 +        { "durotar-jaggedswine-rocktusk", "Jaggedswine Farm & Rocktusk Farm", "Durotar", 1, 3,
@@ -3784,7 +4179,8 @@ index 0000000..2fb49b4
 +          { 23.2f, 25.f, 25.f, 25.f, 25.f, 25.f, 24.2f, 25.f,
 +            20.f, 25.f, 15.f, 25.f, 25.f, 25.f, 15.f, 25.f,
 +            22.5f, 15.f, 15.f },
-+          {} },
++          {},
++          { 1270.5f, -4405.2f } },
 +        // Razor Hill & Razormane Grounds (Durotar): Generated by course-gen (Razor Hill & Razormane
 +        // Grounds Circuit, seed 1000767): 3.42 km, test lap 99.4s.
 +        { "durotar-razor-razormane", "Razor Hill & Razormane Grounds", "Durotar", 1, 3,
@@ -3799,7 +4195,8 @@ index 0000000..2fb49b4
 +            15.f, 18.4f, 15.f, 15.f, 18.4f, 15.f, 25.f, 15.f,
 +            25.f, 25.f, 15.f, 15.f, 24.f, 25.f, 22.f, 25.f,
 +            25.f, 25.f, 15.f },
-+          {} },
++          {},
++          { 267.9f, -4479.9f } },
 +        // Razormane Grounds & Southfury River (Durotar): Generated by course-gen (Razormane Grounds
 +        // & Southfury River Circuit, seed 1001478): 1.77 km, test lap 48.6s.
 +        { "durotar-razormane-southfury", "Razormane Grounds & Southfury River", "Durotar", 1, 3,
@@ -3809,7 +4206,8 @@ index 0000000..2fb49b4
 +            { 449.f, -4312.5f }, { 495.1f, -4171.6f }, { 401.9f, -4119.6f } },
 +          { 23.2f, 25.f, 25.f, 25.f, 25.f, 17.f, 20.f, 25.f,
 +            25.f, 15.f, 25.f, 15.f, 15.f, 15.f, 25.f },
-+          {} },
++          {},
++          { 285.3f, -4100.f } },
 +        // Razormane Grounds & Tor'kren Farm (Durotar): Generated by course-gen (Razormane Grounds &
 +        // Tor'kren Farm Circuit, seed 1000876): 2.25 km, test lap 61.5s.
 +        { "durotar-razormane-tor", "Razormane Grounds & Tor'kren Farm", "Durotar", 1, 3,
@@ -3821,7 +4219,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 23.2f, 15.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 25.f,
 +            25.f, 25.f, 24.2f },
-+          {} },
++          {},
++          { 305.4f, -3898.f } },
 +        // Southfury River & Razormane Grounds (Durotar): Generated by course-gen (Southfury River &
 +        // Razormane Grounds Circuit, seed 1001247): 1.88 km, test lap 53.1s.
 +        { "durotar-southfury-razormane", "Southfury River & Razormane Grounds", "Durotar", 1, 3,
@@ -3831,7 +4230,8 @@ index 0000000..2fb49b4
 +            { 597.1f, -4016.1f }, { 669.5f, -3902.4f }, { 555.1f, -3868.2f }, { 436.4f, -3827.1f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 15.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 20.f, 25.f },
-+          {} },
++          {},
++          { 307.5f, -3833.3f } },
 +        // Tiragarde Keep & Scuttle Coast (Durotar): Generated by course-gen (Tiragarde Keep &
 +        // Scuttle Coast Circuit, seed 1000388): 1.93 km, test lap 57.0s.
 +        { "durotar-tiragarde-scuttle", "Tiragarde Keep & Scuttle Coast", "Durotar", 1, 3,
@@ -3841,7 +4241,8 @@ index 0000000..2fb49b4
 +            { 234.8f, -4829.f }, { 224.5f, -4702.2f }, { 226.4f, -4575.f }, { 173.7f, -4667.3f } },
 +          { 25.f, 25.f, 22.5f, 25.f, 25.f, 18.4f, 15.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 20.f },
-+          {} },
++          {},
++          { 104.6f, -4756.9f } },
 +        // Scuttle Coast to Durotar Sprint (Durotar): Generated by course-gen (Scuttle Coast to
 +        // Durotar Sprint, seed 1000664): 1.94 km, test lap 52.8s.
 +        { "durotar-scuttle-wilds-sprint", "Scuttle Coast to Durotar Sprint", "Durotar", 1, 0,
@@ -3851,7 +4252,8 @@ index 0000000..2fb49b4
 +            { 1169.8f, -4533.8f }, { 1202.3f, -4385.6f }, { 1202.f, -4229.6f }, { 1230.f, -4075.3f } },
 +          { 25.f, 25.f, 25.f, 17.4f, 18.4f, 25.f, 15.f, 15.f,
 +            15.f, 20.f, 20.f, 15.f, 15.f, 17.4f, 25.f, 25.f },
-+          {} },
++          {},
++          { 65.4f, -5122.2f } },
 +        // Ravaged Caravan & The Golden Plains (Mulgore): Generated by course-gen (Ravaged Caravan &
 +        // The Golden Plains Circuit, seed 1000463): 2.13 km, test lap 57.9s.
 +        { "mulgore-ravaged-golden", "Ravaged Caravan & The Golden Plains", "Mulgore", 1, 3,
@@ -3863,7 +4265,8 @@ index 0000000..2fb49b4
 +          { 23.2f, 25.f, 25.f, 25.f, 25.f, 23.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 20.f, 25.f, 15.f, 25.f,
 +            25.f },
-+          {} },
++          {},
++          { -2352.3f, -829.8f } },
 +        // The Golden Plains & Windfury Ridge (Mulgore): Generated by course-gen (The Golden Plains
 +        // & Windfury Ridge Circuit, seed 1000277): 1.97 km, test lap 55.6s.
 +        { "mulgore-golden-windfury", "The Golden Plains & Windfury Ridge", "Mulgore", 1, 3,
@@ -3873,7 +4276,8 @@ index 0000000..2fb49b4
 +            { -827.6f, -293.7f }, { -913.9f, -397.5f }, { -997.2f, -506.4f }, { -1103.7f, -597.5f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -1105.3f, -726.7f } },
 +        // The Golden Plains & Wildmane Water Well (Mulgore): Generated by course-gen (The Golden
 +        // Plains & Wildmane Water Well Circuit, seed 1000354): 2.09 km, test lap 60.9s.
 +        { "mulgore-golden-wildmane", "The Golden Plains & Wildmane Water Well", "Mulgore", 1, 3,
@@ -3885,7 +4289,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 15.8f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 24.f, 25.f, 25.f, 25.f,
 +            25.f },
-+          {} },
++          {},
++          { -750.f, -515.5f } },
 +        // The Golden Plains & Windfury Ridge II (Mulgore): Generated by course-gen (The Golden
 +        // Plains & Windfury Ridge Circuit II, seed 1000961): 2.07 km, test lap 58.9s.
 +        { "mulgore-golden-windfury-2", "The Golden Plains & Windfury Ridge II", "Mulgore", 1, 3,
@@ -3897,7 +4302,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f },
-+          {} },
++          {},
++          { -895.9f, -586.7f } },
 +        // The Golden Plains (Mulgore): Generated by course-gen (The Golden Plains Circuit, seed
 +        // 1001080): 2.64 km, test lap 74.0s.
 +        { "mulgore-golden", "The Golden Plains", "Mulgore", 1, 3,
@@ -3910,7 +4316,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 22.5f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -1552.8f, 0.3f } },
 +        // The Golden Plains & Stonebull Lake (Mulgore): Generated by course-gen (The Golden Plains
 +        // & Stonebull Lake Circuit, seed 1001402): 2.39 km, test lap 69.4s.
 +        { "mulgore-golden-stonebull", "The Golden Plains & Stonebull Lake", "Mulgore", 1, 3,
@@ -3922,7 +4329,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 23.2f, 15.f, 25.f, 25.f, 15.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -2005.9f, -272.3f } },
 +        // Stonebull Lake & Bloodhoof Village (Mulgore): Generated by course-gen (Stonebull Lake &
 +        // Bloodhoof Village Circuit, seed 1000150): 2.77 km, test lap 76.1s.
 +        { "mulgore-stonebull-bloodhoof", "Stonebull Lake & Bloodhoof Village", "Mulgore", 1, 3,
@@ -3935,7 +4343,8 @@ index 0000000..2fb49b4
 +          { 25.f, 23.2f, 25.f, 25.f, 25.f, 25.f, 25.f, 23.2f,
 +            25.f, 25.f, 25.f, 25.f, 15.8f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -2623.8f, -161.4f } },
 +        // The Golden Plains & Red Rocks (Mulgore): Generated by course-gen (The Golden Plains & Red
 +        // Rocks Circuit, seed 1001111): 1.88 km, test lap 51.5s.
 +        { "mulgore-golden-red", "The Golden Plains & Red Rocks", "Mulgore", 1, 3,
@@ -3945,7 +4354,8 @@ index 0000000..2fb49b4
 +            { -1452.9f, -736.1f }, { -1379.2f, -805.1f }, { -1318.1f, -893.5f }, { -1231.5f, -951.4f } },
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -1150.9f, -809.4f } },
 +        // The Stagnant Oasis & Northwatch Hold (The Barrens): Generated by course-gen (The Stagnant
 +        // Oasis & Northwatch Hold Circuit, seed 1001303): 3.04 km, test lap 89.7s.
 +        { "barrens-stagnant-northwatch", "The Stagnant Oasis & Northwatch Hold", "The Barrens", 1, 3,
@@ -3960,7 +4370,8 @@ index 0000000..2fb49b4
 +            25.f, 25.f, 25.f, 25.f, 15.f, 15.f, 20.f, 25.f,
 +            25.f, 25.f, 25.f, 22.5f, 15.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f },
-+          {} },
++          {},
++          { -937.8f, -3229.9f } },
 +        // The Stagnant Oasis & Southern Barrens (The Barrens): Generated by course-gen (The
 +        // Stagnant Oasis & Southern Barrens Circuit, seed 1000328): 2.33 km, test lap 67.3s.
 +        { "barrens-stagnant-southern", "The Stagnant Oasis & Southern Barrens", "The Barrens", 1, 3,
@@ -3972,7 +4383,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 22.f, 25.f, 15.f, 25.f, 24.2f, 21.2f,
 +            25.f, 17.f, 25.f, 25.f, 15.f, 15.f, 25.f, 25.f,
 +            15.f, 25.f, 15.f, 25.f },
-+          {} },
++          {},
++          { -1664.5f, -3063.4f } },
 +        // Field of Giants & Southern Barrens (The Barrens): Generated by course-gen (Field of
 +        // Giants & Southern Barrens Circuit, seed 1000953): 2.73 km, test lap 76.8s.
 +        { "barrens-giants-southern", "Field of Giants & Southern Barrens", "The Barrens", 1, 3,
@@ -3985,7 +4397,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 20.f, 15.f, 25.f, 25.f, 25.f,
 +            25.f, 15.f, 25.f, 21.2f, 25.f, 25.f, 15.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -2650.2f, -2173.3f } },
 +        // Bramblescar & Southern Barrens (The Barrens): Generated by course-gen (Bramblescar &
 +        // Southern Barrens Circuit, seed 1000365): 2.55 km, test lap 74.6s.
 +        { "barrens-bramblescar-southern", "Bramblescar & Southern Barrens", "The Barrens", 1, 3,
@@ -3998,7 +4411,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 24.2f, 25.f, 15.8f,
 +            25.f, 25.f, 15.f, 25.f, 25.f, 25.f, 21.2f, 25.f,
 +            15.f, 25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -1978.f, -2305.7f } },
 +        // Gold Road & The Stagnant Oasis (The Barrens): Generated by course-gen (Gold Road & The
 +        // Stagnant Oasis Circuit, seed 1000568): 1.99 km, test lap 55.8s.
 +        { "barrens-gold-stagnant", "Gold Road & The Stagnant Oasis", "The Barrens", 1, 3,
@@ -4010,7 +4424,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 25.f, 17.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f },
-+          {} },
++          {},
++          { -1245.4f, -2453.6f } },
 +        // The Stagnant Oasis (The Barrens): Generated by course-gen (The Stagnant Oasis Circuit,
 +        // seed 1000391): 2.31 km, test lap 67.1s.
 +        { "barrens-stagnant", "The Stagnant Oasis", "The Barrens", 1, 3,
@@ -4022,7 +4437,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 15.f, 25.f, 15.f, 21.2f,
 +            25.f, 25.f, 15.f, 17.f, 25.f, 25.f, 25.f, 17.f,
 +            25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -739.7f, -2989.8f } },
 +        // Lushwater Oasis & Gold Road (The Barrens): Generated by course-gen (Lushwater Oasis &
 +        // Gold Road Circuit, seed 1000747): 2.30 km, test lap 69.0s.
 +        { "barrens-lushwater-gold", "Lushwater Oasis & Gold Road", "The Barrens", 1, 3,
@@ -4034,7 +4450,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 15.f, 15.f, 25.f,
 +            25.f, 15.f, 15.f, 25.f, 25.f, 25.f, 25.f, 24.2f,
 +            25.f, 25.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -1091.7f, -2447.7f } },
 +        // Southern Barrens & Blackthorn Ridge (The Barrens): Generated by course-gen (Southern
 +        // Barrens & Blackthorn Ridge Circuit, seed 1000487): 2.90 km, test lap 84.9s.
 +        { "barrens-southern-blackthorn", "Southern Barrens & Blackthorn Ridge", "The Barrens", 1, 3,
@@ -4047,7 +4464,8 @@ index 0000000..2fb49b4
 +          { 25.f, 25.f, 25.f, 25.f, 25.f, 24.2f, 18.4f, 15.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
 +            25.f, 25.f, 25.f, 25.f, 25.f, 23.f, 25.f, 25.f },
-+          {} },
++          {},
++          { -3291.9f, -2041.3f } },
 +    };
 diff --git a/src/game/Spells/Spell.cpp b/src/game/Spells/Spell.cpp
 index eaaaaf1..abd1b5d 100644
@@ -4119,6 +4537,14 @@ index ca0b522..ee84998 100644
  
      sObjectMgr.LoadFactions();
  
+@@ -1763,6 +1765,7 @@ void World::SetInitialWorldSettings()
+ 
+     sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Initializing Scripts...");
+     sScriptMgr.Initialize();
++    Kartcraft::RegisterScripts();
+     sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "");
+ 
+     sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Loading aura removal on map change definitions");
 diff --git a/src/shared/Progression.h b/src/shared/Progression.h
 index f9a08bc..a92c9e0 100644
 --- a/src/shared/Progression.h

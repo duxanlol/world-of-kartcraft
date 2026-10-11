@@ -9,6 +9,9 @@
 //!
 //! `course-gen export --candidates <dir>/candidates.json --all` adds those finalists to
 //! `courses/courses.json`, each replacing the course of its key.
+//!
+//! `course-gen marshals` writes each course's Race Marshal spot (`"marshal"`) into
+//! `courses/courses.json`; run it after adding courses, then `setup/vmangos/pack.py`.
 
 use std::path::PathBuf;
 
@@ -133,6 +136,13 @@ enum Cmd {
         /// Keys to remove from the file (repeatable).
         #[arg(long)]
         remove: Vec<String>,
+    },
+    /// Place a Race Marshal beside every distinct course start, at the ground's height, and
+    /// write each course's `"marshal"` into the course file.
+    Marshals {
+        /// The course file.
+        #[arg(long, default_value = "courses/courses.json")]
+        courses: PathBuf,
     },
 }
 
@@ -352,6 +362,10 @@ fn main() -> Result<()> {
                 );
             }
             println!("exported {} into {}", done.len(), courses.display());
+        }
+        Cmd::Marshals { courses } => {
+            let n = course_gen::marshal::run(&courses, open_install()?)?;
+            println!("{n} marshals written into {}", courses.display());
         }
         Cmd::Courses {
             zone,

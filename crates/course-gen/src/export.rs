@@ -433,6 +433,7 @@ const ORDER: &[&str] = &[
     "map",
     "laps",
     "note",
+    "marshal",
     "checkpoints",
     "crates",
 ];
@@ -550,6 +551,11 @@ pub fn validate(file: &Value) -> Result<()> {
                 && num(&p["gate"], &format!("course {key}: checkpoint {i} gate"))? < 0.0
             {
                 bail!("course {key}: checkpoint {i} gate is negative");
+            }
+        }
+        if let Some(m) = c.get("marshal") {
+            for f in ["x", "y", "z", "o"] {
+                num(&m[f], &format!("course {key}: marshal {f}"))?;
             }
         }
         for (i, s) in c["crates"].as_array().into_iter().flatten().enumerate() {

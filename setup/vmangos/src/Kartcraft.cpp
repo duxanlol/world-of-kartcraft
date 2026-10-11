@@ -7,6 +7,9 @@
 #include "ObjectAccessor.h"
 #include "WorldSession.h"
 #include "World.h"
+#include "Creature.h"
+#include "GossipDef.h"
+#include "ScriptMgr.h"
 
 #include <cmath>
 #include <string>
@@ -245,6 +248,8 @@ namespace Kartcraft
         std::vector<float> gates;
         // The crate layout; empty for the one built from the checkpoints (Layout).
         std::vector<CrateSpot> crates;
+        // Where its Race Marshal stands (WoW x, y): courses sharing a start share the marshal.
+        std::pair<float, float> marshal;
     };
 
     // The courses: courses/courses.json, made into this table by setup/vmangos/pack.py.
@@ -1093,6 +1098,16 @@ namespace Kartcraft
             !player->GetMap()->Instanceable();
     }
 
+    // Puts a driver on foot (or on another mount) in the kart: a triggered cast, with no cast bar
+    // to interrupt; the kart aura lands when the cast time has run.
+    static void SummonKart(Player* player)
+    {
+        if (player->HasAura(SPELL_SUMMON_KART))
+            return;
+        player->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
+        player->CastSpell(player, SPELL_SUMMON_KART, true);
+    }
+
     static void TeleportToGrid(Player* player, Course const& c, size_t slot)
     {
         // Their situation may have changed since they said yes: then they stay where they are.
@@ -1112,11 +1127,7 @@ namespace Kartcraft
         if (ground <= INVALID_HEIGHT)
             return;
         float z = ground + 0.5f;
-        if (!player->HasAura(SPELL_SUMMON_KART))
-        {
-            player->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
-            player->CastSpell(player, SPELL_SUMMON_KART, true);
-        }
+        SummonKart(player);
         player->TeleportTo(c.map, x, y, z, std::atan2(dy, dx));
     }
 
@@ -1355,7 +1366,9 @@ namespace Kartcraft
         return true;
     }
 
-    static void HandleRace(Player* player, std::string const& body)
+    // `marshal`: the line comes from a Race Marshal's menu (MarshalSelect), which the player used
+    // standing at the start: the start's distance and the kart are not asked for.
+    static void HandleRace(Player* player, std::string const& body, bool marshal)
     {
         uint32 now = WorldTimer::getMSTime();
         for (auto it = s_races.begin(); it != s_races.end();)
@@ -1370,8 +1383,8 @@ namespace Kartcraft
                 tab = body.size();
             f.push_back(body.substr(at, tab - at));
         }
-        // The finder's verbs work on foot; the rest need the kart.
-        if (f.size() < 2 || HandleFinder(player, f, now) || !player->HasAura(SPELL_SUMMON_KART))
+        // The finder's verbs work on foot; the rest need the kart, but for a marshal's.
+        if (f.size() < 2 || HandleFinder(player, f, now) || (!marshal && !player->HasAura(SPELL_SUMMON_KART)))
             return;
         std::string const& verb = f[1];
         uint32 id = f.size() > 2 ? uint32(std::strtoul(f[2].c_str(), nullptr, 10)) : 0;
@@ -1380,7 +1393,7 @@ namespace Kartcraft
         if (verb == "H" && f.size() > 2)
         {
             Course const* course = FindCourse(f[2]);
-            if (!course || player->GetMapId() != course->map || DistanceTo(player, course->points[0]) > START_RADIUS)
+            if (!course || player->GetMapId() != course->map || (!marshal && DistanceTo(player, course->points[0]) > START_RADIUS))
                 return;
             // A race already waiting on this course takes them in: who arrives after the offer
             // (sent once, to those near) still races with the host rather than alone.
@@ -1415,7 +1428,8 @@ namespace Kartcraft
         else if (verb == "J" && race != s_races.end())
         {
             Race& r = race->second;
-            if (r.start || r.racers.size() >= MAX_RACERS || DistanceTo(player, r.course->points[0]) > START_RADIUS)
+            if (r.start || r.racers.size() >= MAX_RACERS || player->GetMapId() != r.course->map ||
+                (!marshal && DistanceTo(player, r.course->points[0]) > START_RADIUS))
                 return;
             for (Racer const& x : r.racers)
                 if (x.guid == player->GetObjectGuid())
@@ -1489,12 +1503,11 @@ namespace Kartcraft
         }
     }
 
-    bool HandleAddonMessage(Player* player, std::string const& message)
+    static std::string const PREFIX = "KARTCRAFT\t";
+
+    // One Kartcraft line, without its prefix; `marshal` as for HandleRace.
+    static void HandleLine(Player* player, std::string const& body, bool marshal)
     {
-        static std::string const prefix = "KARTCRAFT\t";
-        if (message.compare(0, prefix.size(), prefix) != 0)
-            return false;
-        std::string body = message.substr(prefix.size());
         std::lock_guard<std::mutex> lock(s_mutex);
         TickWeapons(WorldTimer::getMSTime());
         if (body.compare(0, 2, "L\t") == 0)
@@ -1504,14 +1517,210 @@ namespace Kartcraft
                 LandLine(player, points);
         }
         else if (body.compare(0, 2, "S\t") == 0)
-            RelayState(player, message);
+            RelayState(player, PREFIX + body);
         else if (body.compare(0, 2, "R\t") == 0)
-            HandleRace(player, body);
+            HandleRace(player, body, marshal);
         else if (body.compare(0, 2, "W\t") == 0)
             HandleWeapon(player, body);
         // After the line: a finish or a leave in it frees the racer at once.
         TickShields(WorldTimer::getMSTime());
+    }
+
+    bool HandleAddonMessage(Player* player, std::string const& message)
+    {
+        if (message.compare(0, PREFIX.size(), PREFIX) != 0)
+            return false;
+        HandleLine(player, message.substr(PREFIX.size()), false);
         return true;
+    }
+
+    // ── Race Marshal ───────────────────────────────────────────────────────────────────────────
+    //
+    // A gossip NPC beside every course start (setup/vmangos/sql/kartcraft.sql, placed by
+    // `course-gen marshals`): its menu hosts, joins, starts and leaves races there, and opens the
+    // client's Race Finder ("R\tFinder"). Gossip runs on the player's map thread, and maps update
+    // in parallel: the menu only reads the races, under the lock, and a choice is posted to the
+    // world's messager, which runs it between map updates as the addon line it stands for, so a
+    // choice and its key do the same thing.
+
+    constexpr uint32 MARSHAL_TEXT = 190000;      // npc_text: the greeting
+    constexpr uint32 MARSHAL_HELP_TEXT = 190001; // npc_text: "How do races work?"
+    // A marshal belongs to the courses whose "marshal" spot is its spawn point, this near (yards).
+    constexpr float MARSHAL_MATCH = 2.f;
+
+    enum MarshalOption : uint32
+    {
+        MARSHAL_HOST = 1, // action: the course's index in COURSES
+        MARSHAL_JOIN,     // action: the race id
+        MARSHAL_START,    // action: the race id
+        MARSHAL_LEAVE,
+        MARSHAL_FINDER,
+        MARSHAL_HELP,
+        MARSHAL_BACK,
+    };
+
+    // The courses that start at this marshal: those placed with it, else (a marshal spawned
+    // anywhere else) those whose start is within START_RADIUS of it.
+    static std::vector<size_t> MarshalCourses(Creature* marshal)
+    {
+        float x, y, z;
+        marshal->GetRespawnCoord(x, y, z);
+        std::vector<size_t> here, near;
+        for (size_t i = 0; i < COURSES.size(); ++i)
+        {
+            Course const& c = COURSES[i];
+            if (c.map != marshal->GetMapId())
+                continue;
+            if (std::hypot(c.marshal.first - x, c.marshal.second - y) <= MARSHAL_MATCH)
+                here.push_back(i);
+            else if (std::hypot(c.points[0].first - x, c.points[0].second - y) <= START_RADIUS)
+                near.push_back(i);
+        }
+        return here.empty() ? near : here;
+    }
+
+    static bool AtMarshal(std::vector<size_t> const& here, Course const* course)
+    {
+        return std::any_of(here.begin(), here.end(), [course](size_t i) { return &COURSES[i] == course; });
+    }
+
+    static bool MarshalHello(Player* player, Creature* marshal)
+    {
+        std::vector<size_t> const here = MarshalCourses(marshal);
+        ObjectGuid const guid = player->GetObjectGuid();
+        PlayerMenu* talk = player->PlayerTalkClass;
+        talk->ClearMenus();
+        GossipMenu& menu = talk->GetGossipMenu();
+        // Room for the three lines every menu ends with.
+        size_t room = GOSSIP_MAX_MENU_ITEMS - 3;
+        bool busy = false;
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            uint32 const now = WorldTimer::getMSTime();
+            busy = std::any_of(s_queue.begin(), s_queue.end(), [guid](Queued const& q) { return q.guid == guid; });
+            for (auto const& p : s_pops)
+                for (Queued const& q : p.second.members)
+                    busy |= q.guid == guid;
+            std::vector<Course const*> waiting;
+            std::vector<std::pair<uint32, Race const*>> joinable;
+            for (auto const& entry : s_races)
+            {
+                Race const& r = entry.second;
+                bool in = std::any_of(r.racers.begin(), r.racers.end(), [guid](Racer const& x) { return x.guid == guid; });
+                busy |= in;
+                if (r.start || WorldTimer::getMSTimeDiff(r.created, now) > RACE_LIFETIME || !AtMarshal(here, r.course))
+                    continue;
+                waiting.push_back(r.course);
+                if (r.host == guid && room)
+                {
+                    menu.AddMenuItem(GOSSIP_ICON_BATTLE, "Start the race on " + std::string(r.course->name) + " (" +
+                        std::to_string(r.racers.size()) + (r.racers.size() == 1 ? " racer)" : " racers)"),
+                        MARSHAL_START, entry.first, "", false);
+                    --room;
+                }
+                else if (!in && r.racers.size() < MAX_RACERS)
+                    joinable.emplace_back(entry.first, &r);
+            }
+            for (auto const& j : joinable)
+            {
+                if (!room)
+                    break;
+                Race const& r = *j.second;
+                std::string host = r.racers.front().name;
+                for (Racer const& x : r.racers)
+                    if (x.guid == r.host)
+                        host = x.name;
+                menu.AddMenuItem(GOSSIP_ICON_TALK, "Join " + host + "'s race on " + r.course->name + " (" +
+                    std::to_string(r.racers.size()) + (r.racers.size() == 1 ? " racer)" : " racers)"),
+                    MARSHAL_JOIN, j.first, "", false);
+                --room;
+            }
+            // A course with a race waiting is joined, not hosted again (as "R\tH" itself does).
+            for (size_t i : here)
+            {
+                Course const& c = COURSES[i];
+                if (!room)
+                    break;
+                if (std::find(waiting.begin(), waiting.end(), &c) != waiting.end())
+                    continue;
+                menu.AddMenuItem(GOSSIP_ICON_BATTLE, "Host a race: " + std::string(c.name) + " (" +
+                    (c.laps ? std::to_string(c.laps) + (c.laps == 1 ? " lap)" : " laps)") : std::string("sprint)")),
+                    MARSHAL_HOST, uint32(i), "", false);
+                --room;
+            }
+        }
+        if (busy)
+            menu.AddMenuItem(GOSSIP_ICON_CHAT, "Leave the race", MARSHAL_LEAVE, 0, "", false);
+        menu.AddMenuItem(GOSSIP_ICON_DOT, "Open the Race Finder", MARSHAL_FINDER, 0, "", false);
+        menu.AddMenuItem(GOSSIP_ICON_CHAT, "How do races work?", MARSHAL_HELP, 0, "", false);
+        talk->SendGossipMenu(MARSHAL_TEXT, marshal->GetObjectGuid());
+        return true;
+    }
+
+    static bool MarshalSelect(Player* player, Creature* marshal, uint32 sender, uint32 action)
+    {
+        std::string line;
+        switch (sender)
+        {
+            case MARSHAL_HOST:
+                if (action < COURSES.size() && AtMarshal(MarshalCourses(marshal), &COURSES[action]))
+                    line = std::string("R\tH\t") + COURSES[action].key;
+                break;
+            case MARSHAL_JOIN:
+            case MARSHAL_START:
+            {
+                std::vector<size_t> const here = MarshalCourses(marshal);
+                std::lock_guard<std::mutex> lock(s_mutex);
+                auto race = s_races.find(action);
+                if (race != s_races.end() && AtMarshal(here, race->second.course))
+                    line = (sender == MARSHAL_JOIN ? "R\tJ\t" : "R\tS\t") + std::to_string(action);
+                break;
+            }
+            case MARSHAL_LEAVE:
+                line = "R\tX";
+                break;
+            case MARSHAL_FINDER:
+                line = "R\tFinder";
+                break;
+            case MARSHAL_HELP:
+                player->PlayerTalkClass->GetGossipMenu().AddMenuItem(GOSSIP_ICON_CHAT, "Back", MARSHAL_BACK, 0, "", false);
+                player->PlayerTalkClass->SendGossipMenu(MARSHAL_HELP_TEXT, marshal->GetObjectGuid());
+                return true;
+            case MARSHAL_BACK:
+                return MarshalHello(player, marshal);
+        }
+        player->PlayerTalkClass->CloseGossip();
+        if (line.empty())
+            return true;
+        ObjectGuid const guid = player->GetObjectGuid();
+        sWorld.GetMessager().AddMessage([guid, line](World*)
+        {
+            Player* p = ObjectAccessor::FindPlayer(guid);
+            if (!p || !p->IsInWorld())
+                return;
+            if (line == "R\tFinder")
+            {
+                // The client opens its Race Finder at this line.
+                SendLine(p, PREFIX + line);
+                return;
+            }
+            // Hosting or joining on foot: into the kart first, as a Race Finder pop does.
+            bool const enters = line.compare(0, 4, "R\tH\t") == 0 || line.compare(0, 4, "R\tJ\t") == 0;
+            if (enters && CanBeRacedOff(p))
+                SummonKart(p);
+            HandleLine(p, line, true);
+        });
+        return true;
+    }
+
+    void RegisterScripts()
+    {
+        // ScriptMgr keeps it only if creature_template names it (sql/kartcraft.sql), and frees it.
+        Script* marshal = new Script;
+        marshal->Name = "npc_kartcraft_marshal";
+        marshal->pGossipHello = &MarshalHello;
+        marshal->pGossipSelect = &MarshalSelect;
+        marshal->RegisterSelf(true);
     }
 
     SpellCastResult CheckCast(Unit const* caster, SpellEntry const* spell)

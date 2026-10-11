@@ -39,6 +39,8 @@ namespace Kartcraft
     bool HandleAddonMessage(Player* player, std::string const& message);
     // Extra cast checks for the kart spells. SPELL_CAST_OK otherwise.
     SpellCastResult CheckCast(Unit const* caster, SpellEntry const* spell);
+    // After ScriptMgr::Initialize: the Race Marshal's gossip (npc_kartcraft_marshal).
+    void RegisterScripts();
 }
 
 #endif

@@ -164,6 +164,18 @@ if [ ! -d "$SERVER/storage/mangosd/extracted-data/maps" ]; then
 fi
 step "Building the server with the Karting profession (a few minutes)"
 "$ROOT/setup/build-server.sh" "$SERVER" || die "the server build failed (see the lines above)"
+# The Race Marshals (setup/vmangos/sql/kartcraft.sql): the database container runs custom-sql/ on
+# every start, so a changed file restarts it, with the world server stopped meanwhile.
+CUSTOM_SQL="$SERVER/storage/database/custom-sql/kartcraft.sql"
+if ! cmp -s "$ROOT/setup/vmangos/sql/kartcraft.sql" "$CUSTOM_SQL"; then
+    mkdir -p "$(dirname "$CUSTOM_SQL")"
+    cp "$ROOT/setup/vmangos/sql/kartcraft.sql" "$CUSTOM_SQL"
+    echo "  Race Marshals: storage/database/custom-sql/kartcraft.sql"
+    if [ -n "$(compose ps -q database 2>/dev/null)" ]; then
+        compose stop mangosd
+        compose restart database
+    fi
+fi
 step "Starting the server"
 compose up -d
 printf '  waiting for the world server'
