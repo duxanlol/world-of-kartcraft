@@ -38,7 +38,11 @@ fn family(rel: &str) -> Family {
 }
 
 /// The standing count of `Game` files; raise it only with the reason written down.
-const CEILING: usize = 40;
+///
+/// Raised from 40 to 42 for World of Kartcraft's `kart/autotest.rs`, the unattended live-run
+/// driver that answers the race windows' popups as a player's clicks would (a probe in all but
+/// its folder), and `kart/bindings.rs`, which names the VM only in its own tests.
+const CEILING: usize = 42;
 
 /// How far under [`CEILING`] the count may sit before the test asks for the ceiling to follow it.
 const SLACK: usize = 4;
