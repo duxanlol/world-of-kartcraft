@@ -3,8 +3,15 @@
 //! The server sends the course's checkpoints and a countdown: CTR's start lights, the kart held on
 //! the line revving, with CTR's start boost for the revs at GO (`ctr_kart::rev`). Each checkpoint
 //! passed is reported, and the server checks it against where we really are; it relays everyone's
-//! progress, from which our place is worked out, and the finishes with their times. Checkpoints
-//! stand in the world as beams of light, the next one bright. The server keeps each character's best per course
+//! progress, and the finishes with their times. Our place is worked out every frame, as CTR ranks
+//! by each racer's distance along its path: everyone projected onto the leg past their last
+//! checkpoint, where their kart is relayed. Checkpoints stand in the world as beams of light, the
+//! next one bright.
+//!
+//! CTR's race HUD comes with it (`kartcraft::hud`): the race clock with our lap times, which we
+//! keep ourselves as we cross the start; "FINAL LAP" flying by as the last lap begins, the music
+//! 20 BPM up on its own tempo soon after; and "WRONG WAY" flashing once we have driven back along
+//! the course far enough, facing back down it. The server keeps each character's best per course
 //! and the course record: it sends both at the start (`Rec`), marks a finish that beats one
 //! (`F`'s sixth field), and the results board ends with them.
 //!
@@ -25,6 +32,7 @@ use benilla_assets::coords::{bevy_to_wow, wow_to_bevy};
 use benilla_protocol::SessionEvent;
 use benilla_world::collision::WorldCollision;
 use bevy::prelude::*;
+use kartcraft::hud::RaceClock;
 
 /// A course of `courses/courses.json`, the file the server's table is made from
 /// (`docs/courses.md`). The server sends the checkpoints at the start ("R\tC"); here are the
@@ -195,6 +203,22 @@ const KART_GRACE_SECS: f32 = 10.0;
 /// A checkpoint's beam: its height (yards) and radius.
 const BEAM_HEIGHT: f32 = 40.0;
 const BEAM_RADIUS: f32 = 1.2;
+/// CTR runs its race at 30 frames a second (`CTR_FRAMES_PER_SECOND`), and "FINAL LAP" flies by
+/// for 90 of them (`PlayLevel.c` `PLAYLEVEL_FINAL_LAP_TEXT_FRAMES`, three seconds).
+const CTR_FPS: f32 = 30.0;
+const FINAL_LAP_FRAMES: u32 = 90;
+/// The final lap's music: 20 BPM on the song's own tempo (`HOWL_AudioState.c:338`), set once the
+/// final-lap XA sting has played 0xE1 of its 256-sample blocks at 44.1 kHz
+/// (`HOWL_AudioState.c:334`; the block size from CTR-native's `NativeAudio_GetXACurrOffset`).
+const FINAL_LAP_BPM: f64 = 20.0;
+const FINAL_LAP_STING_SECS: f32 = 225.0 * 256.0 / 44100.0;
+/// "WRONG WAY": CTR adds what a racer's distance to the finish grew by each frame and clamps it
+/// to 0..1000 lu (`PlayLevel.c:80-95`), and shows the text from 0x1F5 lu while the racer faces
+/// within 45 degrees of straight back down the path (`VehLap.c:114-131`, the dot product against
+/// 0x5A801 of 0x80000; `UI_RenderFrame.c:130-160`).
+const WRONG_WAY_MAX_LU: f32 = 1000.0;
+const WRONG_WAY_SHOWN_LU: f32 = 501.0;
+const WRONG_WAY_FACING: f32 = 0x5a801 as f32 / 0x80000 as f32;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Offer {
@@ -262,6 +286,18 @@ pub(crate) struct Active {
     /// left: RESULTS_SECS after everyone is in, or after FINISH_WAIT_SECS for the stragglers.
     finished_at: Option<f32>,
     closes_at: Option<f32>,
+    /// Our laps' times (s), and when the lap under way began (local s): GO, then each crossing
+    /// of the start (CTR's `lapTime`, `PlayLevel.c:145`).
+    lap_times: Vec<f32>,
+    lap_began: f32,
+    /// When we crossed the finish line (local s): the race clock stops there.
+    crossed_finish: Option<f32>,
+    /// When our final lap began (local s): its fly-by and its music.
+    final_lap_at: Option<f32>,
+    /// How far along the course we were last frame (yards), and how far we have driven back
+    /// along it since (lu, CTR's `distanceDrivenBackwards`).
+    progress_at: Option<f32>,
+    backwards: f32,
 }
 
 impl Active {
@@ -277,6 +313,171 @@ impl Active {
         self.finished.clear();
         self.lights = None;
         self.grace_until = self.grace_until.max(now + KART_GRACE_SECS);
+        self.lap_times.clear();
+        self.lap_began = now + ms / 1000.0;
+        self.crossed_finish = None;
+        self.final_lap_at = None;
+        self.progress_at = None;
+        self.backwards = 0.0;
+    }
+
+    /// Checkpoint `next` passed at `now`: on to it; crossing the start finishes a lap, whose time
+    /// is kept, and may begin the final one (`PlayLevel.c:145-167`) or end the race.
+    fn pass(&mut self, next: usize, now: f32) {
+        self.checkpoint = next;
+        if self.laps > 0 && next == 0 {
+            self.lap += 1;
+            self.lap_times.push(now - self.lap_began);
+            self.lap_began = now;
+            // CTR's `lapIndex == numLaps - 1`: never in a one-lap race, whose first lap is its last.
+            if self.laps > 1 && self.lap + 1 == self.laps {
+                self.final_lap_at = Some(now);
+            }
+            if self.lap >= self.laps {
+                self.crossed_finish = Some(now);
+            }
+        } else if self.laps == 0 && next + 1 == self.points.len() {
+            self.crossed_finish = Some(now);
+        }
+    }
+
+    /// The race clock at `now` (`UI_DrawRaceClock`): the time since GO, stopped at the finish,
+    /// with a row for each lap so far, the one under way running. `finish_ms` is our time as the
+    /// server has it, for a finish we did not see ourselves.
+    fn clock(&self, now: f32, finish_ms: Option<u32>) -> Option<RaceClock> {
+        let go = self.go_at?;
+        let end = self.crossed_finish.unwrap_or(now).max(go);
+        let total = match (self.crossed_finish, finish_ms) {
+            (None, Some(ms)) => ms as f32 / 1000.0,
+            _ => end - go,
+        };
+        let mut laps = Vec::new();
+        if self.laps > 0 {
+            laps.extend(self.lap_times.iter().take(usize::from(self.laps)));
+            if laps.len() < usize::from(self.laps) && finish_ms.is_none() {
+                laps.push((end - self.lap_began).max(0.0));
+            }
+        }
+        Some(RaceClock {
+            total,
+            time_trial: self.time_trial,
+            laps,
+        })
+    }
+
+    /// Frames into "FINAL LAP"'s fly-by at `now`, while it runs.
+    fn final_lap_frame(&self, now: f32) -> Option<u32> {
+        let since = now - self.final_lap_at?;
+        let frame = (since.max(0.0) * CTR_FPS) as u32;
+        (frame < FINAL_LAP_FRAMES).then_some(frame)
+    }
+
+    /// Beats a minute on the song at `now`: CTR's 20 once the final lap's sting has played its
+    /// first 1.3 s, until the race is over for us.
+    fn music_bpm_delta(&self, now: f32) -> f64 {
+        match self.final_lap_at {
+            Some(t) if !self.done && now - t >= FINAL_LAP_STING_SECS => FINAL_LAP_BPM,
+            _ => 0.0,
+        }
+    }
+
+    /// How far along the course (yards from the start, a circuit's laps counted in) a racer is
+    /// with `lap` laps done, checkpoint `cp` the last passed, standing at `at` (WoW x, y): CTR's
+    /// distance along its path (`VehLap.c:14-131`), projected onto the leg from `cp` to the next
+    /// checkpoint. Behind `cp` it counts back down the leg before it, so turning round reads as
+    /// going backwards; beyond the next checkpoint it holds there until that gate is passed.
+    /// Without a position, the racer is at `cp`.
+    fn progress(&self, lap: u8, cp: usize, at: Option<[f32; 2]>) -> f32 {
+        let n = self.points.len();
+        if n < 2 {
+            return 0.0;
+        }
+        let cp = cp.min(n - 1);
+        let leg = |i: usize, j: usize| {
+            let (a, b) = (self.points[i], self.points[j]);
+            (b[0] - a[0]).hypot(b[1] - a[1])
+        };
+        let mut to_cp = 0.0;
+        let mut length = 0.0;
+        for i in 1..n {
+            length += leg(i - 1, i);
+            if i == cp {
+                to_cp = length;
+            }
+        }
+        if self.laps > 0 {
+            length += leg(n - 1, 0);
+        }
+        let base = f32::from(lap) * length + to_cp;
+        let (Some(at), Some(next)) = (at, self.after(cp)) else {
+            return base;
+        };
+        let (a, b) = (self.points[cp], self.points[next]);
+        let len = leg(cp, next).max(1e-3);
+        let along = ((at[0] - a[0]) * (b[0] - a[0]) + (at[1] - a[1]) * (b[1] - a[1])) / len;
+        let back = if self.laps > 0 || cp > 0 {
+            leg((cp + n - 1) % n, cp)
+        } else {
+            0.0
+        };
+        base + along.clamp(-back, len)
+    }
+
+    /// Whether `facing` (WoW x, y, unit) looks back down the leg past checkpoint `cp`: within 45
+    /// degrees of straight back (`VehLap.c:127`).
+    fn facing_back(&self, cp: usize, facing: [f32; 2]) -> bool {
+        let Some(next) = self.after(cp).filter(|_| cp < self.points.len()) else {
+            return false;
+        };
+        let (a, b) = (self.points[cp], self.points[next]);
+        let len = (b[0] - a[0]).hypot(b[1] - a[1]).max(1e-3);
+        let back = [(a[0] - b[0]) / len, (a[1] - b[1]) / len];
+        facing[0] * back[0] + facing[1] * back[1] >= WRONG_WAY_FACING
+    }
+
+    /// One frame of our progress (yards): what it fell by since the last, in lu at
+    /// `lu_per_yard`, added to how far we have driven backwards, clamped as CTR clamps it.
+    fn drove(&mut self, progress: f32, lu_per_yard: f32) {
+        if let Some(before) = self.progress_at.replace(progress) {
+            self.backwards =
+                (self.backwards + (before - progress) * lu_per_yard).clamp(0.0, WRONG_WAY_MAX_LU);
+        }
+    }
+
+    /// Whether "WRONG WAY" is up: driven back far enough, facing back down the course.
+    fn wrong_way(&self, facing_back: bool) -> bool {
+        facing_back && self.backwards >= WRONG_WAY_SHOWN_LU
+    }
+
+    /// The standings, leader first: the finished in their order, then the rest by how far along
+    /// the course each is, the first to their last checkpoint ahead on a tie. Our kart is at
+    /// `me_at`; another racer at their relayed kart in `near`, else at their last checkpoint.
+    fn standings(
+        &self,
+        me: &str,
+        me_at: Option<[f32; 2]>,
+        near: &[(String, [f32; 2])],
+    ) -> Vec<String> {
+        let go = self.go_at.unwrap_or(0.0);
+        let mut order: Vec<String> = self.finished.iter().map(|f| f.0.clone()).collect();
+        let mut running: Vec<(&String, f32, f32)> = self
+            .roster
+            .iter()
+            .filter(|r| !order.contains(r))
+            .map(|r| {
+                let (lap, cp, when) = self.progress.get(r).copied().unwrap_or((0, 0, go));
+                let (lap, cp, at) = if r == me {
+                    (self.lap, self.checkpoint, me_at)
+                } else {
+                    let at = near.iter().find(|(n, _)| n == r).map(|(_, at)| *at);
+                    (lap, usize::from(cp), at)
+                };
+                (r, self.progress(lap, cp, at), when)
+            })
+            .collect();
+        running.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.2.total_cmp(&b.2)));
+        order.extend(running.into_iter().map(|(r, ..)| r.clone()));
+        order
     }
 
     /// CTR's start lights `left` seconds before GO: their timer, and the sound of a light come
@@ -657,13 +858,42 @@ fn countdown_banner(left: f32, in_kart: bool) -> String {
     }
 }
 
-/// Where a racer stands in the race, for ordering: laps, then checkpoints, then who got there
-/// first.
-fn standing(progress: &(u8, u8, f32), points: usize) -> (i64, f32) {
-    (
-        i64::from(progress.0) * points as i64 + i64::from(progress.1),
-        -progress.2,
-    )
+/// The other racers whose karts are relayed to us, by name, where they are (WoW x, y).
+pub(crate) fn relayed(
+    remotes: &super::remote::RemoteKarts,
+    names: Option<&crate::names::NameCache>,
+) -> Vec<(String, [f32; 2])> {
+    remotes
+        .karts
+        .values()
+        .filter_map(|k| {
+            let name = names?.peek(k.guid)?;
+            let w = bevy_to_wow(k.position);
+            Some((name.to_string(), [w[0], w[1]]))
+        })
+        .collect()
+}
+
+/// The race's things on CTR's HUD, and the music's final-lap tempo, taken down.
+fn clear_hud(extras: &mut kartcraft::hud::HudExtras, audio: &mut kartcraft::sound::KartAudio) {
+    extras.lap = None;
+    extras.place = None;
+    extras.clock = None;
+    extras.final_lap_frame = None;
+    extras.wrong_way = false;
+    audio.music_bpm_delta = 0.0;
+}
+
+/// Whether the flashing "WRONG WAY" is lit `secs` into the race: while bit 0x80 of the race's
+/// time in CTR's 1/960 s is set (`UI_RenderFrame.c:155`), on and off every 0.13 s.
+fn wrong_way_lit(secs: f32) -> bool {
+    (secs.max(0.0) * 960.0) as u32 & 0x80 != 0
+}
+
+/// The way our kart faces, WoW x, y: Bevy's yaw turns its forward from −Z.
+fn facing_of(yaw: f32) -> [f32; 2] {
+    let w = bevy_to_wow(Vec3::new(-yaw.sin(), 0.0, -yaw.cos()));
+    [w[0], w[1]]
 }
 
 /// What the race shows on screen this frame: a prompt or countdown at the top, results below.
@@ -683,6 +913,8 @@ pub(crate) fn update(
     mut extras: ResMut<kartcraft::hud::HudExtras>,
     mut audio: ResMut<kartcraft::sound::KartAudio>,
     profession: super::profession::Profession,
+    remotes: Res<super::remote::RemoteKarts>,
+    names: Option<Res<crate::names::NameCache>>,
     mut auto: Local<AutoRace>,
 ) {
     let now = time.elapsed_secs();
@@ -696,9 +928,7 @@ pub(crate) fn update(
             Heard::ReadyCheck => audio.cues.push(kartcraft::sound::Cue::Ready),
             Heard::LeftAll => {
                 *text = RaceText::default();
-                extras.lap = None;
-                extras.place = None;
-                audio.music_rate = 1.0;
+                clear_hud(&mut extras, &mut audio);
             }
         }
     }
@@ -722,9 +952,7 @@ pub(crate) fn update(
             }
         }
         races.offer = None;
-        extras.lap = None;
-        extras.place = None;
-        audio.music_rate = 1.0;
+        clear_hud(&mut extras, &mut audio);
         if let Some(race) = &races.race {
             text.banner = match race.go_at {
                 Some(go) if now < go => countdown_banner(go - now, false),
@@ -759,9 +987,7 @@ pub(crate) fn update(
 
     // The countdown, the start boost and the race.
     let Some(race) = races.race.as_mut() else {
-        extras.lap = None;
-        extras.place = None;
-        audio.music_rate = 1.0;
+        clear_hud(&mut extras, &mut audio);
         text.banner = match &races.offer {
             Some(o) => format!("{}'s {} — talk to the Race Marshal to join", o.host, o.name),
             None => start_banner(&here),
@@ -787,6 +1013,8 @@ pub(crate) fn update(
         extras.start_timer = Some(timer);
     }
     if now < go {
+        // CTR's clock stands at 0:00:00 through the countdown.
+        extras.clock = race.clock(now, None);
         // The seconds to the start until the lights take over (the text's 3, 2, 1 without them).
         text.banner = if lights && timer <= kartcraft::hud::LIGHTS_TIMER_START {
             String::new()
@@ -814,29 +1042,15 @@ pub(crate) fn update(
         if race.passes(next, last_at, at) {
             info!("kart race: checkpoint {next}, lap {}", race.lap);
             profession.send(format!("KARTCRAFT\tR\tK\t{}\t{next}", race.id));
-            race.checkpoint = next;
-            if race.laps > 0 && next == 0 {
-                race.lap += 1;
-            }
+            race.pass(next, now);
             race.progress
                 .insert(me.clone(), (race.lap, next as u8, now));
         }
     }
 
-    // Standings: the finished in order, then the rest by progress.
-    let n = race.points.len();
-    let mut order: Vec<String> = race.finished.iter().map(|f| f.0.clone()).collect();
-    let mut running: Vec<(&String, (i64, f32))> = race
-        .roster
-        .iter()
-        .filter(|r| !order.contains(r))
-        .map(|r| {
-            let p = race.progress.get(r).copied().unwrap_or((0, 0, go));
-            (r, standing(&p, n))
-        })
-        .collect();
-    running.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    order.extend(running.into_iter().map(|(r, _)| r.clone()));
+    // Standings: the finished in order, then the rest by how far along the course they are.
+    let near = relayed(&remotes, names.as_deref());
+    let order = race.standings(&me, Some(at), &near);
     // A time trial has no place to show: it is us alone against the clock.
     extras.place = order
         .iter()
@@ -845,12 +1059,23 @@ pub(crate) fn update(
         .filter(|_| !race.time_trial);
     race.order = order;
     extras.lap = (race.laps > 0).then(|| ((race.lap + 1).min(race.laps), race.laps));
-    audio.music_rate = if race.laps > 1 && race.lap + 1 == race.laps && !race.done {
-        // CTR's final lap: 20 BPM on its tempo (about 180).
-        200.0 / 180.0
-    } else {
-        1.0
-    };
+    let finish_ms = race
+        .finished
+        .iter()
+        .find(|f| f.0 == me)
+        .map(|f| f.2)
+        .filter(|_| race.done);
+    extras.clock = race.clock(now, finish_ms);
+    extras.final_lap_frame = race.final_lap_frame(now);
+    audio.music_bpm_delta = race.music_bpm_delta(now);
+    // Wrong way: our progress along the course this frame, against how we face.
+    let progress = race.progress(race.lap, race.checkpoint, Some(at));
+    race.drove(progress, kartcraft::lu_per_yard());
+    let facing_back = race.facing_back(race.checkpoint, facing_of(drive.yaw));
+    extras.wrong_way = !race.done
+        && race.crossed_finish.is_none()
+        && race.wrong_way(facing_back)
+        && wrong_way_lit(now - go);
     if race.done {
         text.banner = match race.finished.iter().find(|f| f.0 == me) {
             Some((_, place, ms)) => {
@@ -886,9 +1111,7 @@ pub(crate) fn update(
             profession.send(format!("KARTCRAFT\tR\tQ\t{}", race.id));
             races.race = None;
             *text = RaceText::default();
-            extras.lap = None;
-            extras.place = None;
-            audio.music_rate = 1.0;
+            clear_hud(&mut extras, &mut audio);
         }
     }
 }
@@ -966,6 +1189,7 @@ fn board(race: &Active) -> Vec<String> {
             format!("{place}. {name}  {}{mark}", clock(*ms))
         })
         .collect();
+    lines.extend(lap_lines(race));
     if race.record.0 != 0 {
         lines.push(format!(
             "Course record: {} by {}",
@@ -1003,6 +1227,7 @@ fn trial_board(race: &Active) -> Vec<String> {
             clock(best)
         )),
     }
+    lines.extend(lap_lines(race));
     if race.record.0 != 0 {
         lines.push(format!(
             "Time trial record: {} by {}",
@@ -1011,6 +1236,37 @@ fn trial_board(race: &Active) -> Vec<String> {
         ));
     }
     lines
+}
+
+/// Our laps' times, timed by us as we crossed the start (the server times only the finish), the
+/// fastest of several marked.
+fn lap_lines(race: &Active) -> Vec<String> {
+    if race.laps == 0 {
+        return Vec::new();
+    }
+    let fastest = race
+        .lap_times
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.total_cmp(b.1))
+        .map(|(i, _)| i)
+        .filter(|_| race.lap_times.len() > 1);
+    race.lap_times
+        .iter()
+        .enumerate()
+        .map(|(i, secs)| {
+            let mark = if fastest == Some(i) {
+                "  (fastest)"
+            } else {
+                ""
+            };
+            format!(
+                "Lap {}: {}{mark}",
+                i + 1,
+                clock((secs * 1000.0).round() as u32)
+            )
+        })
+        .collect()
 }
 
 fn ordinal(place: u8) -> String {
@@ -1823,13 +2079,204 @@ mod tests {
         );
     }
 
+    /// The test course as a three-lap circuit with a race of four: us, two others and one in.
+    fn circuit_race() -> Active {
+        Active {
+            laps: 3,
+            go_at: Some(10.0),
+            roster: vec![
+                "Racer".into(),
+                "Goblin".into(),
+                "Gnome".into(),
+                "Dwarf".into(),
+            ],
+            ..course()
+        }
+    }
+
     #[test]
-    fn standings_order_by_laps_then_checkpoints_then_first_there() {
-        let a = standing(&(1, 2, 10.0), 6);
-        let b = standing(&(1, 3, 11.0), 6);
-        let c = standing(&(1, 3, 12.0), 6);
-        assert!(b > a);
-        assert!(b > c, "the earlier of two at the same checkpoint leads");
+    fn progress_runs_along_the_course_between_checkpoints() {
+        let sprint = course();
+        // Projected onto the leg past the last checkpoint: yards from the start.
+        assert!((sprint.progress(0, 0, Some([50.0, 7.0])) - 50.0).abs() < 1e-4);
+        assert!((sprint.progress(0, 2, Some([203.0, 40.0])) - 240.0).abs() < 1e-4);
+        // Beyond the next checkpoint it holds there until its gate is passed.
+        assert!((sprint.progress(0, 1, Some([260.0, 0.0])) - 200.0).abs() < 1e-4);
+        // Behind the last checkpoint it counts back down the leg before; behind a sprint's
+        // start there is nothing before it.
+        assert!((sprint.progress(0, 1, Some([90.0, 0.0])) - 90.0).abs() < 1e-4);
+        assert_eq!(sprint.progress(0, 0, Some([-10.0, 0.0])), 0.0);
+        // Without a kart, at the checkpoint; the finish has no leg after it.
+        assert_eq!(sprint.progress(0, 2, None), 200.0);
+        assert_eq!(sprint.progress(0, 3, Some([500.0, 0.0])), 300.0);
+        // A circuit's lap is the loop back to the start; laps done count whole.
+        let circuit = circuit_race();
+        let lap = 300.0 + 200f32.hypot(100.0);
+        assert!((circuit.progress(2, 1, Some([150.0, 0.0])) - (2.0 * lap + 150.0)).abs() < 1e-3);
+        // Just behind the start line on the grid: a little short of it.
+        assert!(circuit.progress(0, 0, Some([-5.0, 0.0])) < 0.0);
+    }
+
+    #[test]
+    fn standings_rank_by_distance_along_the_course_every_frame() {
+        let mut race = circuit_race();
+        race.checkpoint = 1;
+        race.progress.insert("Goblin".into(), (0, 1, 20.0));
+        race.progress.insert("Gnome".into(), (0, 1, 21.0));
+        race.progress.insert("Dwarf".into(), (0, 1, 19.0));
+        // Goblin's kart is relayed 80 yd past checkpoint 1; Gnome and Dwarf are too far off to
+        // be, so they stand at the checkpoint, the one there first ahead.
+        let near = [("Goblin".to_string(), [180.0, 3.0])];
+        assert_eq!(
+            race.standings("Racer", Some([150.0, 0.0]), &near),
+            ["Goblin", "Racer", "Dwarf", "Gnome"]
+        );
+        // We pass Goblin between checkpoints: our place changes with no checkpoint passed.
+        assert_eq!(
+            race.standings("Racer", Some([190.0, 0.0]), &near)[..2],
+            ["Racer", "Goblin"]
+        );
+        // A lap ahead beats any point on the lap before; the finished lead in their order.
+        race.progress.insert("Gnome".into(), (1, 0, 40.0));
+        race.finished = vec![("Dwarf".into(), 1, 90_000)];
+        assert_eq!(
+            race.standings("Racer", Some([190.0, 0.0]), &near),
+            ["Dwarf", "Gnome", "Racer", "Goblin"]
+        );
+    }
+
+    #[test]
+    fn wrong_way_shows_after_driving_back_501_lu_facing_back() {
+        let lu = 36.0;
+        let mut race = circuit_race();
+        race.checkpoint = 1;
+        let back = [-1.0, 0.0];
+        assert!(race.facing_back(1, back));
+        // 45 degrees either side of straight back (`0x5A801 / 0x80000`), and no further.
+        assert!(race.facing_back(1, [-0.8, 0.6]));
+        assert!(!race.facing_back(1, [-0.6, 0.8]));
+        assert!(!race.facing_back(1, [1.0, 0.0]));
+        // Driving back 13 yd (468 lu) is not enough; 14 (504 lu) is, facing back.
+        race.drove(race.progress(0, 1, Some([180.0, 0.0])), lu);
+        race.drove(race.progress(0, 1, Some([167.0, 0.0])), lu);
+        assert!(!race.wrong_way(true));
+        race.drove(race.progress(0, 1, Some([166.0, 0.0])), lu);
+        assert!(race.wrong_way(true));
+        assert!(
+            !race.wrong_way(false),
+            "reversing, facing on down the course"
+        );
+        // It stops counting at 1000 lu: 14 yd back the right way clears it after any reverse.
+        race.drove(race.progress(0, 1, Some([100.0, 0.0])), lu);
+        assert_eq!(race.backwards, WRONG_WAY_MAX_LU);
+        race.drove(race.progress(0, 1, Some([114.0, 0.0])), lu);
+        assert!(!race.wrong_way(true));
+        // It flashes on bit 0x80 of the race's time in 1/960 s: off, on, off again.
+        assert!(!wrong_way_lit(0.0));
+        assert!(wrong_way_lit(0.14));
+        assert!(!wrong_way_lit(0.27));
+    }
+
+    #[test]
+    fn our_kart_faces_where_its_yaw_points() {
+        for d in [[1.0f32, 0.0], [0.0, 1.0], [-0.6, 0.8], [0.0, -1.0]] {
+            // The autopilot's yaw for a heading, as `kart::update` steers for a checkpoint.
+            let to = wow_to_bevy([d[0], d[1], 0.0]);
+            let f = facing_of(f32::atan2(-to.x, -to.z));
+            assert!(
+                (f[0] - d[0]).abs() < 1e-5 && (f[1] - d[1]).abs() < 1e-5,
+                "{d:?} {f:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn laps_are_timed_at_the_start_line_and_the_last_begins_the_final_lap() {
+        let mut race = circuit_race();
+        race.count_down(100.0, 4000.0);
+        // Before GO the clock stands at nought, its first lap with it.
+        let clock = race.clock(102.0, None).unwrap();
+        assert_eq!((clock.total, clock.laps.as_slice()), (0.0, &[0.0][..]));
+        for (cp, t) in [(1, 110.0), (2, 115.0), (3, 120.0), (0, 130.0)] {
+            race.pass(cp, t);
+        }
+        assert_eq!(race.lap_times, [26.0]);
+        assert_eq!(race.final_lap_at, None, "lap 2 of 3 is not the last");
+        for (cp, t) in [(1, 135.0), (2, 140.0), (3, 148.0), (0, 155.0)] {
+            race.pass(cp, t);
+        }
+        assert_eq!(race.lap_times, [26.0, 25.0]);
+        assert_eq!(race.final_lap_at, Some(155.0));
+        // The clock runs, its third lap under way.
+        let clock = race.clock(160.0, None).unwrap();
+        assert_eq!(clock.total, 56.0);
+        assert_eq!(clock.laps, [26.0, 25.0, 5.0]);
+        // "FINAL LAP" flies by for 90 frames at 30 fps.
+        assert_eq!(race.final_lap_frame(155.0), Some(0));
+        assert_eq!(race.final_lap_frame(156.0), Some(30));
+        assert_eq!(race.final_lap_frame(157.99), Some(89));
+        assert_eq!(race.final_lap_frame(158.0), None);
+        // The music goes up 20 BPM 1.31 s into the final lap's sting.
+        assert_eq!(race.music_bpm_delta(156.2), 0.0);
+        assert_eq!(race.music_bpm_delta(156.4), FINAL_LAP_BPM);
+        // Over the line: the clock stops with three laps.
+        for (cp, t) in [(1, 160.0), (2, 165.0), (3, 172.0), (0, 179.0)] {
+            race.pass(cp, t);
+        }
+        let clock = race.clock(200.0, None).unwrap();
+        assert_eq!(clock.total, 75.0);
+        assert_eq!(clock.laps, [26.0, 25.0, 24.0]);
+        assert!(!clock.time_trial);
+        race.done = true;
+        assert_eq!(race.music_bpm_delta(200.0), 0.0);
+        // A one-lap race has no final lap to announce.
+        let mut one = Active {
+            laps: 1,
+            ..circuit_race()
+        };
+        one.count_down(0.0, 0.0);
+        for cp in [1, 2, 3, 0] {
+            one.pass(cp, 10.0);
+        }
+        assert_eq!((one.final_lap_at, one.crossed_finish), (None, Some(10.0)));
+    }
+
+    #[test]
+    fn a_sprint_s_clock_has_no_laps_and_stops_at_its_finish() {
+        let mut race = course();
+        race.time_trial = true;
+        race.count_down(0.0, 2000.0);
+        for (cp, t) in [(1, 10.0), (2, 20.0), (3, 32.5)] {
+            race.pass(cp, t);
+        }
+        let clock = race.clock(50.0, None).unwrap();
+        assert_eq!(clock.total, 30.5);
+        assert!(clock.laps.is_empty() && clock.time_trial);
+        // A finish we did not see ourselves takes the server's time.
+        let mut unseen = course();
+        unseen.count_down(0.0, 0.0);
+        assert_eq!(unseen.clock(90.0, Some(61_250)).unwrap().total, 61.25);
+    }
+
+    #[test]
+    fn the_board_ends_with_our_lap_times_the_fastest_marked() {
+        let mut race = circuit_race();
+        race.finished = vec![("Racer".into(), 2, 75_750)];
+        race.lap_times = vec![26.0, 25.5, 24.25];
+        assert_eq!(
+            board(&race),
+            [
+                "2. Racer  1:15.75",
+                "Lap 1: 0:26.00",
+                "Lap 2: 0:25.50",
+                "Lap 3: 0:24.25  (fastest)",
+            ]
+        );
+        // A sprint has no laps to show.
+        let mut sprint = course();
+        sprint.finished = vec![("Racer".into(), 1, 30_000)];
+        sprint.lap_times = vec![30.0];
+        assert_eq!(board(&sprint), ["1. Racer  0:30.00"]);
     }
 
     /// A sprint east along x, then a bend north: checkpoints at x 0, 100, 200 (then y 100).

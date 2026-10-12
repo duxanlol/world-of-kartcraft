@@ -65,6 +65,32 @@ pub struct HudState {
     pub time_seconds: f32,
     /// The start lights' timer (see [`start_lights`]); `None` draws none.
     pub start_timer: Option<i32>,
+    /// The race clock in the top-left corner; `None` hides it.
+    pub clock: Option<RaceClock>,
+}
+
+/// The race clock (`UI_Clock.c` `UI_DrawRaceClock`, drawn at (0x14, 8) by
+/// `UI_RenderFrame.c:561`): "TIME" (or "TIME TRIAL") small orange, the race's time big orange
+/// 8 px below, then a row per lap so far, "L1" small red and its time small periwinkle.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RaceClock {
+    /// The race's time so far, seconds (`timeElapsedInRace`).
+    pub total: f32,
+    /// "TIME TRIAL" over the time instead of "TIME".
+    pub time_trial: bool,
+    /// Each lap's time, seconds, the current lap's running time last (`UI_SaveLapTime`); empty
+    /// draws no rows.
+    pub laps: Vec<f32>,
+}
+
+/// The centre-screen texts, drawn by [`HudRenderer::render_banners`] onto a canvas as wide as
+/// the screen: CTR centres them on the whole view, so they cannot sit in one of the HUD's crops.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Banners {
+    /// Frames into "FINAL LAP"'s 90-frame fly-by (30 fps); `None` or past 90 draws nothing.
+    pub final_lap_frame: Option<u32>,
+    /// Draw "WRONG WAY" this frame (the caller flashes it).
+    pub wrong_way: bool,
 }
 
 /// Where an element should be pinned when the 512×216 canvas is shown on a wider screen.
@@ -88,8 +114,10 @@ pub struct Region {
 /// Horizontal canvas spans for drawing the HUD in three crops on a wide screen: pin `left` to
 /// the screen's left edge, `middle` to its centre and `right` to its right edge. Every element
 /// lies entirely inside one span.
-pub const CROP_LEFT: [i32; 2] = [0, 120];
-pub const CROP_MIDDLE: [i32; 2] = [120, 400];
+/// The left crop runs to x 160: the race clock's "TIME TRIAL" ends at 150, the start lights begin
+/// at 162.
+pub const CROP_LEFT: [i32; 2] = [0, 160];
+pub const CROP_MIDDLE: [i32; 2] = [160, 400];
 
 /// CTR's traffic-light timer (`gGT->trafficLightsTimer`) counts its "ms": 32 for a 30 Hz frame
 /// (MainFrame.c:188-203, `elapsedTimeMS`), 960 a second.
@@ -230,6 +258,7 @@ pub struct HudRenderer {
     orange: Grad,
     periwinkle: Grad,
     white: Grad,
+    red: Grad,
     big_digits: Vec<Mesh>,
     fruit: Mesh,
     items: Vec<(String, usize)>,
@@ -406,6 +435,8 @@ impl HudRenderer {
             orange: grad(&j["colors"]["orange"])?,
             periwinkle: grad(&j["colors"]["periwinkle"])?,
             white: grad(&j["colors"]["white"])?,
+            // An older `hud.json` without red draws the lap labels orange.
+            red: grad(&j["colors"]["red"]).or_else(|_| grad(&j["colors"]["orange"]))?,
             big_digits,
             fruit: mesh("fruitdisp")?,
             items: named(&lay["weapon"]["sprites"]),
@@ -468,6 +499,15 @@ impl HudRenderer {
                 52.0,
                 Anchor::BottomLeft,
             ),
+            // "TIME TRIAL" and "9:59:99" from (20, 8), and up to seven lap rows under them.
+            r(
+                "clock",
+                20.0,
+                8.0,
+                10.0 * 13.0,
+                16.0 + 8.0 * 8.0,
+                Anchor::TopLeft,
+            ),
             r("item", l.weapon[0], l.weapon[1], 56.0, 40.0, Anchor::Top),
             r(
                 "wumpa",
@@ -521,7 +561,11 @@ impl HudRenderer {
             "HUD buffer must be 512*216*4 bytes"
         );
         out[..WIDTH * HEIGHT * 4].fill(0);
-        let c = &mut Canvas { px: out };
+        let c = &mut Canvas {
+            px: out,
+            w: WIDTH as i32,
+            h: HEIGHT as i32,
+        };
         let l = &self.l;
 
         // Rank list (UI_DrawRankedDrivers).
@@ -540,6 +584,10 @@ impl HudRenderer {
                 &self.white,
                 false,
             );
+        }
+
+        if let Some(clock) = &s.clock {
+            self.clock(c, clock);
         }
 
         // Item (UI_Weapon_DrawSelf / DrawBG).
@@ -744,6 +792,66 @@ impl HudRenderer {
         }
     }
 
+    /// Draws the centre-screen texts onto `out`, a `width`×216 RGBA8 canvas (rows top-first)
+    /// as wide as the screen in CTR's pixels, cleared to transparent first.
+    ///
+    /// "FINAL LAP" (`MainFrame_RenderFrame.c` `DrawFinalLap`): big orange, centred, a quarter
+    /// of the way down; over its 90 frames it flies in from 100 px past the right edge to the
+    /// centre in 10, holds there to frame 80, and flies out to 100 px past the left edge in the
+    /// last 10 (`UI_Lerp2D_Linear`). "WRONG WAY" (`UI_RenderFrame.c:158`): big orange, centred,
+    /// 0x1E px above the middle.
+    pub fn render_banners(&self, s: &Banners, width: usize, out: &mut [u8]) {
+        assert!(
+            out.len() >= width * HEIGHT * 4,
+            "banner buffer must be width*216*4 bytes"
+        );
+        out[..width * HEIGHT * 4].fill(0);
+        let c = &mut Canvas {
+            px: out,
+            w: width as i32,
+            h: HEIGHT as i32,
+        };
+        let (w, h) = (width as i32, HEIGHT as i32);
+        if let Some(x) = s.final_lap_frame.and_then(|f| final_lap_x(f, w)) {
+            self.text_centred(c, &self.big, b"FINAL LAP", x as f32, (h / 4) as f32);
+        }
+        if s.wrong_way {
+            self.text_centred(
+                c,
+                &self.big,
+                b"WRONG WAY",
+                (w / 2) as f32,
+                (h / 2 - 0x1e) as f32,
+            );
+        }
+    }
+
+    /// The race clock (`UI_DrawRaceClock` with `UI_RACE_CLOCK_SHOW_CURRENT_TIME` at (0x14, 8)).
+    fn clock(&self, c: &mut Canvas, k: &RaceClock) {
+        const X: f32 = 0x14 as f32;
+        const Y: f32 = 8.0;
+        let label: &[u8] = if k.time_trial { b"TIME TRIAL" } else { b"TIME" };
+        self.text(c, &self.small, label, X, Y, &self.orange, false);
+        let total = clock_text(k.total);
+        self.text(c, &self.big, &total, X, Y + 8.0, &self.orange, false);
+        for (i, &lap) in k.laps.iter().take(9).enumerate() {
+            // Row n (from 1) at y + 8n + 0x10: "Ln" small red at x, " m:ss:cc" at x + 0x1A.
+            let y = Y + (i as f32 + 1.0) * 8.0 + 16.0;
+            self.text(
+                c,
+                &self.small,
+                &[b'L', b'1' + i as u8],
+                X,
+                y,
+                &self.red,
+                false,
+            );
+            let mut row = [b' '; 8];
+            row[1..].copy_from_slice(&clock_text(lap));
+            self.text(c, &self.small, &row, X + 26.0, y, &self.periwinkle, false);
+        }
+    }
+
     fn item_sprite(&self, name: &str) -> Option<usize> {
         self.items.iter().find(|i| i.0 == name).map(|i| i.1)
     }
@@ -854,14 +962,14 @@ impl HudRenderer {
         let (x0, y0) = (x as i32, y as i32);
         for yy in 0..h {
             let py = y0 + yy;
-            if py < 0 || py >= HEIGHT as i32 {
+            if py < 0 || py >= c.h {
                 continue;
             }
             let v = (((yy as f32 + 0.5) / h as f32 * img.draw[1]) as usize).min(img.h - 1);
             let fy = yy as f32 / h as f32;
             for xx in 0..w {
                 let px = x0 + xx;
-                if px < 0 || px >= WIDTH as i32 {
+                if px < 0 || px >= c.w {
                     continue;
                 }
                 let u = (((xx as f32 + 0.5) / w as f32 * img.draw[0]) as usize).min(img.w - 1);
@@ -908,22 +1016,75 @@ impl HudRenderer {
     }
 
     fn text(&self, c: &mut Canvas, font: &Font, s: &[u8], x: f32, y: f32, g: &Grad, right: bool) {
-        let adv = |ch: u8| {
-            if ch == b'.' || ch == b':' {
-                font.advance_punct
-            } else {
-                font.advance
-            }
-        };
-        let width: i32 = s.iter().map(|&ch| adv(ch)).sum();
+        let width = font.width(s);
         let mut pen = if right { x as i32 - width } else { x as i32 };
         for &ch in s {
             if let Some(Some(sp)) = font.glyphs.get(ch as usize) {
                 self.sprite(c, *sp as usize, pen as f32, y, Some(g), 1.0);
             }
-            pen += adv(ch);
+            pen += font.advance_of(ch);
         }
     }
+
+    /// Orange text centred on `x` (`JUSTIFY_CENTER | ORANGE`).
+    fn text_centred(&self, c: &mut Canvas, font: &Font, s: &[u8], x: f32, y: f32) {
+        let left = x as i32 - font.width(s) / 2;
+        self.text(c, font, s, left as f32, y, &self.orange, false);
+    }
+}
+
+impl Font {
+    fn advance_of(&self, ch: u8) -> i32 {
+        if ch == b'.' || ch == b':' {
+            self.advance_punct
+        } else {
+            self.advance
+        }
+    }
+
+    fn width(&self, s: &[u8]) -> i32 {
+        s.iter().map(|&ch| self.advance_of(ch)).sum()
+    }
+}
+
+/// Where "FINAL LAP" is centred `frame` frames into its fly-by on a screen `width` px wide
+/// (`DrawFinalLap`: 10 frames in from `width + 100`, held at the centre to frame 80, 10 frames
+/// out to −100, each leg `UI_Lerp2D_Linear` over 10 frames); `None` once its 90 frames are up.
+pub fn final_lap_x(frame: u32, width: i32) -> Option<i32> {
+    let t = frame as i32;
+    let lerp = |from: i32, to: i32, t: i32| {
+        if t <= 10 {
+            from + t * (to - from) / 10
+        } else {
+            to
+        }
+    };
+    match t {
+        0..=10 => Some(lerp(width + 100, width / 2, t)),
+        11..=80 => Some(width / 2),
+        81..=89 => Some(lerp(width / 2, -100, t - 80)),
+        _ => None,
+    }
+}
+
+/// A race time as CTR's clock prints it, "m:ss:cc" (`sdata->raceClockStr`), stopping at
+/// 9:59:99 as the game's does past ten minutes.
+pub fn clock_text(secs: f32) -> [u8; 7] {
+    let cs = (secs.max(0.0) * 100.0) as u32;
+    let (m, s, c) = if cs / 6000 < 10 {
+        (cs / 6000, (cs / 100) % 60, cs % 100)
+    } else {
+        (9, 59, 99)
+    };
+    [
+        b'0' + m as u8,
+        b':',
+        b'0' + (s / 10) as u8,
+        b'0' + (s % 10) as u8,
+        b':',
+        b'0' + (c / 10) as u8,
+        b'0' + (c % 10) as u8,
+    ]
 }
 
 fn num(mut n: u32, buf: &mut [u8; 3]) -> &[u8] {
@@ -942,15 +1103,18 @@ fn num(mut n: u32, buf: &mut [u8; 3]) -> &[u8] {
 
 struct Canvas<'a> {
     px: &'a mut [u8],
+    /// Its size in pixels: the HUD's 512×216, or a banner canvas as wide as the screen.
+    w: i32,
+    h: i32,
 }
 
 impl Canvas<'_> {
     /// Straight-alpha "over" compositing onto the RGBA8 canvas.
     fn put(&mut self, x: i32, y: i32, c: [f32; 3], a: f32) {
-        if x < 0 || y < 0 || x >= WIDTH as i32 || y >= HEIGHT as i32 {
+        if x < 0 || y < 0 || x >= self.w || y >= self.h {
             return;
         }
-        let o = (y as usize * WIDTH + x as usize) * 4;
+        let o = (y as usize * self.w as usize + x as usize) * 4;
         let d = &mut self.px[o..o + 4];
         if a >= 1.0 {
             for k in 0..3 {
@@ -989,7 +1153,7 @@ impl Canvas<'_> {
             .map(|q| q[0])
             .fold(f32::MIN, f32::max)
             .ceil()
-            .min(WIDTH as f32 - 1.0) as i32;
+            .min(self.w as f32 - 1.0) as i32;
         let y0 = p
             .iter()
             .map(|q| q[1])
@@ -1001,7 +1165,7 @@ impl Canvas<'_> {
             .map(|q| q[1])
             .fold(f32::MIN, f32::max)
             .ceil()
-            .min(HEIGHT as f32 - 1.0) as i32;
+            .min(self.h as f32 - 1.0) as i32;
         for y in y0..=y1 {
             let py = y as f32 + 0.5;
             for x in x0..=x1 {
@@ -1360,6 +1524,100 @@ mod tests {
             },
             &mut px,
         );
+        assert!(px.chunks(4).all(|p| p[3] == 0));
+    }
+
+    #[test]
+    fn final_lap_flies_in_from_the_right_holds_and_flies_out_left_over_90_frames() {
+        // DrawFinalLap on CTR's 512-wide screen: 612 -> 256 in 10 frames, held to frame 80,
+        // 256 -> -100 in the last 10.
+        assert_eq!(final_lap_x(0, 512), Some(612));
+        assert_eq!(final_lap_x(5, 512), Some(434));
+        assert_eq!(final_lap_x(10, 512), Some(256));
+        assert_eq!(final_lap_x(45, 512), Some(256));
+        assert_eq!(final_lap_x(80, 512), Some(256));
+        assert_eq!(final_lap_x(85, 512), Some(78));
+        assert_eq!(final_lap_x(89, 512), Some(-64));
+        assert_eq!(
+            final_lap_x(90, 512),
+            None,
+            "90 frames, three seconds at 30 fps"
+        );
+        // On a wider screen it centres on that screen and starts past its edge.
+        assert_eq!(final_lap_x(0, 683), Some(783));
+        assert_eq!(final_lap_x(40, 683), Some(341));
+    }
+
+    #[test]
+    fn the_clock_prints_like_ctr_s() {
+        assert_eq!(&clock_text(0.0), b"0:00:00");
+        assert_eq!(&clock_text(83.456), b"1:23:45");
+        assert_eq!(&clock_text(599.999), b"9:59:99");
+        assert_eq!(&clock_text(4000.0), b"9:59:99", "stops past ten minutes");
+    }
+
+    #[test]
+    fn the_clock_draws_top_left_and_its_lap_rows_under_it() {
+        let hud = HudRenderer::from_json(&tiny_hud()).unwrap();
+        let mut px = vec![0u8; WIDTH * HEIGHT * 4];
+        let mut s = HudState {
+            hide_drift_meter: true,
+            clock: Some(RaceClock {
+                total: 61.0,
+                time_trial: false,
+                laps: vec![30.5, 30.5],
+            }),
+            ..Default::default()
+        };
+        hud.render(&s, &mut px);
+        // "TIME" at (20, 8), the time at (20, 16), "L1" at (20, 32), "L2" at (20, 40).
+        for y in [8, 16, 32, 40] {
+            assert_eq!(alpha(&px, 20, y), 255, "row at {y}");
+        }
+        assert_eq!(alpha(&px, 20, 48), 0, "two laps, two rows");
+        // Everything inside the left crop.
+        for y in 0..HEIGHT {
+            for x in CROP_LEFT[1] as usize..WIDTH {
+                assert_eq!(alpha(&px, x, y), 0, "{x},{y}");
+            }
+        }
+        s.clock = None;
+        hud.render(&s, &mut px);
+        assert!(px.chunks(4).all(|p| p[3] == 0));
+    }
+
+    #[test]
+    fn banners_draw_centred_on_a_screen_wide_canvas() {
+        let hud = HudRenderer::from_json(&tiny_hud()).unwrap();
+        let width = 683;
+        let mut px = vec![9u8; width * HEIGHT * 4];
+        let at = |px: &[u8], x: usize, y: usize| px[(y * width + x) * 4 + 3];
+        hud.render_banners(&Banners::default(), width, &mut px);
+        assert!(px.chunks(4).all(|p| p[3] == 0), "nothing to show");
+        // "WRONG WAY": nine characters of 17 px centred on x 341, from y 78.
+        let wrong = Banners {
+            wrong_way: true,
+            ..Default::default()
+        };
+        hud.render_banners(&wrong, width, &mut px);
+        let left = 341 - 9 * 17 / 2;
+        assert_eq!(at(&px, left as usize, 78), 255);
+        assert_eq!(at(&px, left as usize - 2, 78), 0);
+        assert_eq!(at(&px, 341, 54), 0, "no FINAL LAP");
+        // "FINAL LAP" held at the centre, a quarter of the way down.
+        let final_lap = Banners {
+            final_lap_frame: Some(40),
+            ..Default::default()
+        };
+        hud.render_banners(&final_lap, width, &mut px);
+        assert_eq!(at(&px, left as usize, 54), 255);
+        assert_eq!(at(&px, left as usize, 78), 0);
+        // Off the screen at its first frame: nothing drawn.
+        let start = Banners {
+            final_lap_frame: Some(0),
+            ..Default::default()
+        };
+        hud.render_banners(&start, width, &mut px);
         assert!(px.chunks(4).all(|p| p[3] == 0));
     }
 

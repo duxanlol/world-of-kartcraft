@@ -161,9 +161,21 @@ pub struct KartAudio {
     pub engine: (u8, u8),
     /// The music's volume, 0 to 1 (the host's music slider).
     pub music: f32,
-    /// The music's tempo against its own (CTR plays the final lap 20 BPM faster); 0 reads as 1.
-    pub music_rate: f64,
+    /// Beats a minute on the playing song's own tempo: CTR's final lap adds 20
+    /// (`HOWL_AudioState.c:338`, `Audio_SetMaskSong(20)`), 0 plays it as written.
+    pub music_bpm_delta: f64,
     pub weapons: WeaponLoops,
+}
+
+/// The playback rate that plays a song written at `bpm` at `bpm + delta`: CTR changes the
+/// sequence's tempo (`CseqMusic_ChangeTempo`), our rendered song can only be played faster
+/// (its pitch rises with it). A song of unknown tempo plays as it is.
+pub fn tempo_rate(bpm: f64, delta: f64) -> f64 {
+    if bpm > 0.0 {
+        ((bpm + delta) / bpm).max(0.1)
+    } else {
+        1.0
+    }
 }
 
 /// The turbo roar's pitch `age` seconds into its sweep, as CTR's `VehTurbo_ThTick` plays it
@@ -514,12 +526,16 @@ pub struct Sounds {
     /// The race track playing, and one being read off the disk for it.
     music: Option<StaticSoundHandle>,
     loading: Option<std::sync::mpsc::Receiver<Option<StaticSoundData>>>,
+    /// The playing (or loading) song's own tempo, from `music.json`; 0 unknown.
+    music_bpm: f64,
 }
 
 /// A CTR race track rendered from the player's disc (`kart-data/music/music.json`).
 pub struct Track {
     pub name: String,
     pub file: PathBuf,
+    /// Its tempo as the sequence is written (`CseqSongHeader.bpm`); 0 unknown.
+    pub bpm: f64,
 }
 
 /// The race tracks there are.
@@ -543,6 +559,7 @@ pub fn tracks() -> &'static [Track] {
                 Some(Track {
                     name: t["track"].as_str()?.to_string(),
                     file: root.join(t["file"].as_str()?),
+                    bpm: t["bpm"].as_f64().unwrap_or(0.0),
                 })
             })
             .filter(|t| t.file.is_file())
@@ -603,7 +620,8 @@ impl Sounds {
         // The race track: read on its own thread, started when it is in, looped.
         if !self.driving && music_on() {
             if let Some(track) = pick_track() {
-                info!("kart music: {}", track.name);
+                info!("kart music: {} ({} BPM)", track.name, track.bpm);
+                self.music_bpm = track.bpm;
                 let (send, receive) = std::sync::mpsc::channel();
                 let file = track.file.clone();
                 let _ = std::thread::Builder::new()
@@ -622,12 +640,8 @@ impl Sounds {
         }
         if let Some(m) = self.music.as_mut() {
             m.set_volume(db(0.8 * audio.music), tween(400));
-            let rate = if audio.music_rate > 0.0 {
-                audio.music_rate
-            } else {
-                1.0
-            };
-            m.set_playback_rate(rate, tween(1500));
+            // CTR sets the new tempo at once; a short tween only keeps the change from clicking.
+            m.set_playback_rate(tempo_rate(self.music_bpm, audio.music_bpm_delta), tween(60));
         }
         let bank: &Bank = self.bank.get_or_insert_with(Bank::load);
         if !self.driving {
@@ -711,6 +725,20 @@ impl Sounds {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_final_lap_adds_twenty_beats_to_each_song_s_own_tempo() {
+        // Crash Cove at 190 BPM, Dragon Mines at 229: each 20 BPM up from its own.
+        assert!((tempo_rate(190.0, 20.0) - 210.0 / 190.0).abs() < 1e-12);
+        assert!((tempo_rate(229.0, 20.0) - 249.0 / 229.0).abs() < 1e-12);
+        assert!(
+            tempo_rate(148.0, 20.0) > tempo_rate(229.0, 20.0),
+            "slower songs speed up more"
+        );
+        // As written off the final lap, and a song of unknown tempo never changes.
+        assert_eq!(tempo_rate(190.0, 0.0), 1.0);
+        assert_eq!(tempo_rate(0.0, 20.0), 1.0);
+    }
 
     #[test]
     fn the_turbo_roar_starts_low_and_climbs_to_its_own_pitch_as_ctr_s_does() {

@@ -99,14 +99,7 @@ pub(super) fn publish(
             let w = bevy_to_wow(p);
             [w[0], w[1]]
         };
-        let near: Vec<(String, [f32; 2])> = remotes
-            .karts
-            .values()
-            .filter_map(|k| {
-                let name = names.as_ref()?.peek(k.guid)?;
-                Some((name.to_string(), to_wow(k.position)))
-            })
-            .collect();
+        let near = super::race::relayed(&remotes, names.as_deref());
         let me_at = drive.active.then(|| to_wow(drive.pos));
         racer_dots(map, &races.me, me_at, &near)
     });
