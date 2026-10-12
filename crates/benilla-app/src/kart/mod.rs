@@ -701,17 +701,43 @@ pub(crate) fn mount_model_display(store: &crate::net::ObjectStore) -> u32 {
     }
 }
 
-/// Our character's name, for the race rosters.
+/// Our character's name, for the race rosters: the one logged in now. Kept once, a relog onto
+/// another character in the same session raced under the first one's name, and every roster
+/// the server sent the new one was taken for someone else's: no race, while the server had us
+/// in it.
 fn race_name(
     guid: Res<crate::net::SelfGuid>,
     names: Option<Res<crate::names::NameCache>>,
     mut races: ResMut<race::Races>,
 ) {
-    if races.me.is_empty() {
-        if let (Some(g), Some(names)) = (guid.0, names) {
-            if let Some(name) = names.peek(g) {
+    if let (Some(g), Some(names)) = (guid.0, names) {
+        if let Some(name) = names.peek(g) {
+            if races.me != name {
                 races.me = name.to_string();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod race_name_tests {
+    use super::*;
+
+    #[test]
+    fn a_relog_onto_another_character_races_under_its_name() {
+        let mut app = App::new();
+        let mut names = crate::names::NameCache::default();
+        names.insert_player(1, "Vozaccamezu".into(), None);
+        names.insert_player(2, "Asdasd".into(), None);
+        app.insert_resource(names)
+            .insert_resource(crate::net::SelfGuid(Some(1)))
+            .init_resource::<race::Races>()
+            .add_systems(Update, race_name);
+        app.update();
+        assert_eq!(app.world().resource::<race::Races>().me, "Vozaccamezu");
+        // Back to character select and in as another: the rosters name the new one.
+        app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(2);
+        app.update();
+        assert_eq!(app.world().resource::<race::Races>().me, "Asdasd");
     }
 }
