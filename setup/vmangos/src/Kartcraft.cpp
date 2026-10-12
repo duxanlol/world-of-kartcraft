@@ -1264,7 +1264,7 @@ namespace Kartcraft
     // the map threads' visibility checks and by the async packet thread's kart relay: a shared
     // lock for the readers, and s_layered so a world with no race under way takes no lock.
     static std::unordered_map<uint32, uint32> s_layer; // player low guid -> race id
-    static std::shared_mutex s_layerMutex;
+    static std::shared_timed_mutex s_layerMutex;
     static std::atomic<size_t> s_layered{ 0 };
     // What the last TickLayers handed the messager, under s_mutex.
     static std::map<ObjectGuid, uint32> s_layerPosted;
@@ -1279,7 +1279,7 @@ namespace Kartcraft
     {
         if (s_layered.load(std::memory_order_acquire) == 0 || a == b || !a->IsPlayer() || !b->IsPlayer())
             return true;
-        std::shared_lock<std::shared_mutex> lock(s_layerMutex);
+        std::shared_lock<std::shared_timed_mutex> lock(s_layerMutex);
         return LayerOf(a) == LayerOf(b);
     }
 
@@ -1309,7 +1309,7 @@ namespace Kartcraft
         sWorld.GetMessager().AddMessage([layers, moved](World*)
         {
             {
-                std::unique_lock<std::shared_mutex> lock(s_layerMutex);
+                std::unique_lock<std::shared_timed_mutex> lock(s_layerMutex);
                 s_layer.clear();
                 for (auto const& l : layers)
                     s_layer[l.first.GetCounter()] = l.second;
