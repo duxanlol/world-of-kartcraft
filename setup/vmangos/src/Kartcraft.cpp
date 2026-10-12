@@ -12,6 +12,9 @@
 #include "GossipDef.h"
 #include "ScriptMgr.h"
 #include "Database/DatabaseEnv.h"
+#include "GameObject.h"
+#include "Group.h"
+#include "MapManager.h"
 
 #include <cmath>
 #include <ctime>
@@ -233,6 +236,11 @@ namespace Kartcraft
             reputation.SendForceReactions();
     }
 
+    bool InKart(Player const* player)
+    {
+        return player->HasAura(SPELL_SUMMON_KART);
+    }
+
     void OnLogin(Player* player)
     {
         // The whole map discovered, every zone's every area, as `.explorecheat 1` sets it
@@ -339,10 +347,22 @@ namespace Kartcraft
         std::vector<CrateSpot> crates;
         // Where its Race Marshal stands (WoW x, y): courses sharing a start share the marshal.
         std::pair<float, float> marshal;
+        // Gameobject entries a race on it opens near its start while it runs (doors and gates
+        // across the course: Stratholme's locked King's Square gates); may be empty.
+        std::vector<uint32> doors;
     };
 
     // The courses: courses/courses.json, made into this table by setup/vmangos/pack.py.
 #include "KartcraftCourses.h"
+
+    // Whether `c` is a party course: in a dungeon, not the open world, which in 1.12 is its two
+    // continents (MapEntry::IsContinent; the client draws the same line). Each party, in its own
+    // copy of the dungeon, races it alone: hosted inside, joined by the host's party in the host's
+    // copy, and never offered by the Race Finder, which would take players into copies of their own.
+    static bool PartyCourse(Course const& c)
+    {
+        return c.map != 0 && c.map != 1;
+    }
 
     // How near a checkpoint (yards, across the ground) a racer must pass, how near the start a
     // driver must be to host or join, how long a countdown runs (ms), and how long a race may
@@ -429,6 +449,9 @@ namespace Kartcraft
         // Finder race takes FINDER_GROUND_TYPES, and a time trial never has them, so its board
         // stays one board.
         bool groundTypes = false;
+        // A party race's instance: a course in a dungeon is raced in one copy of it, the host's,
+        // by the host's party there (PartyCourse). 0 in the open world.
+        uint32 instance = 0;
         std::vector<Racer> racers;
         // Weapons, live from the start: the crates, the shots relayed in the last SHOT_LIFETIME
         // keyed by shooter low guid << 16 | shot, and the race's MixRNG state.
@@ -1319,7 +1342,8 @@ namespace Kartcraft
                 me = x;
             }
         }
-        if (!race || player->GetMapId() != race->course->map)
+        if (!race || player->GetMapId() != race->course->map ||
+            (race->instance && player->GetInstanceId() != race->instance))
             return;
         std::string const& verb = f[1];
         std::string const guid = std::to_string(player->GetGUIDLow());
@@ -1577,11 +1601,74 @@ namespace Kartcraft
                 std::to_string(BestOf(board, x.guid.GetCounter(), r.course->key)));
     }
 
+    // A course's doors (Course::doors) a race has opened, to close once it is over: the race,
+    // and the door by its map, copy and guid.
+    struct OpenDoor
+    {
+        uint32 race;
+        uint32 map;
+        uint32 instance;
+        ObjectGuid door;
+    };
+    static std::vector<OpenDoor> s_doors;
+    // How near the host (yards) a course's door is looked for. A door opened stays open a race's
+    // lifetime at most (RACE_LIFETIME), should the close never come.
+    constexpr float DOOR_REACH = 150.f;
+
+    // Opens the course's doors nearest the host, from the world's messager (a game object belongs
+    // to its map's thread): each stays open until TickDoors sees the race gone.
+    static void OpenDoors(uint32 id, Race const& r)
+    {
+        if (r.course->doors.empty())
+            return;
+        ObjectGuid const host = r.host;
+        std::vector<uint32> const doors = r.course->doors;
+        sWorld.GetMessager().AddMessage([id, host, doors](World*)
+        {
+            Player* p = ObjectAccessor::FindPlayer(host);
+            if (!p || !p->IsInWorld())
+                return;
+            for (uint32 entry : doors)
+            {
+                GameObject* door = p->FindNearestGameObject(entry, DOOR_REACH);
+                if (!door || door->GetGoState() != GO_STATE_READY)
+                    continue;
+                door->UseDoorOrButton(RACE_LIFETIME / IN_MILLISECONDS);
+                std::lock_guard<std::mutex> lock(s_mutex);
+                s_doors.push_back({ id, p->GetMapId(), p->GetInstanceId(), door->GetObjectGuid() });
+            }
+        });
+    }
+
+    // Closes the doors of races that are over (run with every line, as CloseLateRaces is).
+    static void TickDoors()
+    {
+        for (auto it = s_doors.begin(); it != s_doors.end();)
+        {
+            if (s_races.count(it->race))
+            {
+                it = std::next(it);
+                continue;
+            }
+            OpenDoor const door = *it;
+            sWorld.GetMessager().AddMessage([door](World*)
+            {
+                if (Map* map = sMapMgr.FindMap(door.map, door.instance))
+                    if (GameObject* go = map->GetGameObject(door.door))
+                        if (go->GetGoState() != GO_STATE_READY)
+                            go->ResetDoorOrButton();
+            });
+            it = s_doors.erase(it);
+        }
+    }
+
     // Sends the ground types, the course and the countdown: the race is on once it runs out. A
-    // time trial has no crates: its racer starts with nothing and is sent no layout.
+    // time trial has no crates: its racer starts with nothing and is sent no layout. The course's
+    // doors open.
     static void StartRace(uint32 id, Race& r, uint32 now, uint32 countdown)
     {
         r.start = now + countdown;
+        OpenDoors(id, r);
         SendRace(r, "KARTCRAFT\tR\tGT\t" + std::to_string(id) + "\t" + (r.groundTypes ? "1" : "0"));
         std::string points;
         for (auto const& p : r.course->points)
@@ -1648,19 +1735,21 @@ namespace Kartcraft
 
     // The Race Finder's zones, in the order courses.json first names them: the client asks for a
     // zone by its place in this list ("z3"), which keeps a queue line short however many it ticks.
+    // A party course's zone is not in it.
     static std::vector<std::string> const& Zones()
     {
         static std::vector<std::string> zones = [] {
             std::vector<std::string> out;
             for (Course const& c : COURSES)
-                if (*c.zone && std::find(out.begin(), out.end(), c.zone) == out.end())
+                if (*c.zone && !PartyCourse(c) && std::find(out.begin(), out.end(), c.zone) == out.end())
                     out.push_back(c.zone);
             return out;
         }();
         return zones;
     }
 
-    // The courses a queue line asks for: "any", or a comma list of zones ("z<index>") and keys.
+    // The courses a queue line asks for: "any", or a comma list of zones ("z<index>") and keys;
+    // never a party course.
     static std::vector<bool> CourseMask(std::string const& asked)
     {
         std::vector<bool> mask(COURSES.size(), false);
@@ -1679,7 +1768,8 @@ namespace Kartcraft
                     zone = &zones[index];
             }
             for (size_t i = 0; i < COURSES.size(); ++i)
-                if (token == "any" || token == COURSES[i].key || (zone && *zone == COURSES[i].zone))
+                if (!PartyCourse(COURSES[i]) &&
+                    (token == "any" || token == COURSES[i].key || (zone && *zone == COURSES[i].zone)))
                     mask[i] = true;
         }
         return mask;
@@ -1705,14 +1795,39 @@ namespace Kartcraft
     }
 
     // A grid slot behind the start, two abreast, facing down the course.
-    // Whether the Race Finder may take a player off to a race now: not dead, fighting or already
-    // on the move, not on a flight path, a boat or a zeppelin, and not inside a dungeon, a raid
-    // or a battleground (a teleport out of those would lose their place there).
-    static bool CanBeRacedOff(Player* player)
+    // Whether a player may be put in the kart or on a grid where they are: not dead, fighting or
+    // already on the move, and not on a flight path, a boat or a zeppelin.
+    static bool Settled(Player* player)
     {
         return player->IsAlive() && !player->IsInCombat() && !player->IsBeingTeleported() &&
-            !player->IsTaxiFlying() && !player->GetTransport() && !player->InBattleGround() &&
-            !player->GetMap()->Instanceable();
+            !player->IsTaxiFlying() && !player->GetTransport();
+    }
+
+    // Whether the Race Finder may take a player off to a race now: settled, and not inside a
+    // dungeon, a raid or a battleground (a teleport out of those would lose their place there).
+    static bool CanBeRacedOff(Player* player)
+    {
+        return Settled(player) && !player->InBattleGround() && !player->GetMap()->Instanceable();
+    }
+
+    // Whether a racer may be put on `c`'s grid now: off to it from the open world, or, on a party
+    // course, only from inside the race's copy of its dungeon (`instance`): a teleport within one
+    // map stays in its copy (Player::TeleportTo's near teleport), so the party never leaves it.
+    static bool CanRaceOn(Player* player, Course const& c, uint32 instance)
+    {
+        if (!PartyCourse(c))
+            return CanBeRacedOff(player);
+        return Settled(player) && player->GetMapId() == c.map && player->GetInstanceId() == instance;
+    }
+
+    // Whether `player` may join `r`: anyone near its start, but a party race only the host's party
+    // (one group) in the host's copy of the dungeon; a host with no party races alone.
+    static bool MayJoin(Player* player, Race const& r)
+    {
+        if (!r.instance)
+            return true;
+        Player* host = ObjectAccessor::FindPlayer(r.host);
+        return host && player->GetInstanceId() == r.instance && player->IsInSameRaidWith(host);
     }
 
     // Puts a driver on foot (or on another mount) in the kart: a triggered cast, with no cast bar
@@ -1724,6 +1839,9 @@ namespace Kartcraft
         player->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
         player->CastSpell(player, SPELL_SUMMON_KART, true);
     }
+
+    // How far over a racer in a dungeon (yards) the ground a teleport lands on is looked for from.
+    constexpr float DUNGEON_LOOK_UP = 12.f;
 
     // How long after a teleport the kart is summoned again (ms), and how often it looks again
     // while the teleport is still landing (the client's ack, a far teleport's load).
@@ -1760,7 +1878,11 @@ namespace Kartcraft
     // the sky.
     static bool TeleportOnto(Player* player, uint32 map, float x, float y, float o, bool kart)
     {
-        float ground = sTerrainMgr.LoadTerrain(map)->GetHeightStatic(x, y, 500.f);
+        // The ground under the highest point looked from: in a dungeon, a city of floors and roofs
+        // (Stratholme's), from a little over the racer, who is on its streets, not from the sky.
+        float const from = player->GetMapId() == map && player->GetMap()->IsDungeon() ?
+            player->GetPositionZ() + DUNGEON_LOOK_UP : 500.f;
+        float ground = sTerrainMgr.LoadTerrain(map)->GetHeightStatic(x, y, from);
         if (ground <= INVALID_HEIGHT)
             return false;
         if (kart)
@@ -1771,10 +1893,11 @@ namespace Kartcraft
         return true;
     }
 
-    static bool TeleportToGrid(Player* player, Course const& c, size_t slot)
+    // `instance`: a party race's (Race::instance), 0 in the open world.
+    static bool TeleportToGrid(Player* player, Course const& c, size_t slot, uint32 instance)
     {
         // Their situation may have changed since they said yes: then they stay where they are.
-        if (!CanBeRacedOff(player))
+        if (!CanRaceOn(player, c, instance))
             return false;
         float sx = c.points[0].first, sy = c.points[0].second;
         float dx = c.points[1].first - sx, dy = c.points[1].second - sy;
@@ -1856,7 +1979,7 @@ namespace Kartcraft
                 r.racers.push_back({ p->GetObjectGuid(), p->GetName() });
                 Origin from = { p->GetMapId(), p->GetPositionX(), p->GetPositionY(), p->GetPositionZ(),
                     p->GetOrientation(), now };
-                if (TeleportToGrid(p, *pop.course, slot++))
+                if (TeleportToGrid(p, *pop.course, slot++, 0))
                     s_origins[p->GetGUIDLow()] = from;
             }
         SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(raceId) + "\t" + Roster(r));
@@ -1984,7 +2107,7 @@ namespace Kartcraft
         for (auto const& entry : s_races)
         {
             Race const& r = entry.second;
-            if (r.start || r.racers.empty() || r.timeTrial)
+            if (r.start || r.racers.empty() || r.timeTrial || r.instance)
                 continue;
             std::string host = r.racers.front().name;
             for (Racer const& x : r.racers)
@@ -2083,7 +2206,7 @@ namespace Kartcraft
             uint32 id = uint32(std::strtoul(f[2].c_str(), nullptr, 10));
             auto race = s_races.find(id);
             if (race == s_races.end() || race->second.start || race->second.timeTrial ||
-                race->second.racers.size() >= MAX_RACERS || !CanBeRacedOff(player) ||
+                race->second.instance || race->second.racers.size() >= MAX_RACERS || !CanBeRacedOff(player) ||
                 std::any_of(race->second.racers.begin(), race->second.racers.end(),
                     [guid](Racer const& x) { return x.guid == guid; }))
                 return true;
@@ -2237,7 +2360,15 @@ namespace Kartcraft
 
     static void Unstuck(Player* player, uint32 now)
     {
-        if (!CanBeRacedOff(player))
+        // A racer in a race under way is put back on its course, in a party race inside its copy
+        // of the dungeon; anyone else only in the open world.
+        Race const* racing = nullptr;
+        for (auto const& entry : s_races)
+            if (entry.second.start && int32(now - entry.second.start) >= 0)
+                for (Racer const& x : entry.second.racers)
+                    if (x.guid == player->GetObjectGuid() && !x.finished)
+                        racing = &entry.second;
+        if (racing ? !CanRaceOn(player, *racing->course, racing->instance) : !CanBeRacedOff(player))
             return;
         auto used = s_unstuck.find(player->GetGUIDLow());
         if (used != s_unstuck.end() && WorldTimer::getMSTimeDiff(used->second, now) < UNSTUCK_COOLDOWN)
@@ -2283,7 +2414,7 @@ namespace Kartcraft
             SendLine(player, "KARTCRAFT\tR\tUn");
             return;
         }
-        if (TeleportToGrid(player, *nearest, 0))
+        if (TeleportToGrid(player, *nearest, 0, 0))
             s_unstuck[player->GetGUIDLow()] = now;
     }
 
@@ -2330,15 +2461,25 @@ namespace Kartcraft
             Course const* course = FindCourse(f[2]);
             if (!course || player->GetMapId() != course->map || (!marshal && DistanceTo(player, course->points[0]) > START_RADIUS))
                 return;
+            // A party course is hosted inside its dungeon, by the party's leader.
+            uint32 const instance = PartyCourse(*course) ? player->GetInstanceId() : 0;
+            Group* group = player->GetGroup();
+            if (instance && group && !group->IsLeader(player->GetObjectGuid()))
+            {
+                ChatHandler(player->GetSession()).SendSysMessage("Only your party's leader can host a race here.");
+                return;
+            }
             // A race already waiting on this course takes them in: who arrives after the offer
-            // (sent once, to those near) still races with the host rather than alone.
+            // (sent once, to those near) still races with the host rather than alone. A party
+            // race only if it is theirs to join.
             for (auto& entry : s_races)
             {
                 uint32 openId = entry.first;
                 Race& open = entry.second;
                 bool in = std::any_of(open.racers.begin(), open.racers.end(),
                     [player](Racer const& x) { return x.guid == player->GetObjectGuid(); });
-                if (open.course == course && !open.start && !open.timeTrial && (in || open.racers.size() < MAX_RACERS))
+                if (open.course == course && !open.start && !open.timeTrial && open.instance == instance &&
+                    MayJoin(player, open) && (in || open.racers.size() < MAX_RACERS))
                 {
                     if (!in)
                         open.racers.push_back({ player->GetObjectGuid(), player->GetName() });
@@ -2352,6 +2493,7 @@ namespace Kartcraft
             r.host = player->GetObjectGuid();
             r.created = now;
             r.groundTypes = f.size() > 3 && f[3] == "1";
+            r.instance = instance;
             r.racers.push_back({ player->GetObjectGuid(), player->GetName() });
             WorldPacket data;
             std::string open = "KARTCRAFT\tR\tO\t" + std::to_string(raceId) + "\t" + course->key + "\t" +
@@ -2367,7 +2509,8 @@ namespace Kartcraft
             // with no crates and no items. Out of the queue, any ready check and every other race
             // first; no one joins it, and the Race Finder never lists it.
             Course const* course = FindCourse(f[2]);
-            if (!course || player->GetMapId() != course->map || !CanBeRacedOff(player) ||
+            uint32 const instance = course && PartyCourse(*course) ? player->GetInstanceId() : 0;
+            if (!course || player->GetMapId() != course->map || !CanRaceOn(player, *course, instance) ||
                 (!marshal && DistanceTo(player, course->points[0]) > START_RADIUS))
                 return;
             ObjectGuid const guid = player->GetObjectGuid();
@@ -2378,19 +2521,20 @@ namespace Kartcraft
             r.host = guid;
             r.created = now;
             r.timeTrial = true;
+            r.instance = instance;
             r.racers.push_back({ guid, player->GetName() });
             // The roster makes the client's race, the next line marks it a time trial, and the
             // course, countdown and records follow (StartRace).
             SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(raceId) + "\t" + Roster(r));
             SendRace(r, "KARTCRAFT\tR\tTT\t" + std::to_string(raceId));
-            TeleportToGrid(player, *course, 0);
+            TeleportToGrid(player, *course, 0, instance);
             StartRace(raceId, r, now, GRID_COUNTDOWN);
         }
         else if (verb == "J" && race != s_races.end())
         {
             Race& r = race->second;
             if (r.start || r.timeTrial || r.racers.size() >= MAX_RACERS || player->GetMapId() != r.course->map ||
-                (!marshal && DistanceTo(player, r.course->points[0]) > START_RADIUS))
+                !MayJoin(player, r) || (!marshal && DistanceTo(player, r.course->points[0]) > START_RADIUS))
                 return;
             for (Racer const& x : r.racers)
                 if (x.guid == player->GetObjectGuid())
@@ -2419,7 +2563,7 @@ namespace Kartcraft
                         p->CombatStopWithPets(true);
                         p->GetHostileRefManager().deleteReferences();
                     }
-                    TeleportToGrid(p, *r.course, slot++);
+                    TeleportToGrid(p, *r.course, slot++, r.instance);
                 }
             StartRace(id, r, now, far ? GRID_COUNTDOWN + FAR_SETTLE : GRID_COUNTDOWN);
         }
@@ -2432,7 +2576,7 @@ namespace Kartcraft
             for (Racer& x : r.racers)
                 if (x.guid == player->GetObjectGuid())
                     me = &x;
-            if (!me || me->finished)
+            if (!me || me->finished || (r.instance && player->GetInstanceId() != r.instance))
                 return;
             Course const& c = *r.course;
             uint32 n = uint32(c.points.size());
@@ -2538,6 +2682,7 @@ namespace Kartcraft
         uint32 const now = WorldTimer::getMSTime();
         WitnessSender(player, now);
         CloseLateRaces(now);
+        TickDoors();
         TickWeapons(now);
         if (body.compare(0, 2, "L\t") == 0)
         {
@@ -2648,8 +2793,9 @@ namespace Kartcraft
                 Race const& r = entry.second;
                 bool in = std::any_of(r.racers.begin(), r.racers.end(), [guid](Racer const& x) { return x.guid == guid; });
                 busy |= in;
+                // Another copy's party race is not this marshal's to offer.
                 if (r.start || r.timeTrial || WorldTimer::getMSTimeDiff(r.created, now) > RACE_LIFETIME ||
-                    !AtMarshal(here, r.course))
+                    !AtMarshal(here, r.course) || (r.instance && r.instance != player->GetInstanceId()))
                     continue;
                 waiting.push_back(r.course);
                 if (r.host == guid && room)
@@ -2659,7 +2805,7 @@ namespace Kartcraft
                         MARSHAL_START, entry.first, "", false);
                     --room;
                 }
-                else if (!in && r.racers.size() < MAX_RACERS)
+                else if (!in && r.racers.size() < MAX_RACERS && MayJoin(player, r))
                     joinable.emplace_back(entry.first, &r);
             }
             for (auto const& j : joinable)
@@ -2864,10 +3010,11 @@ namespace Kartcraft
                 return;
             }
             // Hosting, joining or a time trial on foot: into the kart first, as a Race Finder pop
-            // does.
+            // does; in a dungeon too, where only a triggered cast mounts (Spell::CheckCast's
+            // MapEntry::IsMountAllowed), and a marshal there has only party courses.
             bool const enters = line.compare(0, 4, "R\tH\t") == 0 || line.compare(0, 4, "R\tJ\t") == 0 ||
                 line.compare(0, 4, "R\tT\t") == 0;
-            if (enters && CanBeRacedOff(p))
+            if (enters && (CanBeRacedOff(p) || (p->GetMap()->IsDungeon() && Settled(p))))
                 SummonKart(p);
             HandleLine(p, line, true);
         });
