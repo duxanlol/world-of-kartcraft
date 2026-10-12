@@ -61,7 +61,12 @@ pub struct Held {
     bomb_out: bool,
     /// `instBubbleHold`: our shield is up.
     shield_up: bool,
+    /// A rain cloud holds the roulette at 5 frames from its end (`RB_MaskShieldCloud.c:543-551`).
+    locked: bool,
 }
+
+/// `d->itemRollTimer = 5` under an `ITEM_ROLL` cloud, every frame.
+const CLOUD_ROLL_TIMER: u16 = 5;
 
 impl Held {
     pub fn new() -> Self {
@@ -83,11 +88,42 @@ impl Held {
         self.no_item_timer = 0;
     }
 
-    /// The server's roll for the running roulette.
+    /// The server's roll for the running roulette. A roulette a rain cloud held is let go: the
+    /// item shows on the next tick (`VehPhysGeneral_SetHeldItem` as the cloud goes,
+    /// `RB_MaskShieldCloud.c:556-561`).
     pub fn set_result(&mut self, item: Item) {
         if self.rolling {
             self.result = Some(item);
+            if std::mem::take(&mut self.locked) {
+                self.roll_timer = 0;
+            }
         }
+    }
+
+    /// An `ITEM_ROLL` rain cloud takes the held item into the roulette (`HELD_ITEM_ROULETTE`,
+    /// shots gone), held 5 frames from its end while the cloud lasts: no Fire stops it
+    /// (`RB_MaskShieldCloud.c:543-551`). A running roulette's result is dropped; the new roll
+    /// comes as the cloud goes.
+    pub fn cloud_lock(&mut self) {
+        self.item = Item::None;
+        self.rolling = true;
+        self.roll_timer = CLOUD_ROLL_TIMER;
+        self.result = None;
+        self.stack = 0;
+        self.no_item_timer = 0;
+        self.locked = true;
+    }
+
+    /// The cloud went with no roll yet: the roulette runs down and waits for the result.
+    pub fn cloud_unlock(&mut self) {
+        if std::mem::take(&mut self.locked) {
+            self.roll_timer = 0;
+        }
+    }
+
+    /// Whether a rain cloud holds the roulette.
+    pub fn locked(&self) -> bool {
+        self.locked
     }
 
     /// One frame's timers, before the Fire press is read: the roll counts down and, at 0, shows
@@ -95,7 +131,9 @@ impl Held {
     /// with no shots stacked (`:612-636`). Returns the item revealed this frame.
     pub fn tick(&mut self) -> Option<Item> {
         let mut revealed = None;
-        if self.rolling {
+        if self.locked {
+            self.roll_timer = CLOUD_ROLL_TIMER;
+        } else if self.rolling {
             if self.roll_timer != 0 {
                 self.roll_timer -= 1;
             } else if let Some(item) = self.result.take() {
@@ -128,6 +166,11 @@ impl Held {
         if self.shield_up {
             self.shield_up = false;
             return Fire::ShieldShot;
+        }
+        // Under the cloud the press does stop the roll, but the cloud sets it back to 5 before
+        // the next frame (`VehPhysProc.c:857-858`, `RB_MaskShieldCloud.c:550`).
+        if self.locked {
+            return Fire::Nothing;
         }
         if self.rolling || self.item == Item::None || self.no_item_timer != 0 {
             // `CheckItemRollTimer`: any refused press stops a roll that has spun 20 frames.
@@ -313,6 +356,37 @@ mod tests {
         assert_eq!(held.fire(0, true), Fire::Detonate);
         assert!(matches!(held.fire(0, true), Fire::Launch(_)));
         assert_eq!(held.shots_left(), 1);
+    }
+
+    #[test]
+    fn a_rain_cloud_holds_the_roulette_until_the_new_roll() {
+        let mut held = Held::new();
+        held.start_roulette();
+        held.set_result(Item::Bomb3);
+        while held.tick().is_none() {}
+        held.cloud_lock();
+        assert_eq!(held.view(), HeldView::Spinning);
+        assert_eq!(held.shots_left(), 0);
+        assert!(!held.can_take_crate());
+        // The cloud's 240 frames: Fire never stops it, nothing shows.
+        for _ in 0..240 {
+            assert_eq!(held.tick(), None);
+            assert_eq!(held.fire(10, true), Fire::Nothing);
+        }
+        held.set_result(Item::Mask);
+        assert!(!held.locked());
+        assert_eq!(held.tick(), Some(Item::Mask));
+        assert!(matches!(held.fire(0, true), Fire::Launch(_)));
+        // A cloud gone with no roll yet: the roulette waits for it, then shows it.
+        let mut held = Held::new();
+        held.start_roulette();
+        held.set_result(Item::Tnt);
+        held.cloud_lock();
+        assert_eq!(held.tick(), None, "the crate's roll is dropped");
+        held.cloud_unlock();
+        assert_eq!(held.tick(), None);
+        held.set_result(Item::Turbo);
+        assert_eq!(held.tick(), Some(Item::Turbo));
     }
 
     #[test]

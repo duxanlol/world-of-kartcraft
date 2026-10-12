@@ -9,7 +9,7 @@ pub mod stats;
 
 pub use collision::Collision;
 pub use kart::{
-    clock_slowdown, CameraInput, Event, HitKind, Input, Kart, Modifiers, OtherKart, Pose, Shield,
-    State, MS, TICK,
+    clock_slowdown, CameraInput, CloudEffect, Event, HitKind, Input, Kart, Modifiers, OtherKart,
+    Pose, Ram, Shield, State, MS, RAM_TURBO_IMPACT, TICK,
 };
 pub use stats::Class;

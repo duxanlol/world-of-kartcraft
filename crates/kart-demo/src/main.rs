@@ -460,13 +460,25 @@ fn drive(
             kart.fire_turbo(demo.juice);
         }
     }
+    // The dummies stand in the way, and are rammed as any kart.
+    let mut nearby: Vec<kartcraft::NearbyKart> = demo
+        .dummies
+        .iter()
+        .map(|&(id, _, at, _)| kartcraft::NearbyKart {
+            position: at,
+            weight: 256,
+            id,
+            ..Default::default()
+        })
+        .collect();
+    weapons.arm(&mut nearby);
     let events = demo.session.step_with(
         &collide,
         now,
         dt,
         &kartcraft::kart_input(&controls),
         &mods,
-        &[],
+        &nearby,
         |world, kart, origin| weapons.tick(world, kart, origin),
     );
     weapons.blend = demo.session.tick_fraction();

@@ -370,6 +370,13 @@ namespace Kartcraft
         // no time limit).
         uint32 shieldAt = 0;
         bool shieldJuiced = false;
+        // When the turbo item was last fired (ms, 0 none), for a turbo ram.
+        uint32 turboAt = 0;
+        // A red beaker's rain cloud: until when (ms, 0 none), its effect, and whether the held
+        // item went into the roulette under it, to be rolled anew when the cloud goes.
+        uint32 cloudUntil = 0;
+        uint8 cloudEffect = 0;
+        bool cloudLocked = false;
     };
 
     // A weapon crate ('Q'), a fruit crate ('F') or a single Wumpa fruit ('W') on a race's course.
@@ -382,14 +389,15 @@ namespace Kartcraft
         uint32 grownAt = 0;   // ms; until then it regrows and cannot be taken; 0 full
     };
 
-    // A relayed shot: the item, when it was relayed (ms), whether it has hit anyone, and whether
-    // it was dropped behind (TNT, Nitro, beaker).
+    // A relayed shot: the item, when it was relayed (ms), whether it has hit anyone, whether it
+    // was dropped behind (TNT, Nitro, beaker), and juiced (a red beaker).
     struct Shot
     {
         uint8 item;
         uint32 at;
         bool hit = false;
         bool dropped = false;
+        bool juiced = false;
     };
 
     struct Race
@@ -637,6 +645,14 @@ namespace Kartcraft
     constexpr uint32 MASK_TIME_JUICED = 11520;
     // A green shield lasts 12 s (VehPickupItem.c:976-983); a second's slack for the line.
     constexpr uint32 SHIELD_TIME = 13 * IN_MILLISECONDS;
+    // The turbo item burns 2400 ms of reserves; a ram under it counts this long after its relay.
+    constexpr uint32 TURBO_TIME = 3 * IN_MILLISECONDS;
+    // A rammer and its victim are this near (yards): both positions here trail their karts.
+    constexpr float RAM_RADIUS = 20.f;
+    // A red beaker's rain cloud lasts 7680 ms (RB_MaskShieldCloud.c:615). Its effects
+    // (namespace_Vehicle.h:629-632): slow, the held item spinning, ice, no hop.
+    constexpr uint32 CLOUD_TIME = 0x1E00;
+    enum RainEffect : uint8 { CLOUD_SLOW = 0, CLOUD_ITEM_ROLL = 1 };
     // A whole addon line stays under this (docs/ctr-weapons-assets-and-net.md, B1).
     constexpr size_t MAX_LINE = 200;
 
@@ -885,6 +901,51 @@ namespace Kartcraft
         return item;
     }
 
+    // A roulette a rain cloud held spins out: a new roll, shown at once, so its shots are taken
+    // at once (RB_MaskShieldCloud.c:556-561).
+    static void Reroll(Race& race, Racer& me, uint32 now)
+    {
+        me.cloudLocked = false;
+        me.held = Roll(race, me, now);
+        me.shots = me.held == ITEM_BOMB_3 || me.held == ITEM_MISSILE_3 ? 3 : 1;
+        me.claimed = now - ROLL_MIN;
+        if (Player* p = Recipient(me.guid))
+            SendLine(p, "KARTCRAFT\tW\tI\t" + std::to_string(me.held) + "\t" + std::to_string(me.shots));
+    }
+
+    static bool CloudUp(Racer const& me, uint32 now)
+    {
+        return me.cloudUntil && int32(now - me.cloudUntil) < 0;
+    }
+
+    // A red beaker's spin-out took on a racer (RB_GenericMine.c:172-176, RB_RainCloud_Init at
+    // RB_MaskShieldCloud.c:568-641): a first cloud spins a held item (ITEM_ROLL) or slows a racer
+    // holding nothing; under a cloud the time starts again and the effect is drawn anew,
+    // (MixRNG % 400) / 100. ITEM_ROLL takes a held item into the roulette (:543-551); a redraw
+    // away from it rolls a roulette it held at once, its timer no longer held at 5.
+    static void Rain(Race& race, Racer& me, uint32 now)
+    {
+        bool holds = me.held != ITEM_NONE && me.shots;
+        if (CloudUp(me, now))
+            me.cloudEffect = uint8(Scramble(race) % 400 / 100);
+        else
+        {
+            me.cloudEffect = holds ? CLOUD_ITEM_ROLL : CLOUD_SLOW;
+            me.cloudLocked = false;
+        }
+        if (me.cloudEffect == CLOUD_ITEM_ROLL && holds)
+        {
+            me.cloudLocked = true;
+            me.held = ITEM_NONE;
+            me.shots = 0;
+        }
+        me.cloudUntil = (now + CLOUD_TIME) | 1;
+        SendRace(race, "KARTCRAFT\tW\tR\t" + std::to_string(me.guid.GetCounter()) + "\t" +
+            std::to_string(me.cloudEffect) + "\t" + (me.cloudLocked ? "1" : "0"));
+        if (me.cloudLocked && me.cloudEffect != CLOUD_ITEM_ROLL)
+            Reroll(race, me, now);
+    }
+
     static void SendLayout(Race const& race)
     {
         std::string const head = "KARTCRAFT\tW\tL\t";
@@ -936,6 +997,9 @@ namespace Kartcraft
             r.wumpa = 0;
             r.maskUntil = 0;
             r.shieldAt = 0;
+            r.turboAt = 0;
+            r.cloudUntil = 0;
+            r.cloudLocked = false;
         }
         SendLayout(race);
     }
@@ -1039,13 +1103,21 @@ namespace Kartcraft
         SendLine(player, std::string("KARTCRAFT\tR\tM\t") + (on ? "1" : "0"));
     }
 
-    // Crates due back come up; old shots are forgotten. Run on every Kartcraft line: a racer's
-    // kart sends its state ten times a second, so a respawn is late by at most about 100 ms.
+    // Crates due back come up; old shots are forgotten; rain clouds go, rolling the roulettes
+    // they held. Run on every Kartcraft line: a racer's kart sends its state ten times a second,
+    // so a respawn is late by at most about 100 ms.
     static void TickWeapons(uint32 now)
     {
         for (auto& entry : s_races)
         {
             Race& race = entry.second;
+            for (Racer& r : race.racers)
+                if (r.cloudUntil && int32(now - r.cloudUntil) >= 0)
+                {
+                    r.cloudUntil = 0;
+                    if (r.cloudLocked)
+                        Reroll(race, r, now);
+                }
             for (size_t i = 0; i < race.crates.size(); ++i)
             {
                 Crate& c = race.crates[i];
@@ -1145,8 +1217,9 @@ namespace Kartcraft
             SendRace(*race, "KARTCRAFT\tW\tX\t" + std::to_string(index) + "\t" + guid);
             if (crate.kind == 'Q')
             {
-                // A racer still holding an item breaks the crate for nothing (RB_Crate.c:152-226).
-                if (me->held != ITEM_NONE || me->shots)
+                // A racer still holding an item, or under a cloud spinning one, breaks the crate
+                // for nothing (RB_Crate.c:152-226).
+                if (me->held != ITEM_NONE || me->shots || (CloudUp(*me, now) && me->cloudEffect == CLOUD_ITEM_ROLL))
                     return;
                 uint8 item = Roll(*race, *me, now);
                 me->held = item;
@@ -1191,7 +1264,13 @@ namespace Kartcraft
             if (--me->shots == 0)
                 me->held = ITEM_NONE;
             if (item == ITEM_MASK)
+            {
                 me->maskUntil = now + (juiced ? MASK_TIME_JUICED : MASK_TIME);
+                // ACTION_MASK_WEAPON blows a rain cloud away (RB_MaskShieldCloud.c:527-532).
+                me->cloudUntil = 0;
+            }
+            if (item == ITEM_TURBO)
+                me->turboAt = now ? now : 1;
             if (item == ITEM_SHIELD)
             {
                 me->shieldAt = now ? now : 1;
@@ -1213,6 +1292,7 @@ namespace Kartcraft
             record.item = item;
             record.at = now;
             record.dropped = flags.find('d') != std::string::npos;
+            record.juiced = juiced;
             SendRace(*race, "KARTCRAFT\tW\tS\t" + guid + "\t" + std::to_string(item) + "\t" + (juiced ? "1" : "0") +
                 "\t" + std::to_string(shot) + "\t" + place + "\t" + std::to_string(target) + "\t" + flags);
         }
@@ -1262,6 +1342,7 @@ namespace Kartcraft
             if (kind != 'S' && kind != 'B' && kind != 'Q' && kind != 'T')
                 return;
             bool self = shooter == player->GetGUIDLow() && shot == 0;
+            bool red = false;
             if (!self)
             {
                 auto found = race->shots.find((uint64(shooter) << 16) | shot);
@@ -1273,6 +1354,7 @@ namespace Kartcraft
                     return;
                 if (single || s.dropped)
                     s.hit = true;
+                red = s.item == ITEM_BEAKER && s.juiced && kind == 'S';
             }
             // Spin-out and squish cost 1, a blast 3; a TNT landing on the head costs nothing until
             // it goes off; none while masked (RB_Player.c:153-161).
@@ -1282,6 +1364,40 @@ namespace Kartcraft
             me->wumpa = uint8(me->wumpa > loss ? me->wumpa - loss : 0);
             SendRace(*race, "KARTCRAFT\tW\tH\t" + guid + "\t" + std::to_string(shooter) + "\t" + std::to_string(shot) +
                 "\t" + std::string(1, kind) + "\t" + std::to_string(me->wumpa));
+            if (red)
+                Rain(*race, *me, now);
+        }
+        else if (verb == "B" && f.size() >= 4)
+        {
+            // Rammed (VehPhysCrash_Attack, VehPhysCrash.c:199-252): only by a racer near us with
+            // its mask on, its shield up (spent by the ram) or its turbo item burning.
+            uint32 low = uint32(std::strtoul(f[2].c_str(), nullptr, 10));
+            Racer* attacker = low == player->GetGUIDLow() ? nullptr : FindRacer(*race, low);
+            Player* rammer = attacker ? ObjectAccessor::FindPlayer(attacker->guid) : nullptr;
+            if (!rammer || f[3].size() != 1 ||
+                DistanceTo(rammer, { player->GetPositionX(), player->GetPositionY() }) > RAM_RADIUS)
+                return;
+            char ram = f[3][0];
+            bool armed = false;
+            if (ram == 'M')
+                armed = attacker->maskUntil && int32(now - attacker->maskUntil) < 0;
+            else if (ram == 'S')
+            {
+                armed = attacker->shieldAt &&
+                    (attacker->shieldJuiced || WorldTimer::getMSTimeDiff(attacker->shieldAt, now) <= SHIELD_TIME);
+                attacker->shieldAt = 0;
+            }
+            else if (ram == 'T')
+                armed = attacker->turboAt && WorldTimer::getMSTimeDiff(attacker->turboAt, now) <= TURBO_TIME;
+            if (!armed)
+                return;
+            // As the hit it is: a blast costs 3, a squish 1; none while masked.
+            uint32 loss = ram == 'T' ? 1 : 3;
+            if (me->maskUntil && int32(now - me->maskUntil) < 0)
+                loss = 0;
+            me->wumpa = uint8(me->wumpa > loss ? me->wumpa - loss : 0);
+            SendRace(*race, "KARTCRAFT\tW\tB\t" + guid + "\t" + std::to_string(low) + "\t" + std::string(1, ram) +
+                "\t" + std::to_string(me->wumpa));
         }
     }
 

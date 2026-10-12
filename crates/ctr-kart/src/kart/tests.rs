@@ -327,6 +327,7 @@ fn karts_bump_apart_and_the_heavier_one_wins() {
         position: ahead,
         velocity: Vec3::ZERO,
         weight: 300,
+        ..Default::default()
     };
     let before = kart.speed();
     kart.events.clear();
@@ -341,6 +342,154 @@ fn karts_bump_apart_and_the_heavier_one_wins() {
     kart.events.clear();
     kart.tick_among(&w, &GAS, &NONE, &[far]);
     assert!(!kart.events.iter().any(|e| matches!(e, Event::Bump { .. })));
+}
+
+/// A kart 60 lu ahead of `kart`, standing, wearing what `armed` sets.
+fn ahead_of(kart: &Kart, armed: impl FnOnce(&mut OtherKart)) -> OtherKart {
+    let mut other = OtherKart {
+        position: kart.pose().position + Vec3::Z * 60.0,
+        weight: 256,
+        id: 7,
+        ..Default::default()
+    };
+    armed(&mut other);
+    other
+}
+
+fn rammed(kart: &Kart) -> Option<Ram> {
+    kart.events.iter().find_map(|e| match e {
+        Event::Rammed { by: 7, ram } => Some(*ram),
+        _ => None,
+    })
+}
+
+fn rammer(kart: &Kart) -> Option<Ram> {
+    kart.events.iter().find_map(|e| match e {
+        Event::Rammer { other: 7, ram } => Some(*ram),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_masked_kart_ramming_us_blasts_us_and_a_plain_bump_does_not() {
+    let w = world(floor(40000.0));
+    let mut kart = cruising(&w);
+    kart.tick_among(&w, &GAS, &NONE, &[ahead_of(&kart, |_| {})]);
+    assert_eq!(rammed(&kart), None);
+    assert_eq!(kart.reaction(), None);
+    let mut kart = cruising(&w);
+    kart.tick_among(&w, &GAS, &NONE, &[ahead_of(&kart, |o| o.masked = true)]);
+    assert_eq!(rammed(&kart), Some(Ram::Mask));
+    assert!(matches!(kart.reaction(), Some((HitKind::Blasted, _))));
+    // Masked ourselves, nothing gets through; and ours blasts it.
+    let mut kart = cruising(&w);
+    kart.mask(false);
+    kart.tick_among(&w, &GAS, &NONE, &[ahead_of(&kart, |o| o.masked = true)]);
+    assert_eq!(rammed(&kart), None);
+    assert_eq!(rammer(&kart), None, "both masked: neither attacks");
+    kart.events.clear();
+    kart.tick_among(&w, &GAS, &NONE, &[ahead_of(&kart, |_| {})]);
+    assert_eq!(rammer(&kart), Some(Ram::Mask));
+    assert!(kart.masked(), "the mask stays");
+}
+
+#[test]
+fn a_shield_ram_blasts_the_other_and_is_spent() {
+    let w = world(floor(40000.0));
+    // Theirs into us: blasted.
+    let mut kart = cruising(&w);
+    kart.tick_among(&w, &GAS, &NONE, &[ahead_of(&kart, |o| o.shielded = true)]);
+    assert_eq!(rammed(&kart), Some(Ram::Shield));
+    assert!(matches!(kart.reaction(), Some((HitKind::Blasted, _))));
+    // Ours into them: spent, popping, and we are not hurt.
+    let mut kart = cruising(&w);
+    kart.shield_up(true);
+    kart.tick_among(&w, &GAS, &NONE, &[ahead_of(&kart, |_| {})]);
+    assert_eq!(rammer(&kart), Some(Ram::Shield));
+    assert!(kart.shield().is_none());
+    assert!(saw(&kart, Event::ShieldPopped));
+    assert_eq!(kart.reaction(), None);
+    // Shield against shield: nothing.
+    let mut kart = cruising(&w);
+    kart.shield_up(false);
+    kart.tick_among(&w, &GAS, &NONE, &[ahead_of(&kart, |o| o.shielded = true)]);
+    assert_eq!((rammed(&kart), rammer(&kart)), (None, None));
+    assert!(kart.shield().is_some());
+}
+
+#[test]
+fn a_turbo_ram_over_the_threshold_squishes_and_high_jumps() {
+    let w = world(floor(40000.0));
+    // Their turbo into us at speed: squished. Standing still, the impact is under 0xA00.
+    let mut kart = cruising(&w);
+    let fast = |o: &mut OtherKart| {
+        o.turbo = true;
+        o.velocity = Vec3::new(0.0, 0.0, -2.0 * RAM_TURBO_IMPACT);
+    };
+    kart.tick_among(&w, &GAS, &NONE, &[ahead_of(&kart, fast)]);
+    assert_eq!(rammed(&kart), Some(Ram::Turbo));
+    assert!(matches!(kart.reaction(), Some((HitKind::Squished, _))));
+    let mut still = Kart::new(Class::Balanced, Vec3::ZERO, 0);
+    run(&mut still, &w, Input::default(), 10);
+    let slow = |o: &mut OtherKart| {
+        o.turbo = true;
+        o.velocity = Vec3::new(0.0, 0.0, -0.5 * RAM_TURBO_IMPACT);
+    };
+    still.events.clear();
+    still.tick_among(&w, &Input::default(), &NONE, &[ahead_of(&still, slow)]);
+    assert_eq!(rammed(&still), None, "under the threshold");
+    // Ours: under the turbo item at speed into a kart without one, we high-jump.
+    let mut kart = cruising(&w);
+    kart.fire_turbo(false);
+    run(&mut kart, &w, GAS, 2);
+    kart.events.clear();
+    let y = kart.pose().position.y;
+    kart.tick_among(&w, &GAS, &NONE, &[ahead_of(&kart, |_| {})]);
+    assert_eq!(rammer(&kart), Some(Ram::Turbo));
+    assert_eq!(kart.reaction(), None);
+    run(&mut kart, &w, GAS, 8);
+    let high = kart.pose().position.y - y;
+    // A hop's 4596 rises about 140 lu in 8 frames; three times the force, far higher.
+    let mut hop = cruising(&w);
+    let y0 = hop.pose().position.y;
+    hop.tick(&w, &Input { r1: true, ..GAS }, &NONE);
+    run(&mut hop, &w, GAS, 8);
+    let low = hop.pose().position.y - y0;
+    assert!(high > 2.0 * low, "{high} vs a hop's {low}");
+    // A turbo from a pad or a slide is no turbo item.
+    let mut kart = cruising(&w);
+    kart.start_boost(true);
+    kart.tick_among(&w, &GAS, &NONE, &[ahead_of(&kart, |_| {})]);
+    assert_eq!(rammer(&kart), None);
+}
+
+#[test]
+fn a_cloud_slows_ices_or_takes_the_hop() {
+    let w = world(floor(40000.0));
+    let top = |cloud| {
+        let mut kart = Kart::new(Class::Balanced, Vec3::ZERO, 0);
+        kart.set_cloud(cloud);
+        run(&mut kart, &w, GAS, 120);
+        kart.speed()
+    };
+    let clear = top(None);
+    let slowed = top(Some(CloudEffect::Slow));
+    assert!(
+        (clear - slowed - DAMAGED_SPEED).abs() < 300,
+        "{clear} vs {slowed}"
+    );
+    let mut kart = cruising(&w);
+    kart.set_cloud(Some(CloudEffect::Ice));
+    run(&mut kart, &w, GAS, 1);
+    assert_eq!(kart.terrain, Terrain::ICE);
+    let mut kart = cruising(&w);
+    kart.set_cloud(Some(CloudEffect::NoHop));
+    kart.tick(&w, &Input { r1: true, ..GAS }, &NONE);
+    assert!(!saw(&kart, Event::Hop));
+    kart.set_cloud(None);
+    run(&mut kart, &w, GAS, 1);
+    kart.tick(&w, &Input { r1: true, ..GAS }, &NONE);
+    assert!(saw(&kart, Event::Hop));
 }
 
 /// A kart at the class's top speed on a long floor.

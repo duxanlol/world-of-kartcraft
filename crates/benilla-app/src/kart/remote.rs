@@ -128,6 +128,8 @@ impl RemoteKarts {
                 position: r.position,
                 velocity: r.velocity,
                 weight: 256,
+                id: super::weapons::low_guid(r.guid),
+                ..Default::default()
             })
             .collect()
     }

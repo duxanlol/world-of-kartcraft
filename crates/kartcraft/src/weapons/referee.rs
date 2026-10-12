@@ -2,11 +2,13 @@
 //! `HandleWeapon`; `docs/kartcraft-weapons-protocol.md`) for a race with no server, so the demo
 //! drives the same [`super::Weapons`] the client does. It owns the crates and their respawns,
 //! rolls the roulette ([`ctr_weapons::roll`]), keeps each racer's item, shots and Wumpa, and
-//! relays shots, detonations, shield bombs and hits.
+//! relays shots, detonations, shield bombs, hits, rams and rain clouds.
 
 use std::collections::HashMap;
 
-use ctr_weapons::{roll, HitKind, Item, KartId, RaceItems, Rng, ShotKey};
+use ctr_kart::Ram;
+use ctr_weapons::cloud::CLOUD_MS;
+use ctr_weapons::{roll, HitKind, Item, KartId, RaceItems, RainCloud, Rng, ShotKey};
 
 use super::wire::{CrateKind, CrateSpot, Down, Up};
 
@@ -27,6 +29,11 @@ const MASK_TIME: f32 = 7680.0 / 960.0;
 const MASK_TIME_JUICED: f32 = 11520.0 / 960.0;
 /// A green shield lasts 12 s (`VehPickupItem.c:976-983`); a second's slack for the line.
 const SHIELD_TIME: f32 = 13.0;
+/// The turbo item burns 2400 ms of reserves (`VehPickupItem.c`); a ram under it counts this long
+/// after its relay, with slack for the line.
+const TURBO_TIME: f32 = 3.0;
+/// A rain cloud's 7.68 s (`RB_MaskShieldCloud.c:615`).
+const CLOUD_TIME: f32 = CLOUD_MS as f32 / 1000.0;
 /// The roulette's field: 8 racers on lap 2, CTR's 1P arcade table set.
 const RACERS: usize = 8;
 const LAP: u32 = 1;
@@ -48,10 +55,15 @@ struct Racer {
     mask_until: f32,
     /// A shield fired and not yet launched: when, and whether juiced (blue, no time limit).
     shield: Option<(f32, bool)>,
+    /// When the turbo item was last fired.
+    turbo_at: Option<f32>,
+    /// A rain cloud over the racer, and when it goes.
+    cloud: Option<(RainCloud, f32)>,
 }
 
 struct Record {
     item: Item,
+    juiced: bool,
     at: f32,
     hit: bool,
     dropped: bool,
@@ -117,9 +129,74 @@ impl Referee {
             .is_some_and(|r| r.held.is_some() || r.shots != 0)
     }
 
-    /// Crates due back come up; old shots are forgotten (`TickWeapons`).
+    /// The roulette a cloud locked spins out: a new roll, given at once (`RB_RainCloud_ThTick`,
+    /// `RB_MaskShieldCloud.c:556-561`).
+    fn reroll(&mut self, who: KartId, now: f32) -> Vec<Addressed> {
+        let position = usize::from(self.rng.scramble()) % RACERS;
+        let rolled = roll(&mut self.rng, position, RACERS, LAP, &RaceItems::new(1));
+        let item = self.force.unwrap_or(rolled);
+        let out = self.grant(who, item, now);
+        // No roulette to wait for: it shows at once.
+        if let Some(r) = self.racers.get_mut(&who) {
+            r.claimed = now - ROLL_MIN;
+        }
+        out
+    }
+
+    /// A red beaker's spin-out took on `who` (`RB_GenericMine.c:172-176`): the cloud starts, or
+    /// starts again with a new effect ([`RainCloud::rain`]); a held item goes into the roulette.
+    fn rain(&mut self, who: KartId, now: f32) -> Vec<Addressed> {
+        let r = self.racers.entry(who).or_default();
+        let holds = r.held.is_some() && r.shots != 0;
+        let cloud = RainCloud::rain(r.cloud.map(|c| c.0), holds, &mut self.rng);
+        if cloud.locked {
+            r.held = None;
+            r.shots = 0;
+        }
+        r.cloud = Some((cloud, now + CLOUD_TIME));
+        let mut out = vec![(
+            None,
+            Down::Cloud {
+                victim: who,
+                effect: cloud.effect,
+                locked: cloud.locked,
+            },
+        )];
+        if cloud.rerolls(false) {
+            if let Some(r) = self.racers.get_mut(&who) {
+                r.cloud = Some((
+                    RainCloud {
+                        locked: false,
+                        ..cloud
+                    },
+                    now + CLOUD_TIME,
+                ));
+            }
+            out.extend(self.reroll(who, now));
+        }
+        out
+    }
+
+    /// Crates due back come up; old shots are forgotten; clouds go, and the roulettes they held
+    /// are rolled (`TickWeapons`).
     pub fn tick(&mut self, now: f32) -> Vec<Addressed> {
         let mut out = Vec::new();
+        let gone: Vec<(KartId, bool)> = self
+            .racers
+            .iter_mut()
+            .filter_map(|(&id, r)| {
+                let (cloud, until) = r.cloud?;
+                (now >= until).then(|| {
+                    r.cloud = None;
+                    (id, cloud.rerolls(true))
+                })
+            })
+            .collect();
+        for (id, reroll) in gone {
+            if reroll {
+                out.extend(self.reroll(id, now));
+            }
+        }
         for (i, c) in self.crates.iter_mut().enumerate() {
             if !c.up && c.back_at.is_some_and(|t| now >= t) {
                 c.up = true;
@@ -164,8 +241,14 @@ impl Referee {
                 let kind = c.spot.kind;
                 out.push((None, Down::Taken { index, by: from }));
                 if kind == CrateKind::Weapon {
-                    // Holding an item, the crate breaks for nothing (`RB_Crate.c:152-226`).
-                    if self.holds(from) {
+                    // Holding an item, or under a cloud spinning one, the crate breaks for
+                    // nothing (`RB_Crate.c:152-226`).
+                    let clouded = self
+                        .racers
+                        .get(&from)
+                        .and_then(|r| r.cloud)
+                        .is_some_and(|(c, _)| c.blocks_crates());
+                    if self.holds(from) || clouded {
                         return out;
                     }
                     // Anywhere in the field, for variety.
@@ -208,6 +291,11 @@ impl Referee {
                 }
                 if item == Item::Mask {
                     r.mask_until = now + if juiced { MASK_TIME_JUICED } else { MASK_TIME };
+                    // `ACTION_MASK_WEAPON` blows the cloud away (`RB_MaskShieldCloud.c:527-532`).
+                    r.cloud = None;
+                }
+                if item == Item::Turbo {
+                    r.turbo_at = Some(now);
                 }
                 if item == Item::Shield {
                     r.shield = Some((now, juiced));
@@ -220,6 +308,7 @@ impl Referee {
                     ShotKey { owner: from, shot },
                     Record {
                         item,
+                        juiced,
                         at: now,
                         hit: false,
                         dropped: aim.dropped,
@@ -242,6 +331,7 @@ impl Referee {
                 kind,
             } => {
                 let own = shooter == from && shot == 0;
+                let mut red = false;
                 if !own {
                     let Some(s) = self.shots.get_mut(&ShotKey {
                         owner: shooter,
@@ -256,6 +346,7 @@ impl Referee {
                     if single || s.dropped {
                         s.hit = true;
                     }
+                    red = s.item == Item::Beaker && s.juiced && kind == HitKind::SpinOut;
                 }
                 let r = self.racers.entry(from).or_default();
                 let loss = if now < r.mask_until {
@@ -275,6 +366,43 @@ impl Referee {
                         shooter,
                         shot,
                         kind,
+                        wumpa: r.wumpa,
+                    },
+                ));
+                if red {
+                    out.extend(self.rain(from, now));
+                }
+            }
+            Up::Ram { attacker, ram } => {
+                // `VehPhysCrash_Attack`: only with the attacker's mask on, its shield up (spent
+                // now), or its turbo item burning.
+                let Some(a) = self.racers.get_mut(&attacker).filter(|_| attacker != from) else {
+                    return out;
+                };
+                let armed = match ram {
+                    Ram::Mask => now < a.mask_until,
+                    Ram::Shield => a
+                        .shield
+                        .take()
+                        .is_some_and(|(at, juiced)| juiced || now - at <= SHIELD_TIME),
+                    Ram::Turbo => a.turbo_at.is_some_and(|t| now - t <= TURBO_TIME),
+                };
+                if !armed {
+                    return out;
+                }
+                let r = self.racers.entry(from).or_default();
+                // As the hit it is: a blast costs 3, a squish 1.
+                if now >= r.mask_until {
+                    r.wumpa = r
+                        .wumpa
+                        .saturating_sub(if ram == Ram::Turbo { 1 } else { 3 });
+                }
+                out.push((
+                    None,
+                    Down::Ram {
+                        victim: from,
+                        attacker,
+                        ram,
                         wumpa: r.wumpa,
                     },
                 ));
@@ -304,6 +432,7 @@ impl Referee {
                     ShotKey { owner: from, shot },
                     Record {
                         item: Item::Shield,
+                        juiced,
                         at: now,
                         hit: false,
                         dropped: false,
@@ -327,6 +456,7 @@ impl Referee {
 mod tests {
     use super::super::wire::Aim;
     use super::*;
+    use ctr_weapons::CloudEffect;
 
     fn spot(kind: CrateKind) -> CrateSpot {
         CrateSpot {
@@ -448,5 +578,160 @@ mod tests {
         r.grant(1, Item::Shield, 6.0);
         r.handle(1, Up::Fire { shot: 6, aim }, [0.0; 3], 7.0);
         assert!(r.handle(1, launch(7), [0.0; 3], 30.0).is_empty());
+    }
+
+    /// Racer 1 drops a beaker, juiced (red) or not, as shot `shot` at `now`.
+    fn drop_beaker(r: &mut Referee, shot: u16, red: bool, now: f32) {
+        r.racers.entry(1).or_default().wumpa = if red { 10 } else { 0 };
+        r.grant(1, Item::Beaker, now - 1.0);
+        let aim = Aim {
+            dropped: true,
+            ..Aim::default()
+        };
+        let out = r.handle(1, Up::Fire { shot, aim }, [0.0; 3], now);
+        assert!(matches!(&out[..], [(None, Down::Shot(s))] if s.juiced == red));
+    }
+
+    fn spun(shot: u16) -> Up {
+        Up::Hit {
+            shooter: 1,
+            shot,
+            kind: HitKind::SpinOut,
+        }
+    }
+
+    fn cloud_of(out: &[Addressed]) -> Option<(CloudEffect, bool)> {
+        out.iter().find_map(|(_, d)| match d {
+            Down::Cloud {
+                victim: 2,
+                effect,
+                locked,
+            } => Some((*effect, *locked)),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_red_beaker_spins_the_held_item_for_seven_seconds_then_rerolls_it() {
+        let (mut r, _) = Referee::new(vec![spot(CrateKind::Weapon)], 100);
+        // A green one only spins.
+        drop_beaker(&mut r, 1, false, 1.0);
+        assert_eq!(cloud_of(&r.handle(2, spun(1), [0.0; 3], 1.5)), None);
+        r.grant(2, Item::Missile3, 0.0);
+        drop_beaker(&mut r, 2, true, 2.0);
+        let out = r.handle(2, spun(2), [0.0; 3], 2.5);
+        assert!(matches!(out[0].1, Down::Hit { victim: 2, .. }));
+        assert_eq!(cloud_of(&out), Some((CloudEffect::ItemRoll, true)));
+        // The item is gone into the roulette: no shot, and a crate breaks for nothing.
+        let fire = Up::Fire {
+            shot: 1,
+            aim: Aim::default(),
+        };
+        assert!(r.handle(2, fire, [0.0; 3], 3.0).is_empty());
+        let out = r.handle(2, Up::Claim(0), [10.0, 20.0, 0.0], 3.0);
+        assert_eq!(out, vec![(None, Down::Taken { index: 0, by: 2 })]);
+        // 7.68 s on, a new roll comes, and fires at once.
+        let item = |out: &[Addressed]| {
+            out.iter()
+                .any(|(to, d)| *to == Some(2) && matches!(d, Down::Item { .. }))
+        };
+        assert!(!item(&r.tick(2.5 + 7.6)));
+        let out = r.tick(2.5 + 7.7);
+        assert!(item(&out), "{out:?}");
+        assert!(r.holds(2));
+        assert_eq!(r.handle(2, fire, [0.0; 3], 2.5 + 7.7).len(), 1);
+        assert!(!item(&r.tick(20.0)), "once");
+    }
+
+    #[test]
+    fn a_red_beaker_on_an_empty_kart_slows_it_and_a_second_redraws_the_effect() {
+        let (mut r, _) = Referee::new(vec![], 100);
+        drop_beaker(&mut r, 1, true, 1.0);
+        let out = r.handle(2, spun(1), [0.0; 3], 1.5);
+        assert_eq!(cloud_of(&out), Some((CloudEffect::Slow, false)));
+        // A second one under it: the effect is MixRNG's (`(s % 400) / 100`), and the time
+        // starts again.
+        let mut peek = r.rng;
+        let want = CloudEffect::from_id(((peek.scramble() % 400) / 100) as u8).unwrap();
+        drop_beaker(&mut r, 2, true, 5.0);
+        let out = r.handle(2, spun(2), [0.0; 3], 5.5);
+        assert_eq!(cloud_of(&out), Some((want, false)));
+        assert!(r.racers[&2].cloud.is_some_and(|(_, until)| until > 13.0));
+        r.tick(13.2);
+        assert!(r.racers[&2].cloud.is_none());
+        // A mask blows a cloud away.
+        drop_beaker(&mut r, 3, true, 14.0);
+        r.handle(2, spun(3), [0.0; 3], 14.5);
+        r.grant(2, Item::Mask, 13.0);
+        r.handle(
+            2,
+            Up::Fire {
+                shot: 9,
+                aim: Aim::default(),
+            },
+            [0.0; 3],
+            15.0,
+        );
+        assert!(r.racers[&2].cloud.is_none());
+    }
+
+    #[test]
+    fn rams_need_the_mask_shield_or_turbo_and_a_shield_is_spent() {
+        let (mut r, _) = Referee::new(vec![], 100);
+        let rammed = |ram| Up::Ram { attacker: 1, ram };
+        r.racers.entry(2).or_default().wumpa = 8;
+        for ram in [Ram::Mask, Ram::Shield, Ram::Turbo] {
+            assert!(
+                r.handle(2, rammed(ram), [0.0; 3], 0.0).is_empty(),
+                "{ram:?}"
+            );
+        }
+        let fire = |r: &mut Referee, item, shot, now| {
+            r.grant(1, item, now - 1.0);
+            r.handle(
+                1,
+                Up::Fire {
+                    shot,
+                    aim: Aim::default(),
+                },
+                [0.0; 3],
+                now,
+            )
+        };
+        fire(&mut r, Item::Mask, 1, 1.0);
+        let out = r.handle(2, rammed(Ram::Mask), [0.0; 3], 2.0);
+        assert_eq!(
+            out,
+            vec![(
+                None,
+                Down::Ram {
+                    victim: 2,
+                    attacker: 1,
+                    ram: Ram::Mask,
+                    wumpa: 5
+                }
+            )]
+        );
+        assert!(
+            r.handle(2, rammed(Ram::Mask), [0.0; 3], 10.0).is_empty(),
+            "worn off"
+        );
+        assert!(
+            r.handle(1, rammed(Ram::Mask), [0.0; 3], 2.0).is_empty(),
+            "not itself"
+        );
+        fire(&mut r, Item::Shield, 2, 11.0);
+        assert_eq!(r.handle(2, rammed(Ram::Shield), [0.0; 3], 12.0).len(), 1);
+        assert!(
+            r.handle(2, rammed(Ram::Shield), [0.0; 3], 12.1).is_empty(),
+            "spent"
+        );
+        fire(&mut r, Item::Turbo, 3, 20.0);
+        let out = r.handle(2, rammed(Ram::Turbo), [0.0; 3], 21.0);
+        assert!(
+            matches!(out[..], [(None, Down::Ram { wumpa: 1, .. })]),
+            "{out:?}"
+        );
+        assert!(r.handle(2, rammed(Ram::Turbo), [0.0; 3], 23.5).is_empty());
     }
 }
