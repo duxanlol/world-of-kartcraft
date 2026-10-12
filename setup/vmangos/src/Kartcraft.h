@@ -43,6 +43,9 @@ namespace Kartcraft
     SpellCastResult CheckCast(Unit const* caster, SpellEntry const* spell);
     // After ScriptMgr::Initialize: the Race Marshal's gossip (npc_kartcraft_marshal).
     void RegisterScripts();
+    // Whether a player is in the kart: a driver springs no dungeon's traps nor its scripted
+    // ambushes (Stratholme's rat-trap gates and The Unforgiven, instance_stratholme.cpp).
+    bool InKart(Player const* player);
 }
 
 #endif

@@ -33,7 +33,8 @@ client's list are both made from it; nothing else holds course data.
   Race Finder's queue list).
 - `name`: shown to players. ASCII, no tabs, quotes or backslashes.
 - `zone`, `note`: optional, for people; the note becomes the comment above the C++ entry.
-- `map`: the map id (0 Eastern Kingdoms, 1 Kalimdor).
+- `map`: the map id (0 Eastern Kingdoms, 1 Kalimdor). Any other map is a dungeon's: the course
+  is a party course (below).
 - `laps`: 0 for a sprint from the first checkpoint to the last; else laps back through the first.
 - `checkpoints`: at least two, WoW world `x`, `y` (yards); the first is the start, where a
   driver hosts or joins. Optional `z` (the server finds the ground itself). Optional `gate`:
@@ -50,6 +51,11 @@ client's list are both made from it; nothing else holds course data.
   and `pack.py` ignore them. `course-gen pads` writes them on each course's straights (legs of at
   least 90 yards turning under 20° at both ends, the straightest three, never on neighbouring
   legs, 30% along the leg).
+- `doors`: optional, gameobject entries (the server's `gameobject_template`) a race on the course
+  opens for as long as it runs: each is the one of that entry nearest the host when the race
+  starts, if it is closed, and it closes again once the race is over (at the latest after the
+  race's 20 minutes). For a door across the course that the dungeon keeps locked: the Stratholme
+  Street Circuit's `[175352, 175353]`, the King's Square gates.
 - Up to 1000 courses. The Race Finder offers them by zone, in the order the file first names each
   zone; a queue line names a zone by that place (`z3`), so keep zones' first appearances in order
   when adding courses (the exporter appends).
@@ -75,6 +81,38 @@ and writes only their checkpoints here: `course-gen export --candidates <run>/ca
 --all` adds a run's finalists (key `<zone>-<place>-<place>`, replacing a course of the same key),
 and `course-gen batch --zones alliance,horde --out <dir>` runs zones and adds each one's
 finalists as it finishes, never replacing a key already in the file.
+
+### In a dungeon
+
+`--zone` may name a dungeon map (`Map.dbc`'s name, "Stratholme"), which has no world map: its
+whole map is the zone. A dungeon's streets are WMO faces over filler terrain (Stratholme is one
+city WMO, `stratholme_b.wmo`, above flat ground sixty yards down), so its ground is the walkable
+floor of its WMOs (`course_gen::wmo_floor`): every face the client's walking collision keeps, the
+floors joined where a kart can drive from one to the next, the walls and the WMOs' own doodads
+(carts, crates, lamp posts) solid, at a yard a pixel. Its area triggers are kept clear: one is an
+exit (Stratholme's back gate) or starts a script. The streets are too narrow for the open-ground
+generator, so a dungeon's circuit is named by its streets: `--via "x,y;x,y;..."`, waypoints in
+driving order from the start, and course-gen routes, smooths and test-drives the line through
+them. The Stratholme Street Circuit:
+
+    course-gen courses --zone Stratholme --out <dir> --via "3539,-3389;3553,-3334;3613,-3336;3668,-3331;3713,-3429;3660,-3477;3633,-3501;3572,-3452;3556,-3435"
+
+then `export`, rename the key and name, add its `doors`, and `marshals` (a start on a WMO floor
+gets its marshal at the start's height, not the terrain's).
+
+## Party courses
+
+A course on a dungeon's map (not 0 or 1) is a party course. Each party has its own copy of a
+dungeon, so it races in its own: the Race Marshal stands inside (Stratholme's in King's Square,
+past the main gate), the party's leader (or a player with no party) hosts there, and only the
+host's party in the host's copy can join; the grid, the unstuck hop and every checkpoint stay in
+that copy, as a teleport within one map does. The Race Finder never offers a party course nor
+lists its races, and still refuses players inside a dungeon. Only a triggered cast mounts in a
+dungeon, so the kart comes from the marshal (host, join, time trial), not the spell book.
+
+In the kart, a driver springs none of Stratholme's position events: the rat-trap gates (and their
+rat swarm) and The Unforgiven's ambush on Market Row (`instance_stratholme.cpp`, a hunk of
+`kartcraft.patch`). The course's locked King's Square gates open for its race (`doors`).
 
 ## Race Marshals
 

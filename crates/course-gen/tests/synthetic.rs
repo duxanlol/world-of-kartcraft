@@ -37,6 +37,7 @@ fn flat(size: usize) -> ZoneTerrain {
         obstacles: Vec::new(),
         textures: Vec::new(),
         probes: Vec::new(),
+        wmo_ground: false,
     }
 }
 
@@ -145,7 +146,7 @@ fn a_ring_measures_as_a_long_left_bend_with_gates_at_most_180_yd_apart() {
     assert!(m.elev_range < 1e-3);
     assert_eq!(m.subzones, vec!["Test Fields".to_string()]);
     let z = metrics::heights(&t, &c.pts, true);
-    let gates = checkpoints(&c, &m, &z, &f);
+    let gates = checkpoints(&c, &m, &z, &f, course_gen::select::GATE_GAP);
     assert_eq!(gates[0].index, 0);
     assert_eq!(gates[0].kind, "start");
     let mut s: Vec<f32> = gates.iter().map(|g| g.s).collect();
@@ -227,4 +228,62 @@ fn circuits_generate_on_open_ground_round_a_tree() {
     let (again, _) = generate::generate(&planner, &hubs, &p);
     assert_eq!(again.len(), cands.len());
     assert_eq!(again[0].pts, cands[0].pts);
+}
+
+#[test]
+fn a_street_circuit_follows_its_waypoints_round_a_city_block() {
+    // A 30-yd street round a block 100 yd across, walled both sides, a cart parked on the far
+    // side: the circuit goes round the block by the waypoints, past the cart, from the first.
+    let mut t = flat(200);
+    t.wmo_ground = true;
+    let w = t.grid.width;
+    let centre = at(&t, 100, 100);
+    for r in 0..t.grid.height {
+        for c in 0..w {
+            let d = (at(&t, c, r) - centre).abs().max_element();
+            t.solid[r * w + c] = !(50.0..=80.0).contains(&d);
+        }
+    }
+    let cart = centre + Vec2::new(0.0, -65.0);
+    for r in 0..t.grid.height {
+        for c in 0..w {
+            if at(&t, c, r).distance(cart) < 3.0 {
+                t.solid[r * w + c] = true;
+            }
+        }
+    }
+    let f = CostField::build(
+        &t,
+        &CostParams {
+            obstacle_margin: 0.0,
+            lane_margin: 0.0,
+            ..CostParams::default()
+        },
+    );
+    let planner = Planner::with_clearance(&f, 1, generate::STREET_ROUTE_CLEARANCE);
+    let via: Vec<Vec2> = [(65.0, 0.0), (0.0, -65.0), (-65.0, 0.0), (0.0, 65.0)]
+        .iter()
+        .map(|&(x, y)| centre + Vec2::new(x, y))
+        .collect();
+    let c = generate::street_circuit(&planner, &via, &GenParams::default()).unwrap();
+    assert!(c.closed);
+    assert!(
+        c.pts[0].distance(via[0]) < 16.0,
+        "starts across the street from the first waypoint"
+    );
+    assert!(c.pts.iter().all(|q| f.passable_at(q.x, q.y)));
+    assert!(
+        c.pts.iter().all(|q| q.distance(cart) > 3.0),
+        "round the cart"
+    );
+    assert!(!geom::self_intersects(&c.pts, true));
+    // Driven the way the waypoints go: the second is passed before the third.
+    let nearest = |p: Vec2| {
+        (0..c.pts.len())
+            .min_by(|&a, &b| c.pts[a].distance(p).total_cmp(&c.pts[b].distance(p)))
+            .unwrap()
+    };
+    assert!(nearest(via[1]) < nearest(via[2]));
+    let len = geom::length(&c.pts, true);
+    assert!((400.0..700.0).contains(&len), "{len}");
 }

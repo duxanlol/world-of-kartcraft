@@ -137,6 +137,11 @@ def courses_header(data):
             z = cfloat(num(s['z'], f'course {key}: crate {i} z')) if 'z' in s else 'INVALID_HEIGHT_VALUE'
             crates.append(f"{{ '{s['kind']}', {cfloat(x)}, {cfloat(y)}, {z} }}")
 
+        doors = c.get('doors', [])
+        if not isinstance(doors, list) or not all(
+                isinstance(d, int) and not isinstance(d, bool) and 0 < d < 2**32 for d in doors):
+            fail(f'course {key}: doors must be a list of gameobject entries')
+
         def rows(items, per):
             return ',\n            '.join(', '.join(items[i:i + per]) for i in range(0, len(items), per))
 
@@ -151,7 +156,8 @@ def courses_header(data):
             out.append('          {},')
         out.append(f'          {{ {rows(crates, 3)} }},' if crates else '          {},')
         mx, my, _, _ = marshal_of(c, key)
-        out.append(f'          {{ {cfloat(mx)}, {cfloat(my)} }} }},')
+        doors_c = '{ ' + ', '.join(f'{d}u' for d in doors) + ' }' if doors else '{}'
+        out.append(f'          {{ {cfloat(mx)}, {cfloat(my)} }}, {doors_c} }},')
     out.append('    };')
     return '\n'.join(out) + '\n'
 

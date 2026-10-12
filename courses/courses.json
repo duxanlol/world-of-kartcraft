@@ -6594,6 +6594,32 @@
         { "o": 0, "x": -3253.2, "y": -2051.3, "z": 92.6 },
         { "o": 4.857, "x": -3866.9, "y": -1917, "z": 92.8 }
       ]
+    },
+    {
+      "key": "stratholme-streets",
+      "name": "Stratholme Street Circuit",
+      "zone": "Stratholme",
+      "map": 329,
+      "laps": 3,
+      "note": "Inside the Stratholme instance: King's Square up the rat-trap alley to Market Row, down Festival Lane and back through the King's Square gate. A party race (docs/courses.md, Party courses); course-gen courses --zone Stratholme --via, 0.48 km, test laps 17.9 / 19.6 / 19.1 s.",
+      "marshal": {"o":6.009,"x":3535.3,"y":-3386.2,"z":132.8},
+      "checkpoints": [
+        { "gate": 20, "x": 3544.9, "y": -3388.9, "z": 132.8 },
+        { "gate": 15.1, "x": 3554.5, "y": -3354.8, "z": 130.3 },
+        { "gate": 17.8, "x": 3587.7, "y": -3336.7, "z": 127.1 },
+        { "gate": 15, "x": 3623.5, "y": -3335.9, "z": 123.3 },
+        { "gate": 20.9, "x": 3660.6, "y": -3346.2, "z": 124.9 },
+        { "gate": 23.6, "x": 3684.2, "y": -3372.9, "z": 129.3 },
+        { "gate": 15, "x": 3703, "y": -3407.1, "z": 132.2 },
+        { "gate": 15, "x": 3716.8, "y": -3442.9, "z": 129.4 },
+        { "gate": 15, "x": 3708.2, "y": -3480.6, "z": 129.9 },
+        { "gate": 24.2, "x": 3670, "y": -3487.4, "z": 136.2 },
+        { "gate": 15, "x": 3630.8, "y": -3498.9, "z": 136.7 },
+        { "gate": 15, "x": 3602.3, "y": -3477, "z": 135.1 },
+        { "gate": 15, "x": 3574.6, "y": -3454.2, "z": 135.8 },
+        { "gate": 15, "x": 3551.5, "y": -3427.3, "z": 135.9 }
+      ],
+      "doors": [175352,175353]
     }
   ]
 }

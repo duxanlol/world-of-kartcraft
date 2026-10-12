@@ -81,6 +81,10 @@ enum Cmd {
         seed: u64,
         #[arg(long, default_value_t = 8)]
         threads: usize,
+        /// For an instance whose ground is its streets (Stratholme): the circuit's waypoints,
+        /// WoW `x,y` in driving order, separated by `;`.
+        #[arg(long, allow_hyphen_values = true)]
+        via: Option<String>,
     },
     /// Run `courses` over many zones, a few at a time, exporting each zone's finalists as it
     /// finishes and logging a line a zone to `<out>/batch-log.txt`.
@@ -273,7 +277,16 @@ fn batch(zones: &[String], o: &BatchOpts) {
                     continue;
                 }
                 let started = std::time::Instant::now();
-                let run = courses(zone, &o.out, o.attempts, o.drive, o.keep, o.seed, o.threads);
+                let run = courses(
+                    zone,
+                    &o.out,
+                    o.attempts,
+                    o.drive,
+                    o.keep,
+                    o.seed,
+                    o.threads,
+                    &[],
+                );
                 let secs = started.elapsed().as_secs_f32();
                 let line = match run {
                     Err(e) => format!("{zone}: failed: {e:#}"),
@@ -389,8 +402,10 @@ fn main() -> Result<()> {
             keep,
             seed,
             threads,
+            via,
         } => {
-            let run = courses(&zone, &out, attempts, drive, keep, seed, threads)?;
+            let via = parse_via(via.as_deref().unwrap_or(""))?;
+            let run = courses(&zone, &out, attempts, drive, keep, seed, threads, &via)?;
             print!("{}", run.log);
         }
         Cmd::Roads {
@@ -566,6 +581,24 @@ struct ZoneRun {
     log: String,
 }
 
+/// `x,y;x,y;...` as world points; empty for none.
+fn parse_via(text: &str) -> Result<Vec<glam::Vec2>> {
+    text.split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|pair| {
+            let v: Vec<f32> = pair
+                .split(',')
+                .map(|t| t.trim().parse::<f32>())
+                .collect::<Result<_, _>>()
+                .with_context(|| format!("--via point {pair:?}"))?;
+            anyhow::ensure!(v.len() == 2, "--via point {pair:?} is not x,y");
+            Ok(glam::Vec2::new(v[0], v[1]))
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn courses(
     zone: &str,
     out: &std::path::Path,
@@ -574,6 +607,7 @@ fn courses(
     keep: usize,
     seed: u64,
     threads: usize,
+    via: &[glam::Vec2],
 ) -> Result<ZoneRun> {
     let mut log = String::new();
     let started = std::time::Instant::now();
@@ -591,6 +625,7 @@ fn courses(
     let mut p = SelectParams {
         drive,
         keep,
+        via: via.to_vec(),
         ..Default::default()
     };
     p.gen.attempts = attempts;

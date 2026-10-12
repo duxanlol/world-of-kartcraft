@@ -1,6 +1,8 @@
 //! The whole course run for a zone: generate, measure, keep the distinct, test-drive the best,
 //! score, and place each finalist's checkpoints.
 
+use std::collections::HashMap;
+
 use glam::Vec2;
 use serde::Serialize;
 
@@ -29,6 +31,9 @@ pub struct SelectParams {
     pub drive: usize,
     /// How many finalists are kept.
     pub keep: usize,
+    /// On a map whose ground is its streets, the circuit's waypoints (WoW `x, y`), in driving
+    /// order ([`generate::street_circuit`]).
+    pub via: Vec<Vec2>,
 }
 
 impl Default for SelectParams {
@@ -38,6 +43,7 @@ impl Default for SelectParams {
             cost: CostParams::default(),
             drive: 40,
             keep: 8,
+            via: Vec::new(),
         }
     }
 }
@@ -119,7 +125,14 @@ pub fn run(t: &ZoneTerrain, roads: &RoadGraph, p: &SelectParams) -> Run {
         }
         hubs
     };
-    let mut field = CostField::build(t, &p.cost);
+    // A city's streets are lined with walls and barrels the margin would close a lane over: every
+    // pixel keeps a paved lane's sliver of margin there.
+    let street_cost = CostParams {
+        obstacle_margin: 0.0,
+        lane_margin: 0.0,
+        ..p.cost.clone()
+    };
+    let mut field = CostField::build(t, if t.wmo_ground { &street_cost } else { &p.cost });
     let mut hubs = hubs_on(&field);
     let mut max_slope = p.cost.max_slope;
     if hubs.len() < MIN_HUBS && p.cost.max_slope < STEEP_FALLBACK {
@@ -135,7 +148,16 @@ pub fn run(t: &ZoneTerrain, roads: &RoadGraph, p: &SelectParams) -> Run {
         }
     }
     let planner = Planner::new(&field, 2);
-    let (mut cands, why) = generate::generate(&planner, &hubs, &p.gen);
+    // A city's streets are too narrow for hubs: its circuit goes by the streets `via` names.
+    let (mut cands, why) = if t.wmo_ground {
+        let street = Planner::with_clearance(&field, 1, generate::STREET_ROUTE_CLEARANCE);
+        match generate::street_circuit(&street, &p.via, &p.gen) {
+            Ok(c) => (vec![c], HashMap::new()),
+            Err(e) => (Vec::new(), HashMap::from([(e, 1)])),
+        }
+    } else {
+        generate::generate(&planner, &hubs, &p.gen)
+    };
     let mut failures: Vec<(String, usize)> =
         why.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
     failures.sort_by_key(|a| std::cmp::Reverse(a.1));
@@ -148,8 +170,11 @@ pub fn run(t: &ZoneTerrain, roads: &RoadGraph, p: &SelectParams) -> Run {
         generated: cands.len(),
         ..Default::default()
     };
-    for c in &mut cands {
-        generate::place_start(c, t, &field);
+    // A street circuit starts at its first waypoint, where it was asked to.
+    if !t.wmo_ground {
+        for c in &mut cands {
+            generate::place_start(c, t, &field);
+        }
     }
     let mut measured: Vec<(Candidate, Metrics)> = cands
         .into_iter()
@@ -291,7 +316,12 @@ fn course(
     r: DriveResult,
 ) -> Course {
     let z = metrics::heights(t, &c.pts, c.closed);
-    let checkpoints = checkpoints(c, &m, &z, field);
+    let gap = if t.wmo_ground {
+        STREET_GATE_GAP
+    } else {
+        GATE_GAP
+    };
+    let checkpoints = checkpoints(c, &m, &z, field, gap);
     Course {
         rank,
         name: c.name.clone(),
@@ -329,9 +359,21 @@ pub fn final_score(m: &Metrics, r: &DriveResult, closed: bool) -> f32 {
     s
 }
 
+/// Gates no further apart (yards) on open ground, and on a city's streets: there the line from
+/// one gate to the next, which the client's arrow points along, must not cross a house.
+pub const GATE_GAP: f32 = 180.0;
+pub const STREET_GATE_GAP: f32 = 50.0;
+
 /// Gates at the start, at the apex of every bend of 45° or more, and between them so no two are
-/// more than ~180 yd apart; each as wide as the ground allows, 15–25 yd each side.
-pub fn checkpoints(c: &Candidate, m: &Metrics, z: &[f32], field: &CostField) -> Vec<Checkpoint> {
+/// more than about `max_gap` yd apart ([`GATE_GAP`], [`STREET_GATE_GAP`]); each as wide as the
+/// ground allows, 15–25 yd each side.
+pub fn checkpoints(
+    c: &Candidate,
+    m: &Metrics,
+    z: &[f32],
+    field: &CostField,
+    max_gap: f32,
+) -> Vec<Checkpoint> {
     let n = c.pts.len();
     let total = geom::length(&c.pts, c.closed);
     let mut keys: Vec<(usize, &'static str)> = vec![(0, "start")];
@@ -360,8 +402,8 @@ pub fn checkpoints(c: &Candidate, m: &Metrics, z: &[f32], field: &CostField) -> 
         out_idx.push((i, kind));
         let next = keys.get(k + 1).map_or(end, |k| k.0);
         let gap = (next - i) as f32 * STEP;
-        if gap > 180.0 {
-            let parts = (gap / 160.0).ceil() as usize;
+        if gap > max_gap {
+            let parts = (gap / (max_gap * 8.0 / 9.0)).ceil() as usize;
             for j in 1..parts {
                 out_idx.push((i + (next - i) * j / parts, "spacing"));
             }

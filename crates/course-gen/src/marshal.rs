@@ -16,6 +16,10 @@ pub const MERGE_RADIUS: f32 = 40.0;
 /// marshal stands: inside the server's 60-yard start radius, clear of the grid.
 pub const SIDE_OFFSET: f32 = 10.0;
 
+/// Yards between the terrain under a marshal and its start checkpoint's height beyond which the
+/// start is on a floor over the terrain, not on it.
+pub const ON_FLOOR: f32 = 5.0;
+
 /// World yards from the map corner to its centre: 32 tiles.
 const MAP_CENTER: f32 = 32.0 * TILE_SIZE;
 
@@ -29,8 +33,8 @@ pub struct Ground {
 impl Ground {
     pub fn new(mut chain: Chain) -> Result<Self> {
         let maps = load_map_catalog(&mut chain)?;
-        let dirs = [0u32, 1]
-            .into_iter()
+        // Every map, so a course in an instance (Stratholme, 329) finds its ground too.
+        let dirs = (0..1024u32)
             .filter_map(|m| maps.directory(m).map(|d| (m, d.to_string())))
             .collect();
         Ok(Self {
@@ -116,9 +120,16 @@ pub fn place(
                     .iter()
                     .find_map(|(ox, oy)| ground(map, mx + ox, my + oy))
                     .or_else(|| c["checkpoints"][0]["z"].as_f64().map(|z| z as f32));
-                let Some(z) = z else {
+                let Some(mut z) = z else {
                     bail!("course {key}: no ground under its marshal at {mx:.1}, {my:.1}");
                 };
+                // A start on a WMO floor (a city street over filler terrain, as in Stratholme)
+                // stands well above the terrain: the marshal stands on the start's floor.
+                if let Some(start) = c["checkpoints"][0]["z"].as_f64().map(|v| v as f32) {
+                    if (start - z).abs() > ON_FLOOR {
+                        z = start;
+                    }
+                }
                 let mut m = Map::new();
                 m.insert("x".into(), round(f64::from(mx), 1));
                 m.insert("y".into(), round(f64::from(my), 1));
@@ -180,5 +191,20 @@ mod tests {
         assert_eq!((c["x"].as_f64(), c["y"].as_f64()), (Some(10.0), Some(0.0)));
         assert_eq!(c["z"].as_f64(), Some(5.0));
         crate::export::validate(&file).unwrap();
+    }
+
+    #[test]
+    fn a_start_on_a_floor_over_the_terrain_puts_its_marshal_on_the_floor() {
+        // Stratholme's King's Square: the street at 132.8, the filler terrain under it at 73.
+        let mut file = serde_json::json!({"courses": [
+            {"key": "streets", "name": "Streets", "map": 329, "laps": 3,
+             "checkpoints": [{"x": 0, "y": 0, "z": 132.8}, {"x": 100, "y": 0}]},
+            {"key": "hill", "name": "Hill", "map": 0, "laps": 0,
+             "checkpoints": [{"x": 500, "y": 0, "z": 73.5}, {"x": 600, "y": 0}]}
+        ]});
+        place(&mut file, |_, _, _| Some(73.0)).unwrap();
+        assert_eq!(file["courses"][0]["marshal"]["z"].as_f64(), Some(132.8));
+        // A start on the ground keeps the ground's height.
+        assert_eq!(file["courses"][1]["marshal"]["z"].as_f64(), Some(73.0));
     }
 }

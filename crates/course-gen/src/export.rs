@@ -437,6 +437,7 @@ const ORDER: &[&str] = &[
     "checkpoints",
     "crates",
     "pads",
+    "doors",
 ];
 
 fn inline(v: &Value) -> String {
@@ -569,6 +570,11 @@ pub fn validate(file: &Value) -> Result<()> {
                 num(&s["z"], &format!("course {key}: crate {i} z"))?;
             }
         }
+        for (i, d) in c["doors"].as_array().into_iter().flatten().enumerate() {
+            if !d.as_u64().is_some_and(|e| e > 0 && e < 1 << 32) {
+                bail!("course {key}: door {i} must be a gameobject entry");
+            }
+        }
         for (i, p) in c["pads"].as_array().into_iter().flatten().enumerate() {
             for f in ["x", "y", "o"] {
                 num(&p[f], &format!("course {key}: pad {i} {f}"))?;
@@ -679,6 +685,24 @@ mod tests {
         merge(&mut file, vec![e], &[], false).unwrap();
         assert_eq!(file["courses"][1]["key"], "sprint-2");
         file["courses"][0]["name"] = "a \"quoted\" name".into();
+        assert!(validate(&file).is_err());
+    }
+
+    #[test]
+    fn doors_are_gameobject_entries_and_format_after_the_pads() {
+        let mut file = serde_json::json!({"courses": [
+            {"key": "streets", "name": "Streets", "map": 329, "laps": 3,
+             "doors": [175352, 175353],
+             "checkpoints": [{"x": 1, "y": 2}, {"x": 3, "y": 4}]}
+        ]});
+        validate(&file).unwrap();
+        let text = format(&file);
+        assert!(text.find("\"checkpoints\"").unwrap() < text.find("\"doors\"").unwrap());
+        let back: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, file);
+        file["courses"][0]["doors"] = serde_json::json!([0]);
+        assert!(validate(&file).is_err());
+        file["courses"][0]["doors"] = serde_json::json!(["gate"]);
         assert!(validate(&file).is_err());
     }
 }
