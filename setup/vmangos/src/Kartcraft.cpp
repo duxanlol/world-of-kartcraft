@@ -472,6 +472,10 @@ namespace Kartcraft
         // A party race's instance: a course in a dungeon is raced in one copy of it, the host's,
         // by the host's party there (PartyCourse). 0 in the open world.
         uint32 instance = 0;
+        // A time trial from the track browser waits for its racer on the grid: their first kart
+        // state there starts the countdown (TickArrival), or ARRIVE_WAIT after awaitSince.
+        ObjectGuid awaiting;
+        uint32 awaitSince = 0;
         std::vector<Racer> racers;
         // Weapons, live from the start: the crates, the shots relayed in the last SHOT_LIFETIME
         // keyed by shooter low guid << 16 | shot, and the race's MixRNG state.
@@ -1797,6 +1801,10 @@ namespace Kartcraft
     // More when a racer comes from another map: a loading screen, then the world streaming in
     // before the client acknowledges it, so they reach the grid before GO.
     constexpr uint32 FAR_SETTLE = 20 * IN_MILLISECONDS;
+    // A track browser time trial: the countdown once its racer is on the grid in the kart, and
+    // how long it waits for them at most.
+    constexpr uint32 ARRIVED_COUNTDOWN = COUNTDOWN + 1 * IN_MILLISECONDS;
+    constexpr uint32 ARRIVE_WAIT = 45 * IN_MILLISECONDS;
     constexpr float GRID_SPACING = 4.f;
     // A Race Finder race's ground types: off, as nobody hosts it to choose.
     constexpr bool FINDER_GROUND_TYPES = false;
@@ -2499,11 +2507,13 @@ namespace Kartcraft
                 return true;
             Origin from = { player->GetMapId(), player->GetPositionX(), player->GetPositionY(),
                 player->GetPositionZ(), player->GetOrientation(), now };
-            bool const far = player->GetMapId() != course->map;
             uint32 raceId = OpenTimeTrial(player, *course, 0, now);
             if (TeleportToGrid(player, *course, 0, 0))
                 s_origins[player->GetGUIDLow()] = from;
-            StartRace(raceId, s_races[raceId], now, far ? GRID_COUNTDOWN + FAR_SETTLE : GRID_COUNTDOWN);
+            // The countdown waits for them on the grid, however long the teleport takes.
+            Race& r = s_races[raceId];
+            r.awaiting = guid;
+            r.awaitSince = now;
         }
         else if (verb == "Q-")
             LeaveQueue(guid);
@@ -2943,6 +2953,31 @@ namespace Kartcraft
         }
     }
 
+    // A track browser time trial waiting for its racer: their kart state from the course's grid
+    // (the teleport and any loading screen behind them) starts the countdown; ARRIVE_WAIT
+    // starts it regardless.
+    static void TickArrival(Player* player, bool state, uint32 now)
+    {
+        for (auto& entry : s_races)
+        {
+            Race& r = entry.second;
+            if (r.start || !r.awaiting)
+                continue;
+            bool arrived = false;
+            if (state && player->GetObjectGuid() == r.awaiting && player->GetMapId() == r.course->map)
+            {
+                float dx = player->GetPositionX() - r.course->points[0].first;
+                float dy = player->GetPositionY() - r.course->points[0].second;
+                arrived = dx * dx + dy * dy <= START_RADIUS * START_RADIUS;
+            }
+            if (arrived || WorldTimer::getMSTimeDiff(r.awaitSince, now) >= ARRIVE_WAIT)
+            {
+                r.awaiting = ObjectGuid();
+                StartRace(entry.first, r, now, ARRIVED_COUNTDOWN);
+            }
+        }
+    }
+
     static void HandleLine(Player* player, std::string const& body, bool marshal)
     {
         std::lock_guard<std::mutex> lock(s_mutex);
@@ -2963,6 +2998,7 @@ namespace Kartcraft
             HandleRace(player, body, marshal);
         else if (body.compare(0, 2, "W\t") == 0)
             HandleWeapon(player, body);
+        TickArrival(player, body.compare(0, 2, "S\t") == 0, now);
         // After the line: a finish or a leave in it frees the racer at once.
         TickShields(WorldTimer::getMSTime());
         TickLayers();
