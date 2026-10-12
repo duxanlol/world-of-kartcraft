@@ -28,7 +28,7 @@ pulls it off your own disc ([`docs/ctr-assets.md`](docs/ctr-assets.md)).
 You don't need to build anything. On Windows 10 or 11, with your own WoW 1.12.1 client and CTR
 disc image (US, `.bin` or `.iso`):
 
-1. **Make an account** at **https://kartcraft-5d37.austriaeast.cloudapp.azure.com**. No email
+1. **Make an account** at **https://worldofkartcraft.com**. No email
    needed.
 2. **Download `WorldOfKartcraft.zip`** from the
    [latest release](https://github.com/duxanlol/world-of-kartcraft/releases/latest) and unzip it
