@@ -29,7 +29,8 @@
         (KartMusic, KartMusicVolume), the minimap button (KartMinimapButton, KartMinimapAngle),
         the Race Marshals on the maps (KartRaceMarshals, kart/marshals.rs), the ghost of the
         best run on a course (KartGhost), CTR's ground types under the kart (KartTerrain,
-        kart/ground.rs, off by default) and the controller's rumble (KartRumble).
+        kart/ground.rs, off by default), the controller's rumble (KartRumble) and how tall the
+        race checkpoints' gates stand (KartGateHeight).
 
         The kart garage (/garage) picks the engine class (KartClass) and whose kart we drive
         (KartRacer). The kart sends BENILLA_KART_GARAGE at load and whenever the Karting skill
@@ -1189,6 +1190,7 @@
             BenillaKartSettingsFrameGhost:SetChecked(BenillaKart_Flag("KartGhost"))
             BenillaKartSettingsFrameTerrain:SetChecked(BenillaKart_Flag("KartTerrain"))
             BenillaKartSettingsFrameRumble:SetChecked(BenillaKart_Flag("KartRumble"))
+            BenillaKartSettingsFrameGateHeight:SetValue(tonumber(GetCVar("KartGateHeight")) or 8)
             frame.refreshing = nil
         end
 
@@ -1947,7 +1949,7 @@
     <!-- The settings: the guide arrow, the camera, the music, the minimap button, the ghost and
          the ground types, each a CVar set as it is clicked, as the stock option boxes are. -->
     <Frame name="BenillaKartSettingsFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="320" y="596"/></Size>
+        <Size><AbsDimension x="320" y="640"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -2054,6 +2056,13 @@
             <CheckButton name="$parentRumble" inherits="BenillaKartSettingsCheckTemplate">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-512"/></Offset></Anchor></Anchors>
             </CheckButton>
+            <Slider name="$parentGateHeight" inherits="OptionsSliderTemplate">
+                <Size><AbsDimension x="240" y="17"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="38" y="-566"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnValueChanged>BenillaKartSettings_Slide(this, "KartGateHeight")</OnValueChanged>
+                </Scripts>
+            </Slider>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>
                 <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
@@ -2082,6 +2091,7 @@
                 BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameArrowTilt, "Arrow tilt", 0, 80, 5, "Level", "Upright")
                 BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameArrowFov, "Arrow field of view", 20, 110, 5, "Flat", "Wide")
                 BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameMusicVolume, "Music volume", 0, 1, 0.05, "Quiet", "Loud")
+                BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameGateHeight, "Checkpoint gate height", 0, 40, 1, "Beams only", "Tall")
                 if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
                 BenillaKart_Movable(this)
             </OnLoad>

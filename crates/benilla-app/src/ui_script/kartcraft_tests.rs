@@ -833,6 +833,27 @@ fn the_settings_window_sets_the_kart_s_cvars() {
             .unwrap(),
         1.0
     );
+    // The checkpoint gates' height opens at its default, and the slider writes its CVar.
+    assert_eq!(
+        s.eval::<f64>("return BenillaKartSettingsFrameGateHeight:GetValue()")
+            .unwrap(),
+        8.0
+    );
+    assert_eq!(
+        s.eval::<String>("return BenillaKartSettingsFrameGateHeightText:GetText()")
+            .unwrap(),
+        "Checkpoint gate height"
+    );
+    s.run("BenillaKartSettingsFrameGateHeight:SetValue(3)")
+        .unwrap();
+    assert_eq!(
+        s.eval::<f64>("return tonumber(GetCVar('KartGateHeight'))")
+            .unwrap(),
+        3.0
+    );
+    s.run("BenillaKartSettingsFrameGateHeight:SetValue(8)")
+        .unwrap();
+    s.take_cvar_changes();
     // The ground types start off: every ground drives as asphalt until asked.
     assert!(!s
         .eval::<bool>("return BenillaKartSettingsFrameTerrain:GetChecked() == 1")

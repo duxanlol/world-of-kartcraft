@@ -220,9 +220,8 @@ const RESYNC_SECS: f32 = 1.5;
 /// How long a race just entered waits for the kart the server is summoning (s).
 const KART_GRACE_SECS: f32 = 10.0;
 /// A checkpoint as drawn: its gate, a sheet of light as wide as the gate it is passed through
-/// and `GATE_SHEET_HEIGHT` tall, between two beams `BEAM_HEIGHT` tall and `BEAM_RADIUS` round
-/// at its ends (yards).
-const GATE_SHEET_HEIGHT: f32 = 8.0;
+/// and `KartGateHeight` tall, between two beams `BEAM_HEIGHT` tall and `BEAM_RADIUS` round at
+/// its ends (yards).
 const BEAM_HEIGHT: f32 = 40.0;
 const BEAM_RADIUS: f32 = 0.6;
 /// CTR runs its race at 30 frames a second (`CTR_FRAMES_PER_SECOND`), and "FINAL LAP" flies by
@@ -1473,7 +1472,7 @@ pub(crate) struct GuideArrow;
 #[derive(Clone)]
 pub(crate) struct Looks {
     beam: Handle<Mesh>,
-    /// A unit square, facing +Z, scaled to each gate's width and `GATE_SHEET_HEIGHT`.
+    /// A unit square, facing +Z, scaled to each gate's width and `KartGateHeight`.
     sheet: Handle<Mesh>,
     arrow: Handle<Mesh>,
     bright: Handle<StandardMaterial>,
@@ -1509,6 +1508,10 @@ impl Looks {
             double_sided: true,
             ..default()
         };
+        let see_through = |c: Color| StandardMaterial {
+            alpha_mode: AlphaMode::Blend,
+            ..solid(c)
+        };
         let (face, outline) = checkpoint_arrow_meshes();
         Self {
             beam: meshes.add(Cylinder::new(BEAM_RADIUS, BEAM_HEIGHT)),
@@ -1524,22 +1527,33 @@ impl Looks {
             guide_outline: meshes.add(guide_outline_mesh()),
             cp_face: meshes.add(face),
             cp_outline: meshes.add(outline),
-            cp_next: materials.add(solid(Color::srgb(1.0, 0.85, 0.1))),
-            cp_after: materials.add(solid(Color::srgb(0.6, 0.5, 0.16))),
-            cp_edge: materials.add(solid(Color::srgb(0.03, 0.02, 0.01))),
+            // See-through, as the gates are: the next arrow half there, the one after less.
+            cp_next: materials.add(see_through(Color::srgba(1.0, 0.85, 0.1, 0.5))),
+            cp_after: materials.add(see_through(Color::srgba(0.6, 0.5, 0.16, 0.3))),
+            cp_edge: materials.add(see_through(Color::srgba(0.03, 0.02, 0.01, 0.45))),
         }
     }
 }
 
 /// The checkpoint arrow's shape, one unit long up its +Y with its centre at the origin, flat in
-/// the XY plane facing +Z: a shaft and a head, each convex.
-const CP_ARROW_SHAFT: [[f32; 2]; 4] = [[-0.16, -0.5], [0.16, -0.5], [0.16, 0.04], [-0.16, 0.04]];
+/// the XY plane facing +Z: a shaft and a head, each convex, meeting edge to edge so the
+/// see-through face is drawn once everywhere; and the two as one outline, anticlockwise.
+const CP_ARROW_SHAFT: [[f32; 2]; 4] = [[-0.16, -0.5], [0.16, -0.5], [0.16, 0.0], [-0.16, 0.0]];
 const CP_ARROW_HEAD: [[f32; 2]; 3] = [[-0.44, 0.0], [0.44, 0.0], [0.0, 0.5]];
+const CP_ARROW_SHAPE: [[f32; 2]; 7] = [
+    [-0.16, -0.5],
+    [0.16, -0.5],
+    [0.16, 0.0],
+    [0.44, 0.0],
+    [0.0, 0.5],
+    [-0.44, 0.0],
+    [-0.16, 0.0],
+];
 /// How far the outline stands out round it (units), and how far behind the face it lies.
 const CP_ARROW_EDGE: f32 = 0.07;
 const CP_ARROW_EDGE_DEPTH: f32 = 0.03;
 
-/// A convex polygon (anticlockwise) grown by `by` on every side, its corners mitred.
+/// A simple polygon (anticlockwise) grown by `by` on every side, its corners mitred.
 fn grown(poly: &[[f32; 2]], by: f32) -> Vec<[f32; 2]> {
     let n = poly.len();
     let normal = |a: [f32; 2], b: [f32; 2]| Vec2::new(b[1] - a[1], a[0] - b[0]).normalize();
@@ -1576,17 +1590,39 @@ fn flat_mesh(parts: &[Vec<[f32; 2]>], z: f32) -> Mesh {
     .with_inserted_indices(Indices::U32(indices))
 }
 
-/// The checkpoint arrow's face and its outline, the face's shape grown by the edge just behind it.
+/// The checkpoint arrow's face and its outline: a band the edge wide round the face's shape,
+/// just behind it, and not under it, so the see-through face shows the world through it.
 fn checkpoint_arrow_meshes() -> (Mesh, Mesh) {
     let face = flat_mesh(&[CP_ARROW_SHAFT.to_vec(), CP_ARROW_HEAD.to_vec()], 0.0);
-    let outline = flat_mesh(
-        &[
-            grown(&CP_ARROW_SHAFT, CP_ARROW_EDGE),
-            grown(&CP_ARROW_HEAD, CP_ARROW_EDGE),
-        ],
+    let outline = band_mesh(
+        &CP_ARROW_SHAPE,
+        &grown(&CP_ARROW_SHAPE, CP_ARROW_EDGE),
         -CP_ARROW_EDGE_DEPTH,
     );
     (face, outline)
+}
+
+/// The band between a polygon and the same polygon grown, a quad per side, in the plane z
+/// facing +Z.
+fn band_mesh(inner: &[[f32; 2]], outer: &[[f32; 2]], z: f32) -> Mesh {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    let n = inner.len() as u32;
+    let positions: Vec<[f32; 3]> = inner.iter().chain(outer).map(|p| [p[0], p[1], z]).collect();
+    let indices: Vec<u32> = (0..n)
+        .flat_map(|i| {
+            let j = (i + 1) % n;
+            [i, j, n + j, i, n + j, n + i]
+        })
+        .collect();
+    let normals = vec![[0.0, 0.0, 1.0]; positions.len()];
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_indices(Indices::U32(indices))
 }
 
 /// The checkpoint arrow's rotation: its +Y tip along the line from `from` to `to` in the world,
@@ -1746,29 +1782,26 @@ fn ground_at(collide: &WorldCollision, p: [f32; 2], fallback: f32) -> Vec3 {
 }
 
 /// Where a piece of checkpoint `i` stands: the sheet on the ground at the gate's centre, as wide
-/// as the gate and square to the course; a beam on the ground at its end. `was` is the piece's
-/// last height, kept where there is no ground under it.
+/// as the gate, `sheet_height` tall and square to the course; a beam on the ground at its end.
+/// `was` is the piece's last height, kept where there is no ground under it.
 fn gate_part_transform(
     race: &Active,
     i: usize,
     part: GatePart,
     collide: &WorldCollision,
     was: f32,
+    sheet_height: f32,
 ) -> Transform {
     match part {
         GatePart::Sheet => {
             let p = race.points[i];
             let h = race.heading(i);
-            let ground = ground_at(collide, p, was - GATE_SHEET_HEIGHT / 2.0);
+            let ground = ground_at(collide, p, was - sheet_height / 2.0);
             let along =
                 wow_to_bevy([p[0] + h[0], p[1] + h[1], 0.0]) - wow_to_bevy([p[0], p[1], 0.0]);
-            Transform::from_translation(ground + Vec3::Y * (GATE_SHEET_HEIGHT / 2.0))
+            Transform::from_translation(ground + Vec3::Y * (sheet_height / 2.0))
                 .with_rotation(Quat::from_rotation_y(along.x.atan2(along.z)))
-                .with_scale(Vec3::new(
-                    2.0 * race.gate_half_width(i),
-                    GATE_SHEET_HEIGHT,
-                    1.0,
-                ))
+                .with_scale(Vec3::new(2.0 * race.gate_half_width(i), sheet_height, 1.0))
         }
         GatePart::End(k) => {
             let end = race.gate_ends(i)[k];
@@ -1803,6 +1836,7 @@ pub(crate) fn beams(
     >,
     mut arrows: Query<(Entity, &mut CheckpointArrow, &mut Transform), Without<Beam>>,
     mut looks: Local<Option<Looks>>,
+    settings: Res<super::settings::KartSettings>,
 ) {
     let race = races.race.as_ref().filter(|r| r.go_at.is_some() && !r.done);
     let Some((race, next)) = race.and_then(|r| Some((r, r.next()?))) else {
@@ -1829,7 +1863,14 @@ pub(crate) fn beams(
             continue;
         }
         have[i][part_index(part)] = true;
-        *t = gate_part_transform(race, i, part, &collide, t.translation.y);
+        *t = gate_part_transform(
+            race,
+            i,
+            part,
+            &collide,
+            t.translation.y,
+            settings.gate_height,
+        );
         material.0 = match (part, i == next) {
             (GatePart::Sheet, true) => looks.sheet_bright.clone(),
             (GatePart::Sheet, false) => looks.sheet_dim.clone(),
@@ -1850,7 +1891,7 @@ pub(crate) fn beams(
                 Beam(i, part),
                 Mesh3d(mesh),
                 MeshMaterial3d(material),
-                gate_part_transform(race, i, part, &collide, 0.0),
+                gate_part_transform(race, i, part, &collide, 0.0, settings.gate_height),
                 Name::new("race checkpoint"),
             ));
         }
@@ -2934,6 +2975,18 @@ mod tests {
                     assert!(depth >= CP_ARROW_EDGE - 1e-4, "{p:?} {depth}");
                 }
             }
+        }
+        // The shaft and head meet edge to edge: the see-through face is one layer everywhere.
+        let shaft_top = CP_ARROW_SHAFT.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+        let head_base = CP_ARROW_HEAD.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+        assert_eq!(shaft_top, head_base);
+        // The outline band runs the edge out from every side of the whole shape.
+        let band = grown(&CP_ARROW_SHAPE, CP_ARROW_EDGE);
+        for (k, (p, q)) in CP_ARROW_SHAPE.iter().zip(&band).enumerate() {
+            let next = CP_ARROW_SHAPE[(k + 1) % CP_ARROW_SHAPE.len()];
+            let side = (Vec2::from(next) - Vec2::from(*p)).normalize();
+            let out = (Vec2::from(*q) - Vec2::from(*p)).dot(Vec2::new(side.y, -side.x));
+            assert!((out - CP_ARROW_EDGE).abs() < 1e-4, "corner {k}: {out}");
         }
         // The shaft grows square: its corners move out by the edge on both axes.
         assert!(

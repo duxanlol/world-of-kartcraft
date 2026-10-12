@@ -786,6 +786,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "0",
         "Kartcraft's own — CTR's ground types under the kart; 1.12 has no kart",
     ),
+    // How tall a race checkpoint's sheet of light stands, yards (`kart::race`); looks only.
+    ours(
+        "KartGateHeight",
+        "8",
+        "Kartcraft's own — the race checkpoints' look; 1.12 has no kart",
+    ),
     // The controller's rumble on crashes, landings and scrapes (`kartcraft::rumble`).
     ours(
         "KartRumble",

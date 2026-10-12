@@ -14,6 +14,8 @@
 //!   are recorded and kept either way.
 //! - `KartTerrain`: the kart drives on CTR's grounds (grass and dirt hold it to 140/256 of its
 //!   top speed, [`super::ground`]); off, as asphalt everywhere. Per player, client-side.
+//! - `KartGateHeight`: how tall a race checkpoint's sheet of light stands (yards, 0 to 40; 0 leaves
+//!   the beams at its ends alone). How it looks only: the gate passed is as wide as ever.
 //! - `KartRumble`: the controller shakes on crashes, hard landings and wall scrapes
 //!   ([`kartcraft::rumble`]), as CTR's vibration does, on by default.
 //! - `KartCam*`: the chase camera's shape, the camera window's (`/kartcam`), one CVar a
@@ -108,6 +110,8 @@ pub(crate) struct KartSettings {
     pub(crate) terrain: bool,
     /// Shake the controller ([`kartcraft::rumble`]).
     pub(crate) rumble: bool,
+    /// A checkpoint gate's sheet of light, its height in yards.
+    pub(crate) gate_height: f32,
     /// The chase camera's shape.
     pub(crate) camera: CameraTuning,
 }
@@ -123,6 +127,7 @@ impl Default for KartSettings {
             ghost: true,
             terrain: false,
             rumble: true,
+            gate_height: GATE_HEIGHT_DEFAULT,
             camera: CameraTuning::default(),
         }
     }
@@ -143,6 +148,10 @@ impl KartSettings {
         }
     }
 }
+
+/// `KartGateHeight`'s default and its range (yards).
+pub(crate) const GATE_HEIGHT_DEFAULT: f32 = 8.0;
+pub(crate) const GATE_HEIGHT_MAX: f32 = 40.0;
 
 /// The Kartcraft CVars' change callback.
 pub(crate) fn on_cvar(
@@ -165,6 +174,7 @@ pub(crate) fn on_cvar(
         "kartghost" => settings.ghost = ev.flag(),
         "kartterrain" => settings.terrain = ev.flag(),
         "kartrumble" => settings.rumble = ev.flag(),
+        "kartgateheight" => settings.gate_height = ev.num().clamp(0.0, GATE_HEIGHT_MAX),
         "kartcamwallpull" => settings.camera.wall_pull = ev.flag(),
         "kartcamtravel" => settings.camera.travel = ev.flag(),
         key if key.starts_with("kartcam") => {
@@ -240,6 +250,7 @@ mod tests {
             "every ground drives as asphalt until asked"
         );
         assert_eq!(d("KartRumble") != 0.0, settings.rumble);
+        assert_eq!(d("KartGateHeight"), settings.gate_height);
         for name in ["KartMinimapButton", "KartMinimapAngle"] {
             d(name);
         }
@@ -316,6 +327,14 @@ mod tests {
         assert!(app.world().resource::<KartSettings>().rumble);
         set(&mut app, "KartRumble", "0");
         assert!(!app.world().resource::<KartSettings>().rumble);
+        set(&mut app, "KartGateHeight", "3.5");
+        assert_eq!(app.world().resource::<KartSettings>().gate_height, 3.5);
+        set(&mut app, "KartGateHeight", "500");
+        assert_eq!(
+            app.world().resource::<KartSettings>().gate_height,
+            GATE_HEIGHT_MAX,
+            "an out-of-range height is clamped"
+        );
     }
 
     fn registered(name: &str) -> &'static str {
