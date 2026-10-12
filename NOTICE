@@ -49,11 +49,11 @@ crates/ctr-assets reads the player's own CTR disc image (ISO 9660, BIGFILE,
 (https://github.com/CTR-tools/CTR-tools, GNU General Public License v2.0) and
 the decompilation; docs/ctr-assets.md documents the formats.
 
-These crates, and crates/kartcraft and crates/kart-demo which build on them,
-are licensed under the GNU General Public License, version 3 or later
-(LICENSE-GPL-3.0). A build
-of the game that includes them is therefore distributed under GPL-3.0-or-later
-as a whole (MIT and Apache-2.0 are compatible with it).
+These crates, and crates/kartcraft, crates/kart-driver and crates/kart-demo
+which build on them, are licensed under the GNU General Public License, version
+3 or later (LICENSE-GPL-3.0). A build of the game that includes them is
+therefore distributed under GPL-3.0-or-later as a whole (MIT and Apache-2.0 are
+compatible with it).
 
 --------------------------------------------------------------------------------
 Tools used by setup (not included)
@@ -73,6 +73,8 @@ Game content
 --------------------------------------------------------------------------------
 
 No World of Warcraft or Crash Team Racing game data is contained in this
-repository or in anything built from it. Players use their own copies: the WoW
-1.12.1 client is read at runtime, and setup converts the player's own CTR disc
-image on their machine into kart-data/, which is never committed.
+repository or in anything built from it (showcase/showcase.json holds only the
+showcase runs' own input tapes and poses, authored by course-gen). Players use
+their own copies: the WoW 1.12.1 client is read at runtime, and setup converts
+the player's own CTR disc image on their machine into kart-data/, which is never
+committed.

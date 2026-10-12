@@ -15,6 +15,9 @@
 //!
 //! `course-gen pads` lays turbo pads on every course's straights (`"pads"`); the client alone
 //! reads them.
+//!
+//! `course-gen showcase [site...] --out <dir> --write showcase/showcase.json` authors the
+//! showcase runs (`/kartshow`) over the real world and keeps their input tapes.
 
 use std::path::PathBuf;
 
@@ -157,6 +160,49 @@ enum Cmd {
         /// The course file.
         #[arg(long, default_value = "courses/courses.json")]
         courses: PathBuf,
+    },
+    /// Author the showcase runs (`course_gen::showcase`): fit each site's choreographies into its
+    /// open ground, drive them, keep the best clean one, draw each site into `<out>/<name>.png`.
+    Showcase {
+        /// The sites to author (all with none): mirage, flats, aq, gurubashi, stormwind,
+        /// thunderbluff, blackrock, bootybay.
+        sites: Vec<String>,
+        /// Where the pictures go.
+        #[arg(long)]
+        out: PathBuf,
+        /// Write the runs into this showcase file, each replacing the run of its name.
+        #[arg(long)]
+        write: Option<PathBuf>,
+        /// Layouts driven per site, at most.
+        #[arg(long, default_value_t = 240)]
+        budget: usize,
+        /// Try the site at another spot, `x,y,z` (WoW).
+        #[arg(long, allow_hyphen_values = true)]
+        spot: Option<String>,
+        /// How far above the spot the ground is looked for, yards.
+        #[arg(long)]
+        probe: Option<f32>,
+        /// How far the ground may climb or fall from the spot's, yards.
+        #[arg(long)]
+        band: Option<f32>,
+        /// The ground looked at, yards each way.
+        #[arg(long)]
+        span: Option<f32>,
+        /// How far from the spot a run may start, yards.
+        #[arg(long)]
+        reach: Option<f32>,
+        /// The clear ground a planned line keeps, yards.
+        #[arg(long)]
+        margin: Option<f32>,
+        /// The engine class: balanced, accel, speed or turn.
+        #[arg(long)]
+        class: Option<String>,
+        /// Boosts a slide takes before the next hop, 1 to 3.
+        #[arg(long)]
+        boosts: Option<u8>,
+        /// The drift radii tried, yards, `a,b,c`.
+        #[arg(long)]
+        radii: Option<String>,
     },
 }
 
@@ -389,6 +435,73 @@ fn main() -> Result<()> {
         Cmd::Marshals { courses } => {
             let n = course_gen::marshal::run(&courses, open_install()?)?;
             println!("{n} marshals written into {}", courses.display());
+        }
+        Cmd::Showcase {
+            sites,
+            out,
+            write,
+            budget,
+            spot,
+            probe,
+            band,
+            span,
+            reach,
+            margin,
+            class,
+            boosts,
+            radii,
+        } => {
+            let spot = match spot {
+                Some(s) => {
+                    let v: Vec<f32> = s
+                        .split(',')
+                        .map(|p| p.trim().parse())
+                        .collect::<Result<_, _>>()
+                        .context("--spot is x,y,z")?;
+                    anyhow::ensure!(v.len() == 3, "--spot is x,y,z");
+                    Some([v[0], v[1], v[2]])
+                }
+                None => None,
+            };
+            let class = match class.as_deref() {
+                None => None,
+                Some("balanced") => Some(kart_driver::Class::Balanced),
+                Some("accel") => Some(kart_driver::Class::Accel),
+                Some("speed") => Some(kart_driver::Class::Speed),
+                Some("turn") => Some(kart_driver::Class::Turn),
+                Some(other) => anyhow::bail!("no class {other}"),
+            };
+            let radii: Option<&'static [f32]> = match radii {
+                Some(r) => {
+                    let v: Vec<f32> = r
+                        .split(',')
+                        .map(|p| p.trim().parse())
+                        .collect::<Result<_, _>>()
+                        .context("--radii is a,b,c")?;
+                    Some(Box::leak(v.into_boxed_slice()))
+                }
+                None => None,
+            };
+            let overrides = course_gen::showcase::Overrides {
+                spot,
+                probe,
+                band,
+                span,
+                reach,
+                margin,
+                class,
+                boosts,
+                radii,
+            };
+            let log = course_gen::showcase::author_sites(
+                &mut open_install()?,
+                &sites,
+                &out,
+                write.as_deref(),
+                budget,
+                &overrides,
+            )?;
+            print!("{log}");
         }
         Cmd::Pads { courses } => {
             let n = course_gen::pads::run(&courses, open_install()?)?;

@@ -489,6 +489,30 @@ fn racewait_asks_the_server_for_the_finders_wait() {
 }
 
 #[test]
+fn kartshow_asks_the_server_for_the_showcase_runs() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    sent(&mut s);
+
+    // Bare, the list; with a name (trimmed, any case), that run; "stop" stops it.
+    s.run("SlashCmdList[\"BENILLA_KARTSHOW\"](\"\")").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tShow"]);
+    s.run("SlashCmdList[\"BENILLA_KARTSHOW\"](\"  Mirage \")")
+        .unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tShow\tmirage"]);
+    s.run("SlashCmdList[\"BENILLA_KARTSHOW\"](\"stop\")")
+        .unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tShow\tstop"]);
+    assert_eq!(
+        s.eval::<String>("return SLASH_BENILLA_KARTSHOW1").unwrap(),
+        "/kartshow"
+    );
+}
+
+#[test]
 fn a_finder_race_offers_the_way_back_and_new_bests_reach_the_chat() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK

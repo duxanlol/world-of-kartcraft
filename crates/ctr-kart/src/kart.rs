@@ -1075,6 +1075,12 @@ impl Kart {
         self.speed_approx = 0;
     }
 
+    /// Shifts the kart by `by` (lu) and leaves its motion as it is: a showcase run's playback
+    /// easing the kart back onto its recorded line (Kartcraft's own; CTR has no such thing).
+    pub fn nudge(&mut self, by: Vec3) {
+        self.pos += by;
+    }
+
     pub fn place(&mut self, position: Vec3, heading: i32) {
         let heading = wrap(heading);
         self.pos = position;

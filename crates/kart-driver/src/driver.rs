@@ -25,6 +25,8 @@ const PLAN_DECEL: f32 = 650.0;
 /// Bends tighter than this radius (lu) are planned at a lower share of the yaw rate.
 const TIGHT_RADIUS: f32 = 900.0;
 const TIGHT_YAW_SHARE: f32 = 0.6;
+/// The share of the slide's full turn a bend planned for slides is taken at.
+const DRIFT_YAW_SHARE: f32 = 0.8;
 /// A powerslide is started for a bend turning at least this much (radians) within the next
 /// [`SLIDE_LOOK_SECS`], no tighter than [`SLIDE_MIN_RADIUS`], at this share of top speed or more
 /// (CTR keeps a drift only above half the class speed).
@@ -43,6 +45,48 @@ const SLIDE_TAP_FRAMES: u32 = 40;
 /// Progress the stuck check counts, lu, and how long a recovery reverses, frames.
 const PROGRESS_LU: f32 = 80.0;
 const REVERSE_FRAMES: u32 = 36;
+
+/// How the driver takes its powerslides: the defaults are the course tester's, a decent player's;
+/// a showcase run slides harder.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SlideTuning {
+    /// A slide starts for a bend turning at least this much (radians) within the next
+    /// `look_secs`, no tighter than `min_radius` (lu), at `min_speed` of top speed or more.
+    pub min_turn: f32,
+    pub look_secs: f32,
+    pub min_radius: f32,
+    pub min_speed: f32,
+    /// It is let go once less than this much bend is left in the next 0.6 s.
+    pub end_turn: f32,
+    /// Frames after a slide before another may start.
+    pub rest_frames: u32,
+    /// Boost once the meter is this full.
+    pub boost_at: f32,
+    /// Let a long slide go once its three boosts are spent, and hop into it again.
+    pub rehop: bool,
+    /// Boosts taken a slide, up to the three CTR gives: fewer keeps a slide slower, and so tighter.
+    pub max_boosts: u8,
+    /// Plan the speeds for sliding through the bends, and hold a slide to the speed its bend
+    /// allows (off the gas), so a tight bend is slid slower rather than run wide.
+    pub drift_plan: bool,
+}
+
+impl Default for SlideTuning {
+    fn default() -> Self {
+        Self {
+            min_turn: SLIDE_MIN_TURN,
+            look_secs: SLIDE_LOOK_SECS,
+            min_radius: SLIDE_MIN_RADIUS,
+            min_speed: SLIDE_MIN_SPEED,
+            end_turn: SLIDE_END_TURN,
+            rest_frames: 20,
+            boost_at: BOOST_AT,
+            rehop: false,
+            max_boosts: 3,
+            drift_plan: false,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DriveOpts {
@@ -63,6 +107,8 @@ pub struct DriveOpts {
     pub powerslides: bool,
     /// Seconds between trace samples.
     pub trace_every: f32,
+    /// How the powerslides are taken.
+    pub slide: SlideTuning,
 }
 
 impl Default for DriveOpts {
@@ -77,6 +123,7 @@ impl Default for DriveOpts {
             max_recoveries: 5,
             powerslides: true,
             trace_every: 0.25,
+            slide: SlideTuning::default(),
         }
     }
 }
@@ -183,10 +230,7 @@ pub fn drive(world: &Collision, route: &Route, opts: &DriveOpts) -> DriveReport 
     if path.len() < 2 {
         return report;
     }
-    let stats = opts.class.stats();
-    let top = stats.speed as f32 * SPEED_LUS;
-    let yaw_max = stats.turn_rate as f32 * ANGLE_RADS;
-    let profile = speed_profile(&path, top, yaw_max * CORNER_YAW_SHARE);
+    let top = opts.class.stats().speed as f32 * SPEED_LUS;
 
     let start = path.pts[0];
     let first = xz(path.pts[1] - path.pts[0]);
@@ -198,16 +242,7 @@ pub fn drive(world: &Collision, route: &Route, opts: &DriveOpts) -> DriveReport 
     let mut kart = Kart::new(opts.class, ground + Vec3::Y * 4.0, heading);
     let mods = Modifiers::default();
 
-    let mut driver = Driver {
-        path: &path,
-        profile,
-        top,
-        yaw_max,
-        drift_base: stats.drift_turn_base as f32,
-        slide: Slide::Off(0),
-        l1_prev: false,
-        recover: 0,
-    };
+    let mut driver = Driver::new(&path, opts.class, opts.slide);
 
     let floor = route
         .waypoints
@@ -373,7 +408,7 @@ pub fn drive(world: &Collision, route: &Route, opts: &DriveOpts) -> DriveReport 
 
 /// The fastest speed (lu/s) to be doing at each point: what the curvature allows at `yaw` rad/s,
 /// lowered so each corner can be braked for from the points before it.
-fn speed_profile(path: &Path, top: f32, yaw: f32) -> Vec<f32> {
+fn speed_profile(path: &Path, top: f32, yaw: f32, tight_share: f32) -> Vec<f32> {
     let n = path.len();
     // The path's curvature is averaged over a few hundred lu, which spreads a hairpin's turn
     // out: plan each point at the sharpest curvature near it, and tight bends (under
@@ -384,7 +419,7 @@ fn speed_profile(path: &Path, top: f32, yaw: f32) -> Vec<f32> {
                 .map(|d| path.curv[path.idx(i + d)].abs())
                 .fold(1e-6f32, f32::max);
             let share = if k > 1.0 / TIGHT_RADIUS {
-                TIGHT_YAW_SHARE
+                tight_share
             } else {
                 1.0
             };
@@ -415,10 +450,15 @@ enum Slide {
     /// Hopped into a bend, holding R1 until the landing starts the slide.
     Hop { frames: u32, left: bool },
     /// Sliding; frames since a shoulder tap.
-    On { left: bool, since_tap: u32 },
+    On {
+        left: bool,
+        since_tap: u32,
+        /// Boosts pressed in the red this slide.
+        boosts: u8,
+    },
 }
 
-struct Driver<'a> {
+pub(crate) struct Driver<'a> {
     path: &'a Path,
     profile: Vec<f32>,
     top: f32,
@@ -430,11 +470,38 @@ struct Driver<'a> {
     l1_prev: bool,
     /// Frames of reversing left.
     recover: u32,
+    tuning: SlideTuning,
 }
 
-impl Driver<'_> {
+impl<'a> Driver<'a> {
+    /// A driver of `class` along `path`, sliding as `tuning` says.
+    pub(crate) fn new(path: &'a Path, class: Class, tuning: SlideTuning) -> Self {
+        let stats = class.stats();
+        let top = stats.speed as f32 * SPEED_LUS;
+        let yaw_max = stats.turn_rate as f32 * ANGLE_RADS;
+        // Planned for slides, a bend is taken at the slide's own turn (its base and 22 more
+        // steering into it, spec 5.2), no slower: a tight one at a slide's speed, not a crawl.
+        let profile = if tuning.drift_plan {
+            let drift_yaw = (stats.drift_turn_base + 22) as f32 * ANGLE_RADS;
+            speed_profile(path, top, drift_yaw * DRIFT_YAW_SHARE, 1.0)
+        } else {
+            speed_profile(path, top, yaw_max * CORNER_YAW_SHARE, TIGHT_YAW_SHARE)
+        };
+        Self {
+            path,
+            profile,
+            top,
+            yaw_max,
+            drift_base: stats.drift_turn_base as f32,
+            slide: Slide::Off(0),
+            l1_prev: false,
+            recover: 0,
+            tuning,
+        }
+    }
+
     /// This frame's controls, the kart at `pos`, nearest the path on segment `seg`, `s` lu along.
-    fn input(&mut self, kart: &Kart, pos: Vec3, seg: usize, s: f32) -> Input {
+    pub(crate) fn input(&mut self, kart: &Kart, pos: Vec3, seg: usize, s: f32) -> Input {
         let pose = kart.pose();
         let v = kart.speed().abs() as f32 * SPEED_LUS;
         let h = pose.heading as f32 / 4096.0 * TAU;
@@ -481,15 +548,15 @@ impl Driver<'_> {
 
         self.slide = match self.slide {
             Slide::Off(wait) => {
-                let n = ahead(SLIDE_LOOK_SECS, 600.0);
+                let n = ahead(self.tuning.look_secs, 600.0);
                 let bend = self.path.turn(seg, n);
                 let sharpest = self.path.sharpest(seg, n);
                 if wait == 0
                     && kart.state == State::Normal
                     && kart.grounded()
-                    && v >= self.top * SLIDE_MIN_SPEED
-                    && bend.abs() >= SLIDE_MIN_TURN
-                    && sharpest < 1.0 / SLIDE_MIN_RADIUS
+                    && v >= self.top * self.tuning.min_speed
+                    && bend.abs() >= self.tuning.min_turn
+                    && sharpest < 1.0 / self.tuning.min_radius
                     && alpha * bend >= 0.0
                 {
                     Slide::Hop {
@@ -502,7 +569,11 @@ impl Driver<'_> {
             }
             Slide::Hop { frames, left } => {
                 if kart.state == State::Drifting {
-                    Slide::On { left, since_tap: 0 }
+                    Slide::On {
+                        left,
+                        since_tap: 0,
+                        boosts: 0,
+                    }
                 } else if frames > 25 {
                     Slide::Off(30)
                 } else {
@@ -512,19 +583,30 @@ impl Driver<'_> {
                     }
                 }
             }
-            Slide::On { left, since_tap } => {
+            Slide::On {
+                left,
+                since_tap,
+                boosts,
+            } => {
                 let rest = self.path.turn(seg, ahead(0.6, 300.0));
                 let dir = if left { 1.0 } else { -1.0 };
+                // Three boosts are all a slide gives (`boostsAttempted`): with `rehop`, a long bend
+                // is let go once they are spent and hopped into afresh for three more.
+                let spent = self.tuning.rehop
+                    && boosts >= self.tuning.max_boosts
+                    && (boosts < 3 || kart.turbo_meter().is_none());
                 if kart.state != State::Drifting
-                    || rest * dir < SLIDE_END_TURN
+                    || rest * dir < self.tuning.end_turn
                     || alpha * dir < -0.35
                     || target_v < self.top * 0.5
+                    || spent
                 {
-                    Slide::Off(20)
+                    Slide::Off(if spent { 0 } else { self.tuning.rest_frames })
                 } else {
                     Slide::On {
                         left,
                         since_tap: since_tap + 1,
+                        boosts,
                     }
                 }
             }
@@ -543,7 +625,11 @@ impl Driver<'_> {
                 input.r1 = true;
                 input.steer = if *left { -1.0 } else { 1.0 };
             }
-            Slide::On { left, since_tap } => {
+            Slide::On {
+                left,
+                since_tap,
+                boosts,
+            } => {
                 input.r1 = true;
                 let dir = if *left { 1.0 } else { -1.0 };
                 // CTR's slide turns `base` units a frame steering neutral, up to 22 more steering
@@ -555,13 +641,22 @@ impl Driver<'_> {
                     (units - self.drift_base) / 10.0
                 };
                 input.steer = -dir * stick(into * 1.2);
-                let tap = match kart.turbo_meter() {
-                    Some((filled, red)) => red && filled >= BOOST_AT,
+                // Too fast for the slide to hold the bend: off the gas (never under the half
+                // of the class's speed a slide needs, `VehPhysProc.c`'s drift exit).
+                if self.tuning.drift_plan && v > target_v + 40.0 && v > self.top * 0.56 {
+                    input.gas = false;
+                }
+                let meter = kart.turbo_meter();
+                let tap = match meter {
+                    Some((filled, red)) => {
+                        red && filled >= self.tuning.boost_at && *boosts < self.tuning.max_boosts
+                    }
                     None => *since_tap >= SLIDE_TAP_FRAMES,
                 };
                 if tap && !self.l1_prev {
                     input.l1 = true;
                     *since_tap = 0;
+                    *boosts += u8::from(meter.is_some());
                 }
             }
         }
