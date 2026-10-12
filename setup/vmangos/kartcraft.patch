@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..e74ea5d
+index 0000000..93c4935
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,3145 @@
+@@ -0,0 +1,3218 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -113,7 +113,9 @@ index 0000000..e74ea5d
 +#include <algorithm>
 +#include <cstdio>
 +#include <cstdlib>
++#include <atomic>
 +#include <mutex>
++#include <shared_mutex>
 +#include <random>
 +#include <set>
 +#include <unordered_map>
@@ -1339,6 +1341,74 @@ index 0000000..e74ea5d
 +        });
 +    }
 +
++    // ── Race layers ────────────────────────────────────────────────────────────────────────────
++    //
++    // Each race under way is its own instance of the world: its racers see only each other, and
++    // nobody else sees them (Player::IsVisibleInGridForPlayer), nor hears their /say, emotes or karts
++    // (the player message deliverers). Creatures are in every layer. A racer is in the race's
++    // layer from its start until they leave it, the results included.
++    //
++    // s_layer is written on the world thread between map updates (the messager), then read by
++    // the map threads' visibility checks and by the async packet thread's kart relay: a shared
++    // lock for the readers, and s_layered so a world with no race under way takes no lock.
++    static std::unordered_map<uint32, uint32> s_layer; // player low guid -> race id
++    static std::shared_mutex s_layerMutex;
++    static std::atomic<size_t> s_layered{ 0 };
++    // What the last TickLayers handed the messager, under s_mutex.
++    static std::map<ObjectGuid, uint32> s_layerPosted;
++
++    static uint32 LayerOf(WorldObject const* o)
++    {
++        auto it = s_layer.find(o->GetGUIDLow());
++        return it == s_layer.end() ? 0 : it->second;
++    }
++
++    bool SameLayer(WorldObject const* a, WorldObject const* b)
++    {
++        if (s_layered.load(std::memory_order_acquire) == 0 || a == b || !a->IsPlayer() || !b->IsPlayer())
++            return true;
++        std::shared_lock<std::shared_mutex> lock(s_layerMutex);
++        return LayerOf(a) == LayerOf(b);
++    }
++
++    // Run after every Kartcraft line and at login: who is in which race's layer now. A change
++    // goes through the messager, which swaps the table and redraws what the moved players see and
++    // who sees them, as GM mode's toggle does.
++    static void TickLayers()
++    {
++        std::map<ObjectGuid, uint32> layers;
++        for (auto const& entry : s_races)
++            if (entry.second.start)
++                for (Racer const& r : entry.second.racers)
++                    layers[r.guid] = entry.first;
++        if (layers == s_layerPosted)
++            return;
++        std::vector<ObjectGuid> moved;
++        for (auto const& had : s_layerPosted)
++        {
++            auto now = layers.find(had.first);
++            if (now == layers.end() || now->second != had.second)
++                moved.push_back(had.first);
++        }
++        for (auto const& now : layers)
++            if (!s_layerPosted.count(now.first))
++                moved.push_back(now.first);
++        s_layerPosted = layers;
++        sWorld.GetMessager().AddMessage([layers, moved](World*)
++        {
++            {
++                std::unique_lock<std::shared_mutex> lock(s_layerMutex);
++                s_layer.clear();
++                for (auto const& l : layers)
++                    s_layer[l.first.GetCounter()] = l.second;
++                s_layered.store(s_layer.size(), std::memory_order_release);
++            }
++            for (ObjectGuid const& guid : moved)
++                if (Player* p = ObjectAccessor::FindPlayer(guid))
++                    p->UpdateVisibilityAndView();
++        });
++    }
++
 +    // "R\tM\t1" or "R\tM\t0": race mode on or off. The answer is "R\tM\t<1 or 0>", or "R\tMx"
 +    // when it can't come on (in combat). The shield follows with the line's TickShields.
 +    static void RaceMode(Player* player, bool on)
@@ -2508,6 +2578,8 @@ index 0000000..e74ea5d
 +            player->RemoveFlag(UNIT_FIELD_FLAGS, RACE_MODE_FLAGS);
 +        // A spot to go back to does not outlive the session.
 +        s_origins.erase(guid.GetCounter());
++        // Out of any race's layer, back with everyone.
++        TickLayers();
 +    }
 +
 +    // "R\tU": a kart stuck in the world (sunk into a hill, wedged in a crease) put back on a course:
@@ -2863,6 +2935,7 @@ index 0000000..e74ea5d
 +            HandleWeapon(player, body);
 +        // After the line: a finish or a leave in it frees the racer at once.
 +        TickShields(WorldTimer::getMSTime());
++        TickLayers();
 +    }
 +
 +    bool HandleAddonMessage(Player* player, std::string const& message)
@@ -3233,10 +3306,10 @@ index 0000000..e74ea5d
 +}
 diff --git a/src/game/Kartcraft.h b/src/game/Kartcraft.h
 new file mode 100644
-index 0000000..7553bde
+index 0000000..55b2641
 --- /dev/null
 +++ b/src/game/Kartcraft.h
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,56 @@
 +/*
 + * World of Kartcraft: Karting, a secondary profession levelled by chaining kart turbos.
 + *
@@ -3254,6 +3327,7 @@ index 0000000..7553bde
 +
 +class Player;
 +class Unit;
++class WorldObject;
 +class SpellEntry;
 +
 +namespace Kartcraft
@@ -3276,6 +3350,10 @@ index 0000000..7553bde
 +    void OnLogin(Player* player);
 +    // The kart's aura on or off (Aura::HandleAuraMounted): a driver is friendly to everyone.
 +    void OnMounted(Unit* target, uint32 spell, bool apply);
++    // Race layers: false when a and b are players in different races' layers (each race under
++    // way is its own instance); creatures and everything else are in every layer. Player's
++    // visibility check and the player message deliverers ask it.
++    bool SameLayer(WorldObject const* a, WorldObject const* b);
 +    // An addon message from the client; true when it was ours.
 +    bool HandleAddonMessage(Player* player, std::string const& message);
 +    // Extra cast checks for the kart spells. SPELL_CAST_OK otherwise.
@@ -5912,6 +5990,62 @@ index 0000000..8cc8655
 +          {},
 +          { 3535.3f, -3386.2f }, { 175352u, 175353u } },
 +    };
+diff --git a/src/game/Maps/GridNotifiers.cpp b/src/game/Maps/GridNotifiers.cpp
+index 55298600..6f54077f 100644
+--- a/src/game/Maps/GridNotifiers.cpp
++++ b/src/game/Maps/GridNotifiers.cpp
+@@ -28,6 +28,7 @@
+ #include "ObjectAccessor.h"
+ #include "BattleGroundMgr.h"
+ #include "PlayerBroadcaster.h"
++#include "Kartcraft.h"
+ 
+ using namespace MaNGOS;
+ 
+@@ -119,7 +120,8 @@ void MessageDeliverer::Visit(CameraMapType& m)
+     {
+         Player* owner = iter.getSource()->GetOwner();
+ 
+-        if (i_toSelf || owner != &i_player)
++        // Kartcraft: a player's messages stay in their race's layer.
++        if ((i_toSelf || owner != &i_player) && Kartcraft::SameLayer(&i_player, owner))
+         {
+             if (WorldSession* session = owner->GetSession())
+                 session->SendPacket(i_message);
+@@ -159,7 +161,9 @@ void MessageDistDeliverer::Visit(CameraMapType& m)
+ 
+         if ((i_toSelf || owner != &i_player) &&
+                 (!i_ownTeamOnly || owner->GetTeam() == i_player.GetTeam()) &&
+-                (!i_dist || iter.getSource()->GetBody()->IsWithinDist(&i_player, i_dist)))
++                (!i_dist || iter.getSource()->GetBody()->IsWithinDist(&i_player, i_dist)) &&
++                // Kartcraft: a player's messages stay in their race's layer.
++                Kartcraft::SameLayer(&i_player, owner))
+         {
+             if (WorldSession* session = owner->GetSession())
+                 session->SendPacket(i_message);
+diff --git a/src/game/Objects/Player.cpp b/src/game/Objects/Player.cpp
+index c45726eb..5db6ba3d 100644
+--- a/src/game/Objects/Player.cpp
++++ b/src/game/Objects/Player.cpp
+@@ -24,6 +24,7 @@
+ #include <sstream>
+ 
+ #include "Player.h"
++#include "Kartcraft.h"
+ #include "Bag.h"
+ #include "Language.h"
+ #include "Database/DatabaseEnv.h"
+@@ -18713,6 +18714,10 @@ bool Player::IsVisibleInGridForPlayer(Player const* pl) const
+     if (pl->IsGameMaster() && GetSession()->GetSecurity() <= pl->GetSession()->GetSecurity())
+         return true;
+ 
++    // Kartcraft: each race under way is its own layer of the world.
++    if (!Kartcraft::SameLayer(this, pl))
++        return false;
++
+     // Nostalrius: ghost visibility by raid members.
+     if (IsInSameRaidWith(pl))
+         return true;
 diff --git a/src/game/Spells/Spell.cpp b/src/game/Spells/Spell.cpp
 index eaaaaf1..abd1b5d 100644
 --- a/src/game/Spells/Spell.cpp

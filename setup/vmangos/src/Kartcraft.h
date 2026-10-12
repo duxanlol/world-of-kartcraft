@@ -15,6 +15,7 @@
 
 class Player;
 class Unit;
+class WorldObject;
 class SpellEntry;
 
 namespace Kartcraft
@@ -37,6 +38,10 @@ namespace Kartcraft
     void OnLogin(Player* player);
     // The kart's aura on or off (Aura::HandleAuraMounted): a driver is friendly to everyone.
     void OnMounted(Unit* target, uint32 spell, bool apply);
+    // Race layers: false when a and b are players in different races' layers (each race under
+    // way is its own instance); creatures and everything else are in every layer. Player's
+    // visibility check and the player message deliverers ask it.
+    bool SameLayer(WorldObject const* a, WorldObject const* b);
     // An addon message from the client; true when it was ours.
     bool HandleAddonMessage(Player* player, std::string const& message);
     // Extra cast checks for the kart spells. SPELL_CAST_OK otherwise.
