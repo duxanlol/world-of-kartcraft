@@ -84,15 +84,18 @@ race" per course, "Join <host>'s race" per waiting race, "Start the race" for th
 the race" while in a race or the Race Finder's queue, "Open the Race Finder" and "How do races
 work?". A choice runs as the addon line it stands for (`R\tH`, `R\tJ`, `R\tS`, `R\tX`), so a
 client that still sends those lines does the same; hosting or joining on foot puts the driver
-in the kart.
+in the kart. "Host a race" asks first whether ground types count (npc_text 190004): "ground
+types off" sends `R\tH\t<key>`, "ground types on" `R\tH\t<key>\t1`, and every racer in that race
+drives by the host's choice (`R\tGT`, `docs/ctr-weapons-assets-and-net.md` B3); a waiting race
+with them on says so in its "Join" line.
 
 - **Placing.** After adding or moving courses, run
   `WOW_DATA=<your WoW>/Data cargo run --release -p course-gen -- marshals`: starts within 40 yards
   of an earlier course's start share its marshal, who stands 10 yards left of the start line
   (across the way from checkpoint 0 to 1), facing it, at the terrain's height there. It writes
   each course's `marshal`; then run `pack.py`.
-- **The rows.** `pack.py` writes `setup/vmangos/sql/kartcraft.sql`: the creature template, its two
-  texts (npc_text/broadcast_text 190000-190001) and one spawn per distinct spot (creature guids
+- **The rows.** `pack.py` writes `setup/vmangos/sql/kartcraft.sql`: the creature template, its
+  texts (npc_text/broadcast_text 190000-190004) and one spawn per distinct spot (creature guids
   from 400000; 400000-400999 are reserved). It deletes its own rows first, so it runs any number
   of times.
 - **Deploying.** vmangos-deploy runs every `server/storage/database/custom-sql/*.sql` against the
