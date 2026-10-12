@@ -816,6 +816,12 @@
             elseif verb == "Qx" then
                 f.queued, f.waiting, f.waited = nil, nil, nil
                 if line[3] == "racing" then f.noticeUntil = GetTime() + 6 end
+                if line[3] == "party" then BenillaKart_Say("Your party left the Race Finder queue.") end
+            elseif verb == "Qp" then
+                -- A party mate queued the party: we are queued too, and keep our place ourselves.
+                f.queued, f.waiting, f.waited, f.noticeUntil = line[3], nil, nil, 0
+                f.beat = GetTime()
+                BenillaKart_Say(format("%s queued your party in the Race Finder.", line[4] or "Your party"))
             elseif verb == "Pop" then
                 f.check = { id = line[3], course = line[4], racers = tonumber(line[5]) or 0 }
                 if StaticPopupDialogs then
