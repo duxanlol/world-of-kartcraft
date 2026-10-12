@@ -7,6 +7,9 @@
 //! CTR audio, converted at setup); the driving sounds are else synthesized here, the weapons' else
 //! silent. Played 2D: the driver is the listener, and the weapons' cues carry a gain for their
 //! distance.
+//!
+//! The skid loop plays while the tyres skid ([`ctr_kart::Kart::skids`]), not only in a
+//! powerslide, and it and a rolling loop are the ground's own, as CTR's terrain table names them.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -155,6 +158,10 @@ pub struct KartAudio {
     pub drifting: bool,
     pub grounded: bool,
     pub turbo: bool,
+    /// The tyres skid ([`ctr_kart::Kart::skids`], either pair).
+    pub skidding: bool,
+    /// The ground under the kart, as it is (not as it drives): its skid and rolling sounds.
+    pub ground: ctr_kart::Ground,
     /// Seconds since the turbo's roar last started its sweep: a new boost restarts it.
     pub turbo_age: f32,
     /// The engine's distortion and volume (`ctr_kart::Kart::engine_sound`).
@@ -375,10 +382,59 @@ fn crash() -> StaticSoundData {
     })
 }
 
+/// A ground's skid loop file by its OtherFX id (`MetaDataTerrain.skidSound`): 17 asphalt, 18
+/// dirt and grass, 19 snow and icy road (`ctr_assets::audio::SOUNDS`).
+fn skid_file(id: u16) -> Option<&'static str> {
+    match id {
+        17 => Some("skid"),
+        18 => Some("skid_dirt"),
+        19 => Some("skid_snow"),
+        _ => None,
+    }
+}
+
+/// A ground's rolling loop file by its OtherFX id (`MetaDataTerrain.sound`).
+fn rolling_file(id: u16) -> Option<&'static str> {
+    match id {
+        22 => Some("ground_ice"),
+        23 => Some("ground_snow"),
+        24 => Some("ground_dirt"),
+        25 => Some("ground_water"),
+        26 => Some("ground_metal"),
+        27 => Some("ground_mud"),
+        _ => None,
+    }
+}
+
+/// The skid loop's level, 0 to 1, at `speed` (CTR's units): `VehEmitter`'s volume (0x14 to
+/// 0xAA over 2000 to 12000, none below 0x201), at our 0.5 for a skid at full speed.
+fn skid_level(skidding: bool, grounded: bool, speed: i32) -> f32 {
+    if !(skidding && grounded) {
+        return 0.0;
+    }
+    0.5 * ctr_kart::terrain::skid_volume(speed) as f32 / 170.0
+}
+
+/// The rolling loop's level and pitch at `speed`: `VehEmitter`'s volume (0 to 200 over 0 to
+/// 5000) and OtherFX distortion (0x6C to 0xD2 over 0 to 12000), on the ground only.
+fn rolling_mix(grounded: bool, speed: i32) -> (f32, f64) {
+    let (volume, distort) = ctr_kart::terrain::rolling_mix(speed);
+    let level = if grounded {
+        0.6 * volume as f32 / 255.0
+    } else {
+        0.0
+    };
+    (level, 2f64.powf((f64::from(distort) - 128.0) / 128.0))
+}
+
 /// The sounds, each from the player's audio when present.
 struct Bank {
     engine: StaticSoundData,
     skid: StaticSoundData,
+    /// The other grounds' skid loops and every ground's rolling loop, those the audio has, by
+    /// OtherFX id.
+    skids: std::collections::HashMap<u16, StaticSoundData>,
+    rolling: std::collections::HashMap<u16, StaticSoundData>,
     roar: StaticSoundData,
     hop: StaticSoundData,
     land: StaticSoundData,
@@ -427,9 +483,18 @@ impl Bank {
                 .iter()
                 .filter(|l| l.is_some())
                 .count();
+        let skids = [18u16, 19]
+            .into_iter()
+            .filter_map(|id| Some((id, file(skid_file(id)?)?)))
+            .collect();
+        let rolling = (22u16..=27)
+            .filter_map(|id| Some((id, file(rolling_file(id)?)?)))
+            .collect();
         let bank = Self {
             engine: one("engine", engine),
             skid: one("skid", skid),
+            skids,
+            rolling,
             roar: one("turbo", roar),
             hop: one("hop", hop),
             land: one("land", || land(false)),
@@ -468,10 +533,15 @@ struct Loops {
     missile: Option<StaticSoundHandle>,
     warp: Option<StaticSoundHandle>,
     bomb: Option<StaticSoundHandle>,
+    /// The ground's rolling loop.
+    ground: Option<StaticSoundHandle>,
+    /// The OtherFX ids the skid and the rolling loops play, swapped as the ground changes.
+    skid_id: Option<u16>,
+    ground_id: Option<u16>,
 }
 
 impl Loops {
-    fn all(&mut self) -> [&mut Option<StaticSoundHandle>; 7] {
+    fn all(&mut self) -> [&mut Option<StaticSoundHandle>; 8] {
         [
             &mut self.engine,
             &mut self.skid,
@@ -480,7 +550,15 @@ impl Loops {
             &mut self.missile,
             &mut self.warp,
             &mut self.bomb,
+            &mut self.ground,
         ]
+    }
+}
+
+impl Bank {
+    /// A ground's skid loop: its own when the audio has it, else asphalt's.
+    fn skid_for(&self, id: u16) -> &StaticSoundData {
+        self.skids.get(&id).unwrap_or(&self.skid)
     }
 }
 
@@ -656,8 +734,46 @@ impl Sounds {
                 missile: bank.missile.as_ref().and_then(&mut start),
                 warp: bank.warp.as_ref().and_then(&mut start),
                 bomb: bank.bomb.as_ref().and_then(&mut start),
+                ground: None,
+                skid_id: Some(17),
+                ground_id: None,
             };
             self.driving = true;
+        }
+        // The ground's own skid and rolling loops (`terrain->skidSound`, `terrain->sound`),
+        // swapped in as it changes; a ground with neither is silent (`VehEmitter.c:1187-1267`).
+        let ground = audio.ground;
+        let want_skid = ground.skid_sound();
+        if want_skid != self.loops.skid_id {
+            if let Some(mut h) = self.loops.skid.take() {
+                h.stop(tween(60));
+            }
+            self.loops.skid = want_skid.and_then(|id| {
+                play(
+                    bank.skid_for(id)
+                        .clone()
+                        .loop_region(..)
+                        .volume(Decibels::SILENCE),
+                )
+            });
+            self.loops.skid_id = want_skid;
+        }
+        let want_ground = ground
+            .rolling_sound()
+            .filter(|id| bank.rolling.contains_key(id));
+        if want_ground != self.loops.ground_id {
+            if let Some(mut h) = self.loops.ground.take() {
+                h.stop(tween(120));
+            }
+            self.loops.ground = want_ground.and_then(|id| {
+                play(
+                    bank.rolling[&id]
+                        .clone()
+                        .loop_region(..)
+                        .volume(Decibels::SILENCE),
+                )
+            });
+            self.loops.ground_id = want_ground;
         }
 
         // The engine as CTR mixes it (`Kart::engine_sound`, from `EngineSound_Player`): the
@@ -668,11 +784,10 @@ impl Sounds {
             0.6 * f32::from(volume) / 230.0,
             f64::from(((f32::from(d) - 128.0) / 64.0).exp2()),
         );
-        let skid = if audio.drifting && audio.grounded {
-            (0.5, 1.0)
-        } else {
-            (0.0, 1.0)
-        };
+        // CTR's speed units from lu/s.
+        let ctr_speed = (audio.speed * 256.0 / 30.0) as i32;
+        let skid = (skid_level(audio.skidding, audio.grounded, ctr_speed), 1.0);
+        let rolling = rolling_mix(audio.grounded, ctr_speed);
         let roar = if audio.turbo {
             (0.4, turbo_pitch(audio.turbo_age))
         } else {
@@ -685,7 +800,10 @@ impl Sounds {
             (0.7 * w.warp, 1.0),
             (0.6 * w.bomb, 1.0),
         ];
-        let levels = [engine, skid, roar].into_iter().chain(weapons);
+        let levels = [engine, skid, roar]
+            .into_iter()
+            .chain(weapons)
+            .chain([rolling]);
         for (handle, (level, rate)) in self.loops.all().into_iter().zip(levels) {
             if let Some(h) = handle.as_mut() {
                 h.set_volume(db(level * sfx), tween(60));
@@ -759,6 +877,42 @@ mod tests {
         a.burn(false, 0.016);
         assert_eq!(a.turbo_age, 0.0);
         assert!(!a.turbo);
+    }
+
+    #[test]
+    fn the_skid_and_the_ground_play_as_vehemitter_mixes_them() {
+        // A skid at speed on the ground, none in the air, none crawling, none without a skid.
+        assert_eq!(skid_level(true, true, 12000), 0.5);
+        assert_eq!(skid_level(true, false, 12000), 0.0);
+        assert_eq!(skid_level(true, true, 0x200), 0.0);
+        assert_eq!(skid_level(false, true, 12000), 0.0);
+        assert!(skid_level(true, true, 3000) < skid_level(true, true, 9000));
+        // The rolling loop: silent standing, full by 5000, rising in pitch to 0xD2.
+        assert_eq!(rolling_mix(true, 0).0, 0.0);
+        assert!((rolling_mix(true, 5000).0 - 0.6 * 200.0 / 255.0).abs() < 1e-6);
+        assert_eq!(rolling_mix(false, 5000).0, 0.0);
+        assert!(rolling_mix(true, 0).1 < 1.0 && rolling_mix(true, 12000).1 > 1.0);
+        // Each ground's loops have files: grass skids on dirt's, mud has no skid.
+        assert_eq!(
+            ctr_kart::Ground::Grass.skid_sound().and_then(skid_file),
+            Some("skid_dirt")
+        );
+        assert_eq!(
+            ctr_kart::Ground::Grass
+                .rolling_sound()
+                .and_then(rolling_file),
+            Some("ground_dirt")
+        );
+        assert_eq!(ctr_kart::Ground::Mud.skid_sound(), None);
+        for g in ctr_kart::Ground::ALL {
+            if let Some(id) = g.skid_sound() {
+                assert!(skid_file(id).is_some(), "{g:?}");
+            }
+            // Wood and the track's edge roll on CTR's one-shot path, which is not looped.
+            if let Some(id) = g.rolling_sound() {
+                assert!(rolling_file(id).is_some(), "{g:?}");
+            }
+        }
     }
 
     #[test]

@@ -12,6 +12,7 @@ pub mod generate;
 pub mod geom;
 pub mod marshal;
 pub mod metrics;
+pub mod pads;
 pub mod preview;
 pub mod render;
 pub mod roads;

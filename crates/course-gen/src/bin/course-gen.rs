@@ -12,6 +12,9 @@
 //!
 //! `course-gen marshals` writes each course's Race Marshal spot (`"marshal"`) into
 //! `courses/courses.json`; run it after adding courses, then `setup/vmangos/pack.py`.
+//!
+//! `course-gen pads` lays turbo pads on every course's straights (`"pads"`); the client alone
+//! reads them.
 
 use std::path::PathBuf;
 
@@ -140,6 +143,13 @@ enum Cmd {
     /// Place a Race Marshal beside every distinct course start, at the ground's height, and
     /// write each course's `"marshal"` into the course file.
     Marshals {
+        /// The course file.
+        #[arg(long, default_value = "courses/courses.json")]
+        courses: PathBuf,
+    },
+    /// Lay turbo pads on every course's straights, at the ground's height, and write each
+    /// course's `"pads"` into the course file (`course_gen::pads`).
+    Pads {
         /// The course file.
         #[arg(long, default_value = "courses/courses.json")]
         courses: PathBuf,
@@ -366,6 +376,10 @@ fn main() -> Result<()> {
         Cmd::Marshals { courses } => {
             let n = course_gen::marshal::run(&courses, open_install()?)?;
             println!("{n} marshals written into {}", courses.display());
+        }
+        Cmd::Pads { courses } => {
+            let n = course_gen::pads::run(&courses, open_install()?)?;
+            println!("{n} turbo pads written into {}", courses.display());
         }
         Cmd::Courses {
             zone,

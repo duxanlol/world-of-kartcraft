@@ -599,7 +599,7 @@ fn drive_go_collision(
 /// `PLAYER_FLAGS` ghost bit `0x10` (`0x631658`), and `CGGameObject_C`'s candidacy virtual
 /// (`0x5f85f0`, vtable `+0x50`) tests it at `0x5f85f6` to refuse type DOOR. Nothing else about a
 /// ghost's collision differs; the flag is the mover's, so a possessed creature never sets it.
-fn publish_ghost_door_exclusions(
+pub(crate) fn publish_ghost_door_exclusions(
     mut exclusions: ResMut<benilla_world::collision::MoverTraceExclusions>,
     mover: Query<&ObjectStore, With<crate::net::Embodied>>,
     doors: Query<(Entity, &ObjectStore, &crate::net::NetEntity), With<Collider>>,

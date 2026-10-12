@@ -436,6 +436,7 @@ const ORDER: &[&str] = &[
     "marshal",
     "checkpoints",
     "crates",
+    "pads",
 ];
 
 fn inline(v: &Value) -> String {
@@ -566,6 +567,14 @@ pub fn validate(file: &Value) -> Result<()> {
             num(&s["y"], &format!("course {key}: crate {i} y"))?;
             if s.get("z").is_some() {
                 num(&s["z"], &format!("course {key}: crate {i} z"))?;
+            }
+        }
+        for (i, p) in c["pads"].as_array().into_iter().flatten().enumerate() {
+            for f in ["x", "y", "o"] {
+                num(&p[f], &format!("course {key}: pad {i} {f}"))?;
+            }
+            if p.get("z").is_some() {
+                num(&p["z"], &format!("course {key}: pad {i} z"))?;
             }
         }
     }

@@ -8,8 +8,9 @@
 //!   flame burns, riding with the kart; additive grey, but **dark** (subtractive) while the drift
 //!   meter is in its boost window, CTR's "boost now" cue, and puffing on through a flame for the
 //!   eight frames after a boost pressed too early.
-//! - **Skid marks** (`VehGroundSkids.c`): through a powerslide each tyre lays a tread mark, the
-//!   last eight game frames of it, darkening the ground.
+//! - **Skid marks** (`VehGroundSkids.c`): a skidding tyre lays a tread mark, the last eight game
+//!   frames of it, darkening the ground: all four through a powerslide, the back pair under the
+//!   brake or spinning off the line ([`ctr_kart::Kart::skids`]).
 //!
 //! The PSX blends map onto Bevy's: additive to `Add`, a 50/50 `mix` to `Blend` at half alpha,
 //! subtractive to `Multiply` by the inverted texture. The flames' subtractive outer haze is left
@@ -478,7 +479,11 @@ pub fn tick(
             let right = t.rotation * Vec3::X;
             for (i, tyre) in TYRES.iter().enumerate() {
                 let marks = state.marks.entry((kart, i)).or_default();
-                let skidding = status.grounded && status.drifting;
+                // The back pair marks on `ACTION_BACK_SKID`, the front on `ACTION_FRONT_SKID`
+                // (`VehEmitter.c:812`, `:948`).
+                let back = TYRES[i][2] < 0.0;
+                let flag = if back { status.skids.0 } else { status.skids.1 };
+                let skidding = status.grounded && flag;
                 let section = skidding.then(|| {
                     let at = t.transform_point(Vec3::from_array(*tyre)) + Vec3::Y * 0.03;
                     let half = right * (SKID_WIDTH * 0.5 * to_yards);

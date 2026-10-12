@@ -148,6 +148,12 @@ pub const HANG_TIME_METER_MAX: i32 = 2400;
 pub const HANG_TIME_RESERVES: i32 = 960;
 /// The turbo item: reserves and fire, juiced fire (`VehPickupItem.c`).
 pub const TURBO_ITEM_RESERVES: i32 = 2400;
+/// A turbo pad: the reserves it tops up to (`VEH_PHYS_FORCE_TURBO_PAD_RESERVES`) and the
+/// engine's acceleration on it (`VEH_PHYS_JUMP_TURBO_PAD_ACCEL`).
+pub const TURBO_PAD_RESERVES: i32 = 0x3C0;
+pub const TURBO_PAD_ACCEL: i32 = 8000;
+/// Off ice, the sideways grip's timer starts here (`0xfec0`, `COLL.c:1478-1481`).
+pub const ICE_EXIT_MS: i32 = -320;
 /// Super Engine tops reserves up to this every frame while the gas is held.
 pub const SUPER_ENGINE_RESERVES: i32 = 120;
 /// The kart's collision sphere, radius and centre height above the origin (lu).

@@ -44,6 +44,12 @@ client's list are both made from it; nothing else holds course data.
 - `crates`: optional. When present it replaces the layout the server builds along the
   segments: `kind` `F` (fruit crate), `Q` (weapon crate) or `W` (wumpa fruit), `x`, `y`, and an
   optional `z` (else the ground's).
+- `pads`: optional turbo pads, `x`, `y`, an optional `z` (else the ground under the camera's
+  height) and `o`, the way the pad points (radians, as a creature's facing). Client-side only:
+  the client lays them on the ground and fires CTR's turbo pad while a kart is on one; the server
+  and `pack.py` ignore them. `course-gen pads` writes them on each course's straights (legs of at
+  least 90 yards turning under 20° at both ends, the straightest three, never on neighbouring
+  legs, 30% along the leg).
 - Up to 1000 courses. The Race Finder offers them by zone, in the order the file first names each
   zone; a queue line names a zone by that place (`z3`), so keep zones' first appearances in order
   when adding courses (the exporter appends).

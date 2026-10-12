@@ -272,7 +272,8 @@ enum FireKind {
     Stack,
 }
 
-/// The terrain multipliers under the kart (8.2), all 256 = 1.
+/// The terrain multipliers under the kart (8.2), all 256 = 1, and its `TERRAIN_FLAG_*`s
+/// ([`crate::terrain::flags`]); CTR's whole table is [`crate::Ground`]'s.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Terrain {
     pub speed: i32,
@@ -282,32 +283,14 @@ pub struct Terrain {
     pub ground_friction: i32,
     pub turn_angle: i32,
     pub turn_response: i32,
+    pub flags: u32,
 }
 
 impl Terrain {
-    pub const ASPHALT: Terrain = Terrain {
-        speed: 256,
-        accel: 256,
-        counter_steer: 256,
-        lean: 256,
-        ground_friction: 256,
-        turn_angle: 256,
-        turn_response: 256,
-    };
-    pub const ICE: Terrain = Terrain {
-        speed: 256,
-        accel: 100,
-        counter_steer: 0,
-        lean: 0,
-        ground_friction: 32,
-        turn_angle: 128,
-        turn_response: 32,
-    };
+    pub const ASPHALT: Terrain = crate::Ground::Asphalt.terrain();
+    pub const ICE: Terrain = crate::Ground::Ice.terrain();
     /// In the air.
-    pub const NONE: Terrain = Terrain {
-        counter_steer: 0,
-        ..Terrain::ASPHALT
-    };
+    pub const NONE: Terrain = crate::Ground::None.terrain();
 }
 
 // `actionsFlagSet` bits that matter here.
@@ -317,6 +300,8 @@ const JUMP_BUTTON_HELD: u32 = 0x4;
 const ACCEL_PREVENTION: u32 = 0x8;
 const STEER_LEFT: u32 = 0x10;
 const BRAKE_WITH_ACCEL: u32 = 0x20;
+const BACK_SKID: u32 = 0x800;
+const FRONT_SKID: u32 = 0x1000;
 const DRIVING_AGAINST_WALL: u32 = 0x2000;
 const REVERSING: u32 = 0x20000;
 const AIRBORNE: u32 = 0x80000;
@@ -324,7 +309,7 @@ const AIRBORNE: u32 = 0x80000;
 const CARRY: u32 = TOUCH_GROUND | STEER_LEFT | REVERSING | AIRBORNE;
 
 /// `VehCalc_MapToRange`: clamps test the old bounds literally, so a reversed range saturates.
-fn map(v: i32, omin: i32, omax: i32, nmin: i32, nmax: i32) -> i32 {
+pub(crate) fn map(v: i32, omin: i32, omax: i32, nmin: i32, nmax: i32) -> i32 {
     if v <= omin {
         nmin
     } else if v >= omax {
@@ -533,6 +518,17 @@ pub struct Kart {
     stats: Stats,
     pub state: State,
     pub terrain: Terrain,
+    /// The ground under the kart, the host's to set before a tick (CTR reads the touched
+    /// quadblock's `terrain_type`, `COLL.c:1475-1491`); asphalt until it says otherwise.
+    pub ground_type: Terrain,
+    /// `terrainMeta2`, the terrain the speed multiplier comes from: it stays through a hop and
+    /// is let go 128 lu above the ground (`COLL.c:1431-1435`).
+    speed_terrain: Terrain,
+    /// `terrainScaledBaseSpeed`: the target speed after the terrain's multiplier.
+    terrain_base: i32,
+    /// On a turbo pad this tick ([`Kart::turbo_pad`]), and the tick before.
+    on_pad: bool,
+    pad_prev: bool,
 
     pos: Vec3,
     vel: Vec3,
@@ -664,6 +660,11 @@ impl Kart {
             stats: class.stats(),
             state: State::Normal,
             terrain: Terrain::ASPHALT,
+            ground_type: Terrain::ASPHALT,
+            speed_terrain: Terrain::ASPHALT,
+            terrain_base: 0,
+            on_pad: false,
+            pad_prev: false,
             pos: position,
             vel: Vec3::ZERO,
             speed: 0,
@@ -1397,6 +1398,38 @@ impl Kart {
         }
     }
 
+    /// The kart is on a turbo pad for the coming tick (`COLL_STEP_TRIGGER_TURBO_PAD`,
+    /// `VehPhysForce.c:1003-1028`): 960 reserves topped up at fire level 256 (the Freeze path,
+    /// so standing on it holds them), refused while braking (`VehFire.c:120-129`), and the
+    /// engine's 8000 while the gas is down (`VehPhysGeneral.c:1189-1239`). A [`Event::Turbo`]
+    /// marks only the tick it is driven onto.
+    pub fn turbo_pad(&mut self) {
+        if self.flags & ACCEL_PREVENTION != 0 {
+            return;
+        }
+        self.on_pad = true;
+        if self.fire_increment(TURBO_PAD_RESERVES, FireKind::Freeze, 256) && !self.pad_prev {
+            self.events.push(Event::Turbo);
+        }
+    }
+
+    /// The skid flags this tick (`ACTION_BACK_SKID`, `ACTION_FRONT_SKID`): the back tyres under
+    /// the brake, spinning off the line or pushed against their direction (`VehPhysForce.c:
+    /// 448-534`), all four through a powerslide (`VehPhysProc.c:2580`), off ice or on a ground
+    /// that forces them (`VehPhysForce.c:630-633`, `VehEmitter.c:1413-1419`); on the ground only,
+    /// as `VehEmitter` draws and plays them (`:1449-1456`).
+    pub fn skids(&self) -> (bool, bool) {
+        if !self.grounded() {
+            return (false, false);
+        }
+        let all = self.state == State::Drifting
+            || self.terrain.flags & crate::terrain::flags::FORCE_SKIDMARKS != 0;
+        (
+            all || self.flags & BACK_SKID != 0,
+            all || self.flags & FRONT_SKID != 0,
+        )
+    }
+
     /// `VehFire_Increment` (7.1); false when the state refuses it.
     fn fire_increment(&mut self, reserves: i32, kind: FireKind, fire: i32) -> bool {
         if self.blasted || matches!(self.state, State::Spinning(_) | State::Crashing(_)) {
@@ -1503,6 +1536,7 @@ impl Kart {
         self.mask_tick();
         self.shield_tick();
         self.tnt_tick();
+        self.pad_prev = std::mem::take(&mut self.on_pad);
     }
 
     /// `RB_MaskWeapon_ThTick` and `_FadeAway`: the time runs out, then 16 frames of fade.
@@ -1830,11 +1864,17 @@ impl Kart {
         };
         self.flags = (self.flags & !REVERSING) | flags;
         self.fire_speed = gas;
-        let m = self.terrain.speed;
-        self.base_speed = if self.flags & BRAKE_WITH_ACCEL == 0 && !mods.mask && m != 256 {
-            (gas * m) >> 8
+        // A power brake at speed leaves the back tyres' marks (`VehPhysGeneral.c:435-450`).
+        if self.flags & BRAKE_WITH_ACCEL != 0 && self.speed_approx > 0x300 {
+            self.flags |= BACK_SKID;
+        }
+        // `terrainMeta2`'s multiplier (`VehPhysProc.c:1362-1388`).
+        let m = self.speed_terrain.speed;
+        let scaled = self.flags & BRAKE_WITH_ACCEL == 0 && !mods.mask && m != 256;
+        (self.base_speed, self.terrain_base) = if scaled {
+            ((gas * m) >> 8, (b * m) >> 8)
         } else {
-            gas
+            (gas, b)
         };
         let mut lockout = false;
         if self.blasted || matches!(self.state, State::Crashing(_) | State::Spinning(_)) {
@@ -2197,8 +2237,10 @@ impl Kart {
         let side = SIDE_SPEED_CLAMP as f32;
         l.x = l.x.clamp(l0.x.min(-side), l0.x.max(side));
         l.y = l.y.max(l0.y.min(-(TERMINAL_VELOCITY as f32)));
-        // A blasted kart's friction acts in the air too (`VehPhysForce.c:429`).
-        if self.flags_prev & TOUCH_GROUND != 0 || self.blasted {
+        // A blasted kart's friction acts in the air too, and a slow ground's drag through a hop
+        // off it (`VehPhysForce.c:429-430`).
+        let slow_drag = self.speed_approx > self.terrain_base && self.speed_terrain.speed < 256;
+        if self.flags_prev & TOUCH_GROUND != 0 || self.blasted || slow_drag {
             self.friction(&mut l);
         }
         if l.z.abs() > 64.0 {
@@ -2208,10 +2250,21 @@ impl Kart {
     }
 
     /// Ground friction (3.6), in the kart's frame.
-    fn friction(&self, l: &mut Vec3) {
-        let opposing = self.speed_approx.abs() > 0x300
+    fn friction(&mut self, l: &mut Vec3) {
+        let fast = self.speed_approx.abs() > 0x300;
+        let opposing = fast
             && ((self.base_speed > 0 && self.speed_approx < 0)
                 || (self.base_speed < 0 && self.speed_approx > 0));
+        // The back tyres skid under the brake, against their direction, or spinning at under
+        // half the target speed (`VehPhysForce.c:448-534`).
+        let wheelspin = self.base_speed != 0
+            && !opposing
+            && self.state != State::Drifting
+            && fast
+            && self.speed_approx.abs() < self.base_speed.abs() >> 1;
+        if (fast && (self.flags & ACCEL_PREVENTION != 0 || opposing)) || wheelspin {
+            self.flags |= BACK_SKID;
+        }
         let (mut perp, mut fwd) = if self.flags & ACCEL_PREVENTION != 0 {
             let f = if self.blasted {
                 (BRAKE_FRICTION * 3) >> 2
@@ -2239,6 +2292,36 @@ impl Kart {
         }
         if self.grip_timer > 0 {
             perp += perp;
+        } else if self.grip_timer < 0 {
+            // Just off ice (`VehPhysForce.c:580-649`): the first frame takes half the sideways
+            // speed, the rest double grip, and the tyres skid while it slides.
+            perp = if self.grip_timer == ICE_EXIT_MS {
+                (l.x.abs() / 2.0) as i32
+            } else {
+                perp + perp
+            };
+            if l.x.abs() >= 1.0 {
+                self.flags |= BACK_SKID | FRONT_SKID;
+            }
+            self.grip_timer = (self.grip_timer + MS).min(0);
+        }
+        let flags = self.terrain.flags;
+        if flags & crate::terrain::flags::MUD_PHYSICS != 0 && !self.masked() {
+            // Mud's least frictions (`VehPhysForce.c:680-787`): an eighth of the sideways
+            // speed, and half of any speed past the target (half the speed when against it).
+            perp = perp.max((l.x / 8.0).abs() as i32);
+            let (z, base) = (l.z, self.base_speed as f32);
+            let least = if z != 0.0 && base != 0.0 && (z < 0.0) != (base < 0.0) {
+                (z / 2.0).abs()
+            } else if (z < base && z <= 0.0) || (base < z && z >= 0.0) {
+                (z - base).abs() / 2.0
+            } else {
+                0.0
+            };
+            fwd = fwd.max(least as i32);
+        }
+        if flags & crate::terrain::flags::SIDESLIP_FRICTION != 0 {
+            perp = ((perp * 3) >> 2).max(fwd);
         }
         l.x = approach(l.x, perp as f32, 0.0);
         l.z = approach(l.z, fwd as f32, 0.0);
@@ -2335,11 +2418,17 @@ impl Kart {
         if grounded {
             self.flags |= TOUCH_GROUND;
             // `COLL.c:1476`: a cloud's ice effect makes any ground ice.
-            self.terrain = if self.cloud == Some(CloudEffect::Ice) {
+            let under = if self.cloud == Some(CloudEffect::Ice) {
                 Terrain::ICE
             } else {
-                Terrain::ASPHALT
+                self.ground_type
             };
+            // Off ice the sideways grip is rebuilt over 320 ms (`COLL.c:1478-1481`).
+            if self.terrain == Terrain::ICE && under != Terrain::ICE {
+                self.grip_timer = ICE_EXIT_MS;
+            }
+            self.terrain = under;
+            self.speed_terrain = under;
             if !was {
                 self.flags |= STARTED_TOUCH_GROUND;
                 self.grip_timer = LANDING_GRIP_MS;
@@ -2354,6 +2443,10 @@ impl Kart {
         } else {
             self.flags &= !TOUCH_GROUND;
             self.terrain = Terrain::NONE;
+            // `quadBlockHeight + 0x8000 < posCurr.y` (`COLL.c:1431-1435`).
+            if self.pos.y > self.ground + 128.0 {
+                self.speed_terrain = Terrain::NONE;
+            }
             self.coyote = (self.coyote - MS).max(0);
             if self.coyote == 0 {
                 self.jump_cooldown = 0;
@@ -2436,8 +2529,15 @@ impl Kart {
         if base == 0 {
             return 0;
         }
+        if self.on_pad && base > 0 {
+            return TURBO_PAD_ACCEL;
+        }
         let wrong_way = sa.abs() > 0x2FF && (base <= 0 || sa <= 0) && (base >= 0 || sa >= 0);
-        if wrong_way {
+        let reverse_slide = self.terrain.flags & crate::terrain::flags::ACCEL_WHILE_REVERSE_SLIDING
+            != 0
+            && base > 0
+            && sa < 0;
+        if wrong_way && !reverse_slide {
             return 0;
         }
         let mut acc = self.stats.accel;
