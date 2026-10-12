@@ -81,6 +81,13 @@ struct CourseCheckpoint {
 }
 
 impl Course {
+    /// Whether it is a party course: in a dungeon, not the open world (1.12's two continents, 0
+    /// and 1). Each party races it inside its own copy, hosted at the marshal there; the Race
+    /// Finder never offers it (`Kartcraft.cpp` `PartyCourse`).
+    pub(crate) fn party(&self) -> bool {
+        self.map > 1
+    }
+
     /// The first checkpoint, WoW x, y.
     pub(crate) fn start(&self) -> [f32; 2] {
         self.checkpoints.first().map_or([0.0; 2], |c| [c.x, c.y])
@@ -115,6 +122,9 @@ impl Course {
             n => format!("A {n}-lap circuit{place}, {km:.2} km a lap"),
         };
         text += &format!(" through {} checkpoints.", route.len());
+        if self.party() {
+            text += " A party race: your party's leader hosts it at the Race Marshal inside.";
+        }
         // The generator's test lap, "test lap 76.1s": a clean lap's time.
         let lap = self
             .note
@@ -172,12 +182,12 @@ pub(crate) static COURSES: std::sync::LazyLock<Vec<Course>> = std::sync::LazyLoc
         .courses
 });
 
-/// The Race Finder's zones, in the order the file first names them; the server keeps the same
-/// list, and a queue line asks for a zone by its place in it (`z3`).
+/// The Race Finder's zones, in the order the file first names them, but a party course's; the
+/// server keeps the same list, and a queue line asks for a zone by its place in it (`z3`).
 pub(crate) static ZONES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
     let mut zones: Vec<String> = Vec::new();
     for c in COURSES.iter() {
-        if !c.zone.is_empty() && !zones.contains(&c.zone) {
+        if !c.zone.is_empty() && !c.party() && !zones.contains(&c.zone) {
             zones.push(c.zone.clone());
         }
     }
@@ -1022,6 +1032,7 @@ pub(crate) fn update(
     profession: super::profession::Profession,
     remotes: Res<super::remote::RemoteKarts>,
     names: Option<Res<crate::names::NameCache>>,
+    current_map: Option<Res<benilla_world::world_map::CurrentMap>>,
     mut auto: Local<AutoRace>,
 ) {
     let now = time.elapsed_secs();
@@ -1074,10 +1085,12 @@ pub(crate) fn update(
     let at = [wow[0], wow[1]];
     let near = |p: [f32; 2], r: f32| (p[0] - at[0]).hypot(p[1] - at[1]) <= r;
 
-    // The courses starting here.
+    // The courses starting here, on this map: Stratholme's streets lie over Eastern Plaguelands'
+    // coordinates.
+    let map = current_map.as_ref().map_or(0, |m| m.0);
     let here: Vec<&Course> = COURSES
         .iter()
-        .filter(|c| near(c.start(), START_RADIUS))
+        .filter(|c| c.map == map && near(c.start(), START_RADIUS))
         .collect();
     if press {
         match (&races.race, &races.offer, here.first()) {
@@ -2033,12 +2046,28 @@ mod tests {
         assert_eq!(keys.len(), COURSES.len(), "keys are unique");
         for c in COURSES.iter() {
             assert!(c.checkpoints.len() >= 2, "{} has a course", c.key);
-            assert!(
+            assert_eq!(
                 ZONES.contains(&c.zone),
-                "{} is in a Race Finder zone",
+                !c.party(),
+                "{} is in a Race Finder zone unless it is a party course",
                 c.key
             );
         }
+    }
+
+    #[test]
+    fn stratholme_is_a_party_course_the_finder_never_lists() {
+        let strat = COURSES
+            .iter()
+            .find(|c| c.key == "stratholme-streets")
+            .unwrap();
+        assert_eq!(strat.map, 329);
+        assert!(strat.party());
+        assert_eq!(strat.laps, 3);
+        assert!(strat.marshal.is_some(), "a marshal inside the instance");
+        assert!(!ZONES.contains(&strat.zone));
+        assert!(strat.description().contains("A party race"));
+        assert!(COURSES.iter().filter(|c| c.map <= 1).all(|c| !c.party()));
     }
 
     #[test]
