@@ -5,12 +5,14 @@
 //! own: whole level units (lu) and lu per frame for weapons, 4096ths of a turn for angles, and 30
 //! frames a second. Every function here is pure and deterministic.
 
+pub mod boxes;
 pub mod cloud;
 pub mod held;
 pub mod item;
 pub mod projectile;
 pub mod roulette;
 
+pub use boxes::CrateBox;
 pub use cloud::{CloudEffect, RainCloud};
 pub use held::{Fire, Held, HeldView, Shot};
 pub use item::Item;

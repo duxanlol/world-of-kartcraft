@@ -121,6 +121,8 @@ pub enum Down {
 pub enum Up {
     /// Take crate `index` (`W C`).
     Claim(usize),
+    /// Our shot `shot` broke crate `index` (`W K`): it touched the crate or its blast reached it.
+    Break { shot: u16, index: usize },
     /// Fire the held item (`W S`): our own shot counter, 1–65535.
     Fire { shot: u16, aim: Aim },
     /// We were hit by the shooter's shot (`W H`); a self-inflicted hit names us and shot 0.
@@ -225,6 +227,7 @@ impl Up {
     pub fn line(&self) -> String {
         let body = match self {
             Up::Claim(i) => format!("C\t{i}"),
+            Up::Break { shot, index } => format!("K\t{shot}\t{index}"),
             Up::Fire { shot, aim } => {
                 format!("S\t{shot}\t{}\t{}\t{}", place(aim), aim.target, flags(aim))
             }
@@ -246,6 +249,10 @@ impl Up {
         let f: Vec<&str> = line.strip_prefix(PREFIX)?.split('\t').collect();
         Some(match *f.first()? {
             "C" => Up::Claim(f.get(1)?.parse().ok()?),
+            "K" if f.len() >= 3 => Up::Break {
+                shot: shot_number(f[1])?,
+                index: f[2].parse().ok()?,
+            },
             "S" if f.len() >= 4 => Up::Fire {
                 shot: shot_number(f[1])?,
                 aim: aim(f[2], f[3], f.get(4).copied().unwrap_or(""))?,
@@ -495,6 +502,10 @@ mod tests {
     fn racer_lines_round_trip() {
         for up in [
             Up::Claim(17),
+            Up::Break {
+                shot: 65535,
+                index: 41,
+            },
             Up::Fire {
                 shot: 65535,
                 aim: aim_at(true, false),
@@ -533,6 +544,12 @@ mod tests {
             assert_eq!(Up::parse(&line), Some(up), "{line}");
         }
         assert_eq!(Up::Lose(Loss::MaskGrab).line(), "KARTCRAFT\tW\tP\tM");
+        assert_eq!(
+            Up::Break { shot: 3, index: 12 }.line(),
+            "KARTCRAFT\tW\tK\t3\t12"
+        );
+        assert_eq!(Up::parse("KARTCRAFT\tW\tK\t0\t12"), None, "shot 0");
+        assert_eq!(Up::parse("KARTCRAFT\tW\tK\t3"), None);
         assert_eq!(Up::parse("KARTCRAFT\tW\tP\tX"), None);
         assert_eq!(
             Up::Fire {

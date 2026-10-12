@@ -24,6 +24,11 @@ const ROLL_MIN: f32 = 20.0 / 30.0;
 /// A shot is remembered 30 s; CTR keeps 12 projectiles (`MAX_LIVE_SHOTS`).
 const SHOT_LIFE: f32 = 30.0;
 const MAX_LIVE_SHOTS: usize = 12;
+/// A shot breaks a crate no farther from where it left than it can have flown at the warp orb's
+/// 112 lu a frame, the fastest (`RB_Warpball.c`), 92 yd/s (`SHOT_SPEED`)...
+const SHOT_SPEED: f32 = 92.0;
+/// ...and a juiced bomb's 512 lu blast, with the crate's size and slack: 16 yd (`BREAK_REACH`).
+const BREAK_REACH: f32 = 16.0;
 /// The mask's 8 s, juiced 12 s: no Wumpa is lost under it (`231/RB_Player.c:153-161`).
 const MASK_TIME: f32 = 7680.0 / 960.0;
 const MASK_TIME_JUICED: f32 = 11520.0 / 960.0;
@@ -67,6 +72,32 @@ struct Record {
     at: f32,
     hit: bool,
     dropped: bool,
+    /// Where it left from, WoW world x and y.
+    from: [f32; 2],
+    /// A Shield launched (`W Z`), not one put up.
+    shield_bomb: bool,
+}
+
+impl Record {
+    /// Whether it can break crates: a bomb, missile, shield bomb or warp orb, or a TNT, Nitro or
+    /// beaker where it is dropped (`ctr_weapons::boxes`).
+    fn breaks_crates(&self) -> bool {
+        match self.item.single() {
+            Item::Bomb | Item::Missile | Item::WarpOrb => !self.dropped,
+            Item::Shield => self.shield_bomb,
+            Item::Tnt | Item::Beaker => self.dropped,
+            _ => false,
+        }
+    }
+
+    /// How far from where it left (yards) it can break a crate `elapsed` seconds on.
+    fn crate_reach(&self, elapsed: f32) -> f32 {
+        if self.dropped {
+            CRATE_RADIUS
+        } else {
+            SHOT_SPEED * elapsed + BREAK_REACH
+        }
+    }
 }
 
 pub struct Referee {
@@ -224,6 +255,36 @@ impl Referee {
         )]
     }
 
+    /// What a crate of `kind` broken by `to` (its kart or its shot) gives them.
+    fn give(&mut self, to: KartId, kind: CrateKind, now: f32) -> Vec<Addressed> {
+        if kind == CrateKind::Weapon {
+            // Holding an item, or under a cloud spinning one, the crate breaks for nothing
+            // (`RB_Crate.c:152-226`).
+            let clouded = self
+                .racers
+                .get(&to)
+                .and_then(|r| r.cloud)
+                .is_some_and(|(c, _)| c.blocks_crates());
+            if self.holds(to) || clouded {
+                return Vec::new();
+            }
+            // Anywhere in the field, for variety.
+            let position = usize::from(self.rng.scramble()) % RACERS;
+            let rolled = roll(&mut self.rng, position, RACERS, LAP, &RaceItems::new(1));
+            let item = self.force.unwrap_or(rolled);
+            return self.grant(to, item, now);
+        }
+        // A fruit crate gives `MixRNG % 4 + 5` (`RB_Crate.c:316`), a fruit one.
+        let gain = if kind == CrateKind::Fruit {
+            self.rng.scramble() % 4 + 5
+        } else {
+            1
+        };
+        let r = self.racers.entry(to).or_default();
+        r.wumpa = (u16::from(r.wumpa) + gain).min(u16::from(ctr_weapons::item::WUMPA_MAX)) as u8;
+        vec![(Some(to), Down::Wumpa(r.wumpa))]
+    }
+
     /// A racer's line; `at` is where the sender is (WoW world, yards).
     pub fn handle(&mut self, from: KartId, up: Up, at: [f32; 3], now: f32) -> Vec<Addressed> {
         let mut out = Vec::new();
@@ -240,34 +301,40 @@ impl Referee {
                 c.back_at = (c.spot.kind != CrateKind::Wumpa).then_some(now + CRATE_RESPAWN);
                 let kind = c.spot.kind;
                 out.push((None, Down::Taken { index, by: from }));
-                if kind == CrateKind::Weapon {
-                    // Holding an item, or under a cloud spinning one, the crate breaks for
-                    // nothing (`RB_Crate.c:152-226`).
-                    let clouded = self
-                        .racers
-                        .get(&from)
-                        .and_then(|r| r.cloud)
-                        .is_some_and(|(c, _)| c.blocks_crates());
-                    if self.holds(from) || clouded {
-                        return out;
-                    }
-                    // Anywhere in the field, for variety.
-                    let position = usize::from(self.rng.scramble()) % RACERS;
-                    let rolled = roll(&mut self.rng, position, RACERS, LAP, &RaceItems::new(1));
-                    let item = self.force.unwrap_or(rolled);
-                    out.extend(self.grant(from, item, now));
+                out.extend(self.give(from, kind, now));
+            }
+            Up::Break { shot, index } => {
+                // Our shot broke a crate (`ctr_weapons::boxes`): a live shot of ours that breaks
+                // crates, a full-grown crate (no single fruit) it can have reached by now.
+                let Some(s) = self.shots.get(&ShotKey { owner: from, shot }) else {
+                    return out;
+                };
+                let Some(c) = self.crates.get_mut(index) else {
+                    return out;
+                };
+                let d = (c.spot.at[0] - s.from[0]).hypot(c.spot.at[1] - s.from[1]);
+                if !s.breaks_crates()
+                    || now - s.at >= SHOT_LIFE
+                    || d > s.crate_reach(now - s.at)
+                    || c.spot.kind == CrateKind::Wumpa
+                    || !c.up
+                    || now < c.grown_at
+                {
+                    return out;
+                }
+                c.up = false;
+                c.back_at = Some(now + CRATE_RESPAWN);
+                let kind = c.spot.kind;
+                // A bomb, missile or shield bomb gives its shooter the crate; a warp orb or a
+                // mine breaks it for no one (`RB_Crate.c:152-226`, `:315-355`).
+                let by = if ctr_weapons::boxes::rewards(s.item) && !s.dropped {
+                    from
                 } else {
-                    // A fruit crate gives `MixRNG % 4 + 5` (`RB_Crate.c:316`), a fruit one.
-                    let gain = if kind == CrateKind::Fruit {
-                        self.rng.scramble() % 4 + 5
-                    } else {
-                        1
-                    };
-                    let r = self.racers.entry(from).or_default();
-                    r.wumpa = (u16::from(r.wumpa) + gain)
-                        .min(u16::from(ctr_weapons::item::WUMPA_MAX))
-                        as u8;
-                    out.push((Some(from), Down::Wumpa(r.wumpa)));
+                    0
+                };
+                out.push((None, Down::Taken { index, by }));
+                if by != 0 {
+                    out.extend(self.give(from, kind, now));
                 }
             }
             Up::Fire { shot, mut aim } => {
@@ -312,6 +379,8 @@ impl Referee {
                         at: now,
                         hit: false,
                         dropped: aim.dropped,
+                        from: [aim.at[0], aim.at[1]],
+                        shield_bomb: false,
                     },
                 );
                 out.push((
@@ -436,6 +505,8 @@ impl Referee {
                         at: now,
                         hit: false,
                         dropped: false,
+                        from: [aim.at[0], aim.at[1]],
+                        shield_bomb: true,
                     },
                 );
                 out.push((
@@ -489,6 +560,105 @@ mod tests {
         // Holding an item, the crate breaks for nothing.
         let out = r.handle(1, Up::Claim(0), [10.0, 20.0, 0.0], 1.6);
         assert_eq!(out, vec![(None, Down::Taken { index: 0, by: 1 })]);
+    }
+
+    /// Racer 1 fires `item` from (10, 0) at `now` as shot `shot`, `dropped` behind or not.
+    fn fire_from(r: &mut Referee, item: Item, shot: u16, dropped: bool, now: f32) {
+        r.grant(1, item, now - 1.0);
+        let aim = Aim {
+            at: [10.0, 0.0, 0.0],
+            dropped,
+            ..Aim::default()
+        };
+        let out = r.handle(1, Up::Fire { shot, aim }, [0.0; 3], now);
+        assert_eq!(out.len(), 1, "{out:?}");
+    }
+
+    fn broke(shot: u16, index: usize) -> Up {
+        Up::Break { shot, index }
+    }
+
+    #[test]
+    fn a_bomb_breaks_a_crate_for_its_shooter_and_it_comes_back_as_any_crate() {
+        // Weapon crate 0 at (10, 20), 20 yd from where the shots leave.
+        let (mut r, _) = Referee::new(vec![spot(CrateKind::Weapon)], 100);
+        fire_from(&mut r, Item::Bomb, 1, false, 1.0);
+        // Not the shooter's to report, nor a shot that is not.
+        assert!(r.handle(2, broke(1, 0), [0.0; 3], 1.2).is_empty());
+        assert!(r.handle(1, broke(2, 0), [0.0; 3], 1.2).is_empty());
+        assert!(r.handle(1, broke(1, 7), [0.0; 3], 1.2).is_empty());
+        let out = r.handle(1, broke(1, 0), [0.0; 3], 1.2);
+        assert_eq!(out[0], (None, Down::Taken { index: 0, by: 1 }));
+        assert!(
+            matches!(out[1], (Some(1), Down::Item { .. })),
+            "the shooter rolls: {out:?}"
+        );
+        // Broken: neither the shot nor a kart breaks it again until it is back, 1 s on.
+        assert!(r.handle(1, broke(1, 0), [0.0; 3], 1.3).is_empty());
+        assert!(r.handle(2, Up::Claim(0), [10.0, 20.0, 0.0], 1.3).is_empty());
+        assert!(r.tick(2.15).is_empty());
+        assert_eq!(r.tick(2.2), vec![(None, Down::Back { index: 0 })]);
+        // Regrowing, it cannot be broken.
+        assert!(r.handle(1, broke(1, 0), [0.0; 3], 2.5).is_empty());
+        // Full again; the shooter holds an item now, so it breaks for nothing.
+        let out = r.handle(1, broke(1, 0), [0.0; 3], 2.8);
+        assert_eq!(out, vec![(None, Down::Taken { index: 0, by: 1 })]);
+    }
+
+    #[test]
+    fn a_shot_breaks_only_crates_it_can_have_reached() {
+        let far = CrateSpot {
+            kind: CrateKind::Fruit,
+            at: [10.0, 200.0, 0.0],
+        };
+        let (mut r, _) = Referee::new(vec![far, spot(CrateKind::Wumpa)], 100);
+        fire_from(&mut r, Item::Missile, 1, false, 1.0);
+        // 200 yd off: not 0.5 s after the shot (92 yd/s and 16 yd), but 2.5 s after.
+        assert!(r.handle(1, broke(1, 0), [0.0; 3], 1.5).is_empty());
+        let out = r.handle(1, broke(1, 0), [0.0; 3], 3.5);
+        assert_eq!(out[0], (None, Down::Taken { index: 0, by: 1 }));
+        assert!(
+            matches!(out[1], (Some(1), Down::Wumpa(5..=8))),
+            "the shooter gets the fruit: {out:?}"
+        );
+        // A single fruit is the karts' alone.
+        assert!(r.handle(1, broke(1, 1), [0.0; 3], 1.5).is_empty());
+        // A shot forgotten breaks nothing.
+        r.tick(40.0);
+        assert!(r.handle(1, broke(1, 0), [0.0; 3], 40.0).is_empty());
+    }
+
+    #[test]
+    fn a_warp_orb_or_a_dropped_mine_breaks_a_crate_for_no_one_and_a_shield_up_breaks_none() {
+        let near = CrateSpot {
+            kind: CrateKind::Weapon,
+            at: [12.0, 5.0, 0.0],
+        };
+        let (mut r, _) = Referee::new(vec![spot(CrateKind::Weapon), near], 100);
+        fire_from(&mut r, Item::WarpOrb, 1, false, 1.0);
+        let out = r.handle(1, broke(1, 0), [0.0; 3], 1.2);
+        assert_eq!(out, vec![(None, Down::Taken { index: 0, by: 0 })]);
+        // A TNT breaks only the crate it is dropped on: 20 yd off is too far.
+        fire_from(&mut r, Item::Tnt, 2, true, 3.0);
+        let out = r.handle(1, broke(2, 1), [0.0; 3], 3.1);
+        assert_eq!(out, vec![(None, Down::Taken { index: 1, by: 0 })]);
+        r.tick(4.5);
+        assert!(r.handle(1, broke(2, 0), [0.0; 3], 5.5).is_empty());
+        // A shield put up is no shot at crates; launched, it gives as a bomb does.
+        fire_from(&mut r, Item::Shield, 3, false, 6.0);
+        assert!(r.handle(1, broke(3, 0), [0.0; 3], 6.5).is_empty());
+        let aim = Aim {
+            at: [10.0, 0.0, 0.0],
+            ..Aim::default()
+        };
+        assert_eq!(
+            r.handle(1, Up::ShieldShot { shot: 4, aim }, [0.0; 3], 6.6)
+                .len(),
+            1
+        );
+        let out = r.handle(1, broke(4, 0), [0.0; 3], 6.8);
+        assert_eq!(out[0], (None, Down::Taken { index: 0, by: 1 }));
+        assert!(matches!(out[1], (Some(1), Down::Item { .. })), "{out:?}");
     }
 
     #[test]
