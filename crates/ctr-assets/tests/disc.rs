@@ -156,6 +156,48 @@ fn extracts_every_racer_s_voice() {
 }
 
 #[test]
+fn extracts_the_final_lap_sting() {
+    let Some(mut disc) = disc() else {
+        eprintln!("CTR_DISC not set; skipping");
+        return;
+    };
+    let (lba, size) = disc.find_file(ctr_assets::voice::XNF_PATH).unwrap();
+    let xnf = disc.read_bytes(lba, size as usize).unwrap();
+    let music = ctr_assets::voice::parse_xnf_category(&xnf, ctr_assets::voice::XA_TYPE_MUSIC)
+        .expect("music tracks");
+    eprintln!("XA music tracks: {music:?}");
+    assert!(music.len() > ctr_assets::music::FINAL_LAP_XA);
+    let dir = std::env::temp_dir().join(format!("ctr-sting-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sting = ctr_assets::music::final_lap_sting(&mut disc, &dir)
+        .expect("sting")
+        .expect("a raw .bin holds the XA sting");
+    eprintln!(
+        "final lap sting: {} {:.2} s {} ch {} Hz",
+        sting.xa, sting.seconds, sting.channels, sting.rate
+    );
+    // It plays past the point the song speeds up (0xE1 blocks of 256 at 44.1 kHz, 1.31 s).
+    assert!((1.5..8.0).contains(&sting.seconds), "{} s", sting.seconds);
+    let wav = std::fs::read(dir.join(&sting.file)).unwrap();
+    assert_eq!(&wav[..4], b"RIFF");
+    let pcm: Vec<i16> = wav[44..]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| i16::from_le_bytes(*b))
+        .collect();
+    assert!(pcm.iter().any(|s| s.abs() > 8000), "the sting is loud");
+    // Decoded audio, not noise: one channel's sample-to-sample steps are small against its
+    // level (white noise would have them larger).
+    let left: Vec<f64> = pcm.iter().step_by(2).map(|s| f64::from(*s)).collect();
+    let level = left.iter().map(|s| s.abs()).sum::<f64>() / left.len() as f64;
+    let step = left.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f64>() / left.len() as f64;
+    eprintln!("sting level {level:.0}, mean step {step:.0}");
+    assert!(step < 0.5 * level, "step {step} level {level}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn extracts_weapons() {
     let Some(mut disc) = disc() else {
         eprintln!("CTR_DISC not set; skipping");

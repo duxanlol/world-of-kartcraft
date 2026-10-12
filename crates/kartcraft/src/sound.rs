@@ -174,6 +174,9 @@ pub struct KartAudio {
     /// Beats a minute on the playing song's own tempo: CTR's final lap adds 20
     /// (`HOWL_AudioState.c:338`, `Audio_SetMaskSong(20)`), 0 plays it as written.
     pub music_bpm_delta: f64,
+    /// Seconds into our final lap while it is under way: its XA sting plays as it begins, the
+    /// song lowered under it ([`final_lap_volume`]).
+    pub final_lap: Option<f32>,
     pub weapons: WeaponLoops,
     /// The engine class whose sample the engine plays (the garage's).
     pub engine_class: crate::Class,
@@ -186,6 +189,26 @@ pub struct KartAudio {
     /// The game frames left before another kart crash sounds (`VehPhysCrash.c:520-524`).
     bump_cooldown: u8,
     voice: crate::voice::Voice,
+}
+
+/// The final lap's music (`HOWL_AudioState.c:79-87`, `:330-345`): the XA sting (music index
+/// 6) plays with the song lowered (`Music_LowerVolume`, 190 to 90), and once the sting has played
+/// more than 0xE1 of its 256-sample blocks at 44.1 kHz the song is raised again
+/// (`Music_RaiseVolume`) and sped up 20 BPM. The block size is CTR-native's
+/// `NativeAudio_GetXACurrOffset` (`native_audio.c:3426-3428`).
+pub const FINAL_LAP_TEMPO_SECS: f32 = 225.0 * 256.0 / 44100.0;
+/// `HOWL_Music.c:477-514`: song 0 at 90 of its 190 under the sting.
+const FINAL_LAP_DUCKED: f32 = 90.0 / 190.0;
+/// `CseqMusic_ChangeVolume(.., 8)`: 8 a 60 Hz tick, the 100 between the two in 13 ticks.
+const FINAL_LAP_FADE_MS: u64 = 13 * 1000 / 60;
+
+/// The song's volume (against its own) `secs` into the final lap, and whether the sting is still
+/// ahead of the speed-up.
+pub fn final_lap_volume(final_lap: Option<f32>) -> f32 {
+    match final_lap {
+        Some(t) if t < FINAL_LAP_TEMPO_SECS => FINAL_LAP_DUCKED,
+        _ => 1.0,
+    }
 }
 
 /// The playback rate that plays a song written at `bpm` at `bpm + delta`: CTR changes the
@@ -761,6 +784,9 @@ struct Extras {
     themes: [Option<Option<StaticSoundData>>; 2],
     /// The voice lines read so far (`None`: unreadable).
     voices: std::collections::HashMap<PathBuf, Option<StaticSoundData>>,
+    /// The final lap's sting, read with the ride's track, and whether this final lap has had it.
+    sting: Option<StaticSoundData>,
+    sting_played: bool,
 }
 
 impl Extras {
@@ -772,6 +798,31 @@ impl Extras {
         self.track = None;
         self.track_data = None;
         self.mask = None;
+        self.sting = None;
+        self.sting_played = false;
+    }
+
+    /// `AUDIO_FINAL_LAP`'s `CDSYS_XAPlay(CDSYS_XA_TYPE_MUSIC, 6)` (`HOWL_AudioState.c:79-87`):
+    /// the sting once as the final lap begins, at the music's volume (the XA plays at
+    /// `vol_Music`, `CDSYS.c:723-729`).
+    fn final_lap_sting(
+        &mut self,
+        final_lap: Option<f32>,
+        volume: f32,
+        play: &mut impl FnMut(StaticSoundData) -> Option<StaticSoundHandle>,
+    ) {
+        let Some(t) = final_lap else {
+            self.sting_played = false;
+            return;
+        };
+        // Only its beginning starts it: a final lap seen first well under way has missed it.
+        if self.sting_played || t >= FINAL_LAP_TEMPO_SECS {
+            return;
+        }
+        self.sting_played = true;
+        if let Some(data) = &self.sting {
+            let _ = play(data.clone().volume(db(volume)));
+        }
     }
 
     /// `Audio_SetMaskSong` (`HOWL_AudioState.c:142-190`): while we wear the mask its theme
@@ -872,6 +923,21 @@ pub fn tracks() -> &'static [Track] {
     })
 }
 
+/// The final lap's XA sting (`music.json`'s `final_lap_sting`; kart data converted before it
+/// was, or from an image without XA audio, has none).
+pub fn final_lap_sting() -> Option<&'static std::path::Path> {
+    static STING: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    STING
+        .get_or_init(|| {
+            let root = crate::model::data_root()?.join("music");
+            let index: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(root.join("music.json")).ok()?).ok()?;
+            let file = root.join(index["final_lap_sting"]["file"].as_str()?);
+            file.is_file().then_some(file)
+        })
+        .as_deref()
+}
+
 /// Whether the kart plays CTR's music: there are tracks and `WOW_KART_MUSIC` is not `off`.
 pub fn music_on() -> bool {
     std::env::var("WOW_KART_MUSIC").map_or(true, |v| v != "off") && !tracks().is_empty()
@@ -925,6 +991,8 @@ impl Sounds {
                 info!("kart music: {} ({} BPM)", track.name, track.bpm);
                 self.music_bpm = track.bpm;
                 self.extras.track = Some(track);
+                self.extras.sting =
+                    final_lap_sting().and_then(|f| StaticSoundData::from_file(f).ok());
                 let (send, receive) = std::sync::mpsc::channel();
                 let file = track.file.clone();
                 let _ = std::thread::Builder::new()
@@ -946,8 +1014,16 @@ impl Sounds {
         }
         self.extras
             .mask_music(audio.mask_theme, &mut self.music, &mut play);
+        let music = 0.8 * audio.music;
+        self.extras
+            .final_lap_sting(audio.final_lap, music, &mut play);
         if let Some(m) = self.music.as_mut() {
-            m.set_volume(db(0.8 * audio.music), tween(400));
+            let fade = if audio.final_lap.is_some() {
+                FINAL_LAP_FADE_MS
+            } else {
+                400
+            };
+            m.set_volume(db(music * final_lap_volume(audio.final_lap)), tween(fade));
             // CTR sets the new tempo at once; a short tween only keeps the change from clicking.
             m.set_playback_rate(tempo_rate(self.music_bpm, audio.music_bpm_delta), tween(60));
         }
@@ -1123,6 +1199,41 @@ mod tests {
         // As written off the final lap, and a song of unknown tempo never changes.
         assert_eq!(tempo_rate(190.0, 0.0), 1.0);
         assert_eq!(tempo_rate(0.0, 20.0), 1.0);
+    }
+
+    #[test]
+    fn the_final_lap_plays_its_sting_once_under_a_lowered_song_then_speeds_it_up() {
+        // 0xE1 blocks of 256 samples at 44.1 kHz.
+        assert!((FINAL_LAP_TEMPO_SECS - 1.3061).abs() < 1e-4);
+        // The song at 90 of its 190 under the sting, back at full once it speeds up.
+        assert_eq!(final_lap_volume(None), 1.0);
+        assert_eq!(final_lap_volume(Some(0.0)), 90.0 / 190.0);
+        assert_eq!(final_lap_volume(Some(1.30)), 90.0 / 190.0);
+        assert_eq!(final_lap_volume(Some(1.31)), 1.0);
+        assert_eq!(FINAL_LAP_FADE_MS, 216);
+
+        let mut x = Extras {
+            sting: Some(engine()),
+            ..Default::default()
+        };
+        let mut played = Vec::new();
+        let mut run = |x: &mut Extras, t: Option<f32>| {
+            x.final_lap_sting(t, 0.5, &mut |_| {
+                played.push(t);
+                None
+            });
+        };
+        run(&mut x, None);
+        for t in [0.0, 0.03, 0.5, 1.3, 2.0] {
+            run(&mut x, Some(t));
+        }
+        // A race whose final lap we only see 2 s in has missed its sting; the next one has it.
+        run(&mut x, None);
+        run(&mut x, Some(2.0));
+        run(&mut x, None);
+        run(&mut x, Some(0.02));
+        run(&mut x, Some(0.05));
+        assert_eq!(played, [Some(0.0), Some(0.02)]);
     }
 
     #[test]

@@ -461,6 +461,7 @@ fn wear(
     racer: &str,
     frame: u64,
     eye: Vec3,
+    origin: Vec3,
 ) {
     let size = model_scale();
     let local = |m: Vec3| at + rotation * (m * size);
@@ -517,7 +518,7 @@ fn wear(
             });
         }
     }
-    if look.masked {
+    if look.masked || look.grab.is_some() {
         let (mask, beam) = if super::good_guy(racer) {
             ("aku", "akubeam")
         } else {
@@ -525,20 +526,32 @@ fn wear(
         };
         let spin = turns(-((frame as i32 * MASK_TURN) & 0xFFF) as f32);
         let beat = frame as usize % MASK_BOB.len();
+        // Carrying the kart, the mask grows in and may stand in the world on its own
+        // (`MASK_HEAD_ROT_WORLD_SPACE`): its orbit's reach and its size scale, its height not.
+        let grown = look.grab.map_or(1.0, |g| g.scale);
         let orbit = Vec3::new(
-            spin.sin() * MASK_ORBIT,
+            spin.sin() * MASK_ORBIT * grown,
             MASK_ORBIT + f32::from(MASK_BOB[beat]),
-            spin.cos() * MASK_ORBIT,
-        ) * METERS_PER_UNIT;
-        let turned = rotation * Quat::from_rotation_y(spin);
+            spin.cos() * MASK_ORBIT * grown,
+        );
+        let world = look.grab.and_then(|g| g.at);
+        let place = |m: Vec3| match world {
+            Some(centre) => from_lu(centre, origin) + m * (METERS_PER_UNIT * size),
+            None => local(m * METERS_PER_UNIT),
+        };
+        let turned = match world {
+            Some(_) => Quat::from_rotation_y(spin),
+            None => rotation * Quat::from_rotation_y(spin),
+        };
+        let scale = Vec3::splat(size * grown);
         draws.push(Draw {
             slot: slot(4, mask),
             frame: (frame / 2) as usize,
             once: false,
             transform: Transform {
-                translation: local(orbit),
+                translation: place(orbit),
                 rotation: turned,
-                scale: Vec3::splat(size),
+                scale,
             },
         });
         draws.push(Draw {
@@ -546,9 +559,9 @@ fn wear(
             frame: beat,
             once: false,
             transform: Transform {
-                translation: local(Vec3::Y * MASK_ORBIT * METERS_PER_UNIT),
+                translation: place(Vec3::Y * MASK_ORBIT),
                 rotation: turned,
-                scale: Vec3::splat(size),
+                scale,
             },
         });
     }
@@ -836,6 +849,7 @@ fn list(
         crate::model::our_kart(),
         frame,
         eye,
+        origin,
     );
     for (id, other, look) in weapons.others() {
         let rotation = Quat::from_rotation_y(other.yaw + std::f32::consts::PI);
@@ -843,6 +857,16 @@ fn list(
         if let Some(r) = weapons.reaction(id) {
             at += rotation * r.offset;
         }
-        wear(draws, id, at, rotation, &look, &other.racer, frame, eye);
+        wear(
+            draws,
+            id,
+            at,
+            rotation,
+            &look,
+            &other.racer,
+            frame,
+            eye,
+            origin,
+        );
     }
 }

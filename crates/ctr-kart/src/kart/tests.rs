@@ -1010,14 +1010,80 @@ fn a_powerslide_spin_out_is_its_own_event_and_a_hit_s_spin_is_not() {
 }
 
 #[test]
-fn the_mask_grab_puts_the_kart_back_and_says_so() {
+fn the_mask_grab_carries_the_kart_back_with_no_input_driving_it() {
     let w = world(floor(40000.0));
     let mut kart = cruising(&w);
+    kart.shield_up(false);
     kart.events.clear();
-    kart.mask_grab(Vec3::new(100.0, 40.0, 100.0), 1024);
+    let fell = kart.pose().position;
+    let ground = Vec3::new(100.0, 0.0, 100.0);
+    kart.mask_grab(ground, 1024);
     assert!(saw(&kart, Event::MaskGrab));
-    assert_eq!(kart.pose().position, Vec3::new(100.0, 40.0, 100.0));
-    assert_eq!(kart.speed(), 0);
+    assert!(kart.grabbed());
+    // Grabbed, the shield pops.
+    kart.tick(&w, &GAS, &NONE);
+    assert!(saw(&kart, Event::ShieldPopped) && kart.shield().is_none());
+    assert_eq!((kart.speed(), kart.reserves()), (0, 0));
+    // Everything held down: it neither moves nor turns, and nothing hits it.
+    let wild = Input {
+        steer: 1.0,
+        gas: true,
+        brake: false,
+        down: false,
+        r1: true,
+        l1: false,
+    };
+    assert!(!kart.hit(HitKind::Blasted));
+    let mut heights = vec![kart.pose().position.y];
+    for _ in 1..44 {
+        kart.tick(&w, &wild, &NONE);
+        let p = kart.pose().position;
+        assert_eq!((p.x, p.z), (fell.x, fell.z));
+        assert_eq!(kart.pose().heading, 0);
+        assert!(kart.revs().is_none());
+        heights.push(p.y);
+    }
+    // Still for 25 frames while the mask comes down, then lifted 16 lu a frame.
+    assert!(heights[..25].iter().all(|y| *y == fell.y));
+    assert_eq!(heights[43], fell.y + 19.0 * 16.0);
+    let mask = kart.grab_mask().unwrap();
+    assert_eq!(mask.at, Some(kart.pose().position));
+    // The 45th frame cuts to 128 lu over the respawn's ground, facing its heading, revving.
+    kart.tick(&w, &wild, &NONE);
+    let c = kart.camera_input();
+    assert!(c.cut);
+    assert_eq!(c.mask_grab, Some(64.0));
+    assert!(!kart.camera_input().cut, "the cut is one shot");
+    assert_eq!(kart.pose().position, ground + Vec3::Y * 126.0);
+    assert_eq!(kart.pose().heading, 1024);
+    assert!(kart.revs().is_some());
+    assert_eq!(
+        kart.grab_mask().unwrap().at,
+        None,
+        "the mask is back on the kart"
+    );
+    // The race's countdown cannot end Aku Aku's revs.
+    assert_eq!(kart.hold_on_grid(false), None);
+    // Lowered 2 lu a frame, the gas revving, for 32 more frames ...
+    let mut revs = 0;
+    for n in 1..=32 {
+        kart.tick(&w, &wild, &NONE);
+        assert_eq!(
+            kart.pose().position,
+            ground + Vec3::Y * (126.0 - 2.0 * n as f32)
+        );
+        assert!(kart.grabbed());
+        revs = revs.max(kart.needle());
+    }
+    assert!(revs > 0, "the gas revs the engine");
+    // ... then let go under 64 lu: that frame drives, and the kart falls to the ground.
+    kart.events.clear();
+    kart.tick(&w, &GAS, &NONE);
+    assert!(!kart.grabbed() && kart.revs().is_none());
+    assert_eq!(kart.camera_input().mask_grab, None);
+    run(&mut kart, &w, GAS, 30);
+    assert!(kart.grounded());
+    assert!(kart.speed() > 0, "it drives off");
 }
 
 #[test]

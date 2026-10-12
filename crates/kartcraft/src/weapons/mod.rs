@@ -96,6 +96,8 @@ pub struct Look {
     pub masked: bool,
     pub tnt: Option<(f32, i32)>,
     pub cloud: bool,
+    /// Aku Aku's mask carrying the kart back ([`Kart::grab_mask`]).
+    pub grab: Option<ctr_kart::GrabMask>,
 }
 
 impl Look {
@@ -111,6 +113,7 @@ impl Look {
             masked: kart.masked(),
             tnt: kart.tnt_height().map(|h| (h, tnt_elapsed(kart))),
             cloud,
+            grab: kart.grab_mask(),
         }
     }
 }
@@ -560,6 +563,11 @@ impl Weapons {
         self.our_cloud_tick(kart);
         let cloud = self.our_cloud().is_some();
         self.ours = Look::of(kart, &self.ours, self.frame, cloud);
+        // Out of a race there is no mask to carry the kart (`VehPickupItem_MaskUseWeapon` births
+        // none unless `LOAD_IsOpen_RacingOrBattle`, `VehPickupItem.c:207-210`).
+        if !self.live() {
+            self.ours.grab = None;
+        }
         self.effects
             .retain(|e| self.frame.saturating_sub(e.born) < EFFECT_FRAMES);
         let frame = self.frame;
@@ -1004,6 +1012,13 @@ impl Weapons {
                 }
                 ctr_kart::Event::MaskGrab if self.live() => {
                     self.outbox.push((self.me, Up::Lose(wire::Loss::MaskGrab)));
+                    // The mask comes with its call (`VehPickupItem.c:284`, `:305`).
+                    let sfx = if good_guy(crate::model::our_kart()) {
+                        Sfx::Aku
+                    } else {
+                        Sfx::Uka
+                    };
+                    self.sounds.push((sfx, 1.0));
                 }
                 ctr_kart::Event::Rammed { by, ram } => {
                     let last = self.rammed.insert(by, self.frame);

@@ -126,7 +126,7 @@ When the kart is flat (`rollS = 0`) and Near is at full speed (D = 224):
 
 At D = 179 the eye is 167 lu behind and 91.4 lu above.
 
-**Mask-grab** (`CAMERA_FLAG_MASK_GRAB`) replaces the eye height with `quadBlockHeight>>8 + maskGrabHeightOffset + vertDistance` (`CAM.c:1221-1224`). Respawn only, so it is not needed.
+**Mask-grab** (`CAMERA_FLAG_MASK_GRAB`) replaces the eye height with `quadBlockHeight>>8 + maskGrabHeightOffset + vertDistance` (`CAM.c:1221-1224`): while Aku Aku lowers a respawned kart (`VehStuckProc_RevEngine_PhysLinear`, `maskGrabHeightOffset = 0x40`, `VehStuckProc.c:1023-1024`) the eye stands where it would over a kart 64 lu above the ground, and the look-at follows the kart. The respawn itself sets `CAMERA_FLAG_DIRECTION_CHANGED` (`VehStuckProc.c:436`, `:1320`): the shot cuts.
 
 ### 2.4 Look-at point
 
