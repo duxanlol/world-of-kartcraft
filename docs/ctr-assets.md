@@ -646,6 +646,9 @@ back-right (orthographic, z-buffered, PSX blend modes).
 | drift meter | box x 441–490, y 199–206 | `UI_Meter.c` `UI_DrawSlideMeter` |
 | jump meter | bar x 491–503, y 168–206; readout box x 471–505, y 161–171 | `UI_Meter.c` |
 | start lights | four 47×31 lights in a row, x 162–350, bottom edge at y 72 in place (`start_lights` element: `lightredoff`, `lightredon`, `lightgreenoff`, `lightgreenon`) | `DotLights.c` `DotLights_Video` |
+| race clock | "TIME" (or "TIME TRIAL") small orange at (20, 8); "m:ss:cc" big orange at (20, 16); lap row n (from 1) at y 8 + 8n + 16: "Ln" small red at x 20, " m:ss:cc" small periwinkle at x 46 | `UI_Clock.c` `UI_DrawRaceClock`, `UI_RenderFrame.c:561` |
+| "FINAL LAP" | big orange, centred on the screen, y = h/4; 90 frames: in from w + 100 to w/2 over 10, held to 80, out to −100 over 10 | `MainFrame_RenderFrame.c` `DrawFinalLap` |
+| "WRONG WAY" | big orange, centred, y = h/2 − 0x1E; lit while bit 0x80 of the race time (1/960 s) is set | `UI_RenderFrame.c:130-160` |
 
 The rank and fruit meshes are flattened from the game's HUD instances:
 `screen = model · scale/4096 · 256/z`, with y × 0.5625 and flipped to +y down. Rank is
@@ -691,7 +694,6 @@ Not exported:
 - the track-map mode;
 - 2P–4P layouts (their tables are in `zGlobal_DATA.c`);
 - the debug font for the jump readout;
-- "WRONG WAY";
 - the item roulette's fly-in lerp;
 - the 3D C-T-R letters and tokens.
 
@@ -702,18 +704,26 @@ Not exported:
 ```rust
 pub const WIDTH: usize = 512;
 pub const HEIGHT: usize = 216;
-pub const CROP_LEFT: [i32; 2] = [0, 120];
-pub const CROP_MIDDLE: [i32; 2] = [120, 400];
+pub const CROP_LEFT: [i32; 2] = [0, 160];   // the race clock ends at 150
+pub const CROP_MIDDLE: [i32; 2] = [160, 400]; // the start lights begin at 162
 pub const CROP_RIGHT: [i32; 2] = [400, 512];
 
 impl HudRenderer {
     pub fn load(path: &Path) -> Result<Self>;          // parses once, pre-decodes sprites
     pub fn from_json(j: &serde_json::Value) -> Result<Self>;
     pub fn render(&self, state: &HudState, out: &mut [u8]); // 512*216*4 RGBA8, rows top-first
+    pub fn render_banners(&self, b: &Banners, width: usize, out: &mut [u8]); // width*216*4
     pub fn regions(&self) -> Vec<Region>;              // { name, rect: [x, y, w, h], anchor }
 }
 pub enum Anchor { TopLeft, Top, TopRight, BottomLeft, BottomRight }
+pub struct RaceClock { total: f32, time_trial: bool, laps: Vec<f32> } // HudState::clock
+pub struct Banners { final_lap_frame: Option<u32>, wrong_way: bool }
 ```
+
+The race clock is part of `HudState` and draws in the left crop. "FINAL LAP" and "WRONG WAY"
+centre on the whole view, so `render_banners` draws them onto a second canvas as wide as the
+screen in CTR's pixels (512 at 4:3, 683 at 16:9); a client shows it over the whole window only
+while one of them is up.
 
 `render` clears the buffer to fully transparent and composites with straight-alpha "over":
 
@@ -802,7 +812,11 @@ writes `<out_dir>/music/<track>.wav` plus `music/music.json`.
   `music.json` has `loop_start_seconds = 0` and `loop_end_seconds = duration`.
 - **Final lap:** `HOWL_AudioState.c` raises the tempo by 20 BPM (`Audio_SetMaskSong(20)`).
   `final_lap_bpm_delta` is in `music.json`; a client can approximate it with playback rate
-  `(bpm+20)/bpm`.
+  `(bpm+20)/bpm`. The game first plays the final-lap XA sting (`XA\MUSIC`, music index 6)
+  with the song ducked, and raises the tempo once the sting has played 0xE1 of its
+  256-sample blocks at 44.1 kHz (about 1.31 s). The sting is not exported: it needs CD-XA
+  Mode 2 Form 2 sectors read raw, the `.XNF` index that places index 6, and an XA-ADPCM
+  decoder, none of which the extractor has.
 - **Shared music:** Slide Coliseum and Turbo Track use byte-identical sequences to Tiny
   Arena; their `music.json` entries point to `tiny_arena.wav` (`same_music_as`).
 
