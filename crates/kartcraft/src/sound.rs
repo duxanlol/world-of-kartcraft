@@ -822,6 +822,7 @@ impl Extras {
         self.sting_played = true;
         if let Some(data) = &self.sting {
             let _ = play(data.clone().volume(db(volume)));
+            info!("kart music: the final lap's sting");
         }
     }
 

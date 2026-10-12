@@ -1171,12 +1171,14 @@ pub(crate) fn update(
     // Standings: the finished in order, then the rest by how far along the course they are.
     let near = relayed(&remotes, names.as_deref());
     let order = race.standings(&me, Some(at), &near);
-    // A time trial has no place to show: it is us alone against the clock.
+    // A time trial has no place to show: it is us alone against the clock; nor has a racer the
+    // race closed on (the server's DNF, place 0).
+    let out_of_time = race.finished.iter().any(|f| f.0 == me && f.1 == 0);
     extras.place = order
         .iter()
         .position(|r| *r == me)
         .map(|i| i as u8 + 1)
-        .filter(|_| !race.time_trial);
+        .filter(|_| !race.time_trial && !out_of_time);
     race.order = order;
     extras.lap = (race.laps > 0).then(|| ((race.lap + 1).min(race.laps), race.laps));
     extras.clock = race.clock(now, race.our_ms.filter(|_| race.done));
