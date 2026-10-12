@@ -96,6 +96,8 @@ struct Host {
     /// The race autopilot: since when it has been stalled, and until when it backs away.
     stalled_since: Option<f32>,
     backing_until: f32,
+    /// The `WOW_KART_CRATE_TEST` hook's aim (`autotest`).
+    crate_test: autotest::CrateTest,
     /// When our kart's state was last relayed to the players around us.
     state_sent: f32,
     /// The body's last teleport settle we saw begin (`Player::settle_since`).
@@ -274,9 +276,19 @@ fn update(
         return;
     }
 
+    // The crate test hook: in a race with weapons, steer for a crate and fire at it.
+    let crate_aim = if input::autopilot_on()
+        && autotest::crate_test()
+        && races.weapons_race().is_some()
+        && races.next_target(now).is_some()
+    {
+        autotest::crate_aim(&mut host.crate_test, &arms, drive.pos, drive.yaw, now)
+    } else {
+        autotest::CrateAim::default()
+    };
     let controls = if input::autopilot_on() {
         // In a race the autopilot drives the course: full gas, steering for the next checkpoint.
-        match races.next_target(now) {
+        match crate_aim.target.or_else(|| races.next_target(now)) {
             Some(target) => {
                 let to = target - drive.pos;
                 let want = f32::atan2(-to.x, -to.z);
@@ -341,7 +353,11 @@ fn update(
         kartcraft::weapons::HeldView::Item(_) | kartcraft::weapons::HeldView::Spinning
     ) || arms.fires_again();
     let fire = controls.fire
-        || (input::autopilot_on() && holding && input::autofire(now, time.delta_secs()));
+        || crate_aim.fire
+        || (input::autopilot_on()
+            && !autotest::crate_test()
+            && holding
+            && input::autofire(now, time.delta_secs()));
     arms.press(fire, controls.reverse);
     arms.camera = view.camera;
     arms.camera_fov = view.fov;
