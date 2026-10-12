@@ -701,10 +701,8 @@ pub(crate) fn mount_model_display(store: &crate::net::ObjectStore) -> u32 {
     }
 }
 
-/// Our character's name, for the race rosters: the one logged in now. Kept once, a relog onto
-/// another character in the same session raced under the first one's name, and every roster
-/// the server sent the new one was taken for someone else's: no race, while the server had us
-/// in it.
+/// Our character's name, for the race rosters: the one logged in now, a relog onto another
+/// character included, or no roster naming it is taken for ours.
 fn race_name(
     guid: Res<crate::net::SelfGuid>,
     names: Option<Res<crate::names::NameCache>>,
