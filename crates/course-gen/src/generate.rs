@@ -118,8 +118,17 @@ pub struct Leg {
 /// Coarse cells nearer impassable ground than this (yards, fine clearance) are not routed on.
 const MIN_ROUTE_CLEARANCE: f32 = 2.5;
 
+/// The same on a city's streets, routed at the field's own resolution: an alley between crates
+/// is a kart and a yard either side.
+pub const STREET_ROUTE_CLEARANCE: f32 = 1.0;
+
 impl<'a> Planner<'a> {
     pub fn new(field: &'a CostField, factor: usize) -> Self {
+        Self::with_clearance(field, factor, MIN_ROUTE_CLEARANCE)
+    }
+
+    /// A planner that routes on cells with `min_clearance` yards of room.
+    pub fn with_clearance(field: &'a CostField, factor: usize, min_clearance: f32) -> Self {
         let g = field.grid;
         let (w, h) = (g.width / factor, g.height / factor);
         let mut cost = vec![f32::INFINITY; w * h];
@@ -135,7 +144,7 @@ impl<'a> Planner<'a> {
                     }
                 }
                 clear[r * w + c] = lo;
-                if lo >= MIN_ROUTE_CLEARANCE && sum.is_finite() {
+                if lo >= min_clearance && sum.is_finite() {
                     cost[r * w + c] = sum / (factor * factor) as f32;
                 }
             }
@@ -245,6 +254,27 @@ impl<'a> Planner<'a> {
                 let score = clr.min(30.0) - 0.15 * d - 4.0 * self.cost[i];
                 if best.is_none_or(|(b, _)| score > b) {
                     best = Some((score, q));
+                }
+            }
+        }
+        best.map(|(_, q)| q)
+    }
+
+    /// The nearest routable cell to `p` within `radius` yards, `p`'s own if it is one.
+    pub fn nearest_open(&self, p: Vec2, radius: f32) -> Option<Vec2> {
+        let (c0, r0) = self.cell_of(p)?;
+        let k = (radius / self.yards()).ceil() as i64;
+        let mut best: Option<(f32, Vec2)> = None;
+        for dr in -k..=k {
+            for dc in -k..=k {
+                let (c, r) = (c0 as i64 + dc, r0 as i64 + dr);
+                if !self.passable(c, r) {
+                    continue;
+                }
+                let q = self.world_of(c as usize, r as usize);
+                let d = q.distance(p);
+                if d <= radius && best.is_none_or(|(b, _)| d < b) {
+                    best = Some((d, q));
                 }
             }
         }
@@ -709,7 +739,7 @@ fn try_circuit(
         planner.repel(&mut extra, &keep, 40.0, 8.0);
         raw.extend_from_slice(&leg[..leg.len() - 1]);
     }
-    let pts = finish(planner.field, &raw, true, p)?;
+    let pts = finish(planner.field, &raw, true, p, &OPEN_GROUND)?;
     let len = geom::length(&pts, true);
     if len < p.circuit_len.0 {
         return Err("too short");
@@ -767,7 +797,7 @@ fn try_sprint(
         .points;
     let mut raw = first;
     raw.extend_from_slice(&second[1..]);
-    let pts = finish(planner.field, &raw, false, p)?;
+    let pts = finish(planner.field, &raw, false, p, &OPEN_GROUND)?;
     let len = geom::length(&pts, false);
     if len < p.sprint_len.0 || len > p.sprint_len.1 {
         return Err("sprint length");
@@ -781,17 +811,38 @@ fn try_sprint(
     })
 }
 
+/// How close to obstacles [`finish`] lets a line go.
+struct Keep {
+    /// A smoothed point keeps this much clearance (yards) unless it had less to begin with.
+    clearance: f32,
+    /// The share of the line's points that may brush an obstacle's margin.
+    margin_share: f32,
+}
+
+/// Open ground: the line may brush past a tree now and then.
+const OPEN_GROUND: Keep = Keep {
+    clearance: 2.5,
+    margin_share: 0.01,
+};
+/// A city street: walls a raster's staircase and carts on both kerbs, so the line keeps further
+/// off them where it can, and never crosses a cart.
+const STREETS: Keep = Keep {
+    clearance: 4.5,
+    margin_share: 0.0,
+};
+
 /// Smooth a raw grid path into a course line, or reject it.
 fn finish(
     field: &CostField,
     raw: &[Vec2],
     closed: bool,
     p: &GenParams,
+    keep: &Keep,
 ) -> Result<Vec<Vec2>, &'static str> {
     if raw.len() < 8 {
         return Err("degenerate");
     }
-    let ok = |q: Vec2| field.clearance_at(q.x, q.y) >= LINE_CLEARANCE;
+    let ok = |q: Vec2| field.clearance_at(q.x, q.y) >= keep.clearance;
     let mut pts = geom::resample(raw, closed, STEP);
     elastic(&mut pts, closed, 80, &ok);
     relax_turns(&mut pts, closed, p.min_turn_radius, &ok);
@@ -817,7 +868,7 @@ fn finish(
             Block::Outside => return Err("smoothed out of the zone"),
         }
     }
-    if margin * 100 > pts.len() {
+    if margin as f32 > keep.margin_share * pts.len() as f32 {
         return Err("smoothed into obstacles");
     }
     if geom::self_intersects(&pts, closed) {
@@ -828,9 +879,6 @@ fn finish(
     }
     Ok(pts)
 }
-
-/// A smoothed point must keep this much clearance (yards) unless it had less to begin with.
-const LINE_CLEARANCE: f32 = 2.5;
 
 /// Pull the line taut and smooth like an elastic band, `iters` rounds, never moving a point onto
 /// ground `ok` refuses; respaced every few rounds so points do not bunch.
@@ -950,4 +998,91 @@ pub fn place_start(c: &mut Candidate, t: &ZoneTerrain, field: &CostField) {
         }
     }
     c.pts.rotate_left(best.1);
+}
+
+/// A street circuit's line is routed between points this far apart along its waypoints' polygon.
+const STREET_ANCHOR_EVERY: f32 = 30.0;
+/// The most yards of line a doubled-back leg can loop over before it meets itself again.
+const STREET_LOOP: f32 = 60.0;
+
+/// A circuit through a city's streets by the waypoints `via` (WoW `x, y`, in driving order), for a
+/// map whose ground is its streets ([`ZoneTerrain::wmo_ground`]): too narrow for [`generate`]'s
+/// open-ground hubs, and its street mask's centrelines break at every cart, so the streets are
+/// named and the line found. The waypoints' polygon gives anchors every [`STREET_ANCHOR_EVERY`]
+/// yards, each on the nearest routable cell; the legs between are routed on the field round the
+/// carts and statues, little loops cut, and the line smoothed as a generated circuit's is
+/// ([`finish`]). It starts at the first waypoint.
+pub fn street_circuit(
+    planner: &Planner,
+    via: &[Vec2],
+    p: &GenParams,
+) -> Result<Candidate, &'static str> {
+    if via.len() < 3 {
+        return Err("too few anchors");
+    }
+    let anchors: Vec<Vec2> = geom::resample(via, true, STREET_ANCHOR_EVERY)
+        .iter()
+        .filter_map(|&q| planner.nearest_open(q, 8.0))
+        .collect();
+    if anchors.len() < 4 {
+        return Err("too few anchors");
+    }
+    // Each leg on its own: a heading carried into a narrow alley leaves no room to turn, and the
+    // smoothing after joins the legs.
+    let extra = HashMap::new();
+    let mut raw: Vec<Vec2> = Vec::new();
+    for i in 0..anchors.len() {
+        let (a, b) = (anchors[i], anchors[(i + 1) % anchors.len()]);
+        if a.distance(b) < 1.0 {
+            continue;
+        }
+        let leg = planner.route(a, b, &extra, None, None).ok_or("no route")?;
+        raw.extend_from_slice(&leg.points[..leg.points.len() - 1]);
+    }
+    let raw = cut_loops(&raw, STREET_LOOP);
+    let mut pts = finish(planner.field, &raw, true, p, &STREETS)?;
+    // The line starts at the first waypoint.
+    if let Some(at) = pts
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.distance(via[0]).total_cmp(&b.1.distance(via[0])))
+        .map(|(i, _)| i)
+    {
+        pts.rotate_left(at);
+    }
+    Ok(Candidate {
+        kind: Kind::Circuit,
+        name: "street circuit".into(),
+        pts,
+        closed: true,
+        seed: 0,
+    })
+}
+
+/// `pts` with every little loop cut out: where the line comes back within a yard and a half of a
+/// point it passed at most `span` yards before, the stretch between goes. Two anchors routed past
+/// each other make such a loop, which no smoothing straightens.
+fn cut_loops(pts: &[Vec2], span: f32) -> Vec<Vec2> {
+    let mut out: Vec<Vec2> = Vec::with_capacity(pts.len());
+    for &q in pts {
+        let mut walked = 0.0;
+        let mut cut = None;
+        for k in (0..out.len()).rev() {
+            if k + 1 < out.len() {
+                walked += out[k].distance(out[k + 1]);
+            }
+            if walked > span {
+                break;
+            }
+            if walked > 4.0 && out[k].distance(q) < 1.5 {
+                cut = Some(k);
+            }
+        }
+        if let Some(k) = cut {
+            out.truncate(k + 1);
+        } else {
+            out.push(q);
+        }
+    }
+    out
 }

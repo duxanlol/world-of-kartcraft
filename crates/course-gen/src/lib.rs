@@ -18,6 +18,7 @@ pub mod render;
 pub mod roads;
 pub mod select;
 pub mod terrain;
+pub mod wmo_floor;
 
 pub use roads::{extract_roads, RoadEdge, RoadGraph, RoadNode, RoadParams, RoadPoint};
 pub use terrain::{

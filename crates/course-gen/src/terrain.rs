@@ -10,10 +10,13 @@ use anyhow::{anyhow, bail, Context, Result};
 use benilla_bytes::{chunks, ByteExt};
 use benilla_formats::{
     adt_to_tile_mesh, load_area_table_catalog, load_map_catalog, load_world_map_area_catalog,
-    world_to_chunk, AreaTableCatalog, Chain, ChunkMesh, TileMesh, WorldMapArea,
+    world_to_chunk, AreaTableCatalog, Chain, ChunkMesh, MapCatalog, TileMesh, WorldMapArea,
     WorldMapAreaCatalog, CHUNK_SIZE, TILE_SIZE,
 };
 use serde::{Deserialize, Serialize};
+
+/// The finest an instance's streets are rasterized, yards per pixel ([`crate::wmo_floor`]).
+pub const STREET_YARDS_PER_PX: f32 = 1.0;
 
 /// Raster resolution the tools default to, in yards per pixel.
 pub const DEFAULT_YARDS_PER_PX: f32 = 2.0;
@@ -174,6 +177,9 @@ pub struct ZoneTerrain {
     pub textures: Vec<TextureCoverage>,
     /// One visible-weight raster per [`TerrainParams::probe_textures`] entry, in order.
     pub probes: Vec<Vec<f32>>,
+    /// The ground is the walkable floor of the map's WMOs (an instance's streets,
+    /// [`crate::wmo_floor`]), and `road` marks that floor.
+    pub wmo_ground: bool,
 }
 
 impl ZoneTerrain {
@@ -273,25 +279,54 @@ pub fn find_zone<'a>(
         .ok_or_else(|| anyhow!("no zone named {zone:?} with a world map"))
 }
 
+/// The instance map named `name` (any case): a `Map.dbc` row with a non-zero `InstanceType`, a
+/// dungeon such as "Stratholme" (map 329), which has no world map of its own in 1.12.
+pub fn find_instance_map(maps: &MapCatalog, name: &str) -> Option<u32> {
+    (0..MAX_MAP_ID).find(|&id| {
+        maps.instance_type(id).is_some_and(|t| t != 0)
+            && maps.name(id).is_some_and(|n| n.eq_ignore_ascii_case(name))
+    })
+}
+
+/// The highest map id [`find_instance_map`] looks at; 1.12's run to 533.
+const MAX_MAP_ID: u32 = 1024;
+
 /// Load `zone` (an `AreaTable` name such as "Elwynn Forest", subzones included) and rasterize it.
+/// A name with no world map that names an instance map ("Stratholme") loads that whole map: every
+/// ADT tile its WDT has is the zone.
 pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Result<ZoneTerrain> {
     let areas = load_area_table_catalog(chain)?;
     // The world map's rect for the zone bounds which tiles to read; a tile past it is read too.
     let wma = load_world_map_area_catalog(chain)?;
-    let (zone_area, rect) = find_zone(&areas, &wma, zone)?;
-    let zone_row = areas.get(zone_area).context("zone row")?.clone();
-    let map_id = zone_row.map_id;
     let maps = load_map_catalog(chain)?;
+    let tile_of = |v: f32| ((MAP_CENTER - v) / TILE_SIZE).floor() as i64;
+    let (zone_area, zone_name, map_id, (tx0, tx1), (ty0, ty1), whole_map) =
+        match find_zone(&areas, &wma, zone) {
+            Ok((zone_area, rect)) => {
+                let zone_row = areas.get(zone_area).context("zone row")?;
+                let (x_lo, x_hi) = minmax(rect.loc_top, rect.loc_bottom);
+                let (y_lo, y_hi) = minmax(rect.loc_left, rect.loc_right);
+                (
+                    zone_area,
+                    zone_row.name.clone(),
+                    zone_row.map_id,
+                    (tile_of(y_hi) - 1, tile_of(y_lo) + 1),
+                    (tile_of(x_hi) - 1, tile_of(x_lo) + 1),
+                    false,
+                )
+            }
+            Err(e) => {
+                let Some(map_id) = find_instance_map(&maps, zone) else {
+                    return Err(e);
+                };
+                let name = maps.name(map_id).unwrap_or(zone).to_string();
+                (0, name, map_id, (0, 63), (0, 63), true)
+            }
+        };
     let map = maps
         .directory(map_id)
         .ok_or_else(|| anyhow!("no Map.dbc row {map_id}"))?
         .to_string();
-
-    let (x_lo, x_hi) = minmax(rect.loc_top, rect.loc_bottom);
-    let (y_lo, y_hi) = minmax(rect.loc_left, rect.loc_right);
-    let tile_of = |v: f32| ((MAP_CENTER - v) / TILE_SIZE).floor() as i64;
-    let (tx0, tx1) = (tile_of(y_hi) - 1, tile_of(y_lo) + 1);
-    let (ty0, ty1) = (tile_of(x_hi) - 1, tile_of(x_lo) + 1);
 
     let mut tiles: Vec<(TileMesh, Vec<ModfExtent>)> = Vec::new();
     for tx in tx0.max(0)..=tx1.min(63) {
@@ -305,7 +340,7 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
         }
     }
     if tiles.is_empty() {
-        bail!("no ADT tiles under {zone:?}'s world map rect");
+        bail!("no ADT tiles under {zone:?}");
     }
 
     // Chunks keyed by their global chunk index, and the zone's bounding box from its own chunks.
@@ -317,7 +352,7 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
                 continue;
             };
             let top_zone = areas.top_zone(c.area_id);
-            if top_zone == Some(zone_area) {
+            if whole_map || top_zone == Some(zone_area) {
                 bx1 = bx1.max(nw[0]);
                 bx0 = bx0.min(nw[0] - CHUNK_SIZE);
                 by1 = by1.max(nw[1]);
@@ -336,8 +371,29 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
     if bx0 > bx1 {
         bail!("no chunk of the loaded tiles is in {zone:?}");
     }
+    // A whole map's own area is the top zone most of its chunks name, so its subzones read as
+    // places on it ("King's Square").
+    let zone_area = if whole_map {
+        let mut count: HashMap<u32, usize> = HashMap::new();
+        for lc in by_chunk.values() {
+            if let Some(z) = lc.top_zone {
+                *count.entry(z).or_default() += 1;
+            }
+        }
+        count
+            .into_iter()
+            .max_by_key(|&(z, n)| (n, std::cmp::Reverse(z)))
+            .map_or(0, |(z, _)| z)
+    } else {
+        zone_area
+    };
 
-    let res = params.yards_per_px;
+    // A city's alleys are a few yards wide: its streets are rasterized finer.
+    let res = if whole_map {
+        params.yards_per_px.min(STREET_YARDS_PER_PX)
+    } else {
+        params.yards_per_px
+    };
     let north_x = bx1 + params.margin;
     let west_y = by1 + params.margin;
     let grid = Grid {
@@ -368,7 +424,7 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
                 continue;
             };
             let c = &lc.mesh;
-            let zone_px = lc.top_zone == Some(zone_area);
+            let zone_px = whole_map || lc.top_zone == Some(zone_area);
             in_zone[i] = zone_px;
             area[i] = c.area_id;
             height[i] = c.height_at([x, y, 0.0]).unwrap_or(f32::NAN);
@@ -409,6 +465,24 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
         }
     }
 
+    // An instance's streets are WMO faces over filler terrain: its ground is the walkable floor.
+    let floor = whole_map.then(|| {
+        let wmos: Vec<benilla_formats::WmoInstance> = tiles
+            .iter()
+            .flat_map(|(t, _)| t.wmos.iter().cloned())
+            .collect();
+        crate::wmo_floor::walkable_floor(chain, &grid, &wmos, &height, placement_rotation)
+    });
+    if let Some(f) = &floor {
+        height.clone_from(&f.height);
+        for i in 0..grid.len() {
+            in_zone[i] = height[i].is_finite();
+            if f.paved[i] && !f.solid[i] {
+                road[i] = 1.0;
+            }
+        }
+    }
+
     let slope = slope_raster(&grid, &height);
 
     // Obstacles: every placement inside the raster, once per uniqueId.
@@ -416,7 +490,9 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
     let mut seen_doodad = HashSet::new();
     let mut seen_wmo = HashSet::new();
     let mut m2_hulls: HashMap<String, Option<Hull>> = HashMap::new();
-    let mut solid = vec![false; grid.len()];
+    let mut solid = floor
+        .as_ref()
+        .map_or_else(|| vec![false; grid.len()], |f| f.solid.clone());
     let inside = |x: f32, y: f32| {
         let (c, r) = grid.pixel_of(x, y);
         grid.index(c.floor() as i64, r.floor() as i64).is_some()
@@ -431,7 +507,15 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
                     .entry(d.model.clone())
                     .or_insert_with(|| m2_hull(chain, &d.model));
                 hull.as_ref().map(|h| {
-                    stamp_hull(&grid, &mut solid, h, d);
+                    stamp_hull(
+                        &grid,
+                        &mut solid,
+                        h,
+                        placement_rotation(d.rotation),
+                        glam::Vec3::from_array(d.position),
+                        d.scale,
+                        (d.position[2] - 0.5, d.position[2] + FOOTPRINT_HEIGHT),
+                    );
                     hull_footprint(&h.points)
                 })
             } else {
@@ -459,7 +543,8 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
             if !inside(x, y) {
                 continue;
             }
-            if radius <= MAX_WMO_RADIUS {
+            // A WMO-built map's walls are in its floor's solid already.
+            if radius <= MAX_WMO_RADIUS && floor.is_none() {
                 stamp_disc(&grid, &mut solid, x, y, radius * WMO_FOOTPRINT_SHARE);
             }
             obstacles.push(Obstacle {
@@ -484,6 +569,51 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
         .collect();
     textures.sort_by(|a, b| b.pixels.total_cmp(&a.pixels));
 
+    // The WMOs' own doodads (carts, barrels, lamp posts), stood on as the ADT's are, and the
+    // instance's area triggers, kept clear: one is an exit (Stratholme's back gate, 2221) or
+    // starts a script (Aurius, 2187), and a kart passing it would leave the race.
+    if let Some(f) = &floor {
+        let triggers = benilla_formats::load_area_trigger_catalog(chain)?;
+        for t in triggers.on_map(map_id) {
+            let reach = if t.radius > 0.0 {
+                t.radius
+            } else {
+                0.5 * t.box_size[0].hypot(t.box_size[1])
+            };
+            stamp_disc(
+                &grid,
+                &mut solid,
+                t.position[0],
+                t.position[1],
+                reach + TRIGGER_MARGIN,
+            );
+        }
+        for d in &f.doodads {
+            let (model, at) = (&d.model, d.at);
+            if !inside(at.x, at.y) {
+                continue;
+            }
+            // Only what stands on the ground: a lamp on a wall, a banner on a roof or a crate in
+            // a cellar is out of a kart's way.
+            let (c, r) = grid.pixel_of(at.x, at.y);
+            let ground = grid
+                .index(c.floor() as i64, r.floor() as i64)
+                .map_or(f32::NAN, |i| height[i]);
+            if !ground.is_finite() || (at.z - ground).abs() > DOODAD_ON_GROUND {
+                continue;
+            }
+            let hull = m2_hulls
+                .entry(model.clone())
+                .or_insert_with(|| m2_hull(chain, model));
+            if let Some(h) = hull.as_ref() {
+                // A kart rides over what stays under a kerb's height: a rubble mound, a broken
+                // barrel.
+                let band = (ground + KERB, ground + FOOTPRINT_HEIGHT);
+                stamp_hull(&grid, &mut solid, h, d.rotation, at, d.scale, band);
+            }
+        }
+    }
+
     // A hull's cut is its outline; fill what it encloses (a trunk's inside).
     let solid = crate::roads::Mask {
         width: grid.width,
@@ -492,7 +622,6 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
     }
     .fill_holes(SOLID_HOLE_PX)
     .data;
-
     let area_names = area
         .iter()
         .copied()
@@ -502,7 +631,7 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
         .collect();
 
     Ok(ZoneTerrain {
-        zone: zone_row.name.clone(),
+        zone: zone_name,
         area_id: zone_area,
         map_id,
         map,
@@ -518,6 +647,7 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
         obstacles,
         textures,
         probes,
+        wmo_ground: whole_map,
     })
 }
 
@@ -667,6 +797,18 @@ fn m2_hull(chain: &mut Chain, model: &str) -> Option<Hull> {
 /// Enclosed open patches of a solid footprint smaller than this (pixels) are inside it.
 const SOLID_HOLE_PX: usize = 200;
 
+/// The height over a street (yards) under which a WMO doodad's hull is ridden over, not hit: a
+/// rubble mound (Stratholme's `KarazahnRockRubble02`, a yard high) or a broken barrel, which a
+/// player walks over too; a crate stands taller.
+const KERB: f32 = 1.1;
+
+/// A WMO doodad whose origin is further than this (yards) above or below the ground under it stands
+/// on a wall, a roof or a floor below, not in the street.
+const DOODAD_ON_GROUND: f32 = 2.0;
+
+/// Yards kept between an instance's area trigger and the ground a course may use.
+pub const TRIGGER_MARGIN: f32 = 12.0;
+
 /// A WMO wider than this (yards) is a cave or a city, mostly underground or walled by terrain; its
 /// extents are not stamped as a footprint.
 pub const MAX_WMO_RADIUS: f32 = 100.0;
@@ -685,18 +827,22 @@ fn placement_rotation(rotation_deg: [f32; 3]) -> glam::Quat {
         * Quat::from_rotation_x(rz - FRAC_PI_2)
 }
 
-/// Mark the pixels a placed doodad's hull covers between half a yard under and
-/// [`FOOTPRINT_HEIGHT`] over its origin.
-fn stamp_hull(grid: &Grid, solid: &mut [bool], hull: &Hull, d: &benilla_formats::Doodad) {
+/// Mark the pixels a placed doodad's hull covers between heights `lo` and `hi` (world yards).
+fn stamp_hull(
+    grid: &Grid,
+    solid: &mut [bool],
+    hull: &Hull,
+    q: glam::Quat,
+    origin: glam::Vec3,
+    scale: f32,
+    (lo, hi): (f32, f32),
+) {
     use glam::Vec3;
-    let q = placement_rotation(d.rotation);
-    let origin = Vec3::from_array(d.position);
     let world: Vec<Vec3> = hull
         .points
         .iter()
-        .map(|p| origin + q * (Vec3::from_array(*p) * d.scale))
+        .map(|p| origin + q * (Vec3::from_array(*p) * scale))
         .collect();
-    let (lo, hi) = (origin.z - 0.5, origin.z + FOOTPRINT_HEIGHT);
     for t in hull.indices.as_chunks::<3>().0 {
         let tri = [
             world[t[0] as usize],
