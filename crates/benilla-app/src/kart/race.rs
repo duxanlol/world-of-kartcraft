@@ -199,9 +199,14 @@ const CP_ARROW_BOB: f32 = 0.35;
 const CP_ARROW_PULSE: f32 = 0.06;
 const CP_ARROW_HZ: f32 = 0.8;
 /// How long the results stay up once everyone is in (s), and how long we wait for racers still
-/// out on the course after we finish before closing anyway.
+/// out on the course after we finish before closing anyway: the server closes the race a minute
+/// after its first finish, those still out "DNF" (`Kartcraft.cpp` `DNF_WAIT`), so ours is only a
+/// fallback for a close that never comes, a little longer.
 const RESULTS_SECS: f32 = 10.0;
-const FINISH_WAIT_SECS: f32 = 60.0;
+const FINISH_WAIT_SECS: f32 = 75.0;
+/// How long our progress may run ahead of the server's for us (s) before the checkpoints it lacks
+/// are reported again, and again as often while it still lacks them.
+const RESYNC_SECS: f32 = 1.5;
 /// How long a race just entered waits for the kart the server is summoning (s).
 const KART_GRACE_SECS: f32 = 10.0;
 /// A checkpoint's beam: its height (yards) and radius.
@@ -264,8 +269,14 @@ pub(crate) struct Active {
     checkpoint: usize,
     /// Each racer's (laps, checkpoint, when) as the server relays it.
     progress: HashMap<String, (u8, u8, f32)>,
-    /// Finishes: (name, place, ms).
+    /// Our checkpoints passed as the server last relayed them, counted as [`Active::passed`]
+    /// counts ours, and when the ones it lacks are next reported again.
+    server_passes: u32,
+    resync_at: Option<f32>,
+    /// Finishes: (name, place, ms); place 0 is out of time (the server's `DNF`).
     finished: Vec<(String, u8, u32)>,
+    /// Our finish time (ms) as the server timed it.
+    our_ms: Option<u32>,
     /// Finishers who set a new best with it: true a course record, false a personal best.
     bests: HashMap<String, bool>,
     /// The course record (ms, holder) and our own best (ms), from the server's `Rec`; 0 none.
@@ -317,7 +328,10 @@ impl Active {
         self.lap = 0;
         self.checkpoint = 0;
         self.progress.clear();
+        self.server_passes = 0;
+        self.resync_at = None;
         self.finished.clear();
+        self.our_ms = None;
         self.lights = None;
         self.grace_until = self.grace_until.max(now + KART_GRACE_SECS);
         self.lap_times.clear();
@@ -350,17 +364,14 @@ impl Active {
 
     /// The race clock at `now` (`UI_DrawRaceClock`): the time since GO, stopped at the finish,
     /// with a row for each lap so far, the one under way running. `finish_ms` is our time as the
-    /// server has it, for a finish we did not see ourselves.
+    /// server has it: once it comes it is the time shown, the server's clock being the race's.
     fn clock(&self, now: f32, finish_ms: Option<u32>) -> Option<RaceClock> {
         let go = self.go_at?;
         let end = self.crossed_finish.unwrap_or(now).max(go);
-        let total = match (self.crossed_finish, finish_ms) {
-            (None, Some(ms)) => ms as f32 / 1000.0,
-            _ => end - go,
-        };
+        let total = finish_ms.map_or(end - go, |ms| ms as f32 / 1000.0);
         let mut laps = Vec::new();
         if self.laps > 0 {
-            laps.extend(self.lap_times.iter().take(usize::from(self.laps)));
+            laps = self.shown_laps(finish_ms);
             if laps.len() < usize::from(self.laps) && finish_ms.is_none() {
                 laps.push((end - self.lap_began).max(0.0));
             }
@@ -370,6 +381,51 @@ impl Active {
             time_trial: self.time_trial,
             laps,
         })
+    }
+
+    /// Our laps' times as we timed them at the start line, but with the server's time for the
+    /// whole race (`finish_ms`) the last made up to it, so the laps add up to the time shown.
+    fn shown_laps(&self, finish_ms: Option<u32>) -> Vec<f32> {
+        let mut laps: Vec<f32> = self
+            .lap_times
+            .iter()
+            .take(usize::from(self.laps))
+            .copied()
+            .collect();
+        if let (Some(ms), true) = (finish_ms, laps.len() == usize::from(self.laps)) {
+            let before: f32 = laps.iter().rev().skip(1).sum();
+            let last = ms as f32 / 1000.0 - before;
+            if let (Some(l), true) = (laps.last_mut(), last > 0.0) {
+                *l = last;
+            }
+        }
+        laps
+    }
+
+    /// Our checkpoints passed in order, as the server counts a racer's: laps times checkpoints,
+    /// plus the last one passed.
+    fn passed(&self) -> u32 {
+        u32::from(self.lap) * self.points.len() as u32 + self.checkpoint as u32
+    }
+
+    /// The checkpoints we have passed that the server has not taken, in order: reports it lost,
+    /// or refused before it could see us there. Due `RESYNC_SECS` after the gap opens and as
+    /// often again while it stays open; empty when nothing is due at `now`.
+    fn resend(&mut self, now: f32) -> Vec<usize> {
+        let n = self.points.len();
+        if n < 2 || self.done || self.passed() <= self.server_passes {
+            self.resync_at = None;
+            return Vec::new();
+        }
+        let due = *self.resync_at.get_or_insert(now + RESYNC_SECS);
+        if now < due {
+            return Vec::new();
+        }
+        self.resync_at = Some(now + RESYNC_SECS);
+        (self.server_passes + 1..=self.passed())
+            .take(n)
+            .map(|k| k as usize % n)
+            .collect()
     }
 
     /// Frames into "FINAL LAP"'s fly-by at `now`, while it runs.
@@ -691,12 +747,7 @@ impl Races {
             id: r.id,
             course: &r.course,
             go_at: r.go_at,
-            finish_ms: r
-                .finished
-                .iter()
-                .find(|f| f.0 == self.me)
-                .map(|f| f.2)
-                .filter(|_| r.done),
+            finish_ms: r.our_ms.filter(|_| r.done),
             done: r.done,
             time_trial: r.time_trial,
         })
@@ -816,9 +867,27 @@ impl Races {
             }
             Some("P") if f.len() >= 5 => {
                 if let Some(race) = self.race.as_mut().filter(|r| r.id == id) {
-                    let lap = f[3].parse().unwrap_or(0);
-                    let cp = f[4].parse().unwrap_or(0);
+                    let lap: u8 = f[3].parse().unwrap_or(0);
+                    let cp: u8 = f[4].parse().unwrap_or(0);
                     race.progress.insert(f[2].clone(), (lap, cp, now));
+                    if f[2] == me {
+                        race.server_passes =
+                            u32::from(lap) * race.points.len() as u32 + u32::from(cp);
+                    }
+                }
+            }
+            // Out of time: the race closed DNF_WAIT after its first finish with them still out.
+            Some("DNF") if f.len() >= 3 => {
+                if let Some(race) = self.race.as_mut().filter(|r| r.id == id) {
+                    info!("kart race: {} did not finish", f[2]);
+                    if !race.finished.iter().any(|x| x.0 == f[2]) {
+                        race.finished.push((f[2].clone(), 0, 0));
+                    }
+                    if f[2] == me {
+                        race.done = true;
+                        // The clock stops where the race closed on us.
+                        race.crossed_finish.get_or_insert(now);
+                    }
                 }
             }
             Some("F") if f.len() >= 5 => {
@@ -834,6 +903,7 @@ impl Races {
                     race.finished.push((f[2].clone(), place, ms));
                     if f[2] == me {
                         race.done = true;
+                        race.our_ms = Some(ms);
                     }
                 }
             }
@@ -1086,6 +1156,17 @@ pub(crate) fn update(
                 .insert(me.clone(), (race.lap, next as u8, now));
         }
     }
+    // Checkpoints the server has not taken from us: reported again, in order, until it has.
+    let missing = race.resend(now);
+    if !missing.is_empty() {
+        warn!(
+            "kart race: the server has us {} checkpoints behind — reporting {missing:?} again",
+            missing.len()
+        );
+        for i in missing {
+            profession.send(format!("KARTCRAFT\tR\tK\t{}\t{i}", race.id));
+        }
+    }
 
     // Standings: the finished in order, then the rest by how far along the course they are.
     let near = relayed(&remotes, names.as_deref());
@@ -1098,13 +1179,7 @@ pub(crate) fn update(
         .filter(|_| !race.time_trial);
     race.order = order;
     extras.lap = (race.laps > 0).then(|| ((race.lap + 1).min(race.laps), race.laps));
-    let finish_ms = race
-        .finished
-        .iter()
-        .find(|f| f.0 == me)
-        .map(|f| f.2)
-        .filter(|_| race.done);
-    extras.clock = race.clock(now, finish_ms);
+    extras.clock = race.clock(now, race.our_ms.filter(|_| race.done));
     extras.final_lap_frame = race.final_lap_frame(now);
     audio.music_bpm_delta = race.music_bpm_delta(now);
     audio.final_lap = race.final_lap_secs(now);
@@ -1118,6 +1193,7 @@ pub(crate) fn update(
         && wrong_way_lit(now - go);
     if race.done {
         text.banner = match race.finished.iter().find(|f| f.0 == me) {
+            Some((_, 0, _)) => "DNF — out of time".into(),
             Some((_, place, ms)) => {
                 let news = match race.bests.get(&me) {
                     Some(true) => " — New course record!",
@@ -1221,6 +1297,9 @@ fn board(race: &Active) -> Vec<String> {
         .finished
         .iter()
         .map(|(name, place, ms)| {
+            if *place == 0 {
+                return format!("DNF  {name}");
+            }
             let mark = match race.bests.get(name) {
                 Some(true) => "  (record)",
                 Some(false) => "  (best)",
@@ -1294,8 +1373,8 @@ fn lap_lines(race: &Active) -> Vec<String> {
         .min_by(|a, b| a.1.total_cmp(b.1))
         .map(|(i, _)| i)
         .filter(|_| race.lap_times.len() > 1);
-    race.lap_times
-        .iter()
+    let laps = race.shown_laps(race.our_ms);
+    laps.iter()
         .enumerate()
         .map(|(i, secs)| {
             let mark = if fastest == Some(i) {
@@ -2004,6 +2083,114 @@ mod tests {
             me: "Racer".into(),
             ..Default::default()
         }
+    }
+
+    /// A circuit of four checkpoints, three laps, under way since 10 s.
+    fn racing() -> Races {
+        let mut races = racer();
+        hear(&mut races, "L\t5\tRacer,Goblin", 1.0);
+        hear(&mut races, "C\t5\tsprint\t3\t0:0;100:0;200:0;200:100", 1.0);
+        hear(&mut races, "G\t5\t9000\tRacer,Goblin", 1.0);
+        races
+    }
+
+    #[test]
+    fn a_report_the_server_did_not_take_is_sent_again_in_order() {
+        // The lap smoke run: checkpoint 4 reported as the warp's ack was still on its way, refused,
+        // and every report after it refused for being out of order.
+        let mut races = racing();
+        let race = races.race.as_mut().unwrap();
+        race.pass(1, 11.0);
+        // Reported and taken at once: nothing to send again.
+        hear(&mut races, "P\t5\tRacer\t0\t1", 11.05);
+        let race = races.race.as_mut().unwrap();
+        assert!(race.resend(11.1).is_empty());
+        assert!(race.resend(20.0).is_empty(), "in step");
+        // Checkpoint 2's report goes unanswered; 3, then 0 (a lap) pass meanwhile.
+        race.pass(2, 21.0);
+        assert!(race.resend(21.0).is_empty(), "its answer may be on its way");
+        race.pass(3, 22.0);
+        assert!(race.resend(22.4).is_empty());
+        assert_eq!(
+            race.resend(22.5),
+            [2, 3],
+            "1.5 s on: every one missing, in order"
+        );
+        assert!(race.resend(23.0).is_empty(), "not again at once");
+        race.pass(0, 23.5);
+        assert_eq!(
+            race.resend(24.0),
+            [2, 3, 0],
+            "and again while still missing"
+        );
+        // The server catches up on 2 and 3; 0 is still owed.
+        hear(&mut races, "P\t5\tRacer\t0\t3", 24.1);
+        let race = races.race.as_mut().unwrap();
+        assert_eq!(race.resend(25.5), [0]);
+        hear(&mut races, "P\t5\tRacer\t1\t0", 25.6);
+        let race = races.race.as_mut().unwrap();
+        assert!(race.resend(30.0).is_empty(), "caught up");
+        // Another racer's progress is not ours.
+        race.pass(1, 31.0);
+        hear(&mut races, "P\t5\tGoblin\t1\t1", 31.1);
+        let race = races.race.as_mut().unwrap();
+        assert!(race.resend(31.1).is_empty());
+        assert_eq!(race.resend(33.0), [1]);
+        // Finished: nothing more to report.
+        hear(&mut races, "F\t5\tRacer\t1\t60000\t", 33.1);
+        assert!(races.race.as_mut().unwrap().resend(40.0).is_empty());
+    }
+
+    #[test]
+    fn the_clock_and_board_show_the_server_s_finish_time() {
+        // The lap smoke run: the HUD read 0:24.76 at the line, the server timed 0:24.72.
+        let mut races = racing();
+        let race = races.race.as_mut().unwrap();
+        for (cp, t) in [(1, 12.0), (2, 14.0), (3, 16.0), (0, 18.0)] {
+            race.pass(cp, t);
+        }
+        for (cp, t) in [(1, 20.0), (2, 22.0), (3, 24.0), (0, 26.0)] {
+            race.pass(cp, t);
+        }
+        for (cp, t) in [(1, 28.0), (2, 30.0), (3, 32.0), (0, 34.76)] {
+            race.pass(cp, t);
+        }
+        assert!((race.clock(40.0, None).unwrap().total - 24.76).abs() < 1e-3);
+        hear(&mut races, "F\t5\tRacer\t1\t24720\t", 34.8);
+        let race = races.race.as_ref().unwrap();
+        let shown = race.clock(40.0, races.run().unwrap().finish_ms).unwrap();
+        assert_eq!(shown.total, 24.72);
+        // The laps add up to it: the last made up to the server's time.
+        assert_eq!(shown.laps.len(), 3);
+        assert!((shown.laps.iter().sum::<f32>() - 24.72).abs() < 1e-3);
+        assert!((shown.laps[0] - 8.0).abs() < 1e-3 && (shown.laps[1] - 8.0).abs() < 1e-3);
+        let lines = board(race);
+        assert_eq!(lines[0], "1. Racer  0:24.72");
+        assert!(lines.contains(&"Lap 3: 0:08.72".to_string()), "{lines:?}");
+    }
+
+    #[test]
+    fn out_of_time_racers_are_dnf_on_the_board_and_our_race_ends() {
+        let mut races = racing();
+        hear(&mut races, "F\t5\tGoblin\t1\t61000\t", 71.0);
+        assert!(!races.race.as_ref().unwrap().done);
+        // A minute on, the server closes the race on us.
+        hear(&mut races, "DNF\t5\tRacer", 131.0);
+        let race = races.race.as_ref().unwrap();
+        assert!(race.done);
+        assert_eq!(board(race)[..2], ["1. Goblin  1:01.00", "DNF  Racer"]);
+        assert_eq!(
+            races.run().unwrap().finish_ms,
+            None,
+            "no time to keep a ghost of"
+        );
+        // The clock stops there: what had run, not nought.
+        let clock = race.clock(140.0, None).unwrap();
+        assert_eq!(clock.total, 121.0);
+        // A repeated line is one entry; another race's is not ours.
+        hear(&mut races, "DNF\t5\tRacer", 131.5);
+        hear(&mut races, "DNF\t6\tGoblin", 131.5);
+        assert_eq!(races.race.as_ref().unwrap().finished.len(), 2);
     }
 
     #[test]
