@@ -82,6 +82,8 @@ pub struct Crate {
     pub up: bool,
     /// When we broke it and asked for it, frames, until the server answers.
     claimed: Option<u64>,
+    /// Our shot that broke it, until the server answers.
+    shot: Option<u16>,
     /// When it came back, frames: it regrows from there; `None` up since the layout.
     back_at: Option<u64>,
 }
@@ -595,6 +597,7 @@ impl Weapons {
                         at,
                         up: true,
                         claimed: None,
+                        shot: None,
                         back_at: None,
                     };
                     let i = first + i;
@@ -613,6 +616,12 @@ impl Weapons {
                 c.up = false;
                 c.claimed = None;
                 let (kind, at) = (c.kind, c.at);
+                if let Some(shot) = c.shot.take() {
+                    info!(
+                        "kart weapons: the server took crate {index} ({}) our shot {shot} broke, for {by}",
+                        kind.code()
+                    );
+                }
                 if was_up {
                     if kind == CrateKind::Wumpa {
                         self.sound(Sfx::Wumpa, at);
@@ -641,17 +650,22 @@ impl Weapons {
                 if let Some(c) = self.crates.get_mut(index) {
                     c.up = true;
                     c.claimed = None;
+                    c.shot = None;
                     c.back_at = Some(self.frame);
                 }
             }
-            Down::Item { item, .. } => {
+            Down::Item { item, shots } => {
+                info!("kart weapons: the server rolled us {item:?} ({shots} shots)");
                 if self.held.view() != HeldView::Spinning {
                     self.held.start_roulette();
                     self.rolling_for = 0;
                 }
                 self.held.set_result(item);
             }
-            Down::Wumpa(n) => self.wumpa_total = n.min(ctr_weapons::item::WUMPA_MAX),
+            Down::Wumpa(n) => {
+                info!("kart weapons: Wumpa {} -> {n}", self.wumpa_total);
+                self.wumpa_total = n.min(ctr_weapons::item::WUMPA_MAX);
+            }
             Down::Shot(s) => self.launch(s, world, kart, origin),
             Down::Hit {
                 victim,
@@ -1247,6 +1261,9 @@ impl Weapons {
         for (i, c) in self.crates.iter_mut().enumerate() {
             if let Some(t) = c.claimed {
                 if frame.saturating_sub(t) >= CLAIM_WAIT {
+                    if let Some(shot) = c.shot.take() {
+                        warn!("kart weapons: the server left crate {i} our shot {shot} broke unanswered");
+                    }
                     c.claimed = None;
                     c.up = true;
                     c.back_at = Some(frame);
@@ -1340,9 +1357,19 @@ impl Weapons {
     /// Our shot `shot` broke crate `i`: its debris and sound now, and `W K`. As a claim, one the
     /// server leaves unanswered `CLAIM_WAIT` frames is back.
     fn shot_breaks(&mut self, i: usize, shot: u16) {
+        let item = self
+            .shots
+            .iter()
+            .find(|(k, _)| k.owner == self.me && k.shot == shot)
+            .map_or("weapon".to_string(), |(_, s)| format!("{:?}", s.item));
         let c = &mut self.crates[i];
         c.up = false;
         c.claimed = Some(self.frame);
+        c.shot = Some(shot);
+        info!(
+            "kart weapons: our {item} (shot {shot}) broke crate {i} ({})",
+            c.kind.code()
+        );
         let at = c.at;
         self.outbox.push((self.me, Up::Break { shot, index: i }));
         self.effect("crate_explosion", at);

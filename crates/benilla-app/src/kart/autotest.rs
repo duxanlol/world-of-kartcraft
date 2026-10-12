@@ -14,8 +14,18 @@
 //! - `:leave=<s>` sends `/leaverace`'s line (`R\tX`) that long after GO.
 //! - `:warp=<s>` hops to the next checkpoint when the autopilot has not reached it in that long
 //!   (it steers straight at it, and courses bend round buildings).
+//! - `host:<course>:alone` starts the race with us alone in it (the server takes a race of one;
+//!   its roll is then any item, `Kartcraft.cpp` `Roll`'s fallback).
 //!
 //! `WOW_KART_MARSHAL_NOGO=1` skips the hop. Every step logs `kart autotest:`.
+//!
+//! The crate test, `WOW_KART_CRATE_TEST=1` with the autopilot (`WOW_KART_AUTOPILOT=1`) in a race
+//! with weapons: it breaks crates with our shots, the `W K` path. Empty-handed it steers for the
+//! nearest weapon crate ahead, to take it; holding a bomb, missile, warp orb or shield it steers
+//! for the nearest full-grown crate ahead and fires (the shield's second press, as a shield bomb)
+//! once lined up within range; any other item it fires at once, to roll again. The break logs
+//! `kart weapons: our <item> (shot <n>) broke crate <i>`, the server's `X` for it `kart weapons:
+//! the server took crate <i> ... our shot <n> broke`. Its own steps log `kart autotest: crate`.
 
 use benilla_assets::coords::bevy_to_wow;
 use bevy::prelude::*;
@@ -98,6 +108,8 @@ struct Plan {
     warp_after: Option<f64>,
     /// `host:` hosts with ground types on (`:ground` or `:ground=1`).
     ground: bool,
+    /// `host:` starts the race with us alone in it (`:alone`).
+    alone: bool,
 }
 
 fn plan() -> Option<&'static Plan> {
@@ -131,12 +143,14 @@ fn parse(spec: &str) -> Option<Plan> {
             .and_then(|s| s.parse().ok())
     };
     let ground = rest.iter().any(|p| *p == "ground" || *p == "ground=1");
+    let alone = rest.contains(&"alone");
     Some(Plan {
         role,
         course,
         leave_after: option("leave"),
         warp_after: option("warp"),
         ground,
+        alone,
     })
 }
 
@@ -351,7 +365,10 @@ fn drive(
             if let Some((_, roster, go, _)) = races.status() {
                 if go {
                     test.step = Step::Racing;
-                } else if plan.role == Role::Host && roster.len() >= 2 && !test.start_asked {
+                } else if plan.role == Role::Host
+                    && roster.len() >= if plan.alone { 1 } else { 2 }
+                    && !test.start_asked
+                {
                     test.start_asked = true;
                     test.step = Step::Asking {
                         wants: vec!["Start the race".into()],
@@ -523,6 +540,131 @@ fn log_race(test: &mut Autotest, races: &Races, now: f64) {
     test.seen = state;
 }
 
+/// `WOW_KART_CRATE_TEST`: the autopilot breaks crates with our shots.
+pub(crate) fn crate_test() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("WOW_KART_CRATE_TEST").is_some())
+}
+
+/// Crates nearer than this (yards) are not aimed for: the kart would reach one before its shot.
+const CRATE_NEAR: f32 = 8.0;
+/// Crates farther than this (yards) are not aimed for.
+const CRATE_FAR: f32 = 70.0;
+/// A crate this far off our heading (radians) is not ahead.
+const CRATE_AHEAD: f32 = 1.2;
+/// A shot goes when the crate is within this many yards and this far off our heading.
+const FIRE_RANGE: f32 = 40.0;
+const FIRE_LINED_UP: f32 = 0.04;
+/// Seconds between the crate test's presses of Fire.
+const FIRE_EVERY: f32 = 1.0;
+
+/// The crate test's memory: the crate it aims for, logged once each, and its last press.
+#[derive(Default)]
+pub(crate) struct CrateTest {
+    aimed: Option<(usize, bool)>,
+    fired_at: Option<f32>,
+}
+
+/// What the crate test asks of the autopilot this frame: a place to steer for instead of the
+/// next checkpoint, and whether to press Fire.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct CrateAim {
+    pub(crate) target: Option<Vec3>,
+    pub(crate) fire: bool,
+}
+
+/// The crate test's steering and Fire for our kart at `pos`, facing `yaw` (the autopilot's yaw:
+/// forward is `-sin, -cos`), `now` seconds in, in a race with weapons.
+pub(crate) fn crate_aim(
+    test: &mut CrateTest,
+    arms: &kartcraft::weapons::Weapons,
+    pos: Vec3,
+    yaw: f32,
+    now: f32,
+) -> CrateAim {
+    use kartcraft::weapons::{wire::CrateKind, HeldView, Item};
+    let shield_up = arms.our_look().shield.is_some();
+    // A rolling bomb is ours to leave alone: a press sets it off.
+    if arms.fires_again() && !shield_up {
+        return CrateAim::default();
+    }
+    let (shooting, fire_now) = match arms.held() {
+        _ if shield_up => (true, false),
+        HeldView::Item(item) => match item.single() {
+            Item::Bomb | Item::Missile | Item::WarpOrb => (true, false),
+            // Up first; its second press is the shield bomb.
+            Item::Shield => (false, true),
+            _ => (false, true),
+        },
+        HeldView::Spinning | HeldView::Fading(_) => return CrateAim::default(),
+        HeldView::Empty => (false, false),
+    };
+    let rested = test.fired_at.is_none_or(|t| now - t >= FIRE_EVERY);
+    if fire_now {
+        test.aimed = None;
+        if !rested {
+            return CrateAim::default();
+        }
+        test.fired_at = Some(now);
+        info!(
+            "kart autotest: crate — firing {:?} away to roll again",
+            arms.held()
+        );
+        return CrateAim {
+            target: None,
+            fire: true,
+        };
+    }
+    let off_of = |at: Vec3| {
+        let to = at - pos;
+        let want = f32::atan2(-to.x, -to.z);
+        let off = (want - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI;
+        (Vec2::new(to.x, to.z).length(), off)
+    };
+    let pick = arms
+        .crates()
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.up && arms.crate_scale(c) >= 1.0)
+        .filter(|(_, c)| {
+            if shooting {
+                c.kind != CrateKind::Wumpa
+            } else {
+                c.kind == CrateKind::Weapon
+            }
+        })
+        .map(|(i, c)| (i, c.at, off_of(c.at)))
+        .filter(|(_, _, (d, off))| {
+            *d <= CRATE_FAR && off.abs() <= CRATE_AHEAD && (!shooting || *d >= CRATE_NEAR)
+        })
+        .min_by(|a, b| a.2 .0.total_cmp(&b.2 .0));
+    let Some((i, at, (d, off))) = pick else {
+        test.aimed = None;
+        return CrateAim::default();
+    };
+    if test.aimed != Some((i, shooting)) {
+        info!(
+            "kart autotest: crate — {} crate {i}, {d:.1} yd ahead, holding {:?}",
+            if shooting { "aiming at" } else { "driving for" },
+            arms.held()
+        );
+        test.aimed = Some((i, shooting));
+    }
+    let fire = rested && shooting && d <= FIRE_RANGE && off.abs() <= FIRE_LINED_UP;
+    if fire {
+        info!(
+            "kart autotest: crate — firing {:?} at crate {i}, {d:.1} yd, {off:.3} rad off",
+            arms.held()
+        );
+        test.fired_at = Some(now);
+    }
+    CrateAim {
+        target: Some(at),
+        fire,
+    }
+}
+
 pub(crate) fn plugin(app: &mut App) {
     if !active() {
         return;
@@ -556,6 +698,8 @@ mod tests {
                 .unwrap()
                 .ground
         );
+        let plan = parse(&format!("host:{}:alone:warp=3", course.key)).unwrap();
+        assert!(plan.alone && !plan.ground && plan.warp_after == Some(3.0));
         assert!(parse("drive:sprint").is_none(), "an unknown role");
         assert!(parse("host:no-such-course").is_none());
     }
