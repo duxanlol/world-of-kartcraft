@@ -234,6 +234,7 @@ fn scene(app: &mut App) {
         .init_resource::<DummyKarts>()
         .init_resource::<KartView>()
         .init_resource::<KartAudio>()
+        .init_resource::<kartcraft::rumble::Rumble>()
         .init_resource::<effects::KartEffects>()
         .init_resource::<hud::KartHud>()
         .init_resource::<hud::HudExtras>()
@@ -267,6 +268,7 @@ fn scene(app: &mut App) {
                 hud,
                 hud::draw,
                 sound,
+                kartcraft::rumble::send,
             )
                 .chain()
                 .in_set(benilla_world::schedule::WorldStage::Input),
@@ -346,6 +348,7 @@ fn drive(
     mut extras: ResMut<hud::HudExtras>,
     mut camera: Query<&mut Transform, With<DemoCam>>,
     mut weapons: ResMut<Weapons>,
+    mut rumble: ResMut<kartcraft::rumble::Rumble>,
 ) {
     let now = time.elapsed_secs();
     let dt = time.delta_secs();
@@ -501,6 +504,7 @@ fn drive(
     for e in &events {
         demo.chain.observe(now, e);
         audio.observe(e);
+        rumble.observe(e);
         if !matches!(e, Event::Land { .. }) {
             debug!("kart demo: {e:?}");
         }
@@ -537,6 +541,13 @@ fn drive(
         audio.engine = kart.engine_sound();
     }
     *view = demo.session.view(dt);
+    if let Some(kart) = demo.session.kart() {
+        audio.engine_class = kartcraft::class();
+        audio.mask_theme = (demo.aku || kart.masked())
+            .then(|| kartcraft::weapons::good_guy(kartcraft::model::our_kart()));
+        audio.tick(&view.feedback, kart.clocked().is_some());
+        rumble.feedback(&view.feedback, kart.speed());
+    }
     // `WOW_KART_FX_TEST=<size>`: a flame of that size burns throughout, to look at.
     if let Some(size) = std::env::var("WOW_KART_FX_TEST")
         .ok()

@@ -14,6 +14,8 @@
 //!   are recorded and kept either way.
 //! - `KartTerrain`: the kart drives on CTR's grounds (grass and dirt hold it to 140/256 of its
 //!   top speed, [`super::ground`]); off, as asphalt everywhere. Per player, client-side.
+//! - `KartRumble`: the controller shakes on crashes, hard landings and wall scrapes
+//!   ([`kartcraft::rumble`]), as CTR's vibration does, on by default.
 //! - `KartCam*`: the chase camera's shape, the camera window's (`/kartcam`), one CVar a
 //!   [`kartcraft::camera::CameraTuning`] field ([`CAMERA_KNOBS`]), read every tick while driving.
 //!
@@ -104,6 +106,8 @@ pub(crate) struct KartSettings {
     /// The kart drives on the ground as CTR's terrain table has it: off-road slows it
     /// ([`super::ground`]); off, every ground drives as asphalt.
     pub(crate) terrain: bool,
+    /// Shake the controller ([`kartcraft::rumble`]).
+    pub(crate) rumble: bool,
     /// The chase camera's shape.
     pub(crate) camera: CameraTuning,
 }
@@ -118,6 +122,7 @@ impl Default for KartSettings {
             class: super::garage::TIERS[0].0,
             ghost: true,
             terrain: false,
+            rumble: true,
             camera: CameraTuning::default(),
         }
     }
@@ -159,6 +164,7 @@ pub(crate) fn on_cvar(
         "kartmusicvolume" => settings.music_volume = ev.num().clamp(0.0, 1.0),
         "kartghost" => settings.ghost = ev.flag(),
         "kartterrain" => settings.terrain = ev.flag(),
+        "kartrumble" => settings.rumble = ev.flag(),
         "kartcamwallpull" => settings.camera.wall_pull = ev.flag(),
         "kartcamtravel" => settings.camera.travel = ev.flag(),
         key if key.starts_with("kartcam") => {
@@ -233,6 +239,7 @@ mod tests {
             !settings.terrain,
             "every ground drives as asphalt until asked"
         );
+        assert_eq!(d("KartRumble") != 0.0, settings.rumble);
         for name in ["KartMinimapButton", "KartMinimapAngle"] {
             d(name);
         }
@@ -306,6 +313,9 @@ mod tests {
         assert!(app.world().resource::<KartSettings>().terrain);
         set(&mut app, "kartterrain", "0");
         assert!(!app.world().resource::<KartSettings>().terrain);
+        assert!(app.world().resource::<KartSettings>().rumble);
+        set(&mut app, "KartRumble", "0");
+        assert!(!app.world().resource::<KartSettings>().rumble);
     }
 
     fn registered(name: &str) -> &'static str {

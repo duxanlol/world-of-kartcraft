@@ -11,6 +11,9 @@
 //! - **Skid marks** (`VehGroundSkids.c`): a skidding tyre lays a tread mark, the last eight game
 //!   frames of it, darkening the ground: all four through a powerslide, the back pair under the
 //!   brake or spinning off the line ([`ctr_kart::Kart::skids`]).
+//! - **Sparks and dirt** (`VehEmitter_Sparks_Ground`, `VehEmitter_Sparks_Wall`,
+//!   `VehEmitter_Terrain_Ground`): additive lines, sparks off a hard landing and along a wall
+//!   scraped, dirt off the tyres at speed.
 //!
 //! The PSX blends map onto Bevy's: additive to `Add`, a 50/50 `mix` to `Blend` at half alpha,
 //! subtractive to `Multiply` by the inverted texture. The flames' subtractive outer haze is left
@@ -221,11 +224,16 @@ struct Built {
     light: Handle<Mesh>,
     dark: Handle<Mesh>,
     skids: Handle<Mesh>,
+    /// The sparks and dirt, additive lines ([`Spark`]).
+    lines: Handle<Mesh>,
 }
 
 #[derive(Resource, Default)]
 pub struct KartEffects {
     built: Option<Option<Built>>,
+    /// Sparks off the ground and walls and dirt off the tyres, in the world.
+    sparks: Vec<Spark>,
+    rng: u32,
     puffs: Vec<Puff>,
     /// Each kart's tyres' last cross-sections (two ground points), newest last.
     marks: HashMap<(Entity, usize), VecDeque<Option<Section>>>,
@@ -321,12 +329,14 @@ fn build(
     let dark = batch(unlit(inverted(*smoke, 1.0), AlphaMode::Multiply));
     // The marks subtract at CTR's intensity 0x7F: about half.
     let skids = batch(unlit(inverted(*tread, 0.5), AlphaMode::Multiply));
+    let lines = batch(unlit(None, AlphaMode::Add));
     Some(Built {
         frames,
         instances,
         light,
         dark,
         skids,
+        lines,
     })
 }
 
@@ -494,7 +504,9 @@ pub fn tick(
                     marks.pop_front();
                 }
             }
+            state.dirt_and_wall_sparks(t, status, to_yards);
         }
+        state.landing_sparks(t, status, to_yards);
     }
     state.marks.retain(|(kart, _), _| live.contains(kart));
     state.puffs.retain(|p| live.contains(&p.kart));
@@ -504,6 +516,205 @@ pub fn tick(
         p.offset += p.velocity * dt;
     }
     state.puffs.retain(|p| p.age < PUFF_LIFE);
+    for s in &mut state.sparks {
+        s.step(dt);
+    }
+    state.sparks.retain(|s| s.age < s.kind.life());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sparks and dirt: CTR's line particles (`effects.json` "landing_sparks" and "dirt_dust", whose
+// numbers these are; `zGlobal_DATA.c` emSet_GroundSparks, emSet_WallSparks, emSet_DirtLR).
+// Meters and seconds in the kart model's frame, scaled with the kart.
+// ---------------------------------------------------------------------------------------------
+
+/// A line's width against its distance from the eye: about a pixel of the PSX's 240 lines.
+const LINE_WIDTH: f32 = 0.003;
+
+/// FP8 world units a frame to m/s: `/ 256 / 51.2 * 30`.
+const fn fp8_per_frame(v: f32) -> f32 {
+    v / 256.0 / 51.2 * 30.0
+}
+
+/// What a line particle is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SparkKind {
+    /// `emSet_GroundSparks` / `emSet_WallSparks`: yellow-white, 8 frames, a line two frames of
+    /// travel long.
+    Spark,
+    /// `emSet_DirtLR`: orange-brown, 10 frames.
+    Dirt,
+    /// `emSet_GrassL/R` (`zGlobal_DATA.c:6642-6899`): green, 10 frames, thrown higher.
+    Grass,
+}
+
+impl SparkKind {
+    fn life(self) -> f32 {
+        match self {
+            SparkKind::Spark => 8.0 * FRAME,
+            SparkKind::Dirt | SparkKind::Grass => 10.0 * FRAME,
+        }
+    }
+
+    /// The head's colour `age` seconds in; the tail is black (additive: unseen).
+    fn color(self, age: f32) -> [f32; 3] {
+        let (start, fall) = match self {
+            SparkKind::Spark => ([1.0, 1.0, 0.5], [7680.0, 7680.0, 3840.0]),
+            SparkKind::Dirt => ([1.0, 0.5, 0.0], [2048.0, 1024.0, 0.0]),
+            SparkKind::Grass => ([15360.0 / 65280.0, 1.0, 0.0], [0.0; 3]),
+        };
+        std::array::from_fn(|i| (start[i] - fall[i] / 65280.0 * 30.0 * age).max(0.0))
+    }
+
+    /// How many frames of travel the line spans.
+    fn length(self) -> f32 {
+        match self {
+            SparkKind::Spark => 2.0,
+            SparkKind::Dirt | SparkKind::Grass => 1.0,
+        }
+    }
+}
+
+/// One line particle, in the world (yards).
+struct Spark {
+    kind: SparkKind,
+    at: Vec3,
+    velocity: Vec3,
+    gravity: f32,
+    age: f32,
+}
+
+impl Spark {
+    fn step(&mut self, dt: f32) {
+        self.age += dt;
+        self.velocity.y += self.gravity * dt;
+        self.at += self.velocity * dt;
+    }
+}
+
+/// `VEH_EMITTER_LANDING_SPARK_MIN_SPEED`, `_MIN_JUMP` (`VehEmitter.c:92-93`), speed units.
+const SPARK_LANDING_SPEED: i32 = 6 * 256;
+const SPARK_LANDING_FALL: i32 = 22 * 256;
+/// `VEH_EMITTER_GROUND_SPARK_COUNT` (`VehEmitter.c:70`).
+const SPARK_LANDING_COUNT: usize = 10;
+/// `VEH_EMITTER_WALL_SPARK_MIN_SPEED` (`VehEmitter.c:112`), speed units.
+const SPARK_WALL_SPEED: i32 = 2 * 256;
+/// `VEH_EMITTER_TERRAIN_MIN_SPEED` (`VehEmitter.c:72`): the tyres throw dirt from this speed.
+const DIRT_SPEED: i32 = 0x300;
+/// The wall sparks' corners (`VehEmitter.c:117-121`: ±0x22, 0xA, +0x28 world units), meters.
+const WALL_CORNERS: [[f32; 3]; 2] = [
+    [34.0 / 51.2, 10.0 / 51.2, 40.0 / 51.2],
+    [-34.0 / 51.2, 10.0 / 51.2, 40.0 / 51.2],
+];
+
+impl KartEffects {
+    fn random(&mut self) -> f32 {
+        if self.rng == 0 {
+            self.rng = 0x9E37_79B9;
+        }
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 17;
+        self.rng ^= self.rng << 5;
+        self.rng as f32 / u32::MAX as f32
+    }
+
+    /// A particle at `local` (model meters) on the kart: the emitter set's random spread, its
+    /// kart-local velocity turned into the world.
+    fn spawn(&mut self, kind: SparkKind, t: &Transform, local: Vec3, to_yards: f32) {
+        let spread = |r: f32, lo: f32, hi: f32| lo + (hi - lo) * r;
+        let (side, up, gravity, offset) = match kind {
+            // Ground and wall sparks: x/z ±500, y 1000..1800, gravity -300..-200 (FP8).
+            SparkKind::Spark => (
+                fp8_per_frame(500.0),
+                (fp8_per_frame(1000.0), fp8_per_frame(1800.0)),
+                spread(self.random(), -300.0, -200.0),
+                0.0,
+            ),
+            // Dirt: x/z ±500, y 1500..1900, gravity -300, ±2560 FP8 of jitter.
+            SparkKind::Dirt => (
+                fp8_per_frame(500.0),
+                (fp8_per_frame(1500.0), fp8_per_frame(1900.0)),
+                -300.0,
+                2560.0 / 256.0 / 51.2,
+            ),
+            // Grass: as dirt, but y 2000..2400.
+            SparkKind::Grass => (
+                fp8_per_frame(500.0),
+                (fp8_per_frame(2000.0), fp8_per_frame(2400.0)),
+                -300.0,
+                2560.0 / 256.0 / 51.2,
+            ),
+        };
+        let jitter = Vec3::new(
+            spread(self.random(), -offset, offset),
+            0.0,
+            spread(self.random(), -offset, offset),
+        );
+        let velocity = Vec3::new(
+            spread(self.random(), -side, side),
+            spread(self.random(), up.0, up.1),
+            spread(self.random(), -side, side),
+        );
+        self.sparks.push(Spark {
+            kind,
+            at: t.transform_point(local + jitter),
+            velocity: t.rotation * velocity * to_yards,
+            gravity: gravity / 256.0 / 51.2 * 900.0 * to_yards,
+            age: 0.0,
+        });
+    }
+
+    /// One game frame of a kart's dirt and wall sparks. Dirt (`VehEmitter_Terrain_Ground`,
+    /// `VehEmitter.c:1342-1353`): on the ground at 0x300 or faster, one off each rear tyre, each
+    /// of the four while drifting, on a ground whose `MetaDataTerrain` row has an emitter: dirt
+    /// (`emSet_DirtLR`) and grass (`emSet_GrassL/R`), slow or not (`zGlobal_DATA.c:6982-7116`).
+    /// The ground is the one read under the kart, whether or not it drives as it (`KartTerrain`).
+    /// Wall sparks (`VehEmitter_Sparks_Wall`, `VehEmitter.c:506-675`): one a frame while
+    /// scraping faster than 2.0, off a front corner; CTR picks the corner nearer the wall,
+    /// which our collision does not report, so the corners take turns.
+    fn dirt_and_wall_sparks(&mut self, t: &Transform, status: &KartStatus, to_yards: f32) {
+        use ctr_kart::Ground;
+        let speed = (status.speed * crate::lu_per_yard() * 256.0 / 30.0) as i32;
+        let thrown = match status.ground {
+            Ground::Dirt | Ground::SlowDirt => Some(SparkKind::Dirt),
+            Ground::Grass | Ground::SlowGrass => Some(SparkKind::Grass),
+            _ => None,
+        };
+        if let Some(kind) = thrown.filter(|_| status.grounded && speed >= DIRT_SPEED) {
+            let tyres = if status.drifting { 0..4 } else { 0..2 };
+            for tyre in &TYRES[tyres] {
+                let at = Vec3::new(tyre[0], 10.0 / 51.2, tyre[2]);
+                self.spawn(kind, t, at, to_yards);
+            }
+        }
+        if status.feedback.wall_frames > 0 && speed > SPARK_WALL_SPEED {
+            let corner = WALL_CORNERS[(self.sparks.len() + self.rng as usize) % 2];
+            self.spawn(SparkKind::Spark, t, Vec3::from_array(corner), to_yards);
+        }
+    }
+
+    /// A landing's sparks (`VehEmitter.c:1320-1340`, `VehEmitter_Sparks_Ground`): ten around
+    /// the kart when it lands faster than 6.0 from a jump faster than 22.0 on a sparking
+    /// terrain (`TERRAIN_FLAG_LANDING_SPARKS`: asphalt, stone, icy road).
+    fn landing_sparks(&mut self, t: &Transform, status: &KartStatus, to_yards: f32) {
+        let Some((fall, speed)) = status.feedback.landing else {
+            return;
+        };
+        if status.ground.terrain().flags & ctr_kart::terrain::flags::LANDING_SPARKS == 0 {
+            return;
+        }
+        if speed.abs() <= SPARK_LANDING_SPEED || fall <= SPARK_LANDING_FALL {
+            return;
+        }
+        for _ in 0..SPARK_LANDING_COUNT {
+            let at = Vec3::new(
+                (self.random() - 0.5) * 1.2,
+                10.0 / 51.2,
+                (self.random() - 0.5) * 1.6,
+            );
+            self.spawn(SparkKind::Spark, t, at, to_yards);
+        }
+    }
 }
 
 /// A batch's vertex streams.
@@ -525,6 +736,24 @@ impl Streams {
             self.positions.push(c.to_array());
             self.uvs.push(uv);
             self.colors.push(color);
+        }
+        self.indices
+            .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+
+    /// A line's quad, `[tail, head, head, tail]`: black at the tail, `color` at the head.
+    fn line(&mut self, corners: [Vec3; 4], color: [f32; 4]) {
+        let base = self.positions.len() as u32;
+        let black = [0.0, 0.0, 0.0, 1.0];
+        for (c, (uv, col)) in corners.iter().zip([
+            ([0.0, 0.0], black),
+            ([1.0, 0.0], color),
+            ([1.0, 1.0], color),
+            ([0.0, 1.0], black),
+        ]) {
+            self.positions.push(c.to_array());
+            self.uvs.push(uv);
+            self.colors.push(col);
         }
         self.indices
             .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -578,13 +807,111 @@ pub fn draw(
             }
         }
     }
+    // The sparks and dirt as CTR's lines: from where the particle was a frame or two ago (the
+    // tail, black) to where it is (the head, its colour), a pixel or so wide.
+    let mut lines = Streams::default();
+    let eye_at = eye.translation();
+    for s in &state.sparks {
+        let tail = s.at - s.velocity * (s.kind.length() * FRAME);
+        let along = s.at - tail;
+        let width = LINE_WIDTH * (eye_at - s.at).length();
+        let side = along.cross(eye_at - s.at).normalize_or_zero() * (width * 0.5);
+        let [r, g, b] = s.kind.color(s.age);
+        lines.line(
+            [tail - side, s.at - side, s.at + side, tail + side],
+            [r, g, b, 1.0],
+        );
+    }
     for (handle, streams) in [
         (&built.light, light),
         (&built.dark, dark),
         (&built.skids, skids),
+        (&built.lines, lines),
     ] {
         if let Some(mesh) = meshes.get_mut(handle) {
             streams.write(mesh);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::Feedback;
+
+    /// yd/s for a speed in CTR's units.
+    fn yards(speed: i32) -> f32 {
+        speed as f32 * 30.0 / 256.0 / crate::lu_per_yard()
+    }
+
+    #[test]
+    fn sparks_and_dirt_spawn_as_ctr_s_emitters_do() {
+        let t = Transform::IDENTITY;
+        let mut fx = KartEffects::default();
+        let mut s = KartStatus {
+            grounded: true,
+            speed: yards(DIRT_SPEED - 0x20),
+            ground: ctr_kart::Ground::Dirt,
+            ..Default::default()
+        };
+        // Below 0x300 the tyres throw nothing; above, one off each rear tyre, four drifting.
+        fx.dirt_and_wall_sparks(&t, &s, 1.0);
+        assert!(fx.sparks.is_empty());
+        s.speed = yards(0x1000);
+        fx.dirt_and_wall_sparks(&t, &s, 1.0);
+        assert_eq!(fx.sparks.len(), 2);
+        s.drifting = true;
+        fx.dirt_and_wall_sparks(&t, &s, 1.0);
+        assert_eq!(fx.sparks.len(), 6);
+        assert!(fx.sparks.iter().all(|p| p.kind == SparkKind::Dirt));
+        // Grass throws its own; asphalt, stone and snow throw nothing.
+        fx.sparks.clear();
+        s.ground = ctr_kart::Ground::SlowGrass;
+        fx.dirt_and_wall_sparks(&t, &s, 1.0);
+        assert_eq!(fx.sparks.len(), 4);
+        assert!(fx.sparks.iter().all(|p| p.kind == SparkKind::Grass));
+        fx.sparks.clear();
+        for ground in [
+            ctr_kart::Ground::Asphalt,
+            ctr_kart::Ground::Stone,
+            ctr_kart::Ground::Snow,
+        ] {
+            s.ground = ground;
+            fx.dirt_and_wall_sparks(&t, &s, 1.0);
+        }
+        assert!(fx.sparks.is_empty());
+        s.ground = ctr_kart::Ground::Asphalt;
+        // Scraping a wall: one spark a frame.
+        fx.sparks.clear();
+        s.grounded = false;
+        s.feedback.wall_frames = 1;
+        fx.dirt_and_wall_sparks(&t, &s, 1.0);
+        assert_eq!(fx.sparks.len(), 1);
+        // A landing from a jump faster than 22.0 at a speed over 6.0: ten sparks.
+        fx.sparks.clear();
+        s.feedback = Feedback {
+            landing: Some((SPARK_LANDING_FALL - 1, 0x2000)),
+            ..Default::default()
+        };
+        fx.landing_sparks(&t, &s, 1.0);
+        assert!(fx.sparks.is_empty());
+        s.feedback.landing = Some((SPARK_LANDING_FALL + 1, 0x2000));
+        // Landing on grass makes none (no TERRAIN_FLAG_LANDING_SPARKS); on asphalt, ten.
+        s.ground = ctr_kart::Ground::Grass;
+        fx.landing_sparks(&t, &s, 1.0);
+        assert!(fx.sparks.is_empty());
+        s.ground = ctr_kart::Ground::Asphalt;
+        fx.landing_sparks(&t, &s, 1.0);
+        assert_eq!(fx.sparks.len(), SPARK_LANDING_COUNT);
+        // They fly up and fall, and are gone after their 8 frames.
+        assert!(fx.sparks[0].velocity.y > 0.0 && fx.sparks[0].gravity < 0.0);
+        for p in &mut fx.sparks {
+            p.step(9.0 * FRAME);
+        }
+        fx.sparks.retain(|p| p.age < p.kind.life());
+        assert!(fx.sparks.is_empty());
+        // The head fades from CTR's start colour.
+        assert_eq!(SparkKind::Spark.color(0.0), [1.0, 1.0, 0.5]);
+        assert!(SparkKind::Dirt.color(0.2)[0] < 1.0);
     }
 }

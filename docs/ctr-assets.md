@@ -291,6 +291,9 @@ are written in full with trailing silence trimmed.
 | `boost_3.wav` | same, distort 0x6C, volume 0xFF | 9893 Hz | 1.27 s | third boost (also voice line 0x10) |
 | `meter_full.wav` | OtherFX 0x0F → SPU 87 | 22621 Hz | 0.47 s | `Vehicle/VehPhysProc.c` ~2528: when `turbo_MeterRoomLeft` reaches 0, `OtherFX_Play_Echo(VEH_PHYS_PROC_DRIFT_METER_FULL_FX = 0xF, ..)` |
 | `crash.wav` | OtherFX 0x06 → SPU 5 | 11025 Hz | 0.83 s | `COLL.c` ~2633: hard wall impact, `OtherFX_Play_LowLevel(6, 1, volume max)` (+ voice line 6, rumble) |
+| `wall_rub.wav` (loop) | OtherFX 0x14 | | 1.26 s | `Vehicle/VehEmitter.c:1356-1405`: `OtherFX_RecycleNew` every frame while scraping a wall, its volume +0x14 a frame scraping, −0x14 a frame after |
+| `bump_soft.wav`, `bump_mid.wav`, `bump_hard.wav` | OtherFX 0x0B, 0x0C, 0x0A | | 0.5–0.6 s | `HOWL_OtherFXRecycle.c:44-63` `OtherFX_DriverCrashing`: kart-on-kart crash, volume `MapToRange(impact, 0, 0x1900, 0x3F, 0xFF)` (`VehPhysCrash.c:533`) picks the sample (≤ 0xA0, ≤ 0xDC, above) |
+| `engine_accel.wav`, `engine_speed.wav`, `engine_turn.wav` (loops) | EngineFX 4, 8, 12 | | | the other engine classes' samples, `EngineFX[engineID*4 + driverID]` |
 
 The three boost files come from one sample. The game's "distortion" is a pitch factor,
 `distortConst_OtherFX[d] / 0x10000 = 2^((d - 0x80) / 128)`, baked in as the WAV rate
@@ -360,6 +363,27 @@ cargo run -p ctr-assets --release --example waveform -- kart-data/audio kart-dat
 This prints duration, peak, RMS and loop-seam jump per file and draws each waveform (loops
 are drawn twice with a red tick at the seam). With `CTR_DISC` set, `tests/disc.rs` also
 checks every file's length, level and loop flag.
+
+### Voices (`voice.rs`)
+
+`--audio` also writes every character's voice lines to `audio/voice/<racer>/` with
+`voice/voices.json`:
+
+- `fx0.wav`, `fx1.wav`: the two short lines in the HOWL bank, OtherFX `0x1C + character` and
+  `0x2C + character`, which `Voiceline_RequestPlay` plays at once for voice types 0 and 1
+  (`HOWL_Voiceline.c:203-210`).
+- `<set>_<n>.wav`: the CD-XA lines. `XA\ENG.XNF` (`XINF`, version 102) indexes the game
+  category's tracks: `XaSize { u8 channel; u8 file; s16 sectors }` at
+  `first_song_index[2] + xaID`, past the 0x44-byte header and `num_xas_total` CD positions.
+  A track is channel `channel` of the interleaved `XA\ENG\GAME\Sfile.XA`, read from the file's
+  start for `sectors` sectors (`CDSYS.c` `CDSYS_XAPlay`). Its sectors are Mode 2 Form 2, so
+  only a raw `.bin` has them; a cooked `.iso` gets the bank lines alone (`"xa": false`).
+  Decoded as 4-bit CD-XA ADPCM (37.8 or 18.9 kHz, mono or stereo, from the subheader's
+  coding byte).
+- Which tracks a character says for a line: `data.voiceData[c].voiceSet[0..11]`
+  (`zGlobal_DATA.c:3100-3368`): set k < 8 is tracks `19c + 2k`, `19c + 2k + 1`, sets 8 to 10
+  one track each; Ripper Roo's set 0 is 200 and 201. A line id picks its set through
+  `data.voiceID` (`zGlobal_DATA.c:3369`). 16 racers × 19 lines, about 390 s, 30 MB.
 
 ## Effects
 
@@ -791,7 +815,9 @@ writes `<out_dir>/music/<track>.wav` plus `music/music.json`.
     | 0xA | pitch bend |
 - **Which song** (`HOWL_Music.c`, `zGlobal_DATA.c`): level `L` loads HOWL sequence
   `data.levBank_Song[L]` (= L for the 18 race tracks) and plays song 0 (`CSEQ_SONG_LEVEL`),
-  looping. Songs 1 and 2 are the Aku/Uka mask themes.
+  looping. Songs 1 and 2 are the Aku/Uka mask themes (`Audio_SetMaskSong`,
+  `HOWL_AudioState.c:142-190`), written as `aku.wav` and `uka.wav` (every track's render is
+  alike, so once) and named per track in `music.json` (`aku_file`, `uka_file`).
 - **Timing** (`SongPool_CalculateTempo`, `Channel_ParseSongToChannels`): `bpm·tpqn/60`
   ticks per second, processed in 60 Hz frames. Each sequence restarts at its own end.
 - **Voices** (`HOWL_CseqOpcode.c`):

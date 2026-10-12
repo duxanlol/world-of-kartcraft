@@ -2,8 +2,8 @@
 //!
 //! Reads the user's own Crash Team Racing (NTSC-U) disc image and writes `<out_dir>/kart.json`
 //! (the chosen racer's kart, default `crash`). `--audio` also writes the kart sound effects to
-//! `<out_dir>/audio/*.wav`; `--effects` writes `<out_dir>/effects.json` (turbo flames, exhaust
-//! smoke, skid marks, particles); `--weapons` writes `<out_dir>/weapons.json` (weapon, crate and
+//! `<out_dir>/audio/*.wav` and the characters' voices to `<out_dir>/audio/voice/`; `--effects`
+//! writes `<out_dir>/effects.json` (turbo flames, exhaust smoke, skid marks, particles); `--weapons` writes `<out_dir>/weapons.json` (weapon, crate and
 //! Wumpa models). `--all` writes `<out_dir>/kart-<name>.json` for every kart, the audio, the weapons
 //! and the effects. The disc image is only read.
 
@@ -100,6 +100,13 @@ fn run(
                 if r.looped { " loop" } else { "" }
             );
         }
+        let voices = dir.join("voice");
+        let lines = ctr_assets::voice::extract(&mut disc, &voices).map_err(|e| e.to_string())?;
+        let seconds: f64 = lines.iter().map(|l| l.seconds).sum();
+        println!(
+            "voice {} XA lines, {seconds:.0} s, and each racer's two bank lines",
+            lines.len()
+        );
         println!("wrote {}", dir.display());
     }
     if music || all {

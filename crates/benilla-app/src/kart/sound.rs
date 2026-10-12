@@ -6,6 +6,47 @@ use kartcraft::sound::Sounds;
 
 use super::KartDrive;
 
+/// The pass line (`PlayLevel.c:391-415`): once a race is 0x4B00 ms old, when someone passes us
+/// the racer now one ahead says it, in their kart's voice (Crash's when their kart is not
+/// relayed); when we pass someone, we say it (CTR's check from the other player's side).
+pub(super) fn overtakes(
+    time: Res<Time>,
+    races: Res<super::race::Races>,
+    remotes: Res<super::remote::RemoteKarts>,
+    names: Option<Res<crate::names::NameCache>>,
+    mut audio: ResMut<KartAudio>,
+    mut last: Local<Option<(u32, usize)>>,
+) {
+    use kartcraft::voice::{line, overtake, Overtake};
+    let Some((run, go)) = races
+        .run()
+        .filter(|r| !r.time_trial && !r.done)
+        .and_then(|r| Some((r.id, r.go_at?)))
+    else {
+        *last = None;
+        return;
+    };
+    let order = races.order();
+    let Some(place) = order.iter().position(|r| *r == races.me).map(|i| i + 1) else {
+        return;
+    };
+    let before = last.filter(|(id, _)| *id == run).map_or(0, |(_, p)| p);
+    *last = Some((run, place));
+    match overtake(before, place, (time.elapsed_secs() - go) * 1000.0) {
+        Some(Overtake::Passed(at)) => {
+            let passer = order[at - 1].as_str();
+            let racer = remotes
+                .karts
+                .values()
+                .find(|k| names.as_ref().and_then(|n| n.peek(k.guid)) == Some(passer))
+                .map_or("", |k| remotes.racer(k.guid));
+            audio.say_as(line::OVERTAKE, racer);
+        }
+        Some(Overtake::Passing) => audio.say(line::OVERTAKE),
+        None => {}
+    }
+}
+
 pub(super) fn update(
     drive: Res<KartDrive>,
     mut audio: ResMut<KartAudio>,

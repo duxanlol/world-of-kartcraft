@@ -151,7 +151,7 @@ fn start(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn update(
     time: Res<Time>,
     (mut overlay, binds, mut cvars): (
@@ -172,11 +172,12 @@ fn update(
     profession: profession::Profession,
     mut score: ResMut<score::KartScore>,
     settings: Res<settings::KartSettings>,
-    (remotes, mut extras, races, mut arms): (
+    (remotes, mut extras, races, mut arms, mut rumble): (
         Res<remote::RemoteKarts>,
         ResMut<kartcraft::hud::HudExtras>,
         Res<race::Races>,
         ResMut<kartcraft::weapons::Weapons>,
+        ResMut<kartcraft::rumble::Rumble>,
     ),
 ) {
     let now = time.elapsed_secs();
@@ -384,6 +385,7 @@ fn update(
     arms.feed(&mut audio);
     for event in &events {
         audio.observe(event);
+        rumble.observe(event);
         host.chain.observe(now, event);
     }
     let Some(kart) = host.session.kart() else {
@@ -409,6 +411,16 @@ fn update(
     *view = host.session.view(dt);
     audio.skidding = view.skids.0 || view.skids.1;
     audio.ground = view.ground;
+    // The scrape, the voices, the engine's class, the mask theme and the pad's shakes.
+    if let Some(kart) = host.session.kart() {
+        audio.engine_class = host.class;
+        audio.mask_theme = kart
+            .masked()
+            .then(|| kartcraft::weapons::good_guy(kartcraft::model::our_kart()));
+        audio.tick(&view.feedback, kart.clocked().is_some());
+        rumble.feedback(&view.feedback, kart.speed());
+    }
+    rumble.off = !settings.rumble;
     // `WOW_KART_DEBUG`: the kart's pose twice a second.
     if std::env::var_os("WOW_KART_DEBUG").is_some()
         && (now * 2.0) as i32 != ((now - dt) * 2.0) as i32
@@ -517,6 +529,7 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<KartView>()
         .init_resource::<model::KartModel>()
         .init_resource::<sound::KartAudio>()
+        .init_resource::<kartcraft::rumble::Rumble>()
         .init_resource::<score::KartScore>()
         .init_resource::<remote::RemoteKarts>()
         .init_resource::<seat::SeatFits>()
@@ -559,12 +572,14 @@ pub(crate) fn plugin(app: &mut App) {
                 kartcraft::pads::lay.after(crate::go_anim::publish_ghost_door_exclusions),
                 update.in_set(KartDriveSet),
                 race::update,
+                sound::overtakes,
                 ghost::update,
                 weapons::update,
                 race::beams,
                 race::guide,
                 model::update,
                 sound::update,
+                kartcraft::rumble::send,
                 score::track_skill,
                 ui::publish,
                 // Into the VM only once the interface is up, or the first frame's events are lost.

@@ -28,9 +28,12 @@ const ENGINE_HZ: f32 = 80.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Cue {
     Hop,
+    /// A landing at CTR's volume for it, 0x78 to 0xFA ([`landing_volume`]).
     Land {
-        hard: bool,
+        volume: u8,
     },
+    /// A crash into another kart at its volume, 0x3F to 0xFF ([`bump_volume`]).
+    Bump(u8),
     Boost(u8),
     Early,
     MeterFull,
@@ -172,6 +175,17 @@ pub struct KartAudio {
     /// (`HOWL_AudioState.c:338`, `Audio_SetMaskSong(20)`), 0 plays it as written.
     pub music_bpm_delta: f64,
     pub weapons: WeaponLoops,
+    /// The engine class whose sample the engine plays (the garage's).
+    pub engine_class: crate::Class,
+    /// Our mask's theme while we wear it: Aku Aku's (`true`) or Uka Uka's.
+    pub mask_theme: Option<bool>,
+    /// The wall scrape loop's volume, CTR's `engineVol` 0 to 0xFF ([`KartAudio::tick`]).
+    pub wall_volume: u8,
+    /// Voice lines to play this frame (files).
+    pub voices: Vec<PathBuf>,
+    /// The game frames left before another kart crash sounds (`VehPhysCrash.c:520-524`).
+    bump_cooldown: u8,
+    voice: crate::voice::Voice,
 }
 
 /// The playback rate that plays a song written at `bpm` at `bpm + delta`: CTR changes the
@@ -185,6 +199,39 @@ pub fn tempo_rate(bpm: f64, delta: f64) -> f64 {
     }
 }
 
+/// `VehCalc_MapToRange`: `x` clamped to `[in_lo, in_hi]` and mapped linearly onto
+/// `[out_lo, out_hi]`.
+pub fn map_to_range(x: i32, in_lo: i32, in_hi: i32, out_lo: i32, out_hi: i32) -> i32 {
+    let x = x.clamp(in_lo, in_hi);
+    out_lo + (x - in_lo) * (out_hi - out_lo) / (in_hi - in_lo).max(1)
+}
+
+/// A landing's volume (`COLL.c:1508`): `MapToRange(|landing speed|, 0x100, 0x3C00, 0x78, 0xFA)`,
+/// played at every touchdown.
+pub fn landing_volume(fall: i32) -> u8 {
+    map_to_range(fall.abs(), 0x100, 0x3C00, 0x78, 0xFA) as u8
+}
+
+/// A kart crash's volume (`VehPhysCrash.c:533`): `MapToRange(impact, 0, 0x1900, 0x3F, 0xFF)`;
+/// `None` at 0x200 or softer, which make no sound.
+pub fn bump_volume(strength: i32) -> Option<u8> {
+    (strength > 0x200).then(|| map_to_range(strength, 0, 0x1900, 0x3F, 0xFF) as u8)
+}
+
+/// `OtherFX_DriverCrashing` (`HOWL_OtherFXRecycle.c:44-63`): the crash sample a volume plays,
+/// 0 soft (0xB), 1 middling (0xC, over 0xA0), 2 hard (0xA, 0xDD and over).
+pub fn bump_sample(volume: u8) -> usize {
+    match volume {
+        0xDD.. => 2,
+        0xA1.. => 1,
+        _ => 0,
+    }
+}
+
+/// `VEH_EMITTER_WALL_RUB_VOLUME_STEP` (`VehEmitter.c:104`): the scrape loop's volume climbs and
+/// falls this much a frame.
+const WALL_RUB_STEP: u8 = 0x14;
+
 /// The turbo roar's pitch `age` seconds into its sweep, as CTR's `VehTurbo_ThTick` plays it
 /// (`VehTurbo.c:339-374`): OtherFX 0xE at distortion fireAudioDistort + 0x10, capped at 0x80,
 /// the counter zeroed by each boost and counting one a 30 Hz frame. So the roar starts about an
@@ -194,9 +241,6 @@ pub fn turbo_pitch(age: f32) -> f64 {
     // OtherFX distortion (`distortConst_OtherFX`): an octave per 128.
     2f64.powf((f64::from(distort) - 128.0) / 128.0)
 }
-
-/// A landing this fast downward (speed units) or harder plays the heavy thump.
-const HARD_LANDING: i32 = 9000;
 
 impl KartAudio {
     /// One frame of `dt` seconds with the turbo burning or not: the roar's sweep runs while it
@@ -214,10 +258,25 @@ impl KartAudio {
         ) {
             self.turbo_age = 0.0;
         }
+        if let Some(line) = crate::voice::line_for(event) {
+            self.say(line);
+        }
         let cue = match *event {
             Event::Hop => Cue::Hop,
-            Event::Land { air_ms, fall } if air_ms > 96 => Cue::Land {
-                hard: fall > HARD_LANDING,
+            // Every touchdown thumps, softly for a small hop (`COLL.c:1504-1514`).
+            Event::Land { fall, .. } => Cue::Land {
+                volume: landing_volume(fall),
+            },
+            // One kart crash in three frames (`VEH_PHYS_CRASH_FEEDBACK_COOLDOWN_FRAMES`).
+            Event::Bump { strength } => match bump_volume(strength) {
+                Some(volume) if self.bump_cooldown == 0 => {
+                    self.bump_cooldown = 3;
+                    if volume > 0xDC {
+                        self.say(crate::voice::line::HARD_CRASH);
+                    }
+                    Cue::Bump(volume)
+                }
+                _ => return,
             },
             Event::Boost { stage, .. } => Cue::Boost(stage),
             Event::HangTime { .. } => Cue::Boost(1),
@@ -239,6 +298,63 @@ impl KartAudio {
 
     pub fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    /// The voices, reading the converted lines from `kart-data/audio/voice`.
+    fn voice(&mut self) -> &mut crate::voice::Voice {
+        if !self.voice.has_root() {
+            self.voice.set_root(audio_root().map(|r| r.join("voice")));
+        }
+        &mut self.voice
+    }
+
+    /// Asks for our racer's ([`crate::model::our_kart`]) voice line `id`
+    /// (`Voiceline_RequestPlay`).
+    pub fn say(&mut self, id: u8) {
+        self.say_as(id, crate::model::our_kart());
+    }
+
+    /// Asks for voice line `id` in `racer`'s voice (another driver's kart look; `""` is Crash).
+    pub fn say_as(&mut self, id: u8, racer: &str) {
+        if let Some(file) = self.voice().request(id, racer) {
+            self.voices.push(file);
+        }
+    }
+
+    /// The rest of a frame, after its events: the step's game frames (`fb`) pace the voice
+    /// queue, the crash cooldown and the wall scrape's volume (`VehEmitter.c:1356-1383`: up
+    /// 0x14 a frame scraping, down 0x14 a frame off the wall); our weapons fired this frame
+    /// speak (`VehPickupItem.c:789-1372`), the clock unless it was another's that caught us.
+    pub fn tick(&mut self, fb: &crate::session::Feedback, clocked: bool) {
+        use crate::voice::line;
+        let fired: Vec<u8> = self
+            .cues
+            .iter()
+            .filter_map(|c| match *c {
+                // Our own shots sound at full gain (no distance).
+                Cue::Sfx(s, gain) if gain >= 0.99 => match s {
+                    Sfx::BombLaunch => Some(line::BOMB),
+                    Sfx::MissileLaunch => Some(line::MISSILE),
+                    Sfx::WarpLaunch => Some(line::WARP_ORB),
+                    Sfx::MineDrop => Some(line::MINE),
+                    Sfx::Clock if !clocked => Some(line::CLOCK),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        for id in fired {
+            self.say(id);
+        }
+        let off = fb.frames.saturating_sub(fb.wall_frames);
+        let v = self
+            .wall_volume
+            .saturating_add(WALL_RUB_STEP.saturating_mul(fb.wall_frames.min(13)));
+        self.wall_volume = v.saturating_sub(WALL_RUB_STEP.saturating_mul(off.min(13)));
+        self.bump_cooldown = self.bump_cooldown.saturating_sub(fb.frames);
+        let voice = self.voice();
+        let said: Vec<PathBuf> = (0..fb.frames).filter_map(|_| voice.frame()).collect();
+        self.voices.extend(said);
     }
 }
 
@@ -429,7 +545,8 @@ fn rolling_mix(grounded: bool, speed: i32) -> (f32, f64) {
 
 /// The sounds, each from the player's audio when present.
 struct Bank {
-    engine: StaticSoundData,
+    /// Each engine class's sample, in [`crate::Class::ALL`] order (`HOWL_Engine.c:323`).
+    engines: [StaticSoundData; 4],
     skid: StaticSoundData,
     /// The other grounds' skid loops and every ground's rolling loop, those the audio has, by
     /// OtherFX id.
@@ -437,8 +554,12 @@ struct Bank {
     rolling: std::collections::HashMap<u16, StaticSoundData>,
     roar: StaticSoundData,
     hop: StaticSoundData,
+    /// Sound 7 at its loudest landing volume, 0xFA; softer landings scale it down.
     land: StaticSoundData,
-    land_hard: StaticSoundData,
+    /// `OtherFX_DriverCrashing`'s three samples, soft to hard.
+    bumps: [StaticSoundData; 3],
+    /// The wall scrape loop (0x14).
+    wall: StaticSoundData,
     boost: [StaticSoundData; 3],
     puff: StaticSoundData,
     beep: StaticSoundData,
@@ -490,15 +611,29 @@ impl Bank {
         let rolling = (22u16..=27)
             .filter_map(|id| Some((id, file(rolling_file(id)?)?)))
             .collect();
+        // Kart data converted before the other classes' engines were has Balanced's alone.
+        let balanced = one("engine", engine);
+        let class = |name: &str| file(name).unwrap_or_else(|| balanced.clone());
+        let engines = [
+            balanced.clone(),
+            class("engine_accel"),
+            class("engine_speed"),
+            class("engine_turn"),
+        ];
         let bank = Self {
-            engine: one("engine", engine),
+            engines,
             skid: one("skid", skid),
             skids,
             rolling,
             roar: one("turbo", roar),
             hop: one("hop", hop),
-            land: one("land", || land(false)),
-            land_hard: one("land_hard", || land(true)),
+            land: one("land_hard", || land(true)),
+            bumps: [
+                one("bump_soft", crash),
+                one("bump_mid", crash),
+                one("bump_hard", crash),
+            ],
+            wall: one("wall_rub", skid),
             boost: [
                 one("boost_1", || boost(1)),
                 one("boost_2", || boost(2)),
@@ -606,14 +741,93 @@ pub struct Sounds {
     loading: Option<std::sync::mpsc::Receiver<Option<StaticSoundData>>>,
     /// The playing (or loading) song's own tempo, from `music.json`; 0 unknown.
     music_bpm: f64,
+    /// The scrape, the engine's class, the mask theme and the voices: [`Extras`].
+    extras: Extras,
 }
 
-/// A CTR race track rendered from the player's disc (`kart-data/music/music.json`).
+/// The wall scrape loop, the engine's class, the mask theme and the voice lines.
+#[derive(Default)]
+struct Extras {
+    scrape: Option<StaticSoundHandle>,
+    /// The class whose engine sample the engine loop plays.
+    engine_class: Option<crate::Class>,
+    /// This ride's race track, read in once (to start again when the mask is off), and the
+    /// mask theme playing instead of it: Aku Aku's (`true`) or Uka Uka's.
+    track: Option<&'static Track>,
+    track_data: Option<StaticSoundData>,
+    /// The mask worn, and whether its theme took the music over.
+    mask: Option<(bool, bool)>,
+    /// Aku Aku's and Uka Uka's themes, read once (`None` inside: unreadable).
+    themes: [Option<Option<StaticSoundData>>; 2],
+    /// The voice lines read so far (`None`: unreadable).
+    voices: std::collections::HashMap<PathBuf, Option<StaticSoundData>>,
+}
+
+impl Extras {
+    fn stop(&mut self) {
+        if let Some(mut h) = self.scrape.take() {
+            h.stop(tween(250));
+        }
+        self.engine_class = None;
+        self.track = None;
+        self.track_data = None;
+        self.mask = None;
+    }
+
+    /// `Audio_SetMaskSong` (`HOWL_AudioState.c:142-190`): while we wear the mask its theme
+    /// (song 1 or 2 of the track's CSEQ) plays instead of the race track, and the race track
+    /// starts over once the mask is off (`Music_Adjust` restarts song 0).
+    fn mask_music(
+        &mut self,
+        theme: Option<bool>,
+        music: &mut Option<StaticSoundHandle>,
+        play: &mut impl FnMut(StaticSoundData) -> Option<StaticSoundHandle>,
+    ) {
+        let Some(track) = self.track else {
+            return;
+        };
+        if self.mask.map(|(aku, _)| aku) == theme {
+            return;
+        }
+        let swapped = self.mask.take().is_some_and(|(_, swapped)| swapped);
+        let mut switch = |data: &StaticSoundData| {
+            if let Some(mut m) = music.take() {
+                m.stop(tween(300));
+            }
+            *music = play(data.clone().loop_region(..).volume(Decibels::SILENCE));
+        };
+        match theme {
+            Some(aku) => {
+                let file = if aku { &track.aku } else { &track.uka };
+                let data = self.themes[usize::from(!aku)].get_or_insert_with(|| {
+                    file.as_ref()
+                        .and_then(|f| StaticSoundData::from_file(f).ok())
+                });
+                if let Some(data) = data {
+                    switch(data);
+                }
+                self.mask = Some((aku, data.is_some()));
+            }
+            None if swapped => {
+                if let Some(data) = &self.track_data {
+                    switch(data);
+                }
+            }
+            None => {}
+        }
+    }
+}
+
+/// A CTR race track rendered from the player's disc (`kart-data/music/music.json`), and the
+/// mask themes played over it (`aku_file`, `uka_file`; kart data converted before they were
+/// has none).
 pub struct Track {
     pub name: String,
     pub file: PathBuf,
     /// Its tempo as the sequence is written (`CseqSongHeader.bpm`); 0 unknown.
     pub bpm: f64,
+    pub aku: Option<PathBuf>,
+    pub uka: Option<PathBuf>,
 }
 
 /// The race tracks there are.
@@ -634,10 +848,18 @@ pub fn tracks() -> &'static [Track] {
             .into_iter()
             .flatten()
             .filter_map(|t| {
+                let theme = |key: &str| {
+                    t[key]
+                        .as_str()
+                        .map(|f| root.join(f))
+                        .filter(|f| f.is_file())
+                };
                 Some(Track {
                     name: t["track"].as_str()?.to_string(),
                     file: root.join(t["file"].as_str()?),
                     bpm: t["bpm"].as_f64().unwrap_or(0.0),
+                    aku: theme("aku_file"),
+                    uka: theme("uka_file"),
                 })
             })
             .filter(|t| t.file.is_file())
@@ -692,7 +914,9 @@ impl Sounds {
                     m.stop(tween(1200));
                 }
                 self.loading = None;
+                self.extras.stop();
             }
+            audio.voices.clear();
             return;
         }
         // The race track: read on its own thread, started when it is in, looped.
@@ -700,6 +924,7 @@ impl Sounds {
             if let Some(track) = pick_track() {
                 info!("kart music: {} ({} BPM)", track.name, track.bpm);
                 self.music_bpm = track.bpm;
+                self.extras.track = Some(track);
                 let (send, receive) = std::sync::mpsc::channel();
                 let file = track.file.clone();
                 let _ = std::thread::Builder::new()
@@ -713,21 +938,45 @@ impl Sounds {
         if let Some(Ok(loaded)) = self.loading.as_ref().map(|r| r.try_recv()) {
             self.loading = None;
             if let Some(data) = loaded {
-                self.music = play(data.loop_region(..).volume(Decibels::SILENCE));
+                self.extras.track_data = Some(data.clone());
+                if !self.extras.mask.is_some_and(|(_, swapped)| swapped) {
+                    self.music = play(data.loop_region(..).volume(Decibels::SILENCE));
+                }
             }
         }
+        self.extras
+            .mask_music(audio.mask_theme, &mut self.music, &mut play);
         if let Some(m) = self.music.as_mut() {
             m.set_volume(db(0.8 * audio.music), tween(400));
             // CTR sets the new tempo at once; a short tween only keeps the change from clicking.
             m.set_playback_rate(tempo_rate(self.music_bpm, audio.music_bpm_delta), tween(60));
         }
         let bank: &Bank = self.bank.get_or_insert_with(Bank::load);
+        let class = audio.engine_class;
+        let engine_sample = &bank.engines[crate::Class::ALL
+            .iter()
+            .position(|c| *c == class)
+            .unwrap_or(0)];
+        if self.driving && self.extras.engine_class != Some(class) {
+            // The garage changed the class: its engine from now on.
+            if let Some(mut h) = self.loops.engine.take() {
+                h.stop(tween(60));
+            }
+            self.loops.engine = play(
+                engine_sample
+                    .clone()
+                    .loop_region(..)
+                    .volume(Decibels::SILENCE),
+            );
+        }
+        self.extras.engine_class = Some(class);
         if !self.driving {
             let mut start = |data: &StaticSoundData| {
                 play(data.clone().loop_region(..).volume(Decibels::SILENCE))
             };
+            self.extras.scrape = start(&bank.wall);
             self.loops = Loops {
-                engine: start(&bank.engine),
+                engine: start(engine_sample),
                 skid: start(&bank.skid),
                 roar: start(&bank.roar),
                 roulette: bank.roulette.as_ref().and_then(&mut start),
@@ -810,12 +1059,30 @@ impl Sounds {
                 h.set_playback_rate(rate, tween(60));
             }
         }
+        // The scrape loop at CTR's `engineVol` for it (`VehEmitter.c:1393-1404`).
+        if let Some(h) = self.extras.scrape.as_mut() {
+            h.set_volume(
+                db(0.6 * f32::from(audio.wall_volume) / 255.0 * sfx),
+                tween(60),
+            );
+        }
+        for file in audio.voices.drain(..) {
+            let data = self
+                .extras
+                .voices
+                .entry(file)
+                .or_insert_with_key(|f| StaticSoundData::from_file(f).ok());
+            if let Some(data) = data {
+                let _ = play(data.clone().volume(db(sfx)));
+            }
+        }
 
         for cue in cues {
             let (data, gain) = match cue {
                 Cue::Hop => (&bank.hop, 0.5),
-                Cue::Land { hard: true } => (&bank.land_hard, 1.0),
-                Cue::Land { hard: false } => (&bank.land, 0.8),
+                // The file is the loudest landing (0xFA); softer ones scale it.
+                Cue::Land { volume } => (&bank.land, f32::from(volume) / 250.0),
+                Cue::Bump(volume) => (&bank.bumps[bump_sample(volume)], f32::from(volume) / 255.0),
                 // The stage's pitch and volume are in the files (CTR plays one sample three ways).
                 Cue::Boost(stage) => (&bank.boost[usize::from(stage.clamp(1, 3) - 1)], 1.0),
                 Cue::Early => (&bank.puff, 0.7),
@@ -936,11 +1203,76 @@ mod tests {
             a.cues,
             [
                 Cue::Hop,
-                Cue::Land { hard: true },
+                Cue::Land { volume: 0x78 },
+                Cue::Land { volume: 0xDD },
                 Cue::Boost(2),
                 Cue::Crash
             ]
         );
+    }
+
+    #[test]
+    fn landings_and_kart_crashes_sound_at_ctr_s_volumes() {
+        // COLL.c:1508: 0x78 at 0x100 or softer, 0xFA at 0x3C00 or harder, linear between.
+        assert_eq!(landing_volume(0), 0x78);
+        assert_eq!(landing_volume(-0x100), 0x78);
+        assert_eq!(landing_volume(0x3C00), 0xFA);
+        assert_eq!(landing_volume(99_999), 0xFA);
+        assert_eq!(landing_volume(0x1E80), 0x78 + (0xFA - 0x78) / 2);
+        // VehPhysCrash.c:529-533: silent up to 0x200, then 0x3F..0xFF over 0..0x1900.
+        assert_eq!(bump_volume(0x200), None);
+        assert_eq!(bump_volume(0x1900), Some(0xFF));
+        assert_eq!(
+            bump_volume(0x201),
+            Some(0x3F + (0x201 * 0xC0 / 0x1900) as u8)
+        );
+        // OtherFX_DriverCrashing's three samples.
+        assert_eq!(bump_sample(0xA0), 0);
+        assert_eq!(bump_sample(0xA1), 1);
+        assert_eq!(bump_sample(0xDC), 1);
+        assert_eq!(bump_sample(0xDD), 2);
+
+        // One crash sound in three frames.
+        let mut a = KartAudio::default();
+        a.observe(&Event::Bump { strength: 0x800 });
+        a.observe(&Event::Bump { strength: 0x800 });
+        assert_eq!(a.cues.len(), 1);
+        let frame = crate::session::Feedback {
+            frames: 3,
+            ..Default::default()
+        };
+        a.tick(&frame, false);
+        a.observe(&Event::Bump { strength: 0x100 });
+        a.observe(&Event::Bump { strength: 0x1900 });
+        assert_eq!(a.cues[1], Cue::Bump(0xFF));
+    }
+
+    #[test]
+    fn the_wall_scrape_swells_while_scraping_and_fades_after() {
+        let mut a = KartAudio::default();
+        let scrape = crate::session::Feedback {
+            frames: 1,
+            wall_frames: 1,
+            landing: None,
+        };
+        let off = crate::session::Feedback {
+            frames: 1,
+            ..Default::default()
+        };
+        for _ in 0..3 {
+            a.tick(&scrape, false);
+        }
+        assert_eq!(a.wall_volume, 3 * 0x14);
+        for _ in 0..20 {
+            a.tick(&scrape, false);
+        }
+        assert_eq!(a.wall_volume, 0xFF);
+        a.tick(&off, false);
+        assert_eq!(a.wall_volume, 0xFF - 0x14);
+        for _ in 0..20 {
+            a.tick(&off, false);
+        }
+        assert_eq!(a.wall_volume, 0);
     }
 
     #[test]

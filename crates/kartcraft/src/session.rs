@@ -78,6 +78,18 @@ pub struct KartView {
     /// The ground under the kart as the host read it, for its sounds, whether or not it drives
     /// as it ([`Session::set_ground`]).
     pub ground: Ground,
+    /// The last step's scrapes and landing, for the effects, sounds and rumble.
+    pub feedback: Feedback,
+}
+
+/// What the kart's ticks of one step did that the effects, sounds and rumble follow: how many
+/// CTR frames it ran, how many of them scraped a wall ([`Kart::against_wall`]), and a landing's
+/// downward speed and ground speed (speed units).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Feedback {
+    pub frames: u8,
+    pub wall_frames: u8,
+    pub landing: Option<(i32, i32)>,
 }
 
 #[derive(Default)]
@@ -115,6 +127,8 @@ pub struct Session {
     terrain_physics: bool,
     /// The turbo pads to fire, Bevy world ([`crate::pads`]).
     pads: Vec<crate::pads::Pad>,
+    /// The last step's [`Feedback`].
+    feedback: Feedback,
 }
 
 /// Every collision triangle in the box around `centre`, in lu from `origin`; zero-area and
@@ -385,6 +399,7 @@ impl Session {
             .collect();
         self.owed = (self.owed + dt.min(0.1)).min(0.25);
         let mut events = std::mem::take(&mut kart.events);
+        self.feedback = Feedback::default();
         while self.owed >= ctr_kart::TICK {
             self.owed -= ctr_kart::TICK;
             let before = kart.pose().position;
@@ -396,6 +411,16 @@ impl Session {
                 from_lu(before, origin),
             );
             kart.tick_among(&world, input, mods, &others);
+            let fb = &mut self.feedback;
+            fb.frames = fb.frames.saturating_add(1);
+            if kart.against_wall() {
+                fb.wall_frames = fb.wall_frames.saturating_add(1);
+            }
+            for e in &kart.events {
+                if let Event::Land { fall, .. } = *e {
+                    fb.landing = Some((fall, kart.speed()));
+                }
+            }
             hold_at_void(&world, kart, before);
             if self.pinned {
                 pin_in_place(kart, before);
@@ -488,6 +513,7 @@ impl Session {
             hidden: kart.flicker_hidden(),
             skids: kart.skids(),
             ground: self.ground,
+            feedback: std::mem::take(&mut self.feedback),
         }
     }
 }

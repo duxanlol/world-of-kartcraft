@@ -91,6 +91,10 @@ fn extracts_kart_audio() {
         let looped = matches!(
             r.file,
             "engine.wav"
+                | "engine_accel.wav"
+                | "engine_speed.wav"
+                | "engine_turn.wav"
+                | "wall_rub.wav"
                 | "skid.wav"
                 | "turbo.wav"
                 | "roulette.wav"
@@ -98,11 +102,56 @@ fn extracts_kart_audio() {
                 | "missile_fly.wav"
                 | "shield_roll.wav"
                 | "warp_fly.wav"
-        );
+        ) || r.file.starts_with("skid_")
+            || r.file.starts_with("ground_");
         assert_eq!(r.looped, looped, "{}", r.file);
         assert!(dir.join(r.file).is_file());
     }
     assert!(dir.join("sounds.json").is_file());
+    // Each engine class has its own sample (HOWL_Engine.c:323).
+    let spu = |f: &str| out.iter().find(|r| r.file == f).unwrap().spu_index;
+    let engines = [
+        "engine.wav",
+        "engine_accel.wav",
+        "engine_speed.wav",
+        "engine_turn.wav",
+    ];
+    for (i, a) in engines.iter().enumerate() {
+        for b in &engines[i + 1..] {
+            assert_ne!(spu(a), spu(b), "{a} and {b} share a sample");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn extracts_every_racer_s_voice() {
+    let Some(mut disc) = disc() else {
+        eprintln!("CTR_DISC not set; skipping");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("ctr-voice-test-{}", std::process::id()));
+    let lines = ctr_assets::voice::extract(&mut disc, &dir).expect("voices");
+    // 16 characters x 19 XA lines (zGlobal_DATA.c voiceData).
+    assert_eq!(lines.len(), 16 * 19, "a raw .bin holds every XA line");
+    for l in &lines {
+        assert!(
+            (0.2..6.0).contains(&l.seconds),
+            "{}: {} s",
+            l.file,
+            l.seconds
+        );
+    }
+    for racer in ctr_assets::voice::RACERS {
+        for fx in ["fx0.wav", "fx1.wav"] {
+            assert!(dir.join(racer).join(fx).is_file(), "{racer}/{fx}");
+        }
+        assert!(dir.join(racer).join("0_0.wav").is_file(), "{racer}");
+    }
+    let doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("voices.json")).unwrap()).unwrap();
+    assert_eq!(doc["xa"], true);
+    assert_eq!(doc["racers"]["crash"]["sets"].as_array().unwrap().len(), 11);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -237,6 +286,15 @@ fn extracts_hud_and_music() {
     assert!((r.loop_seconds - 90.95).abs() < 0.1, "{}", r.loop_seconds);
     assert_eq!(r.pcm.len() % 2, 0);
     assert!(r.pcm.iter().any(|s| s.abs() > 20000));
+    // Its mask themes, songs 1 and 2 (CSEQ_SONG_AKU, CSEQ_SONG_UKA), are music too.
+    for song in [1, 2] {
+        let m = ctr_assets::music::render_song(&howl, &cseq, song, 11025).unwrap();
+        assert!((5.0..60.0).contains(&m.loop_seconds), "{}", m.loop_seconds);
+        assert!(
+            m.pcm.iter().any(|s| s.abs() > 10000),
+            "song {song} is silent"
+        );
+    }
 }
 
 #[test]

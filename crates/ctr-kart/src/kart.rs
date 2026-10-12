@@ -1044,6 +1044,12 @@ impl Kart {
         self.flags & TOUCH_GROUND != 0
     }
 
+    /// Scraping a wall this tick: `wallRubTimer` still full (`VEH_EMITTER_WALL_RUB_TIMER_FULL`,
+    /// `VehEmitter.c:1355`), the test CTR's wall sparks and scrape loop run on.
+    pub fn against_wall(&self) -> bool {
+        self.wall_rub == WALL_RUB_MS
+    }
+
     /// Moves the kart without changing its motion (a respawn or a teleport).
     /// Stops the kart at `position`, keeping its heading and whatever state it is in: the world
     /// past it has not loaded yet (Kartcraft's own; a CTR track is always whole).

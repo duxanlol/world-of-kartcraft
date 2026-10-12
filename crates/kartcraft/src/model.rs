@@ -362,6 +362,12 @@ pub struct KartStatus {
     pub speed: f32,
     /// The back and the front tyres skid, laying their marks (`VehGroundSkids.c`).
     pub skids: (bool, bool),
+    /// The ground under it as the host read it (whether or not it drives as it), for the dirt
+    /// its tyres throw; other drivers' karts relay none (asphalt).
+    pub ground: ctr_kart::Ground,
+    /// This frame's scrapes and landing ([`crate::session::Feedback`]); other drivers' karts
+    /// relay none.
+    pub feedback: crate::session::Feedback,
 }
 
 /// A wheel's steering pivot and its rolling hub, each knowing its kart.
@@ -646,6 +652,8 @@ pub fn update(
         engine: view.engine,
         speed: view.speed,
         skids: view.skids,
+        ground: view.ground,
+        feedback: view.feedback,
     };
 }
 
