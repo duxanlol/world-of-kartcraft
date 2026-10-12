@@ -22,7 +22,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <atomic>
 #include <mutex>
+#include <shared_mutex>
 #include <random>
 #include <set>
 #include <unordered_map>
@@ -1210,6 +1212,74 @@ namespace Kartcraft
         });
     }
 
+    // ── Race layers ────────────────────────────────────────────────────────────────────────────
+    //
+    // Each race under way is its own instance of the world: its racers see only each other, and
+    // nobody else sees them (Player::IsVisibleInGridForPlayer), nor hears their /say, emotes or karts
+    // (the player message deliverers). Creatures are in every layer. A racer is in the race's
+    // layer from its start until they leave it, the results included.
+    //
+    // s_layer is written on the world thread between map updates (the messager), then read by
+    // the map threads' visibility checks and by the async packet thread's kart relay: a shared
+    // lock for the readers, and s_layered so a world with no race under way takes no lock.
+    static std::unordered_map<uint32, uint32> s_layer; // player low guid -> race id
+    static std::shared_mutex s_layerMutex;
+    static std::atomic<size_t> s_layered{ 0 };
+    // What the last TickLayers handed the messager, under s_mutex.
+    static std::map<ObjectGuid, uint32> s_layerPosted;
+
+    static uint32 LayerOf(WorldObject const* o)
+    {
+        auto it = s_layer.find(o->GetGUIDLow());
+        return it == s_layer.end() ? 0 : it->second;
+    }
+
+    bool SameLayer(WorldObject const* a, WorldObject const* b)
+    {
+        if (s_layered.load(std::memory_order_acquire) == 0 || a == b || !a->IsPlayer() || !b->IsPlayer())
+            return true;
+        std::shared_lock<std::shared_mutex> lock(s_layerMutex);
+        return LayerOf(a) == LayerOf(b);
+    }
+
+    // Run after every Kartcraft line and at login: who is in which race's layer now. A change
+    // goes through the messager, which swaps the table and redraws what the moved players see and
+    // who sees them, as GM mode's toggle does.
+    static void TickLayers()
+    {
+        std::map<ObjectGuid, uint32> layers;
+        for (auto const& entry : s_races)
+            if (entry.second.start)
+                for (Racer const& r : entry.second.racers)
+                    layers[r.guid] = entry.first;
+        if (layers == s_layerPosted)
+            return;
+        std::vector<ObjectGuid> moved;
+        for (auto const& had : s_layerPosted)
+        {
+            auto now = layers.find(had.first);
+            if (now == layers.end() || now->second != had.second)
+                moved.push_back(had.first);
+        }
+        for (auto const& now : layers)
+            if (!s_layerPosted.count(now.first))
+                moved.push_back(now.first);
+        s_layerPosted = layers;
+        sWorld.GetMessager().AddMessage([layers, moved](World*)
+        {
+            {
+                std::unique_lock<std::shared_mutex> lock(s_layerMutex);
+                s_layer.clear();
+                for (auto const& l : layers)
+                    s_layer[l.first.GetCounter()] = l.second;
+                s_layered.store(s_layer.size(), std::memory_order_release);
+            }
+            for (ObjectGuid const& guid : moved)
+                if (Player* p = ObjectAccessor::FindPlayer(guid))
+                    p->UpdateVisibilityAndView();
+        });
+    }
+
     // "R\tM\t1" or "R\tM\t0": race mode on or off. The answer is "R\tM\t<1 or 0>", or "R\tMx"
     // when it can't come on (in combat). The shield follows with the line's TickShields.
     static void RaceMode(Player* player, bool on)
@@ -2223,6 +2293,8 @@ namespace Kartcraft
             player->RemoveFlag(UNIT_FIELD_FLAGS, RACE_MODE_FLAGS);
         // A spot to go back to does not outlive the session.
         s_origins.erase(guid.GetCounter());
+        // Out of any race's layer, back with everyone.
+        TickLayers();
     }
 
     // "R\tU": a kart stuck in the world (sunk into a hill, wedged in a crease) put back on a course:
@@ -2553,6 +2625,7 @@ namespace Kartcraft
             HandleWeapon(player, body);
         // After the line: a finish or a leave in it frees the racer at once.
         TickShields(WorldTimer::getMSTime());
+        TickLayers();
     }
 
     bool HandleAddonMessage(Player* player, std::string const& message)
