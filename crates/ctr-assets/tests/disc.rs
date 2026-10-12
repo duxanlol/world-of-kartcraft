@@ -102,7 +102,8 @@ fn extracts_kart_audio() {
                 | "missile_fly.wav"
                 | "shield_roll.wav"
                 | "warp_fly.wav"
-        );
+        ) || r.file.starts_with("skid_")
+            || r.file.starts_with("ground_");
         assert_eq!(r.looped, looped, "{}", r.file);
         assert!(dir.join(r.file).is_file());
     }

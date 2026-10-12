@@ -799,6 +799,7 @@ fn the_settings_window_sets_the_kart_s_cvars() {
          BenillaKartSettingsFrameMusic:Click() \
          BenillaKartSettingsFrameGhost:Click() \
          BenillaKartSettingsFrameTerrain:Click() \
+         BenillaKartSettingsFrameRumble:Click() \
          BenillaKartSettingsFrameFarCamera:Click() \
          BenillaKartSettingsFrameArrowSize:SetValue(1.5) \
          BenillaKartSettingsFrameMusicVolume:SetValue(0.25)",
@@ -810,6 +811,7 @@ fn the_settings_window_sets_the_kart_s_cvars() {
         ("KartMusic", "0"),
         ("KartGhost", "0"),
         ("KartTerrain", "1"),
+        ("KartRumble", "0"),
         ("KartFarCamera", "1"),
         ("KartArrowSize", "1.5"),
         ("KartMusicVolume", "0.25"),

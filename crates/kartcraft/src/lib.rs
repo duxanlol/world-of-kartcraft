@@ -10,8 +10,10 @@ pub mod hud;
 pub mod input;
 pub mod model;
 pub mod pads;
+pub mod rumble;
 pub mod session;
 pub mod sound;
+pub mod voice;
 pub mod weapons;
 
 use bevy::prelude::*;

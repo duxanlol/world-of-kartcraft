@@ -786,6 +786,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "0",
         "Kartcraft's own — CTR's ground types under the kart; 1.12 has no kart",
     ),
+    // The controller's rumble on crashes, landings and scrapes (`kartcraft::rumble`).
+    ours(
+        "KartRumble",
+        "1",
+        "Kartcraft's own — CTR's controller vibration; 1.12 has no kart",
+    ),
     // The chase camera's shape, the camera window's (`/kartcam`), each a field of
     // `kartcraft::camera::CameraTuning` at its Kartcraft value (`kart::settings::CAMERA_KNOBS`):
     // lengths in lu, angles in degrees, smoothing in seconds, shares 0 to 1.

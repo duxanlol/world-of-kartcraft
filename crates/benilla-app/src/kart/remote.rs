@@ -349,6 +349,7 @@ pub(crate) fn update(
                 // The wire carries the powerslide, not the skid flags: a remote kart marks the
                 // ground through its drifts only.
                 skids: (state.drifting, state.drifting),
+                ..Default::default()
             };
         }
         // The driver in the seat of their kart, as ours.
