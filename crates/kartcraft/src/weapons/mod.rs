@@ -863,7 +863,7 @@ impl Weapons {
     }
 
     /// Our kart's own news this tick: a TNT on our head going off (a self-inflicted blast) or
-    /// thrown off, and the fuse's honks.
+    /// thrown off, the fuse's honks, and Wumpa lost to a spin-out or a mask grab.
     fn our_kart(&mut self, kart: &mut Kart, origin: Vec3) {
         let at = kart.pose().position;
         for e in kart.events.clone() {
@@ -881,6 +881,14 @@ impl Weapons {
                     }
                     let me = self.me;
                     self.tnt_blast(me, at, kart, origin);
+                }
+                // Wumpa lost by no one's hit, which the server takes; only in a race
+                // (`LOAD_IsOpen_RacingOrBattle`, `VehPhysProc.c:2868`, `VehStuckProc.c:648`).
+                ctr_kart::Event::DriftSpinOut if self.live() => {
+                    self.outbox.push((self.me, Up::Lose(wire::Loss::SpinOut)));
+                }
+                ctr_kart::Event::MaskGrab if self.live() => {
+                    self.outbox.push((self.me, Up::Lose(wire::Loss::MaskGrab)));
                 }
                 ctr_kart::Event::TntThrownOff => {
                     self.serial += 1;

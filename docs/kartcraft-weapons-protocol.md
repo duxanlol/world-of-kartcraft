@@ -108,6 +108,13 @@ victim's kart. A hit by a dropped item ends that item.
 Self-inflicted hits use shooter guid = own guid, shot 0, for example a TNT going off on your own
 head or driving into your own Nitro. They are always accepted and only relayed.
 
+### Client → server: Wumpa lost by no one's hit
+
+`W\tP\t<why>`: `S` a powerslide spun out (CTR's SpinFirst, 1 Wumpa, `VehPhysProc.c:2868-2871`;
+a hit's spin-out is paid with the hit), `M` Aku Aku put the kart back after a fall (the mask
+grab, 2 Wumpa, `VehStuckProc.c:648-651`). The server takes it (none while masked) and answers
+the sender alone with `W\tF\t<wumpa total>`. Sent only inside a race, as CTR takes it only there.
+
 ### Limits
 
 At most 20 `W` lines a second from one sender; the rest are dropped. At most 12 live shots per

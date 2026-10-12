@@ -440,6 +440,8 @@ fn a_blast_bounces_for_seventy_five_frames_and_a_second_one_is_ignored() {
     kart.tick(&w, &GAS, &NONE);
     assert!(kart.reaction().is_none());
     assert!(kart.can_fire());
+    // The last bounce's landing squash settles back to the model as built.
+    run(&mut kart, &w, GAS, 30);
     assert_eq!(kart.pose().scale, Vec3::ONE);
 }
 
@@ -650,4 +652,167 @@ fn the_turbo_item_is_seventy_five_frames_at_fire_level_128_or_256() {
     assert!(kart.reserves() > 0);
     kart.tick(&w, &GAS, &NONE);
     assert_eq!(kart.reserves(), 0);
+}
+
+#[test]
+fn a_drop_stretches_the_kart_falling_and_squashes_it_landing() {
+    // Off a 400 lu ledge at speed onto the floor.
+    let mut tris = floor(60000.0);
+    let (w, top) = (3000.0, 400.0);
+    tris.push([[-w, top, -w], [-w, top, 2000.0], [w, top, 2000.0]]);
+    tris.push([[-w, top, -w], [w, top, 2000.0], [w, top, -w]]);
+    let world = world(tris);
+    let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, top + 1.0, -2500.0), 0);
+    run(&mut kart, &world, GAS, 20);
+    assert_eq!(kart.pose().scale, Vec3::ONE, "at rest on the plateau");
+    let (mut tallest, mut flattest, mut landed) = (1.0f32, 1.0f32, None);
+    let mut deepest = 0;
+    for frame in 0..200 {
+        kart.tick(&world, &GAS, &NONE);
+        deepest = deepest.min(kart.squash);
+        let s = kart.pose().scale;
+        if !kart.grounded() && kart.pose().position.y < top - 1.0 {
+            // Falling: taller and narrower (`VehPhysForce.c:1697-1708`).
+            tallest = tallest.max(s.y);
+            assert!(s.x <= 1.0 && s.z <= 1.0, "{s:?}");
+        }
+        if landed.is_none() && kart.grounded() && kart.pose().position.y < 1.0 {
+            landed = Some(frame);
+        }
+        if landed.is_some_and(|l| frame - l < 10) {
+            flattest = flattest.min(s.y);
+        }
+    }
+    assert!(landed.is_some(), "never came down");
+    // The fall's stretch up to 0x320 over 0xCCC. The landing's squash takes its least, −0x640,
+    // settled 300 the same frame; the model eases 0xA0 a frame from tall to under its height.
+    assert!(
+        tallest > 1.1 && tallest <= 1.0 + 800.0 / 3276.0 + 1e-3,
+        "{tallest}"
+    );
+    assert_eq!(deepest, SQUASH_LANDING_MIN + SQUASH_EASE);
+    assert!(flattest < 0.95, "{flattest}");
+    assert_eq!(kart.pose().scale, Vec3::ONE, "settled after");
+}
+
+#[test]
+fn a_hop_crouches_first() {
+    let w = world(floor(40000.0));
+    let mut kart = Kart::new(Class::Balanced, Vec3::ZERO, 0);
+    run(&mut kart, &w, GAS, 10);
+    kart.tick(&w, &Input { r1: true, ..GAS }, &NONE);
+    assert!(kart.events.contains(&Event::Hop));
+    // `jumpSquishStretch` −800 on the hop's frame: the height eases down 0xA0 a frame.
+    let s = kart.pose().scale;
+    assert!((s.y - (3276.0 - 160.0) / 3276.0).abs() < 1e-4, "{s:?}");
+    assert!(s.x > 1.0, "{s:?}");
+}
+
+#[test]
+fn a_squish_springs_back_with_ctr_s_bounce() {
+    let w = world(floor(40000.0));
+    let mut kart = cruising(&w);
+    assert!(kart.hit(HitKind::Squished));
+    let mut restored = None;
+    for frame in 0..200 {
+        kart.events.clear();
+        kart.tick(&w, &GAS, &NONE);
+        if saw(&kart, Event::SquishRestored) {
+            restored = Some(frame);
+            break;
+        }
+        assert_eq!(kart.pose().scale.y, 0.0);
+    }
+    // `squishTimer` 0xF00 counts down 32 a frame: the 120th frame is the first unsquished.
+    assert_eq!(restored, Some(119), "after the 120-frame squish");
+    // Entries 1 to 14 of `bakedGteMath[SQUISH_RECOVER]`, the first lifted 3896/256 lu.
+    let p = kart.pose();
+    assert!((p.offset.y - 3896.0 / 256.0).abs() < 0.1, "{p:?}");
+    let mut lifts = vec![p.offset.y];
+    for _ in 1..14 {
+        kart.tick(&w, &GAS, &NONE);
+        lifts.push(kart.pose().offset.y);
+    }
+    let top = lifts.iter().cloned().fold(0.0f32, f32::max);
+    assert!((top - 4636.0 / 256.0).abs() < 0.1, "{lifts:?}");
+    assert_eq!(*lifts.last().unwrap(), 0.0);
+    kart.tick(&w, &GAS, &NONE);
+    assert!(kart.squish_recover.is_none());
+    assert_eq!(kart.pose().offset, Vec3::ZERO);
+    run(&mut kart, &w, GAS, 30);
+    assert_eq!(kart.pose().scale, Vec3::ONE);
+}
+
+#[test]
+fn only_more_than_0x2a0_ms_of_invincibility_flickers_and_every_other_frame() {
+    let w = world(floor(40000.0));
+    // A shield pop leaves exactly 0x2A0: no flicker (`231/RB_Player.c:242-245`).
+    let mut kart = cruising(&w);
+    kart.shield_up(false);
+    assert!(!kart.hit(HitKind::Blasted));
+    for _ in 0..25 {
+        kart.tick(&w, &GAS, &NONE);
+        assert!(!kart.flicker_hidden());
+    }
+    // Battle's 2880 after a tumble: hidden on odd frames until 0x2A0 is left.
+    kart.invincible = 2880;
+    let mut hidden = Vec::new();
+    for _ in 0..90 {
+        kart.tick(&w, &GAS, &NONE);
+        hidden.push(kart.flicker_hidden());
+    }
+    let flickering = ((2880 - FLICKER_INVINCIBLE_MS) / MS) as usize;
+    assert!(hidden[..flickering].windows(2).all(|p| p[0] != p[1]));
+    assert!(hidden[flickering..].iter().all(|h| !h));
+}
+
+#[test]
+fn a_powerslide_spin_out_is_its_own_event_and_a_hit_s_spin_is_not() {
+    let w = world(floor(200000.0));
+    let mut kart = drifting(&w);
+    kart.drift_frames = DRIFT_FRAMES_TILL_SPINOUT + 1;
+    kart.events.clear();
+    kart.tick(
+        &w,
+        &Input {
+            steer: -1.0,
+            r1: true,
+            ..GAS
+        },
+        &NONE,
+    );
+    assert!(matches!(kart.state, State::Spinning(_)));
+    assert!(saw(&kart, Event::SpinOut));
+    assert!(saw(&kart, Event::DriftSpinOut));
+
+    let mut hit = cruising(&w);
+    hit.hit(HitKind::SpinOut);
+    hit.tick(&w, &GAS, &NONE);
+    assert!(saw(&hit, Event::SpinOut));
+    assert!(!saw(&hit, Event::DriftSpinOut));
+}
+
+#[test]
+fn the_mask_grab_puts_the_kart_back_and_says_so() {
+    let w = world(floor(40000.0));
+    let mut kart = cruising(&w);
+    kart.events.clear();
+    kart.mask_grab(Vec3::new(100.0, 40.0, 100.0), 1024);
+    assert!(saw(&kart, Event::MaskGrab));
+    assert_eq!(kart.pose().position, Vec3::new(100.0, 40.0, 100.0));
+    assert_eq!(kart.speed(), 0);
+}
+
+#[test]
+fn the_camera_reads_the_blast_and_the_ground_under_the_kart() {
+    let w = world(floor(40000.0));
+    let mut kart = cruising(&w);
+    let c = kart.camera_input();
+    assert!(!c.blasted && c.grounded);
+    assert!(c.ground.abs() < 1e-3);
+    kart.hit(HitKind::Blasted);
+    run(&mut kart, &w, GAS, 5);
+    let c = kart.camera_input();
+    assert!(c.blasted && !c.grounded, "{c:?}");
+    assert!(c.ground.abs() < 1e-3, "the floor is in reach: {c:?}");
 }

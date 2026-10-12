@@ -318,6 +318,14 @@ impl Referee {
                     },
                 ));
             }
+            Up::Lose(loss) => {
+                // Taken as hits take it, none while masked; the total goes to the loser alone.
+                let r = self.racers.entry(from).or_default();
+                if now >= r.mask_until {
+                    r.wumpa = r.wumpa.saturating_sub(loss.wumpa());
+                }
+                out.push((Some(from), Down::Wumpa(r.wumpa)));
+            }
         }
         out
     }
@@ -396,6 +404,32 @@ mod tests {
         assert!(
             r.handle(2, hit(9), [0.0; 3], 1.5).is_empty(),
             "no such shot"
+        );
+    }
+
+    #[test]
+    fn a_spin_out_costs_one_wumpa_and_the_mask_grab_two_but_not_under_a_mask() {
+        use super::super::wire::Loss;
+        let (mut r, _) = Referee::new(vec![], 100);
+        r.racers.entry(1).or_default().wumpa = 4;
+        let lose = |r: &mut Referee, loss, now| r.handle(1, Up::Lose(loss), [0.0; 3], now);
+        assert_eq!(
+            lose(&mut r, Loss::SpinOut, 1.0),
+            vec![(Some(1), Down::Wumpa(3))]
+        );
+        assert_eq!(
+            lose(&mut r, Loss::MaskGrab, 2.0),
+            vec![(Some(1), Down::Wumpa(1))]
+        );
+        assert_eq!(
+            lose(&mut r, Loss::MaskGrab, 3.0),
+            vec![(Some(1), Down::Wumpa(0))]
+        );
+        r.racers.entry(1).or_default().wumpa = 4;
+        r.racers.entry(1).or_default().mask_until = 10.0;
+        assert_eq!(
+            lose(&mut r, Loss::SpinOut, 4.0),
+            vec![(Some(1), Down::Wumpa(4))]
         );
     }
 

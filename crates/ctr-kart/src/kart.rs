@@ -76,6 +76,15 @@ pub enum Event {
         speed: i32,
     },
     SpinOut,
+    /// A powerslide spun out (`VehPhysProc.c:2542-2552`): a SpinFirst with no hit behind it,
+    /// which costs a Wumpa in a race (`VehPhysProc.c:2868-2871`); a hit's spin is paid with the
+    /// hit. Comes with [`Event::SpinOut`].
+    DriftSpinOut,
+    /// Aku Aku put the fallen kart back (`VehStuckProc_MaskGrab_Init`, `VehStuckProc.c:622-720`),
+    /// which costs 2 Wumpa in a race (`:648-651`).
+    MaskGrab,
+    /// The squish wore off and the model springs back up (`VehPhysForce.c:1740-1750`, SFX 0x5B).
+    SquishRestored,
     /// Bumped by another kart, this hard (speed units into us).
     Bump {
         strength: i32,
@@ -406,6 +415,11 @@ pub struct CameraInput {
     /// The direction the kart is travelling over the ground, 4096ths; `None` when it is barely
     /// moving, so has none worth following.
     pub travel: Option<i32>,
+    /// Tumbling from a blast (`KS_BLASTED`), on the ground, and `quadBlockHeight`: the ground
+    /// under the kart, or 256 lu below it with none in reach (`COLL.c:1362-1373`), lu.
+    pub blasted: bool,
+    pub grounded: bool,
+    pub ground: f32,
 }
 
 /// The world view of a kart, for drawing and the camera.
@@ -423,11 +437,12 @@ pub struct Pose {
     pub steer: f32,
     pub grounded: bool,
     pub state: State,
-    /// The model's scale along its own X, Y, Z (1 = as built): a squished kart is flat (Y 0), a
-    /// blasted one squashes and stretches as it tumbles. Applied before `basis`.
+    /// The model's scale along its own X, Y, Z (1 = as built): stretched falling and squashed
+    /// landing, flat (Y 0) squished and bouncing back after, and squashing and stretching as a
+    /// blasted one tumbles. Applied before `basis`.
     pub scale: Vec3,
-    /// Where the model is drawn off `position`, lu: up its normal when squished, round the
-    /// tumble's pivot when blasted.
+    /// Where the model is drawn off `position`, lu: up its normal when squished, up the kart as
+    /// it bounces back, round the tumble's pivot when blasted.
     pub offset: Vec3,
 }
 
@@ -530,6 +545,21 @@ pub struct Kart {
     camera_spin_rate: i32,
     /// A turbo was granted since the camera last looked (`VehFire.c`'s camera flag 0x80).
     camera_kick: bool,
+    /// `quadBlockHeight`, lu: the camera's floor through a blast.
+    ground: f32,
+    /// `jumpHeightCurr`: the velocity along the kart's up, speed units; and whether a jump
+    /// started this frame (`ACTION_JUMP_STARTED`, set by every PROCESS_JUMP).
+    jump_height: i32,
+    jump_started: bool,
+    /// `jumpSquishStretch` and its lagging twin `jumpSquishStretch2`, and the instance's X, Y, Z
+    /// scale ([`SCALE_BASE`] as built) that follows them.
+    squash: i32,
+    squash_lag: i32,
+    model_scale: [i32; 3],
+    /// `matrixIndex` into [`SQUISH_RECOVER`] while the squish's recovery bounce plays.
+    squish_recover: Option<usize>,
+    /// `gGT->timer`: frames ticked, for the invincibility flicker.
+    frame: u32,
 
     pub events: Vec<Event>,
 }
@@ -617,6 +647,14 @@ impl Kart {
             camera_spin: 0,
             camera_spin_rate: 0,
             camera_kick: false,
+            ground: position.y,
+            jump_height: 0,
+            jump_started: false,
+            squash: 0,
+            squash_lag: 0,
+            model_scale: [SCALE_BASE; 3],
+            squish_recover: None,
+            frame: 0,
             events: Vec::new(),
         }
     }
@@ -700,6 +738,9 @@ impl Kart {
             fire_speed_cap: self.fire_speed_cap,
             travel: (self.vel.x.hypot(self.vel.z) * (30.0 / 256.0) > TRAVEL_MIN)
                 .then(|| atan2_units(self.vel.x, self.vel.z)),
+            blasted: self.blasted,
+            grounded: self.grounded(),
+            ground: self.ground,
         }
     }
 
@@ -837,14 +878,36 @@ impl Kart {
         self.no_input = 0;
         self.blasted = false;
         self.squish = 0;
+        self.squash = 0;
+        self.squash_lag = 0;
+        self.model_scale = [SCALE_BASE; 3];
+        self.squish_recover = None;
         self.moving = rot_axis_angle(Vec3::Y, heading);
         self.facing = self.moving;
+    }
+
+    /// Aku Aku puts the fallen kart back at `position` facing `heading` (CTR's mask grab,
+    /// `VehStuckProc.c:404-720`, drawn here as a cut): [`Event::MaskGrab`], 2 Wumpa in a race.
+    pub fn mask_grab(&mut self, position: Vec3, heading: i32) {
+        self.place(position, heading);
+        self.events.push(Event::MaskGrab);
+    }
+
+    /// `RB_Player_ToggleFlicker` (`231/RB_Player.c:231-257`): with more than 0x2A0 ms of
+    /// invincibility left, the kart is not drawn on odd frames. Only battle's tumble end gives
+    /// that much (2880, `VehPhysProc.c:1705-1710`); a shield pop's 0x2A0 never flickers, so in a
+    /// race the kart never does.
+    pub fn flicker_hidden(&self) -> bool {
+        self.invincible > FLICKER_INVINCIBLE_MS && self.frame & 1 != 0
     }
 
     pub fn pose(&self) -> Pose {
         let steer = (self.simp_turn as f32 / self.stats.turn_rate.max(1) as f32).clamp(-1.0, 1.0);
         let mut basis = self.facing;
-        let mut scale = Vec3::ONE;
+        // The instance's squash and stretch (`VehPhysForce.c:1643-1772`), then the baked matrix
+        // on top of it: the tumble or the squish's recovery bounce.
+        let [x, y, z] = self.model_scale.map(|s| s as f32 / SCALE_BASE as f32);
+        let mut scale = Vec3::new(x, y, z);
         let mut offset = Vec3::ZERO;
         if self.blasted {
             // `VehStuckProc_Tumble_Animate`: the frame is the lockout's 32 ms count, wrapped.
@@ -855,12 +918,18 @@ impl Kart {
             }
             let (tumble, s) = tumble_frame(i);
             basis = self.facing * tumble;
-            scale = s;
+            scale *= s;
             offset = self.facing * ((Vec3::Y - tumble * Vec3::Y) * BLAST_PIVOT);
-        } else if self.squish != 0 {
-            // `VehPhysForce.c:1737-1740`: scale.y = 0, lifted up the drawn normal.
+        } else if let Some(i) = self.squish_recover {
+            // `VehPhysForce.c:1366-1440`: the baked entry's lift is turned with the kart.
+            let [lift, x, y, z] = SQUISH_RECOVER[i];
+            scale *= Vec3::new(x as f32, y as f32, z as f32) / 4096.0;
+            offset = self.facing * (Vec3::Y * (lift as f32 / 256.0));
+        }
+        if self.squish != 0 {
+            // `VehPhysForce.c:1737-1740`, `1453-1458`: scale.y = 0, lifted up the drawn normal.
             scale.y = 0.0;
-            offset = self.n2 * SQUISH_LIFT;
+            offset += self.n2 * SQUISH_LIFT;
         }
         Pose {
             position: self.pos,
@@ -1139,6 +1208,8 @@ impl Kart {
             ..*mods
         };
         self.hopped = false;
+        self.jump_started = false;
+        self.frame = self.frame.wrapping_add(1);
 
         // INIT: a hit taken since the last frame installs its reaction.
         match self.pending.take() {
@@ -1170,6 +1241,7 @@ impl Kart {
             .unwrap_or(Vec3::Y);
         let yaw = wrap(self.angle + self.turn_angle);
         self.facing = rot_axis_angle(self.n2, yaw);
+        self.squash_stretch();
         self.hang_time();
         self.engine_sound_tick();
         self.camera_spin_tick();
@@ -1291,6 +1363,8 @@ impl Kart {
         self.state = State::Normal;
         self.blasted = true;
         self.turbo_meter = 0;
+        // The tumble's baked matrix takes over from a recovery bounce.
+        self.squish_recover = None;
         self.blast_backwards = self.scramble() & 4 != 0;
     }
 
@@ -1444,6 +1518,7 @@ impl Kart {
     fn spin_out(&mut self, ms: i32) {
         self.no_input = ms;
         self.spin_init();
+        self.events.push(Event::DriftSpinOut);
         self.reserves = 0;
     }
 
@@ -1994,6 +2069,8 @@ impl Kart {
     fn ground_probe(&mut self, world: &Collision) {
         let was = self.flags_prev & TOUCH_GROUND != 0;
         let hit = world.ground(self.pos + Vec3::Y * 128.0, 384.0);
+        // `quadBlockHeight` (`COLL.c:1362-1373`): the ground found, else the search's bottom.
+        self.ground = hit.as_ref().map_or(self.pos.y - 256.0, |h| h.point.y);
         let mut grounded = self.flags & TOUCH_GROUND != 0;
         if let Some(hit) = hit {
             if self.pos.y <= hit.point.y + 16.0 {
@@ -2082,6 +2159,7 @@ impl Kart {
             self.vel_pitch = atan2_units(mv.y, flat);
         }
         let up = self.moving.y_axis;
+        self.jump_height = mv.dot(up) as i32;
         let planar = mv - up * mv.dot(up);
         let along = planar.dot(self.moving.z_axis);
         self.speed_approx = (planar.length() * along.signum()) as i32;
@@ -2114,6 +2192,7 @@ impl Kart {
     fn process_jump(&mut self, mv: &mut Vec3) {
         self.jump_cooldown = JUMP_COOLDOWN_MS;
         self.jump_buffer = 0;
+        self.jump_started = true;
         let slope = |n: Vec3| {
             if (n.y * 4096.0).abs() < 21.0 {
                 0.0
@@ -2127,6 +2206,69 @@ impl Kart {
         let j = self.jump_vel as f32;
         let vy = (best * best + j * j).sqrt() - best;
         mv.y = mv.y.max(vy.min(JUMP_VERTICAL_CAP as f32));
+    }
+
+    /// TRANSLATE_MATRIX's squash and stretch (`VehPhysForce.c:1643-1772`): a hop crouches, a
+    /// fall stretches, a hard landing squashes by the drop in up-speed, and `jumpSquishStretch`
+    /// settles 300 a frame while the model's scale follows it 0xA0 a frame, the width and length
+    /// giving back 0xA0/256 of it. A squish holds the height at 0; as it wears off the height
+    /// snaps to the squash's and the baked recovery bounce plays (`:1740-1750`, then
+    /// `VehPhysForce.c:1335-1343`). Not ported: the clock's and rain cloud's `hazardTimer` hold
+    /// (`:1691-1695`) and a TNT's shrink on landing (`:1711-1714`).
+    fn squash_stretch(&mut self) {
+        let jh = self.jump_height;
+        let mut target = SQUASH_DEFAULT;
+        if !self.jump_started {
+            let lag = self.squash_lag;
+            target = (lag - ((lag * 9 + jh * 7) >> 4)) << 2;
+            if target.abs() < SQUASH_DEADBAND {
+                target = 0;
+            }
+            let landing = (self.flags | self.flags_prev) & STARTED_TOUCH_GROUND != 0;
+            let least = if landing {
+                SQUASH_LANDING_MIN
+            } else {
+                SQUASH_AIR_MIN
+            };
+            target = target.max(least).min(SQUASH_MAX);
+        }
+        if !self.grounded() && jh < 0 {
+            let fall = map(
+                -jh,
+                0,
+                FALL_STRETCH_SPEED,
+                FALL_STRETCH_MIN,
+                FALL_STRETCH_MAX,
+            );
+            target = target.max(fall);
+            self.squash_lag = jh;
+        }
+        if self.squash.abs() < target.abs() {
+            self.squash = target;
+        }
+        self.squash = approach_i(self.squash, SQUASH_EASE, 0);
+        self.squash_lag = (self.squash_lag * 9 + jh * 7) >> 4;
+
+        let height = self.squash + SCALE_BASE;
+        let [x, y, z] = &mut self.model_scale;
+        if self.squish != 0 {
+            *y = 0;
+        } else if *y == 0 {
+            *y = height;
+            self.squish_recover = Some(0);
+            self.events.push(Event::SquishRestored);
+        } else {
+            *y = approach_i(*y, SCALE_EASE, height);
+        }
+        let across = SCALE_BASE - self.squash * SQUASH_XZ / 256;
+        *x = approach_i(*x, SCALE_EASE, across);
+        *z = approach_i(*z, SCALE_EASE, across);
+        // `VehPhysForce_TranslateMatrix_UpdateMatrixAnimation`: the bounce steps before it is
+        // drawn, so its entries 1 to 14 show.
+        self.squish_recover = self
+            .squish_recover
+            .map(|i| i + 1)
+            .filter(|&i| i < SQUISH_RECOVER.len());
     }
 
     /// `UI_JumpMeter_Update` (6.6): a long enough hop pays out on landing.
