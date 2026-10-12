@@ -215,7 +215,7 @@ const FINAL_LAP_FRAMES: u32 = 90;
 /// final-lap XA sting has played 0xE1 of its 256-sample blocks at 44.1 kHz
 /// (`HOWL_AudioState.c:334`; the block size from CTR-native's `NativeAudio_GetXACurrOffset`).
 const FINAL_LAP_BPM: f64 = 20.0;
-const FINAL_LAP_STING_SECS: f32 = 225.0 * 256.0 / 44100.0;
+const FINAL_LAP_STING_SECS: f32 = kartcraft::sound::FINAL_LAP_TEMPO_SECS;
 /// "WRONG WAY": CTR adds what a racer's distance to the finish grew by each frame and clamps it
 /// to 0..1000 lu (`PlayLevel.c:80-95`), and shows the text from 0x1F5 lu while the racer faces
 /// within 45 degrees of straight back down the path (`VehLap.c:114-131`, the dot product against
@@ -386,6 +386,14 @@ impl Active {
             Some(t) if !self.done && now - t >= FINAL_LAP_STING_SECS => FINAL_LAP_BPM,
             _ => 0.0,
         }
+    }
+
+    /// Seconds into our final lap at `now`, until the race is over for us: its sting plays as it
+    /// begins, the song lowered under it (`AUDIO_FINAL_LAP`, `HOWL_AudioState.c:79-87`).
+    fn final_lap_secs(&self, now: f32) -> Option<f32> {
+        self.final_lap_at
+            .filter(|_| !self.done)
+            .map(|t| (now - t).max(0.0))
     }
 
     /// How far along the course (yards from the start, a circuit's laps counted in) a racer is
@@ -910,6 +918,7 @@ fn clear_hud(extras: &mut kartcraft::hud::HudExtras, audio: &mut kartcraft::soun
     extras.final_lap_frame = None;
     extras.wrong_way = false;
     audio.music_bpm_delta = 0.0;
+    audio.final_lap = None;
 }
 
 /// Whether the flashing "WRONG WAY" is lit `secs` into the race: while bit 0x80 of the race's
@@ -1098,6 +1107,7 @@ pub(crate) fn update(
     extras.clock = race.clock(now, finish_ms);
     extras.final_lap_frame = race.final_lap_frame(now);
     audio.music_bpm_delta = race.music_bpm_delta(now);
+    audio.final_lap = race.final_lap_secs(now);
     // Wrong way: our progress along the course this frame, against how we face.
     let progress = race.progress(race.lap, race.checkpoint, Some(at));
     race.drove(progress, kartcraft::lu_per_yard());
@@ -2292,9 +2302,17 @@ mod tests {
         assert_eq!(race.final_lap_frame(156.0), Some(30));
         assert_eq!(race.final_lap_frame(157.99), Some(89));
         assert_eq!(race.final_lap_frame(158.0), None);
-        // The music goes up 20 BPM 1.31 s into the final lap's sting.
+        // The final lap's sting starts with it, the song lowered under it ...
+        assert_eq!(race.final_lap_secs(155.0), Some(0.0));
+        let ducked = kartcraft::sound::final_lap_volume(race.final_lap_secs(156.2));
+        assert_eq!(ducked, 90.0 / 190.0);
+        // ... and 1.31 s in the song is back up and 20 BPM faster.
         assert_eq!(race.music_bpm_delta(156.2), 0.0);
         assert_eq!(race.music_bpm_delta(156.4), FINAL_LAP_BPM);
+        assert_eq!(
+            kartcraft::sound::final_lap_volume(race.final_lap_secs(156.4)),
+            1.0
+        );
         // Over the line: the clock stops with three laps.
         for (cp, t) in [(1, 160.0), (2, 165.0), (3, 172.0), (0, 179.0)] {
             race.pass(cp, t);
@@ -2305,6 +2323,7 @@ mod tests {
         assert!(!clock.time_trial);
         race.done = true;
         assert_eq!(race.music_bpm_delta(200.0), 0.0);
+        assert_eq!(race.final_lap_secs(200.0), None);
         // A one-lap race has no final lap to announce.
         let mut one = Active {
             laps: 1,

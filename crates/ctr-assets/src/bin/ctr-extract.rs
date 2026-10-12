@@ -125,6 +125,9 @@ fn run(
                     .unwrap_or_default()
             );
         }
+        if !dir.join("final_lap.wav").is_file() {
+            println!("music final-lap sting: none (no XA audio in a cooked image)");
+        }
         println!("wrote {}", dir.display());
     }
     Ok(())

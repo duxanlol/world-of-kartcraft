@@ -20,11 +20,23 @@ use crate::audio::{render, Howl, SoundSpec, Source};
 use crate::disc::Disc;
 use crate::{Error, Result};
 
-/// The XA index of the voices.
+/// The XA index of the voices and the music stings.
 pub const XNF_PATH: &str = "XA/ENG.XNF";
-/// `enum XA_TYPE` (`namespace_Cdsys.h`): the voice lines are `CDSYS_XA_TYPE_GAME`.
-const XA_TYPE_GAME: usize = 2;
+/// `enum XA_TYPE` (`namespace_Cdsys.h`): the stings are `CDSYS_XA_TYPE_MUSIC`, the voice lines
+/// `CDSYS_XA_TYPE_GAME`.
+pub const XA_TYPE_MUSIC: usize = 0;
+pub const XA_TYPE_GAME: usize = 2;
 const XNF_HEADER: usize = 0x44;
+
+/// The folder of a category's interleaved `Sxx.XA` files (`NativeAudio_BuildXAPath`,
+/// `native_audio.c:1640-1659`).
+pub fn xa_dir(category: usize) -> &'static str {
+    match category {
+        XA_TYPE_MUSIC => "XA/MUSIC",
+        1 => "XA/ENG/EXTRA",
+        _ => "XA/ENG/GAME",
+    }
+}
 
 /// Every character in `enum Characters` order (`namespace_Vehicle.h:37-55`), by the names
 /// `ctr-extract` gives their karts.
@@ -82,13 +94,21 @@ fn u32_at(d: &[u8], at: usize) -> Result<usize> {
 
 /// The game tracks of an `ENG.XNF`, by `xaID`.
 pub fn parse_xnf(d: &[u8]) -> Result<Vec<XaTrack>> {
+    parse_xnf_category(d, XA_TYPE_GAME)
+}
+
+/// The tracks of one `XA_TYPE` category of an `ENG.XNF`, by `xaID`.
+pub fn parse_xnf_category(d: &[u8], category: usize) -> Result<Vec<XaTrack>> {
     if d.get(0..4) != Some(b"XINF") || u32_at(d, 4)? != 102 || u32_at(d, 8)? != 3 {
         return Err(Error("not a CTR XNF (XINF, version 102, 3 types)".into()));
     }
+    if category > 2 {
+        return Err(Error(format!("no XA category {category}")));
+    }
     let xas = u32_at(d, 0xC)?;
     let tracks = u32_at(d, 0x10)?;
-    let songs = u32_at(d, 0x2C + XA_TYPE_GAME * 4)?;
-    let first = u32_at(d, 0x38 + XA_TYPE_GAME * 4)?;
+    let songs = u32_at(d, 0x2C + category * 4)?;
+    let first = u32_at(d, 0x38 + category * 4)?;
     if xas > 4096 || tracks > 4096 || first + songs > tracks {
         return Err(Error("implausible XNF header".into()));
     }
@@ -206,6 +226,23 @@ pub fn decode_channel(raw: &[u8], channel: u8) -> XaAudio {
         decode_sector(sector, &mut hist, &mut audio.pcm);
     }
     audio
+}
+
+/// One XA track, `xaID` of `category` (`CDSYS_XAPlay`, `CDSYS.c:658-760`): channel `channel` of
+/// the category's `Sfile.XA`, from its start for `sectors` sectors. `None` from a cooked image,
+/// which has no XA audio.
+pub fn read_track(disc: &mut Disc, category: usize, xa_id: usize) -> Result<Option<XaAudio>> {
+    let (xlba, xsize) = disc.find_file(XNF_PATH)?;
+    let tracks = parse_xnf_category(&disc.read_bytes(xlba, xsize as usize)?, category)?;
+    let t = *tracks
+        .get(xa_id)
+        .ok_or_else(|| Error(format!("XA category {category} has no track {xa_id}")))?;
+    let path = format!("{}/S{:02}.XA", xa_dir(category), t.file);
+    let (lba, _) = disc.find_file(&path)?;
+    let Some(raw) = disc.read_raw_sectors(lba, u32::from(t.sectors))? else {
+        return Ok(None);
+    };
+    Ok(Some(decode_channel(&raw, t.channel)))
 }
 
 /// One voice line written.
@@ -372,8 +409,9 @@ mod tests {
         put(0x10, 3); // three tracks
         put(0x2C + 8, 2); // two game tracks
         put(0x38 + 8, 1); // from entry 1
+        put(0x2C, 1); // one music track, entry 0
         d.extend([0u8; 8]); // xa_cd_pos
-        d.extend([0, 0, 0, 0]);
+        d.extend([6, 0, 0xFC, 0]);
         d.extend([3, 1, 40, 0]);
         d.extend([5, 2, 0x10, 1]);
         let t = parse_xnf(&d).unwrap();
@@ -393,6 +431,17 @@ mod tests {
             ]
         );
         assert!(parse_xnf(b"HOWL").is_err());
+        // The music category, in XA/MUSIC.
+        assert_eq!(
+            parse_xnf_category(&d, XA_TYPE_MUSIC).unwrap(),
+            [XaTrack {
+                channel: 6,
+                file: 0,
+                sectors: 252
+            }]
+        );
+        assert_eq!(xa_dir(XA_TYPE_MUSIC), "XA/MUSIC");
+        assert!(parse_xnf_category(&d, 3).is_err());
     }
 
     fn sector(channel: u8, coding: u8) -> Vec<u8> {

@@ -421,34 +421,41 @@ impl Session {
                     fb.landing = Some((fall, kart.speed()));
                 }
             }
-            hold_at_void(&world, kart, before);
-            if self.pinned {
-                pin_in_place(kart, before);
-            }
-            if kart.grounded() {
-                let pose = kart.pose();
-                self.last_ground = Some((pose.position, pose.heading));
+            if kart.grabbed() {
+                // Aku Aku carries it: over the void and off the ground as he pleases.
                 self.falling = 0.0;
             } else {
-                self.falling += ctr_kart::TICK;
-                if self.falling > RESCUE_AFTER {
-                    if let Some((at, heading)) = self.last_ground {
-                        kart.mask_grab(at + Vec3::Y * 40.0, heading);
-                    }
+                hold_at_void(&world, kart, before);
+                if self.pinned {
+                    pin_in_place(kart, before);
+                }
+                if kart.grounded() {
+                    let pose = kart.pose();
+                    self.last_ground = Some((pose.position, pose.heading));
                     self.falling = 0.0;
+                } else {
+                    self.falling += ctr_kart::TICK;
+                    if self.falling > RESCUE_AFTER {
+                        if let Some((at, heading)) = self.last_ground {
+                            kart.mask_grab(at, heading);
+                        }
+                        self.falling = 0.0;
+                    }
                 }
             }
             // The weapons step after the kart is where this tick leaves it, and see its events
             // (the mask grab's among them).
             after_tick(&world, kart, origin);
-            let shot = self.camera.tick(&kart.camera_input(), &world);
+            let seen = kart.camera_input();
+            let shot = self.camera.tick(&seen, &world);
             // A cut (look-back) is drawn at once, never swept to through the kart.
             self.shots = Some(match self.shots {
                 Some((_, last)) if !shot.cut => (last, shot),
                 _ => (shot, shot),
             });
             events.append(&mut kart.events);
-            self.previous = self.current.take();
+            // A kart put somewhere else is drawn there at once, not swept to.
+            self.previous = self.current.take().filter(|_| !seen.cut);
             self.current = Some(kart.pose());
         }
         events

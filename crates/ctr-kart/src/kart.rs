@@ -8,6 +8,7 @@
 use glam::{Mat3, Vec3};
 
 use crate::collision::{Collision, GROUND_NORMAL_Y};
+use crate::grab::{GrabMask, MaskGrab, Step};
 use crate::rev::{RevEngine, RevState, StartBoost};
 use crate::stats::*;
 
@@ -488,6 +489,12 @@ pub struct CameraInput {
     pub blasted: bool,
     pub grounded: bool,
     pub ground: f32,
+    /// The kart was put somewhere else since the camera last looked (`DIRECTION_CHANGED`): the
+    /// shot cuts.
+    pub cut: bool,
+    /// Lowered by Aku Aku: the height the eye keeps over, lu, in place of the kart's
+    /// (`CAMERA_FLAG_MASK_GRAB`, `CAM.c:1221-1224`).
+    pub mask_grab: Option<f32>,
 }
 
 /// The world view of a kart, for drawing and the camera.
@@ -630,8 +637,12 @@ pub struct Kart {
     camera_spin_rate: i32,
     /// A turbo was granted since the camera last looked (`VehFire.c`'s camera flag 0x80).
     camera_kick: bool,
-    /// Held on the grid before GO, revving (`KS_ENGINE_REVVING`).
+    /// Held on the grid before GO, or lowered by Aku Aku, revving (`KS_ENGINE_REVVING`).
     rev: Option<RevEngine>,
+    /// Aku Aku carrying the kart back (`KS_MASK_GRABBED`, then the rev state), and the cut to
+    /// its respawn for the camera (`CAMERA_FLAG_DIRECTION_CHANGED`).
+    grab: Option<MaskGrab>,
+    camera_cut: bool,
     /// `quadBlockHeight`, lu: the camera's floor through a blast.
     ground: f32,
     /// `jumpHeightCurr`: the velocity along the kart's up, speed units; and whether a jump
@@ -743,6 +754,8 @@ impl Kart {
             camera_spin_rate: 0,
             camera_kick: false,
             rev: None,
+            grab: None,
+            camera_cut: false,
             ground: position.y,
             jump_height: 0,
             jump_started: false,
@@ -844,6 +857,8 @@ impl Kart {
             blasted: self.blasted,
             grounded: self.grounded(),
             ground: self.ground,
+            cut: std::mem::take(&mut self.camera_cut),
+            mask_grab: self.grab.as_ref().and_then(MaskGrab::camera_height),
         }
     }
 
@@ -1084,11 +1099,77 @@ impl Kart {
         self.facing = self.moving;
     }
 
-    /// Aku Aku puts the fallen kart back at `position` facing `heading` (CTR's mask grab,
-    /// `VehStuckProc.c:404-720`, drawn here as a cut): [`Event::MaskGrab`], 2 Wumpa in a race.
-    pub fn mask_grab(&mut self, position: Vec3, heading: i32) {
-        self.place(position, heading);
+    /// Aku Aku carries the fallen kart back onto the ground at `ground`, facing `heading` (CTR's
+    /// mask grab, `VehStuckProc_MaskGrab_Init`, `VehStuckProc.c:622-720`; [`crate::grab`]): it
+    /// stops where it is, no input drives it until he lets go: [`Event::MaskGrab`], 2 Wumpa in
+    /// a race.
+    pub fn mask_grab(&mut self, ground: Vec3, heading: i32) {
+        let at = self.pos;
+        self.place(at, self.angle);
+        self.rev = None;
+        // `actionsFlagSet &= ~(ACTION_AIRBORNE | ACTION_HIGH_JUMP)`; held, it touches nothing.
+        self.flags &= !(AIRBORNE | TOUCH_GROUND);
+        self.grab = Some(MaskGrab::new(at, ground, heading));
         self.events.push(Event::MaskGrab);
+    }
+
+    /// Aku Aku is carrying the kart back ([`Kart::mask_grab`]).
+    pub fn grabbed(&self) -> bool {
+        self.grab.is_some()
+    }
+
+    /// The mask holding the kart, as drawn; `None` when there is none or it has not shown yet.
+    pub fn grab_mask(&self) -> Option<GrabMask> {
+        self.grab.as_ref().and_then(|g| g.mask(self.pos))
+    }
+
+    /// A frame of the mask grab, in place of driving (`DRIVER_FUNC_*` of `KS_MASK_GRABBED` and
+    /// the rev state): true while Aku Aku holds the kart, false once he lets go this frame, which
+    /// then drives as any other (`VehStuckProc_RevEngine_Update` → `VehPhysProc_Driving_Init`).
+    fn grab_tick(&mut self, gas: bool) -> bool {
+        let Some(grab) = self.grab.as_mut() else {
+            return false;
+        };
+        let ground = grab.ground();
+        match grab.tick(&mut self.pos, MS) {
+            Step::Hold => {}
+            Step::Respawned(heading) => {
+                // `VehBirth_TeleportSelf`, then `VehStuckProc_RevEngine_Init`.
+                let at = self.pos;
+                self.place(at, heading);
+                self.ground = ground.y;
+                self.rev = Some(RevEngine::new(self.stats.accel_speed));
+                self.camera_cut = true;
+            }
+            Step::Released => {
+                self.grab = None;
+                self.release_revs();
+                return false;
+            }
+        }
+        // Nobody hits a grabbed kart (`KS_MASK_GRABBED`).
+        self.pending = None;
+        if !self.grab.is_some_and(|g| g.lowering()) {
+            // Grabbed, a shield pops (`RB_MaskShieldCloud.c:393-408`) and a TNT on the head
+            // goes off (`RB_TNT.c:124-131`).
+            if self.shield.take().is_some() {
+                self.events.push(Event::ShieldPopped);
+            }
+            if self.tnt.is_some_and(|t| t.fuse.is_some()) {
+                self.tnt = None;
+                self.events.push(Event::TntExploded);
+            }
+        }
+        if let Some(rev) = self.rev.as_mut() {
+            if rev.tick(gas, MS) {
+                self.events.push(Event::OverRev);
+            }
+        }
+        self.engine_sound_tick();
+        self.mask_tick();
+        self.shield_tick();
+        self.tnt_tick();
+        true
     }
 
     /// `RB_Player_ToggleFlicker` (`231/RB_Player.c:231-257`): with more than 0x2A0 ms of
@@ -1241,6 +1322,10 @@ impl Kart {
     /// restarts its 30 frames. A hit that takes cancels the boost, and its reaction installs at
     /// the start of the next frame. True when it took (for a TNT: it is on its way to the head).
     pub fn hit(&mut self, kind: HitKind) -> bool {
+        // `KS_MASK_GRABBED` is set "so nobody hits you" (`VehStuckProc.c:628`, `:878-879`).
+        if self.grab.is_some() {
+            return false;
+        }
         if kind != HitKind::TntOnHead {
             return self.damage(Some(kind));
         }
@@ -1364,23 +1449,30 @@ impl Kart {
     /// on the traffic lights: `VehStuckProc.c:954-958`): the gas revs the engine instead of
     /// driving. Let go (GO), the revs earn their start boost, which is returned.
     pub fn hold_on_grid(&mut self, on: bool) -> Option<StartBoost> {
+        // Aku Aku's revs are his to end ([`Kart::mask_grab`]).
+        if self.grab.is_some() {
+            return None;
+        }
         match (on, self.rev) {
             (true, None) => {
                 self.rev = Some(RevEngine::new(self.stats.accel_speed));
                 None
             }
-            (false, Some(rev)) => {
-                self.rev = None;
-                // `VehStuckProc.c:986-987`: the meter full, as driving starts.
-                self.turbo_meter = 0;
-                let boost = rev.release();
-                if let Some(b) = boost {
-                    self.start_boost(b == StartBoost::Big);
-                }
-                boost
-            }
+            (false, Some(_)) => self.release_revs(),
             _ => None,
         }
+    }
+
+    /// The rev state ends (`VehStuckProc_RevEngine_Update`, `VehStuckProc.c:962-990`): the revs
+    /// earn their boost and the meter is full, as driving starts.
+    fn release_revs(&mut self) -> Option<StartBoost> {
+        let rev = self.rev.take()?;
+        self.turbo_meter = 0;
+        let boost = rev.release();
+        if let Some(b) = boost {
+            self.start_boost(b == StartBoost::Big);
+        }
+        boost
     }
 
     /// Revving on the grid: the revs, `None` while not held there.
@@ -1473,6 +1565,15 @@ impl Kart {
         mods: &Modifiers,
         others: &[OtherKart],
     ) {
+        self.hopped = false;
+        self.jump_started = false;
+        self.frame = self.frame.wrapping_add(1);
+        // Carried by Aku Aku, nothing the player does drives the kart (the gas revs it once
+        // lowered); the frame he lets go drives.
+        if self.grab_tick(input.gas) {
+            self.buttons_prev = (input.r1, input.l1);
+            return;
+        }
         // Held on the grid, the gas revs the engine and the kart stands, braked
         // (`VehStuckProc_RevEngine_*`: no forces apply).
         let held = Input {
@@ -1489,9 +1590,6 @@ impl Kart {
             mask: mods.mask || self.masked(),
             ..*mods
         };
-        self.hopped = false;
-        self.jump_started = false;
-        self.frame = self.frame.wrapping_add(1);
 
         // INIT: a hit taken since the last frame installs its reaction.
         match self.pending.take() {

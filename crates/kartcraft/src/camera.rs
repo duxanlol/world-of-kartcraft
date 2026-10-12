@@ -361,8 +361,9 @@ impl ChaseCamera {
         let tuning = self.tuning;
         let zoom = tuning.rig(self.far);
         // 3.4: look-back turning on or off is DIRECTION_CHANGED, an instant cut that restarts
-        // the speed filter.
-        let cut = self.started && self.look_back != self.looked_back;
+        // the speed filter; so is the kart put somewhere else (Aku Aku's respawn,
+        // `VehStuckProc.c:436`, `:1320`).
+        let cut = self.started && (self.look_back != self.looked_back || k.cut);
         self.looked_back = self.look_back;
 
         // 2.2: the boom lengthens with the filtered speed.
@@ -424,6 +425,11 @@ impl ChaseCamera {
             + right(self.yaw.round() as i32) * tuning.side_offset;
         let base = Vec3::new(k.position.x + side.x, k.position.y, k.position.z + side.z);
         let mut eye = base - f * (cp * d) + Vec3::Y * (sp * d + zoom.vert);
+        // Lowered by Aku Aku, the eye keeps the height of a kart 0x40 lu over the ground
+        // (`CAMERA_FLAG_MASK_GRAB`, `CAM.c:1221-1224`); the look-at follows the kart.
+        if let Some(h) = k.mask_grab {
+            eye.y += h - k.position.y;
+        }
 
         // 2.4: it looks just ahead of the drawn nose, over the kart.
         self.ahead = if k.spinning {
@@ -540,6 +546,8 @@ mod tests {
             blasted: false,
             grounded: true,
             ground: 0.0,
+            cut: false,
+            mask_grab: None,
         }
     }
 
@@ -808,6 +816,34 @@ mod tests {
         cam.look_back = false;
         let again = cam.tick(&input(13000), &world);
         assert!(again.cut && (again.eye.z + 211.6).abs() < 2.0, "{again:?}");
+    }
+
+    #[test]
+    fn aku_aku_s_respawn_cuts_and_his_lowering_holds_the_eye_s_height() {
+        let world = flat();
+        let mut cam = ChaseCamera::default();
+        for _ in 0..30 {
+            cam.tick(&input(0), &world);
+        }
+        let level = cam.tick(&input(0), &world);
+        // Put back 126 lu over the ground: the shot cuts, and its eye stands where a kart 64 lu
+        // over the ground would have it, whatever the kart's height while it comes down.
+        let mut held = input(0);
+        held.position.y = 126.0;
+        held.cut = true;
+        held.mask_grab = Some(64.0);
+        let first = cam.tick(&held, &world);
+        assert!(first.cut, "{first:?}");
+        assert!(
+            (first.eye.y - (level.eye.y + 64.0)).abs() < 0.5,
+            "{first:?}"
+        );
+        assert!(first.look.y > level.look.y + 120.0, "it looks at the kart");
+        held.cut = false;
+        held.position.y = 70.0;
+        let lower = cam.tick(&held, &world);
+        assert!(!lower.cut);
+        assert!((lower.eye.y - first.eye.y).abs() < 0.5, "{lower:?}");
     }
 
     fn ctr() -> ChaseCamera {

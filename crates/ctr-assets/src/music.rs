@@ -623,6 +623,68 @@ pub struct TrackFile {
     pub uka: Option<String>,
 }
 
+/// The final lap's sting: `XA_index = 6` of `CDSYS_XA_TYPE_MUSIC` ("MUSIC_LAST_LAP",
+/// `HOWL_AudioState.c:79-87`).
+pub const FINAL_LAP_XA: usize = 6;
+/// `HOWL_AudioState.c:334`: the song speeds up once the sting has played more than 0xE1 of
+/// `XA_CurrOffset`'s 256-sample blocks at 44.1 kHz (CTR-native `NativeAudio_GetXACurrOffset`).
+pub const FINAL_LAP_TEMPO_BLOCKS: u32 = 0xE1;
+/// `Music_LowerVolume` / `Music_RaiseVolume` (`HOWL_Music.c:477-514`): the level song (song 0)
+/// goes from 190 to 90 under the sting and back, 8 a 60 Hz tick (`CseqMusic_ChangeVolume`).
+pub const FINAL_LAP_DUCKED: u32 = 90;
+pub const SONG_VOLUME: u32 = 190;
+pub const VOLUME_STEP: u32 = 8;
+
+/// The final lap's sting written: its file, length and format.
+pub struct Sting {
+    pub file: String,
+    pub seconds: f64,
+    pub channels: u16,
+    pub rate: u32,
+    pub xa: String,
+}
+
+/// Writes the final lap's XA sting into `dir` as `final_lap.wav` (trailing silence trimmed);
+/// `None` from a cooked image, which has no XA audio.
+pub fn final_lap_sting(
+    disc: &mut crate::disc::Disc,
+    dir: &std::path::Path,
+) -> Result<Option<Sting>> {
+    use crate::voice::{parse_xnf_category, read_track, xa_dir, XA_TYPE_MUSIC, XNF_PATH};
+    let Some(a) = read_track(disc, XA_TYPE_MUSIC, FINAL_LAP_XA)? else {
+        return Ok(None);
+    };
+    let mut pcm = a.pcm;
+    while pcm.len() > 1 && pcm.last() == Some(&0) {
+        pcm.pop();
+    }
+    if pcm.is_empty() || a.channels == 0 {
+        return Err(Error("the final-lap sting decodes to nothing".into()));
+    }
+    let (lba, size) = disc.find_file(XNF_PATH)?;
+    let t = parse_xnf_category(&disc.read_bytes(lba, size as usize)?, XA_TYPE_MUSIC)?[FINAL_LAP_XA];
+    let file = "final_lap.wav".to_string();
+    let path = dir.join(&file);
+    std::fs::write(
+        &path,
+        crate::audio::wav_channels(&pcm, a.channels, a.rate, false),
+    )
+    .map_err(|e| Error(format!("{}: {e}", path.display())))?;
+    Ok(Some(Sting {
+        file,
+        seconds: pcm.len() as f64 / f64::from(a.channels) / f64::from(a.rate),
+        channels: a.channels,
+        rate: a.rate,
+        xa: format!(
+            "{}/S{:02}.XA channel {}, {} sectors",
+            xa_dir(XA_TYPE_MUSIC),
+            t.file,
+            t.channel,
+            t.sectors
+        ),
+    }))
+}
+
 /// Renders every race track's music into `dir` as stereo WAV (`<track>.wav`, looping
 /// end-to-start, `smpl` loop chunk) plus `music.json`. Tracks sharing one sequence (Slide
 /// Coliseum and Turbo Track reuse Tiny Arena's) point at the first file via `same_as`.
@@ -700,12 +762,23 @@ pub fn extract(
             same_as: None,
         });
     }
+    let sting = final_lap_sting(disc, dir)?;
     let doc = serde_json::json!({
         "source": "SOUNDS/KART.HWL CSEQ sequences, song 0 (CSEQ_SONG_LEVEL) of data.levBank_Song[level]; rendered with a software SPU model (no reverb)",
         "format": { "channels": 2, "bits": 16, "rate_hz": rate },
         "loop": "every file loops end-to-start seamlessly (it is the second pass of the song, so notes ringing over the loop point are included); the WAV smpl chunk marks the whole file as the loop",
-        "final_lap": "HOWL_AudioState.c AUDIO_FINAL_LAP: once the final-lap XA sting has played ~1 s, Audio_SetMaskSong(20) raises the tempo by 20 BPM (Music_Adjust -> CseqMusic_ChangeTempo); approximate with playback speed (bpm + 20) / bpm (pitch rises too, unlike the game)",
+        "final_lap": "HOWL_AudioState.c AUDIO_FINAL_LAP: the song is lowered (Music_LowerVolume, 190 -> 90) and the final-lap XA sting (CDSYS_XA_TYPE_MUSIC index 6) plays; once it has played more than 0xE1 of its 256-sample blocks at 44.1 kHz (~1.31 s) the song is raised again (Music_RaiseVolume) and Audio_SetMaskSong(20) raises its tempo by 20 BPM (Music_Adjust -> CseqMusic_ChangeTempo); approximate the tempo with playback speed (bpm + 20) / bpm (pitch rises too, unlike the game)",
         "final_lap_bpm_delta": 20,
+        "final_lap_sting": sting.as_ref().map(|s| serde_json::json!({
+            "file": s.file,
+            "xa": s.xa,
+            "seconds": s.seconds,
+            "channels": s.channels,
+            "rate_hz": s.rate,
+            "tempo_after_seconds": f64::from(FINAL_LAP_TEMPO_BLOCKS * 256) / f64::from(SPU_RATE),
+            "song_volume_under_sting": f64::from(FINAL_LAP_DUCKED) / f64::from(SONG_VOLUME),
+            "song_volume_fade_seconds": f64::from((SONG_VOLUME - FINAL_LAP_DUCKED).div_ceil(VOLUME_STEP)) / 60.0,
+        })),
         "mask": "aku_file / uka_file: songs 1 and 2 of the track's CSEQ (CSEQ_SONG_AKU, CSEQ_SONG_UKA), played instead of song 0 while a player wears Aku Aku's or Uka Uka's mask (HOWL_AudioState.c:142-190 Audio_SetMaskSong)",
         "tracks": out.iter().map(|t| serde_json::json!({
             "file": t.file,

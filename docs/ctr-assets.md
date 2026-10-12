@@ -18,7 +18,8 @@ cargo run -p ctr-assets --release --bin ctr-extract -- "<disc>.bin" <out_dir> [-
 - `--weapons` writes `<out_dir>/weapons.json` (weapon, crate and Wumpa fruit models; see
   [Weapons](#weapons));
 - `--hud` writes `<out_dir>/hud.json` (the 1P race HUD; see [HUD](#hud));
-- `--music` renders the race music to `<out_dir>/music/` (see [Music](#music));
+- `--music` renders the race music to `<out_dir>/music/`, with the final lap's XA sting from a
+  raw image (see [Music](#music));
 - `--all` writes `<out_dir>/kart-<name>.json` for every kart, the audio, effects, weapons, HUD
   and music.
 
@@ -838,13 +839,21 @@ writes `<out_dir>/music/<track>.wav` plus `music/music.json`.
 - **Loops:** each file is the song's *second* pass, so notes still ringing from the previous
   pass are included. The file loops end-to-start, and a WAV `smpl` chunk marks it.
   `music.json` has `loop_start_seconds = 0` and `loop_end_seconds = duration`.
-- **Final lap:** `HOWL_AudioState.c` raises the tempo by 20 BPM (`Audio_SetMaskSong(20)`).
-  `final_lap_bpm_delta` is in `music.json`; a client can approximate it with playback rate
-  `(bpm+20)/bpm`. The game first plays the final-lap XA sting (`XA\MUSIC`, music index 6)
-  with the song ducked, and raises the tempo once the sting has played 0xE1 of its
-  256-sample blocks at 44.1 kHz (about 1.31 s). The sting is not exported: it needs CD-XA
-  Mode 2 Form 2 sectors read raw, the `.XNF` index that places index 6, and an XA-ADPCM
-  decoder, none of which the extractor has.
+- **Final lap** (`HOWL_AudioState.c:79-87`, `:330-345`): as the leading human starts the
+  last lap, `Music_LowerVolume` takes the level song from 190 to 90 (8 a 60 Hz tick,
+  `HOWL_Music.c:477-494`) and `CDSYS_XAPlay(CDSYS_XA_TYPE_MUSIC, 6)` plays the final-lap
+  sting. Once `XA_CurrOffset` passes 0xE1 (256-sample blocks at 44.1 kHz, CTR-native
+  `NativeAudio_GetXACurrOffset`: 1.306 s), `Music_RaiseVolume` brings the song back to 190
+  and `Audio_SetMaskSong(20)` raises its tempo by 20 BPM. `final_lap_bpm_delta` is in
+  `music.json`; a client can approximate the tempo with playback rate `(bpm+20)/bpm`.
+- **The sting** (`final_lap.wav`): music index 6 of `XA\ENG.XNF`'s music category (type 0,
+  read as the voices' game category is, `voice.rs`), which on the NTSC-U disc is channel 6
+  of `XA\MUSIC\S00.XA`, 252 sectors: 1.65 s of 37.8 kHz stereo CD-XA. Its sectors are Mode 2
+  Form 2, so only a raw `.bin` has it; from a cooked `.iso` `final_lap_sting` is `null`.
+  `music.json`'s `final_lap_sting` gives the file, its XA source, length and format, and the
+  timing above: `tempo_after_seconds`, `song_volume_under_sting` (90/190) and
+  `song_volume_fade_seconds` (13 ticks, 0.217 s). The sting plays at the music volume (the XA
+  plays at `vol_Music`, `CDSYS.c:723-729`).
 - **Shared music:** Slide Coliseum and Turbo Track use byte-identical sequences to Tiny
   Arena; their `music.json` entries point to `tiny_arena.wav` (`same_music_as`).
 
