@@ -78,8 +78,8 @@ const GRAVITY: f32 = 4.0;
 const MISSILE_GRAVITY: f32 = 8.0;
 const TERMINAL: f32 = 96.0;
 /// A dropped mine finds the ground 400 lu below to 64 above (`VehPickupItem.c:119-120`).
-const MINE_PROBE_DOWN: f32 = 400.0;
-const MINE_PROBE_UP: f32 = 64.0;
+pub(crate) const MINE_PROBE_DOWN: f32 = 400.0;
+pub(crate) const MINE_PROBE_UP: f32 = 64.0;
 
 /// What the weapons need of a racer. `position` is the kart's origin (the bottom centre), lu.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

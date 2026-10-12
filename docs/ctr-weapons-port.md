@@ -36,6 +36,17 @@ constant in the code cites its line in the decompilation.
   off when an 11th is added. It also handles weapons meeting each other: a bomb or missile
   explodes on a mine, a bomb and a missile destroy each other, and a bomb or missile blast sets
   off the mines and missiles inside it. A mine or missile set off this way does no damage.
+- **`boxes`**: weapons breaking crates. A crate is broken by what finds its hitbox
+  (`RB_Crate.c:107-271`): a bomb, missile or shield bomb's level probe (64 lu below to 256 above,
+  `RB_MovingExplosive.c:220-239`) or its burst (the box's centre inside the blast radius,
+  `RB_Burst.c:286-317`), a warp orb's probe (128 lu either side, `RB_Warpball.c:607-640`), and a
+  dropped TNT, Nitro or beaker's one probe (`VehPickupItem.c:1199-1251`). A TNT or Nitro going off
+  breaks none: `RB_Blowup_Init` runs its level search with the thread callback
+  (`RB_Blowup.c:159-180`). The crate does not stop the weapon (`RB_Hazard.c:265-272`), and comes
+  back on the same 30-frame cooldown as after a kart's touch. `rewards` says whose: a bomb's,
+  missile's or shield bomb's shooter gets the crate's item or fruit; a warp orb or mine gives no
+  one anything (`RB_Crate.c:152-226`, `:315-355`). The crate's box is the caller's (Kartcraft's
+  are half CTR's size); the server checks the shooter's report (`docs/kartcraft-weapons-protocol.md`).
 
 ## Faithful
 
@@ -88,8 +99,8 @@ constant in the code cites its line in the decompilation.
   frame is always 32 ms.
 - **Not modelled:**
   - beaker throwing (Up held);
-  - weapons breaking crates: crates are the server's, and a claim must come from a kart near
-    the crate;
+  - a TNT or beaker's drop pausing a broken crate's cooldown while it lies there
+    (`boolPauseCooldown`, `RB_Crate.c:230-240`);
   - bot weapon AI;
   - Clock, Turbo, Mask, Shield and rain-cloud effects on karts, and rams with them
     (`VehPhysCrash_Attack`): `ctr-kart`'s job.

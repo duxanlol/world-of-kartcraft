@@ -60,6 +60,26 @@ The taker also gets:
 
 A refused claim gets no answer.
 
+### Client → server: a shot broke a crate
+
+CTR's crates break for whatever reaches them (`ctr-weapons`' `boxes`; `RB_Crate.c:123-131`): a
+bomb, missile or shield bomb touching one or bursting within its blast (320 lu, 512 juiced, a
+missile's 128) of it, a warp orb touching one, and a TNT, Nitro or beaker dropped on one. A TNT or
+Nitro going off breaks none, and single fruit are for karts alone. The shooter's client decides it
+and sends `W\tK\t<shot>\t<index>`, `shot` from its own counter. The server accepts it when:
+- the sender has that shot, relayed in the last 30 s, and it breaks crates: a bomb, missile or
+  warp orb (not dropped), a shield launched with `Z` (not one put up), or a dropped TNT or beaker;
+- the crate is a `Q` or `F` crate, up and regrown;
+- it is within reach of where the shot left (the `S` or `Z` place): a dropped one 12 yd, others
+  as far as the warp orb's 112 lu a frame (92 yd/s) since the relay, plus 16 yd (a juiced bomb's
+  blast, the crate and slack).
+
+Every racer gets `W\tX\t<index>\t<guid>`, as for a claim, and the crate comes back on the same
+1000 ms cooldown (`RB_Crate.c:125`). A bomb, missile or shield bomb gives its shooter the crate
+as their kart's touch would (`RB_Crate.c:152-226`, `:315-355`): `guid` is the shooter's, and the
+`I` or `F` follows as for a claim (none once they finished). A warp orb or a mine gives no one
+anything: `guid` is 0. A refused break gets no answer.
+
 ### Client → server: fire
 
 `W\tS\t<shot>\t<x>,<y>,<z>,<yaw>\t<target guid or 0>\t<flags>`
@@ -208,6 +228,11 @@ server's rules in-process, so it runs the same code.
   nothing, and `I` sets its result, shown when the 90-frame spin ends (Fire stops it after 20).
   A roulette with no `I` 60 frames past its end is dropped. `U` regrows the crate over 16
   frames. `F` sets the Wumpa total, which the HUD counts up one fruit every 5 frames.
+- **Crates our shots break.** Each frame our live bombs, missiles, shield bombs and warp orbs
+  are tested against the full-grown crates (a 48 lu box, half CTR's), and so are our bursts and
+  a TNT or beaker we drop; a crate one reaches breaks at once on our screen and is sent as `K`,
+  waiting for the `X` as a claim does. The shot flies on. Another racer's shots break crates here
+  on the server's `X`; an `X` naming no one (0) starts no roulette.
 - **Shots.** Fire sends `S` with our position and facing (WoW yaw), the missile lock-on (the
   nearest other racer inside our camera's view) for a bomb or missile, `b` with the stick back,
   `d` for TNT and beakers. Nothing launches until the relay, ours included. A relayed shot puts
@@ -241,7 +266,6 @@ server's rules in-process, so it runs the same code.
   `B` relayed shows the victim's reaction on its ghost, and a shield ram takes the attacker's
   shield, ours included, if it is still up.
 
-Not on this wire: a TNT thrown off by hopping (it goes off where it lands, without damage), and
-weapons breaking crates.
+Not on this wire: a TNT thrown off by hopping (it goes off where it lands, without damage).
 Weapons are stepped only inside our session's collision, 120 yd round our kart: a shot farther
 out finds no ground and goes off.

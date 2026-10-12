@@ -548,3 +548,124 @@ fn a_masked_kart_ramming_us_is_reported_once() {
     w.arm(&mut nearby);
     assert!(!nearby[0].turbo);
 }
+
+/// Crates of `kind` laid out at these spots (Bevy world).
+fn lay(w: &mut Weapons, kind: CrateKind, spots: &[Vec3]) {
+    w.receive(Down::Layout {
+        first: 0,
+        crates: spots
+            .iter()
+            .map(|&at| CrateSpot {
+                kind,
+                at: bevy_to_wow(at),
+            })
+            .collect(),
+    });
+}
+
+/// The `W K` lines waiting, the rest dropped.
+fn breaks(w: &mut Weapons) -> Vec<(KartId, Up)> {
+    std::mem::take(&mut w.outbox)
+        .into_iter()
+        .filter(|(_, up)| matches!(up, Up::Break { .. }))
+        .collect()
+}
+
+#[test]
+fn our_bomb_breaks_the_crate_it_rolls_into_and_rolls_on() {
+    let (mut w, world, mut kart) = setup();
+    let here = from_lu(kart.pose().position, ORIGIN);
+    // 20 yd ahead (+Z, the shot's heading), and a single fruit past it.
+    let ahead = here + Vec3::Z * 20.0;
+    w.receive(Down::Layout {
+        first: 0,
+        crates: vec![
+            CrateSpot {
+                kind: CrateKind::Weapon,
+                at: bevy_to_wow(ahead),
+            },
+            CrateSpot {
+                kind: CrateKind::Wumpa,
+                at: bevy_to_wow(ahead + Vec3::Z * 3.0),
+            },
+        ],
+    });
+    w.receive(shot(ME, Item::Bomb, 1, here));
+    tick(&mut w, &world, &mut kart, 15);
+    assert_eq!(breaks(&mut w), vec![(ME, Up::Break { shot: 1, index: 0 })]);
+    assert_eq!(scale_of(&w, 0), 0.0, "gone at once, as our kart's touch");
+    assert!(w.effects().iter().any(|e| e.model == "crate_explosion"));
+    assert_eq!(scale_of(&w, 1), 1.0, "a fruit is the karts' alone");
+    assert_eq!(w.shots().count(), 1, "the crate does not stop it");
+    // The server gives it to us: the roulette starts as for a crate we drove into.
+    tick(&mut w, &world, &mut kart, 5);
+    w.receive(Down::Taken { index: 0, by: ME });
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(w.held(), HeldView::Spinning);
+    assert!(breaks(&mut w).is_empty(), "broken once");
+}
+
+#[test]
+fn our_bombs_burst_breaks_crates_in_its_blast_and_theirs_waits_for_the_server() {
+    let (mut w, world, mut kart) = setup();
+    let here = from_lu(kart.pose().position, ORIGIN);
+    // 5 yd aside (183 lu) the bomb never touches it, but its 320 lu burst reaches it; 12 yd
+    // aside it does not.
+    let near = here + Vec3::new(5.0, 0.0, 5.0);
+    let far = here + Vec3::new(12.0, 0.0, 5.0);
+    lay(&mut w, CrateKind::Fruit, &[near, far]);
+    w.receive(shot(ME, Item::Bomb, 1, here));
+    tick(&mut w, &world, &mut kart, 2);
+    assert!(breaks(&mut w).is_empty());
+    w.receive(Down::Detonate { shooter: ME });
+    tick(&mut w, &world, &mut kart, 2);
+    assert_eq!(breaks(&mut w), vec![(ME, Up::Break { shot: 1, index: 0 })]);
+    assert_eq!((scale_of(&w, 0), scale_of(&w, 1)), (0.0, 1.0));
+
+    // Another racer's bomb through a crate breaks nothing here until the server says so.
+    let (mut w, world, mut kart) = setup();
+    lay(&mut w, CrateKind::Weapon, &[here + Vec3::Z * 20.0]);
+    w.receive(shot(THEM, Item::Bomb, 1, here));
+    tick(&mut w, &world, &mut kart, 15);
+    assert!(breaks(&mut w).is_empty());
+    assert_eq!(scale_of(&w, 0), 1.0);
+    w.receive(Down::Taken { index: 0, by: THEM });
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(scale_of(&w, 0), 0.0);
+    assert!(w.effects().iter().any(|e| e.model == "crate_explosion"));
+    assert_eq!(w.held(), HeldView::Empty);
+}
+
+#[test]
+fn our_tnt_breaks_the_crate_it_is_dropped_on_and_no_one_gets_it() {
+    let (mut w, world, mut kart) = setup();
+    let here = from_lu(kart.pose().position, ORIGIN);
+    // Under the drop (our kart has not touched it: it is laid out after the kart's frame).
+    lay(&mut w, CrateKind::Weapon, &[here, here + Vec3::Z * 30.0]);
+    w.receive(Down::Shot(Shot {
+        shooter: ME,
+        item: Item::Tnt,
+        juiced: false,
+        shot: 4,
+        aim: Aim {
+            at: bevy_to_wow(here),
+            dropped: true,
+            ..Default::default()
+        },
+    }));
+    tick(&mut w, &world, &mut kart, 1);
+    let sent = std::mem::take(&mut w.outbox);
+    assert!(
+        sent.contains(&(ME, Up::Break { shot: 4, index: 0 })),
+        "{sent:?}"
+    );
+    assert!(
+        !sent.iter().any(|(_, up)| *up == Up::Claim(0)),
+        "broken once"
+    );
+    // The server breaks it for no one (taken by guid 0): no roulette.
+    w.receive(Down::Taken { index: 1, by: 0 });
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(scale_of(&w, 1), 0.0);
+    assert_eq!(w.held(), HeldView::Empty);
+}

@@ -25,8 +25,8 @@ use ctr_weapons::cloud::CLOUD_FRAMES;
 use ctr_weapons::held::ROLL_FRAMES;
 use ctr_weapons::projectile::TNT_BLOWUP_RADIUS;
 use ctr_weapons::{
-    Body, Bomb, Field, Fire, Held, HitKind, KartId, Mine, MineKind, Missile, Outcome, ShotKey,
-    WarpOrb,
+    Body, Bomb, CrateBox, Field, Fire, Held, HitKind, KartId, Mine, MineKind, Missile, Outcome,
+    ShotKey, WarpOrb,
 };
 
 pub use ctr_weapons::{HeldView, Item};
@@ -40,6 +40,9 @@ use wire::{Aim, CrateKind, Down, Up};
 /// the server allows 12.
 const TOUCH_YARDS: f32 = 2.0;
 const TOUCH_HEIGHT: f32 = 3.0;
+/// A crate's hitbox for the weapons, half its size, lu: our kart touches it `TOUCH_YARDS` off
+/// (73 lu), its own sphere 0x19 of that (`COLL.c:2117`).
+const CRATE_HALF: f32 = 48.0;
 /// A crate we broke that the server leaves unanswered this many frames was refused (a refused
 /// claim gets no answer, and the server keeps the crate up): it is back where it stood, regrowing.
 const CLAIM_WAIT: u64 = 30;
@@ -865,7 +868,11 @@ impl Weapons {
         let Some(body) = body else {
             return;
         };
+        let dropped = matches!(body, Body::Mine(_)).then(|| body.position());
         if self.field.launch(key, body) {
+            if let Some(at) = dropped.filter(|_| mine) {
+                self.dropped_on_crates(s.shot, at, origin);
+            }
             self.shots.insert(
                 key,
                 ShotInfo {
@@ -1253,6 +1260,80 @@ impl Weapons {
         }
     }
 
+    /// Whether crate `c` stands full-grown and not already broken by us, to be broken now.
+    fn breakable(&self, c: &Crate) -> bool {
+        c.up && c.claimed.is_none()
+            && c.back_at
+                .is_none_or(|t| self.frame.saturating_sub(t) >= CRATE_GROW)
+    }
+
+    /// Crate `c`'s hitbox in the session's lu.
+    fn crate_box(c: &Crate, origin: Vec3) -> CrateBox {
+        CrateBox {
+            ground: to_lu(c.at, origin),
+            half: CRATE_HALF,
+        }
+    }
+
+    /// Our shots against the crates (`ctr_weapons::boxes`): a crate our bomb, missile, shield bomb
+    /// or warp orb touches, or one of their `blasts` reaches, breaks here at once, as a crate our
+    /// kart touches does, and the server is told (`W K`). Single fruit are the karts' alone.
+    /// Others' shots break crates on the server's `X`.
+    fn shots_on_crates(&mut self, blasts: &[(ShotKey, Vec3, f32)], origin: Vec3) {
+        let mut broke = Vec::new();
+        for (i, c) in self.crates.iter().enumerate() {
+            if c.kind == CrateKind::Wumpa || !self.breakable(c) {
+                continue;
+            }
+            let b = Self::crate_box(c, origin);
+            let touched = self
+                .field
+                .iter()
+                .find(|(key, body)| key.owner == self.me && ctr_weapons::boxes::touches(body, &b));
+            let blasted = || {
+                blasts
+                    .iter()
+                    .find(|(_, at, radius)| ctr_weapons::boxes::blast_reaches(*at, *radius, &b))
+            };
+            if let Some(key) = touched
+                .map(|(k, _)| k)
+                .or_else(|| blasted().map(|(k, ..)| *k))
+            {
+                broke.push((i, key.shot));
+            }
+        }
+        for (i, shot) in broke {
+            self.shot_breaks(i, shot);
+        }
+    }
+
+    /// Our TNT, Nitro or beaker dropped at `at` (lu) breaks the crate it lands on.
+    fn dropped_on_crates(&mut self, shot: u16, at: Vec3, origin: Vec3) {
+        let hit: Vec<usize> = (0..self.crates.len())
+            .filter(|&i| {
+                let c = &self.crates[i];
+                c.kind != CrateKind::Wumpa
+                    && self.breakable(c)
+                    && ctr_weapons::boxes::dropped_on(at, &Self::crate_box(c, origin))
+            })
+            .collect();
+        for i in hit {
+            self.shot_breaks(i, shot);
+        }
+    }
+
+    /// Our shot `shot` broke crate `i`: its debris and sound now, and `W K`. As a claim, one the
+    /// server leaves unanswered `CLAIM_WAIT` frames is back.
+    fn shot_breaks(&mut self, i: usize, shot: u16) {
+        let c = &mut self.crates[i];
+        c.up = false;
+        c.claimed = Some(self.frame);
+        let at = c.at;
+        self.outbox.push((self.me, Up::Break { shot, index: i }));
+        self.effect("crate_explosion", at);
+        self.sound(Sfx::CrateBreak, at);
+    }
+
     /// Every kart as the weapons meet it: ours, and the others at their ghosts' state.
     fn targets(&self, kart: &Kart, origin: Vec3) -> Vec<ctr_weapons::KartView> {
         let view = |id, position, k: &Kart, rank: u8| ctr_weapons::KartView {
@@ -1279,9 +1360,27 @@ impl Weapons {
     fn step_field(&mut self, world: &Collision, kart: &mut Kart, origin: Vec3) {
         self.previous = self.field.iter().map(|(k, b)| (k, b.position())).collect();
         let views = self.targets(kart, origin);
-        for (key, outcome) in self.field.step(world, &views) {
+        let outcomes = self.field.step(world, &views);
+        // Our bombs', missiles' and shield bombs' bursts, before their end forgets what they were.
+        let blasts: Vec<(ShotKey, Vec3, f32)> = outcomes
+            .iter()
+            .filter_map(|(key, o)| match o {
+                Outcome::Exploded { at, radius }
+                    if key.owner == self.me
+                        && self
+                            .shots
+                            .get(key)
+                            .is_some_and(|i| ctr_weapons::boxes::rewards(i.item)) =>
+                {
+                    Some((*key, *at, *radius))
+                }
+                _ => None,
+            })
+            .collect();
+        for (key, outcome) in outcomes {
             self.outcome(key, outcome, kart, origin);
         }
+        self.shots_on_crates(&blasts, origin);
         // The flight loops, as loud as the nearest of each.
         let mut loops = (0.0f32, 0.0f32, 0.0f32);
         let gain = |at: Vec3| (1.0 - at.distance(self.at) / HEARD_YARDS).clamp(0.0, 1.0);

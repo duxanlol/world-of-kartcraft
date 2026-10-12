@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..5bbc446
+index 0000000..78b77e6
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,2733 @@
+@@ -0,0 +1,2815 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -478,7 +478,8 @@ index 0000000..5bbc446
 +    };
 +
 +    // A relayed shot: the item, when it was relayed (ms), whether it has hit anyone, whether it
-+    // was dropped behind (TNT, Nitro, beaker), and juiced (a red beaker).
++    // was dropped behind (TNT, Nitro, beaker), juiced (a red beaker), where it left from (x, y),
++    // and whether it is a launched shield bomb (a Shield's "Z", not the shield put up).
 +    struct Shot
 +    {
 +        uint8 item;
@@ -486,6 +487,8 @@ index 0000000..5bbc446
 +        bool hit = false;
 +        bool dropped = false;
 +        bool juiced = false;
++        float x = 0.f, y = 0.f;
++        bool shieldBomb = false;
 +    };
 +
 +    struct Race
@@ -728,6 +731,11 @@ index 0000000..5bbc446
 +    constexpr uint32 ROLL_MIN = 600;
 +    // A shot can be reported as a hit this long after it was relayed (ms).
 +    constexpr uint32 SHOT_LIFETIME = 30 * IN_MILLISECONDS;
++    // A shot breaks a crate no farther from where it left than it can have flown at the warp
++    // orb's 112 lu a frame, the fastest, 92 yd/s, plus a juiced bomb's 512 lu blast, the crate's
++    // size and slack, 16 yd. A dropped mine breaks only the crate it lands on: CRATE_RADIUS.
++    constexpr float SHOT_SPEED = 92.f;
++    constexpr float BREAK_REACH = 16.f;
 +    // CTR's projectile pool, and the W lines one sender may send a second.
 +    constexpr size_t MAX_LIVE_SHOTS = 12;
 +    constexpr uint32 MAX_WEAPON_LINES = 20;
@@ -926,6 +934,39 @@ index 0000000..5bbc446
 +        return IsProjectile(shot.item) && LiveShot(shot, now) && !shot.hit;
 +    }
 +
++    // A crate's LInC breaks it for whatever reaches it (RB_Crate.c:123-131): a bomb, missile or
++    // shield bomb touching it or bursting near it, a warp orb touching it, a TNT, Nitro or beaker
++    // dropped on it (RB_MovingExplosive.c:220-277, RB_Burst.c:286-317, RB_Warpball.c:607-640,
++    // VehPickupItem.c:1199-1251). A TNT or Nitro going off breaks none (RB_Blowup.c:159-180).
++    static bool BreaksCrates(Shot const& shot)
++    {
++        switch (shot.item)
++        {
++            case ITEM_BOMB: case ITEM_BOMB_3: case ITEM_MISSILE: case ITEM_MISSILE_3: case ITEM_WARP:
++                return !shot.dropped;
++            case ITEM_SHIELD:
++                return shot.shieldBomb;
++            case ITEM_TNT: case ITEM_BEAKER:
++                return shot.dropped;
++        }
++        return false;
++    }
++
++    // Only a bomb, missile or shield bomb gives its shooter the crate it breaks
++    // (RB_Crate.c:152-226, :315-355).
++    static bool RewardsShooter(Shot const& shot)
++    {
++        return BreaksCrates(shot) && shot.item != ITEM_WARP && !shot.dropped;
++    }
++
++    // The x and y of a place ParsePlace wrote.
++    static void PlaceXY(std::string const& place, float& x, float& y)
++    {
++        char* end = nullptr;
++        x = std::strtof(place.c_str(), &end);
++        y = std::strtof(end + 1, nullptr);
++    }
++
 +    // VehPhysGeneral_SetHeldItem (VehPhysGeneral.c:1651-1962), race mode, no boss overrides.
 +    static uint8 Roll(Race& race, Racer& me, uint32 now)
 +    {
@@ -1037,6 +1078,27 @@ index 0000000..5bbc446
 +            std::to_string(me.cloudEffect) + "\t" + (me.cloudLocked ? "1" : "0"));
 +        if (me.cloudLocked && me.cloudEffect != CLOUD_ITEM_ROLL)
 +            Reroll(race, me, now);
++    }
++
++    // What a crate broken by `me` (their kart or their shot) gives them: a weapon crate the
++    // roulette's roll, unless they still hold an item or a cloud spins one, which breaks it for
++    // nothing (RB_Crate.c:152-226); a fruit crate 5-8 Wumpa (RB_Crate.c:316), a single fruit 1.
++    static void GiveCrate(Race& race, Racer& me, Player* player, char kind, uint32 now)
++    {
++        if (kind == 'Q')
++        {
++            if (me.held != ITEM_NONE || me.shots || (CloudUp(me, now) && me.cloudEffect == CLOUD_ITEM_ROLL))
++                return;
++            uint8 item = Roll(race, me, now);
++            me.held = item;
++            me.shots = item == ITEM_BOMB_3 || item == ITEM_MISSILE_3 ? 3 : 1;
++            me.claimed = now;
++            SendLine(player, "KARTCRAFT\tW\tI\t" + std::to_string(item) + "\t" + std::to_string(me.shots));
++            return;
++        }
++        uint32 gain = kind == 'F' ? Scramble(race) % 4 + 5 : 1;
++        me.wumpa = uint8(std::min<uint32>(me.wumpa + gain, MAX_WUMPA));
++        SendLine(player, "KARTCRAFT\tW\tF\t" + std::to_string(me.wumpa));
 +    }
 +
 +    static void SendLayout(Race const& race)
@@ -1308,24 +1370,41 @@ index 0000000..5bbc446
 +            crate.up = false;
 +            crate.respawnAt = crate.kind == 'W' ? 0 : now + CRATE_RESPAWN;
 +            SendRace(*race, "KARTCRAFT\tW\tX\t" + std::to_string(index) + "\t" + guid);
-+            if (crate.kind == 'Q')
-+            {
-+                // A racer still holding an item, or under a cloud spinning one, breaks the crate
-+                // for nothing (RB_Crate.c:152-226).
-+                if (me->held != ITEM_NONE || me->shots || (CloudUp(*me, now) && me->cloudEffect == CLOUD_ITEM_ROLL))
-+                    return;
-+                uint8 item = Roll(*race, *me, now);
-+                me->held = item;
-+                me->shots = item == ITEM_BOMB_3 || item == ITEM_MISSILE_3 ? 3 : 1;
-+                me->claimed = now;
-+                SendLine(player, "KARTCRAFT\tW\tI\t" + std::to_string(item) + "\t" + std::to_string(me->shots));
-+            }
-+            else
-+            {
-+                uint32 gain = crate.kind == 'F' ? Scramble(*race) % 4 + 5 : 1;
-+                me->wumpa = uint8(std::min<uint32>(me->wumpa + gain, MAX_WUMPA));
-+                SendLine(player, "KARTCRAFT\tW\tF\t" + std::to_string(me->wumpa));
-+            }
++            GiveCrate(*race, *me, player, crate.kind, now);
++        }
++        else if (verb == "K" && f.size() >= 4)
++        {
++            // Our shot broke a crate: a live shot of the sender's that breaks crates, and a full-
++            // grown crate (no single fruit) it can have reached by now. It comes back as any crate.
++            char* end = nullptr;
++            unsigned long shot = std::strtoul(f[2].c_str(), &end, 10);
++            if (end == f[2].c_str() || *end || shot < 1 || shot > 0xFFFF)
++                return;
++            unsigned long index = std::strtoul(f[3].c_str(), &end, 10);
++            if (end == f[3].c_str() || *end || index >= race->crates.size())
++                return;
++            auto found = race->shots.find((uint64(player->GetGUIDLow()) << 16) | shot);
++            if (found == race->shots.end() || !LiveShot(found->second, now) || !BreaksCrates(found->second))
++                return;
++            Shot const& s = found->second;
++            Crate& crate = race->crates[index];
++            if (crate.grownAt && int32(now - crate.grownAt) >= 0)
++                crate.grownAt = 0;
++            if (crate.kind == 'W' || !crate.up || crate.grownAt)
++                return;
++            float dx = crate.x - s.x;
++            float dy = crate.y - s.y;
++            float reach = s.dropped ? CRATE_RADIUS
++                                    : SHOT_SPEED * float(WorldTimer::getMSTimeDiff(s.at, now)) / float(IN_MILLISECONDS) + BREAK_REACH;
++            if (std::sqrt(dx * dx + dy * dy) > reach)
++                return;
++            crate.up = false;
++            crate.respawnAt = now + CRATE_RESPAWN;
++            // A warp orb or a mine breaks it for no one: taken by guid 0.
++            bool reward = RewardsShooter(s);
++            SendRace(*race, "KARTCRAFT\tW\tX\t" + std::to_string(index) + "\t" + (reward ? guid : std::string("0")));
++            if (reward && !me->finished)
++                GiveCrate(*race, *me, player, crate.kind, now);
 +        }
 +        else if (verb == "S" && f.size() >= 6 && !me->finished)
 +        {
@@ -1386,6 +1465,7 @@ index 0000000..5bbc446
 +            record.at = now;
 +            record.dropped = flags.find('d') != std::string::npos;
 +            record.juiced = juiced;
++            PlaceXY(place, record.x, record.y);
 +            SendRace(*race, "KARTCRAFT\tW\tS\t" + guid + "\t" + std::to_string(item) + "\t" + (juiced ? "1" : "0") +
 +                "\t" + std::to_string(shot) + "\t" + place + "\t" + std::to_string(target) + "\t" + flags);
 +        }
@@ -1422,6 +1502,8 @@ index 0000000..5bbc446
 +            record = Shot();
 +            record.item = ITEM_SHIELD;
 +            record.at = now;
++            record.shieldBomb = true;
++            PlaceXY(place, record.x, record.y);
 +            SendRace(*race, "KARTCRAFT\tW\tZ\t" + guid + "\t" + std::to_string(shot) + "\t" + place);
 +        }
 +        else if (verb == "H" && f.size() >= 5)
