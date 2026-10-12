@@ -360,6 +360,8 @@ pub struct KartStatus {
     pub grounded: bool,
     pub engine: (u8, u8),
     pub speed: f32,
+    /// The back and the front tyres skid, laying their marks (`VehGroundSkids.c`).
+    pub skids: (bool, bool),
 }
 
 /// A wheel's steering pivot and its rolling hub, each knowing its kart.
@@ -643,6 +645,7 @@ pub fn update(
         grounded: view.grounded,
         engine: view.engine,
         speed: view.speed,
+        skids: view.skids,
     };
 }
 

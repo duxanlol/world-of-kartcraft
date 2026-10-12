@@ -314,7 +314,19 @@ const fn weapon(file: &'static str, id: usize, loop_: bool, reference: &'static 
     }
 }
 
-pub const SOUNDS: [SoundSpec; 41] = [
+/// A ground's looped skid or rolling sound (`MetaDataTerrain`), at the game's full volume.
+const fn terrain(file: &'static str, id: usize, reference: &'static str) -> SoundSpec {
+    SoundSpec {
+        file,
+        source: Source::Other(id),
+        loop_: true,
+        distort: 0x80,
+        volume: 0xFF,
+        reference,
+    }
+}
+
+pub const SOUNDS: [SoundSpec; 49] = [
     SoundSpec {
         file: "engine.wav",
         source: Source::Engine(ENGINE_BALANCED_P1),
@@ -331,6 +343,17 @@ pub const SOUNDS: [SoundSpec; 41] = [
         volume: 0xFF,
         reference: "VehEmitter.c: OtherFX_RecycleNew(.., terrain->skidSound, ..); asphalt skidSound = 17 (zGlobal_DATA.c MetaDataTerrain)",
     },
+    // The other grounds' skids and the grounds' rolling loops: `MetaDataTerrain`'s `skidSound`
+    // and `sound` (zGlobal_DATA.c:6976-7116), played by VehEmitter.c:1187-1267 with the
+    // distortion following the speed (applied at play time, so none baked in here).
+    terrain("skid_dirt.wav", 18, "VehEmitter.c:1574 OtherFX_RecycleNew(.., terrain->skidSound, ..): dirt, grass, hardpack, slow grass and dirt skidSound = 18"),
+    terrain("skid_snow.wav", 19, "VehEmitter.c:1574: snow and icy road skidSound = 19"),
+    terrain("ground_ice.wav", 22, "VehEmitter.c:1209 soundID = terrain->sound, OtherFX_RecycleNew(&driverAudioPtrs[1], ..): ice sound = 22"),
+    terrain("ground_snow.wav", 23, "VehEmitter.c:1209: snow sound = 23"),
+    terrain("ground_dirt.wav", 24, "VehEmitter.c:1209: dirt, grass, slow grass and dirt sound = 24"),
+    terrain("ground_water.wav", 25, "VehEmitter.c:1209: water and fast water sound = 25"),
+    terrain("ground_metal.wav", 26, "VehEmitter.c:1209: metal sound = 26"),
+    terrain("ground_mud.wav", 27, "VehEmitter.c:1209: mud sound = 27"),
     SoundSpec {
         file: "turbo.wav",
         source: Source::Other(0xE),

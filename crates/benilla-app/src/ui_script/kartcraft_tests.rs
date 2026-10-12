@@ -769,6 +769,15 @@ fn the_settings_window_sets_the_kart_s_cvars() {
             .unwrap(),
         1.0
     );
+    // The ground types start off: every ground drives as asphalt until asked.
+    assert!(!s
+        .eval::<bool>("return BenillaKartSettingsFrameTerrain:GetChecked() == 1")
+        .unwrap());
+    assert_eq!(
+        s.eval::<String>("return BenillaKartSettingsFrameTerrainText:GetText()")
+            .unwrap(),
+        "Ground types slow you off-road (CTR)"
+    );
     // The far camera starts off: CTR starts on its near one.
     assert!(!s
         .eval::<bool>("return BenillaKartSettingsFrameFarCamera:GetChecked() == 1")
@@ -789,6 +798,7 @@ fn the_settings_window_sets_the_kart_s_cvars() {
          BenillaKartSettingsFrameChaseCamera:Click() \
          BenillaKartSettingsFrameMusic:Click() \
          BenillaKartSettingsFrameGhost:Click() \
+         BenillaKartSettingsFrameTerrain:Click() \
          BenillaKartSettingsFrameFarCamera:Click() \
          BenillaKartSettingsFrameArrowSize:SetValue(1.5) \
          BenillaKartSettingsFrameMusicVolume:SetValue(0.25)",
@@ -799,6 +809,7 @@ fn the_settings_window_sets_the_kart_s_cvars() {
         ("KartChaseCamera", "0"),
         ("KartMusic", "0"),
         ("KartGhost", "0"),
+        ("KartTerrain", "1"),
         ("KartFarCamera", "1"),
         ("KartArrowSize", "1.5"),
         ("KartMusicVolume", "0.25"),

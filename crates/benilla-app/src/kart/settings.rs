@@ -12,6 +12,8 @@
 //!   [`super::garage`]) and whose kart we drive; both apply at once, while driving too.
 //! - `KartGhost`: the ghost of our best run on the course races us ([`super::ghost`]); the runs
 //!   are recorded and kept either way.
+//! - `KartTerrain`: the kart drives on CTR's grounds (grass and dirt hold it to 140/256 of its
+//!   top speed, [`super::ground`]); off, as asphalt everywhere. Per player, client-side.
 //! - `KartCam*`: the chase camera's shape, the camera window's (`/kartcam`), one CVar a
 //!   [`kartcraft::camera::CameraTuning`] field ([`CAMERA_KNOBS`]), read every tick while driving.
 //!
@@ -99,6 +101,9 @@ pub(crate) struct KartSettings {
     pub(crate) class: kartcraft::Class,
     /// Race the ghost of our best run on the course.
     pub(crate) ghost: bool,
+    /// The kart drives on the ground as CTR's terrain table has it: off-road slows it
+    /// ([`super::ground`]); off, every ground drives as asphalt.
+    pub(crate) terrain: bool,
     /// The chase camera's shape.
     pub(crate) camera: CameraTuning,
 }
@@ -112,6 +117,7 @@ impl Default for KartSettings {
             music_volume: 1.0,
             class: super::garage::TIERS[0].0,
             ghost: true,
+            terrain: false,
             camera: CameraTuning::default(),
         }
     }
@@ -152,6 +158,7 @@ pub(crate) fn on_cvar(
         "kartmusic" => settings.music = ev.flag(),
         "kartmusicvolume" => settings.music_volume = ev.num().clamp(0.0, 1.0),
         "kartghost" => settings.ghost = ev.flag(),
+        "kartterrain" => settings.terrain = ev.flag(),
         "kartcamwallpull" => settings.camera.wall_pull = ev.flag(),
         "kartcamtravel" => settings.camera.travel = ev.flag(),
         key if key.starts_with("kartcam") => {
@@ -221,6 +228,11 @@ mod tests {
         assert_eq!(d("KartMusic") != 0.0, settings.music);
         assert_eq!(d("KartMusicVolume"), settings.music_volume);
         assert_eq!(d("KartGhost") != 0.0, settings.ghost);
+        assert_eq!(d("KartTerrain") != 0.0, settings.terrain);
+        assert!(
+            !settings.terrain,
+            "every ground drives as asphalt until asked"
+        );
         for name in ["KartMinimapButton", "KartMinimapAngle"] {
             d(name);
         }
@@ -286,6 +298,14 @@ mod tests {
         assert!(app.world().resource::<KartSettings>().ghost);
         set(&mut app, "KartGhost", "0");
         assert!(!app.world().resource::<KartSettings>().ghost);
+        assert!(
+            !app.world().resource::<KartSettings>().terrain,
+            "off by default"
+        );
+        set(&mut app, "KartTerrain", "1");
+        assert!(app.world().resource::<KartSettings>().terrain);
+        set(&mut app, "kartterrain", "0");
+        assert!(!app.world().resource::<KartSettings>().terrain);
     }
 
     fn registered(name: &str) -> &'static str {

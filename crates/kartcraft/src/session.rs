@@ -6,7 +6,7 @@ use std::sync::{mpsc, Arc, Mutex};
 
 use benilla_world::collision::WorldCollision;
 use bevy::prelude::*;
-use ctr_kart::{Class, Collision, Event, Input, Kart, Modifiers, Pose, State};
+use ctr_kart::{Class, Collision, Event, Ground, Input, Kart, Modifiers, Pose, State};
 
 use crate::{from_lu, heading_of, lu_per_yard, to_lu, yaw_of};
 
@@ -73,6 +73,11 @@ pub struct KartView {
     pub engine: (u8, u8),
     /// Not drawn this frame: the invincibility flicker ([`ctr_kart::Kart::flicker_hidden`]).
     pub hidden: bool,
+    /// The back and the front tyres skid ([`Kart::skids`]).
+    pub skids: (bool, bool),
+    /// The ground under the kart as the host read it, for its sounds, whether or not it drives
+    /// as it ([`Session::set_ground`]).
+    pub ground: Ground,
 }
 
 #[derive(Default)]
@@ -104,6 +109,12 @@ pub struct Session {
     /// Held where it stands across the ground (a race's countdown): it settles onto the ground
     /// but neither rolls nor slides, however the start slopes.
     pinned: bool,
+    /// The ground under the kart as the host reads it, and whether it drives as CTR's terrain
+    /// does or as asphalt everywhere ([`Session::set_ground`]).
+    ground: Ground,
+    terrain_physics: bool,
+    /// The turbo pads to fire, Bevy world ([`crate::pads`]).
+    pads: Vec<crate::pads::Pad>,
 }
 
 /// Every collision triangle in the box around `centre`, in lu from `origin`; zero-area and
@@ -166,6 +177,25 @@ fn hold_at_void(world: &Collision, kart: &mut Kart, before: Vec3) -> bool {
 fn pin_in_place(kart: &mut Kart, before: Vec3) {
     let settled = kart.pose().position.y;
     kart.halt_at(Vec3::new(before.x, settled, before.z));
+}
+
+/// Before a tick, what is under the kart standing at `here` (Bevy world): the ground it drives
+/// on, `ground` with `physics` (`KartTerrain`) and asphalt without, and a turbo pad.
+fn under_kart(
+    kart: &mut Kart,
+    ground: Ground,
+    physics: bool,
+    pads: &[crate::pads::Pad],
+    here: Vec3,
+) {
+    kart.ground_type = if physics {
+        ground.terrain()
+    } else {
+        ctr_kart::Terrain::ASPHALT
+    };
+    if pads.iter().any(|p| p.contains(here)) {
+        kart.turbo_pad();
+    }
 }
 
 /// The pose to draw: the last two ticks blended by how far into the next one we are.
@@ -260,6 +290,19 @@ impl Session {
         self.camera.look_back = look_back;
     }
 
+    /// The ground under the kart for the coming ticks, from the host (CTR reads it off the
+    /// track's quadblocks); with `physics` off the kart drives it as asphalt, and only the
+    /// sounds hear it ([`KartView::ground`]).
+    pub fn set_ground(&mut self, ground: Ground, physics: bool) {
+        self.ground = ground;
+        self.terrain_physics = physics;
+    }
+
+    /// The turbo pads the kart fires as it drives over them, Bevy world.
+    pub fn set_pads(&mut self, pads: Vec<crate::pads::Pad>) {
+        self.pads = pads;
+    }
+
     /// What shapes the chase camera from the next tick on ([`crate::camera::CameraTuning`]).
     pub fn tune_camera(&mut self, tuning: crate::camera::CameraTuning) {
         self.camera.tuning = tuning;
@@ -345,6 +388,13 @@ impl Session {
         while self.owed >= ctr_kart::TICK {
             self.owed -= ctr_kart::TICK;
             let before = kart.pose().position;
+            under_kart(
+                kart,
+                self.ground,
+                self.terrain_physics,
+                &self.pads,
+                from_lu(before, origin),
+            );
             kart.tick_among(&world, input, mods, &others);
             hold_at_void(&world, kart, before);
             if self.pinned {
@@ -436,6 +486,8 @@ impl Session {
             failed_boost: kart.failed_boost(),
             engine: kart.engine_sound(),
             hidden: kart.flicker_hidden(),
+            skids: kart.skids(),
+            ground: self.ground,
         }
     }
 }
@@ -505,6 +557,46 @@ mod tests {
             at.x.abs() < 2100.0 && at.z.abs() < 2100.0,
             "it stayed at the edge: {at:?}"
         );
+    }
+
+    /// Full gas for `ticks` from a standstill with `under_kart` before each tick, as the session
+    /// runs it; the pad at the origin, Bevy world = lu / lu-per-yard (origin zero).
+    fn gas_over(ground: Ground, physics: bool, pads: &[crate::pads::Pad], ticks: usize) -> Kart {
+        let world = Collision::new(floor(0.0, 6000.0), CELL_LU);
+        let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 1.0, 0.0), 0);
+        let gas = Input {
+            gas: true,
+            ..Default::default()
+        };
+        for _ in 0..ticks {
+            let here = from_lu(kart.pose().position, Vec3::ZERO);
+            under_kart(&mut kart, ground, physics, pads, here);
+            kart.tick(&world, &gas, &Modifiers::default());
+        }
+        kart
+    }
+
+    #[test]
+    fn terrain_off_drives_every_ground_as_asphalt_and_on_drives_ctr_s() {
+        let asphalt = gas_over(Ground::Asphalt, true, &[], 90).speed();
+        for ground in [Ground::Grass, Ground::Mud, Ground::Water, Ground::Snow] {
+            let off = gas_over(ground, false, &[], 90);
+            assert_eq!(off.speed(), asphalt, "{ground:?} with the toggle off");
+            assert_eq!(off.ground_type, ctr_kart::Terrain::ASPHALT);
+        }
+        let grass = gas_over(Ground::Grass, true, &[], 90).speed();
+        let want = (Class::Balanced.stats().speed * 140) >> 8;
+        assert!((grass - want).abs() < 200, "grass {grass} want {want}");
+    }
+
+    #[test]
+    fn a_pad_under_the_kart_fires_its_turbo() {
+        // A pad at the start, pointing along the kart's +Z (Bevy's +Z is WoW's −x: o = π).
+        let pad = crate::pads::Pad::from_wow(0.0, 0.0, 0.0, std::f32::consts::PI);
+        let kart = gas_over(Ground::Asphalt, false, &[pad], 3);
+        assert!(kart.reserves() > 0, "on the pad");
+        let missed = crate::pads::Pad::from_wow(500.0, 0.0, 0.0, 0.0);
+        assert_eq!(gas_over(Ground::Asphalt, false, &[missed], 3).reserves(), 0);
     }
 
     #[test]

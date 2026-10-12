@@ -346,6 +346,9 @@ pub(crate) fn update(
                 grounded: state.grounded,
                 engine: state.engine,
                 speed,
+                // The wire carries the powerslide, not the skid flags: a remote kart marks the
+                // ground through its drifts only.
+                skids: (state.drifting, state.drifting),
             };
         }
         // The driver in the seat of their kart, as ours.

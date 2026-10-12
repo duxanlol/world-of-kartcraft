@@ -9,12 +9,13 @@ pub mod effects;
 pub mod hud;
 pub mod input;
 pub mod model;
+pub mod pads;
 pub mod session;
 pub mod sound;
 pub mod weapons;
 
 use bevy::prelude::*;
-pub use ctr_kart::{Class, Event, Input, Kart, Modifiers, State};
+pub use ctr_kart::{Class, Event, Ground, Input, Kart, Modifiers, State};
 pub use session::{KartView, NearbyKart, Session};
 
 pub const METERS_PER_YARD: f32 = 0.9144;

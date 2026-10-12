@@ -14,7 +14,9 @@ mod autotest;
 mod bindings;
 mod garage;
 mod ghost;
+mod ground;
 pub(crate) mod marshals;
+mod pads;
 mod profession;
 mod race;
 mod remote;
@@ -405,6 +407,8 @@ fn update(
     audio.engine = kart.engine_sound();
 
     *view = host.session.view(dt);
+    audio.skidding = view.skids.0 || view.skids.1;
+    audio.ground = view.ground;
     // `WOW_KART_DEBUG`: the kart's pose twice a second.
     if std::env::var_os("WOW_KART_DEBUG").is_some()
         && (now * 2.0) as i32 != ((now - dt) * 2.0) as i32
@@ -519,6 +523,7 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<kartcraft::hud::KartHud>()
         .init_resource::<kartcraft::hud::HudExtras>()
         .init_resource::<kartcraft::effects::KartEffects>()
+        .init_resource::<kartcraft::pads::PadField>()
         .init_resource::<kartcraft::weapons::Weapons>()
         .init_resource::<kartcraft::weapons::look::WeaponLook>()
         .init_resource::<weapons::WeaponLink>()
@@ -549,6 +554,9 @@ pub(crate) fn plugin(app: &mut App) {
             (
                 input::log_pads,
                 race_name,
+                pads::feed,
+                // The ground under the pads is read through the mover's trace, after its doors.
+                kartcraft::pads::lay.after(crate::go_anim::publish_ghost_door_exclusions),
                 update.in_set(KartDriveSet),
                 race::update,
                 ghost::update,
@@ -571,6 +579,9 @@ pub(crate) fn plugin(app: &mut App) {
         .add_systems(
             PostUpdate,
             (
+                // Off `Update`, where the terrain streamer's writers run unordered: the ground
+                // under the kart as drawn this frame, for the next frame's ticks.
+                ground::sample,
                 remote::update,
                 model::animate_wheels,
                 kartcraft::effects::attach,

@@ -779,6 +779,13 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "1",
         "Kartcraft's own — the time trial's ghost; 1.12 has no kart",
     ),
+    // The kart drives on CTR's grounds read off WoW's (`kart::ground`): grass, dirt, snow, mud
+    // and water slow it as CTR's terrain table does. Off, every ground is asphalt, as before.
+    ours(
+        "KartTerrain",
+        "0",
+        "Kartcraft's own — CTR's ground types under the kart; 1.12 has no kart",
+    ),
     // The chase camera's shape, the camera window's (`/kartcam`), each a field of
     // `kartcraft::camera::CameraTuning` at its Kartcraft value (`kart::settings::CAMERA_KNOBS`):
     // lengths in lu, angles in degrees, smoothing in seconds, shares 0 to 1.

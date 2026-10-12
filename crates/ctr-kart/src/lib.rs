@@ -7,11 +7,13 @@ pub mod collision;
 pub mod kart;
 pub mod rev;
 pub mod stats;
+pub mod terrain;
 
 pub use collision::Collision;
 pub use kart::{
     clock_slowdown, CameraInput, CloudEffect, Event, HitKind, Input, Kart, Modifiers, OtherKart,
-    Pose, Ram, Shield, State, MS, RAM_TURBO_IMPACT, TICK,
+    Pose, Ram, Shield, State, Terrain, MS, RAM_TURBO_IMPACT, TICK,
 };
 pub use rev::{RevEngine, RevState, StartBoost};
 pub use stats::Class;
+pub use terrain::Ground;
