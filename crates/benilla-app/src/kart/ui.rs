@@ -46,6 +46,8 @@ pub(crate) struct KartOverlay {
     /// The race map: the race's track, and its racers, us among them.
     pub(crate) track: Option<RaceMap>,
     pub(crate) racers: Vec<RacerDot>,
+    /// Whether we sit in the kart: the layer hides the action bars and unit frames meanwhile.
+    pub(crate) seated: bool,
 }
 
 /// Each racer's dot: us where our kart is, another at their relayed kart when it is `near`, else
@@ -114,6 +116,9 @@ pub(super) fn publish(
     }
     if overlay.results != text.lines {
         overlay.results.clone_from(&text.lines);
+    }
+    if overlay.seated != drive.active {
+        overlay.seated = drive.active;
     }
     if overlay.skill != score.skill() {
         overlay.skill = score.skill();

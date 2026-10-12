@@ -29,7 +29,8 @@
         (KartMusic, KartMusicVolume), the minimap button (KartMinimapButton, KartMinimapAngle),
         the Race Marshals on the maps (KartRaceMarshals, kart/marshals.rs), the ghost of the
         best run on a course (KartGhost), CTR's ground types under the kart (KartTerrain,
-        kart/ground.rs, off by default) and the controller's rumble (KartRumble).
+        kart/ground.rs, off by default), the controller's rumble (KartRumble) and how tall the
+        race checkpoints' gates stand (KartGateHeight).
 
         The kart garage (/garage) picks the engine class (KartClass) and whose kart we drive
         (KartRacer). The kart sends BENILLA_KART_GARAGE at load and whenever the Karting skill
@@ -941,8 +942,50 @@
             BenillaKartScoreFrame:Show()
         end
 
+        -- In the kart the action bars and the unit frames step aside: each goes under a hidden
+        -- holder, where the stock code's own Show() cannot bring it back, and returns to
+        -- UIParent when we climb out. Chat, the minimap, buffs and the rest stay.
+        BENILLA_KART_HIDDEN_FRAMES = {
+            "MainMenuBar", "MultiBarBottomLeft", "MultiBarBottomRight", "MultiBarLeft",
+            "MultiBarRight", "PlayerFrame", "TargetFrame", "PetFrame", "PartyMemberFrame1",
+            "PartyMemberFrame2", "PartyMemberFrame3", "PartyMemberFrame4",
+        }
+
+        function BenillaKartSeated_Set(seated)
+            if not BenillaKartHiddenHolder then
+                BenillaKartHiddenHolder = CreateFrame("Frame", nil, UIParent)
+                BenillaKartHiddenHolder:Hide()
+                BenillaKartHiddenHolder.parents = {}
+            end
+            local holder = BenillaKartHiddenHolder
+            for _, name in ipairs(BENILLA_KART_HIDDEN_FRAMES) do
+                local frame = getglobal(name)
+                if frame then
+                    if seated and not holder.parents[name] then
+                        holder.parents[name] = frame:GetParent() or UIParent
+                        -- Stepping aside is no lost target: TargetFrame's OnHide would play it.
+                        local onhide = frame:GetScript("OnHide")
+                        frame:SetScript("OnHide", nil)
+                        frame:SetParent(holder)
+                        frame:SetScript("OnHide", onhide)
+                    elseif not seated and holder.parents[name] then
+                        frame:SetParent(holder.parents[name])
+                        holder.parents[name] = nil
+                        -- 1.12's SetParent does not show a frame it moves under a visible parent
+                        -- from a hidden one: a shown frame is hidden and shown again to appear.
+                        if frame:IsShown() then
+                            frame:Hide()
+                            frame:Show()
+                        end
+                    end
+                end
+            end
+        end
+
         function BenillaKartEvents_OnEvent()
-            if event == "CHAT_MSG_ADDON" then
+            if event == "BENILLA_KART_SEATED" then
+                BenillaKartSeated_Set(arg1 == 1)
+            elseif event == "CHAT_MSG_ADDON" then
                 if arg1 == BENILLA_KART_PREFIX then BenillaKartFinder_OnLine(arg2) end
             elseif event == "BENILLA_KART_RACE" then
                 BenillaKartRace_Show(arg1, arg2)
@@ -1147,6 +1190,7 @@
             BenillaKartSettingsFrameGhost:SetChecked(BenillaKart_Flag("KartGhost"))
             BenillaKartSettingsFrameTerrain:SetChecked(BenillaKart_Flag("KartTerrain"))
             BenillaKartSettingsFrameRumble:SetChecked(BenillaKart_Flag("KartRumble"))
+            BenillaKartSettingsFrameGateHeight:SetValue(tonumber(GetCVar("KartGateHeight")) or 8)
             frame.refreshing = nil
         end
 
@@ -1905,7 +1949,7 @@
     <!-- The settings: the guide arrow, the camera, the music, the minimap button, the ghost and
          the ground types, each a CVar set as it is clicked, as the stock option boxes are. -->
     <Frame name="BenillaKartSettingsFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="320" y="596"/></Size>
+        <Size><AbsDimension x="320" y="640"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -2012,6 +2056,13 @@
             <CheckButton name="$parentRumble" inherits="BenillaKartSettingsCheckTemplate">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-512"/></Offset></Anchor></Anchors>
             </CheckButton>
+            <Slider name="$parentGateHeight" inherits="OptionsSliderTemplate">
+                <Size><AbsDimension x="240" y="17"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="38" y="-566"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnValueChanged>BenillaKartSettings_Slide(this, "KartGateHeight")</OnValueChanged>
+                </Scripts>
+            </Slider>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>
                 <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
@@ -2040,6 +2091,7 @@
                 BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameArrowTilt, "Arrow tilt", 0, 80, 5, "Level", "Upright")
                 BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameArrowFov, "Arrow field of view", 20, 110, 5, "Flat", "Wide")
                 BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameMusicVolume, "Music volume", 0, 1, 0.05, "Quiet", "Loud")
+                BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameGateHeight, "Checkpoint gate height", 0, 40, 1, "Beams only", "Tall")
                 if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
                 BenillaKart_Movable(this)
             </OnLoad>
@@ -2678,6 +2730,7 @@
                 this:RegisterEvent("BENILLA_KART_RACERS")
                 this:RegisterEvent("BENILLA_KART_COURSE_NAMES")
                 this:RegisterEvent("BENILLA_KART_GARAGE")
+                this:RegisterEvent("BENILLA_KART_SEATED")
             </OnLoad>
             <OnEvent>BenillaKartEvents_OnEvent()</OnEvent>
             <OnUpdate>BenillaKartEvents_OnUpdate()</OnUpdate>
