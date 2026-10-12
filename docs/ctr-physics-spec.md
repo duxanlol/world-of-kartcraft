@@ -1147,6 +1147,11 @@ and no `clockReceive` (`VehPhysProc.c:804-861`).
   once the model faces forward.
 - The TNT's landing also waits for its shrink to 0x800 (8 frames; always done by the ~25-frame
   throw) and uses the character's own head height; the port uses Crash's.
-- The squish's recovery bounce (`bakedGteMath[SQUISH_RECOVER]`, 15 frames of data) is not ported;
-  the model snaps back to full height.
-- In battle, leaving the tumble gives `invincibleTimer = 2880`; races only here.
+- The squish's recovery bounce (`bakedGteMath[SQUISH_RECOVER]`, `zGlobal_DATA.c:5673-5795`)
+  plays its entries 1 to 14 as the squish wears off (`VehPhysForce.c:1740-1750`, `1335-1343`);
+  its sound (OtherFX 0x5B) is not among the extracted sounds, so it is silent.
+- The squash and stretch (`VehPhysForce.c:1643-1772`) leaves out the clock's and rain cloud's
+  `hazardTimer` hold and the TNT's shrink on landing.
+- In battle, leaving the tumble gives `invincibleTimer = 2880`; races only here. Over 0x2A0 the
+  kart flickers on odd frames (`RB_Player_ToggleFlicker`, `231/RB_Player.c:231-257`); the port
+  draws that, but in a race nothing gives more than the shield pop's 0x2A0, so it never shows.

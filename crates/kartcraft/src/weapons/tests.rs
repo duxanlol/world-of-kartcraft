@@ -416,3 +416,28 @@ fn a_new_race_keeps_the_layout_that_came_with_its_roster() {
     tick(&mut w, &world, &mut kart, 1);
     assert!(w.crates().is_empty());
 }
+
+#[test]
+fn a_mask_grab_reports_its_wumpa_in_a_race_and_not_outside_one() {
+    let (mut w, world, mut kart) = setup();
+    // No race: nothing to report, and nothing piles up unsent.
+    kart.mask_grab(Vec3::Y * 40.0, 0);
+    w.tick(&world, &mut kart, ORIGIN);
+    assert!(w.outbox.is_empty());
+
+    w.receive(Down::Layout {
+        first: 0,
+        crates: vec![CrateSpot {
+            kind: CrateKind::Weapon,
+            at: bevy_to_wow(ORIGIN + Vec3::Z * 50.0),
+        }],
+    });
+    tick(&mut w, &world, &mut kart, 1);
+    kart.events.clear();
+    kart.mask_grab(Vec3::Y * 40.0, 0);
+    w.tick(&world, &mut kart, ORIGIN);
+    assert_eq!(
+        std::mem::take(&mut w.outbox),
+        vec![(ME, Up::Lose(wire::Loss::MaskGrab))]
+    );
+}

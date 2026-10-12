@@ -626,7 +626,11 @@ pub fn update(
         return;
     }
     *t = view.transform;
-    *visibility = Visibility::Visible;
+    *visibility = if view.hidden {
+        Visibility::Hidden
+    } else {
+        Visibility::Visible
+    };
     *wheels = KartWheels {
         steer: view.steer,
         spin: view.wheel_spin,

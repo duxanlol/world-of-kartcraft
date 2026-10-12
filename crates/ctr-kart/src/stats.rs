@@ -195,6 +195,45 @@ pub const BLAST_TUMBLE_FRAMES: i32 = 0x1B;
 pub const BLAST_PIVOT: f32 = 0x2000 as f32 / 256.0;
 /// A squished kart is drawn this far up its normal, lu (`VehPhysForce.c:123`, `1453-1458`).
 pub const SQUISH_LIFT: f32 = 0x13 as f32;
+/// The squash and stretch (`VehPhysForce.c:105-122`, `1643-1772`): the instance's scale as built
+/// (0xCCC), the squash's resting target and its dead band, its least on landing and in the air and
+/// its most, the fall's stretch (0x280 to 0x320 over 0 to 0xA00 of fall speed), how fast
+/// `jumpSquishStretch` settles a frame, how fast the scale follows it, and how much of it the
+/// width and length give back (0xA0/256).
+pub const SCALE_BASE: i32 = 0xCCC;
+pub const SQUASH_DEFAULT: i32 = -800;
+pub const SQUASH_DEADBAND: i32 = 0x960;
+pub const SQUASH_LANDING_MIN: i32 = -0x640;
+pub const SQUASH_AIR_MIN: i32 = -800;
+pub const SQUASH_MAX: i32 = 800;
+pub const FALL_STRETCH_SPEED: i32 = 0xA00;
+pub const FALL_STRETCH_MIN: i32 = 0x280;
+pub const FALL_STRETCH_MAX: i32 = 0x320;
+pub const SQUASH_EASE: i32 = 300;
+pub const SCALE_EASE: i32 = 0xA0;
+pub const SQUASH_XZ: i32 = 0xA0;
+/// `bakedGteMath[SQUISH_RECOVER]` (`zGlobal_DATA.c:5673-5795`): the bounce as a squished kart
+/// springs back, a frame each: the lift up the kart (1/256 lu) and the X, Y, Z scale (4096ths).
+pub const SQUISH_RECOVER: [[i32; 4]; 15] = [
+    [3091, 4096, 2227, 4096],
+    [3896, 3704, 4456, 3704],
+    [4418, 3200, 5869, 3200],
+    [4636, 3086, 6116, 3086],
+    [4418, 3200, 5869, 3200],
+    [3338, 3758, 5251, 3758],
+    [1669, 4550, 4217, 4550],
+    [0, 4952, 3246, 4952],
+    [0, 4670, 2816, 4670],
+    [0, 4049, 3073, 4049],
+    [0, 3427, 3639, 3427],
+    [0, 3145, 4205, 3145],
+    [0, 3294, 4463, 3294],
+    [0, 3620, 4367, 3620],
+    [0, 3947, 4191, 3947],
+];
+/// `RB_Player_ToggleFlicker` (`231/RB_Player.c:231-257`): with more `invincibleTimer` than this
+/// left (CTR-ms), the kart is not drawn on odd frames.
+pub const FLICKER_INVINCIBLE_MS: i32 = 0x2A0;
 /// Aku Aku / Uka Uka (`ovr_231.h:51-52`) and its fade, during which it still protects
 /// (`RB_MaskShieldCloud.c:19-81`, `180-202`), CTR-ms.
 pub const MASK_MS: i32 = 0x1E00;

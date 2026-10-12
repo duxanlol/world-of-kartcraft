@@ -1283,6 +1283,20 @@ namespace Kartcraft
             SendRace(*race, "KARTCRAFT\tW\tH\t" + guid + "\t" + std::to_string(shooter) + "\t" + std::to_string(shot) +
                 "\t" + std::string(1, kind) + "\t" + std::to_string(me->wumpa));
         }
+        else if (verb == "P" && f.size() >= 3 && f[2].size() == 1)
+        {
+            // Wumpa lost by no one's hit: a powerslide spun out 1 (VehPhysProc.c:2868-2871), Aku
+            // Aku's grab after a fall 2 (VehStuckProc.c:648-651); none while masked. The total goes
+            // to the racer alone.
+            char why = f[2][0];
+            if (why != 'S' && why != 'M')
+                return;
+            uint32 loss = why == 'M' ? 2 : 1;
+            if (me->maskUntil && int32(now - me->maskUntil) < 0)
+                loss = 0;
+            me->wumpa = uint8(me->wumpa > loss ? me->wumpa - loss : 0);
+            SendLine(player, "KARTCRAFT\tW\tF\t" + std::to_string(me->wumpa));
+        }
     }
 
     // A race's records: a time trial's own, or the races'.

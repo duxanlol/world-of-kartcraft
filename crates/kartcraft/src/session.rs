@@ -71,6 +71,8 @@ pub struct KartView {
     pub failed_boost: bool,
     /// The engine's distortion and volume, as CTR mixes it.
     pub engine: (u8, u8),
+    /// Not drawn this frame: the invincibility flicker ([`ctr_kart::Kart::flicker_hidden`]).
+    pub hidden: bool,
 }
 
 #[derive(Default)]
@@ -340,7 +342,6 @@ impl Session {
             self.owed -= ctr_kart::TICK;
             let before = kart.pose().position;
             kart.tick_among(&world, input, mods, &others);
-            after_tick(&world, kart, origin);
             hold_at_void(&world, kart, before);
             if self.pinned {
                 pin_in_place(kart, before);
@@ -353,11 +354,14 @@ impl Session {
                 self.falling += ctr_kart::TICK;
                 if self.falling > RESCUE_AFTER {
                     if let Some((at, heading)) = self.last_ground {
-                        kart.place(at + Vec3::Y * 40.0, heading);
+                        kart.mask_grab(at + Vec3::Y * 40.0, heading);
                     }
                     self.falling = 0.0;
                 }
             }
+            // The weapons step after the kart is where this tick leaves it, and see its events
+            // (the mask grab's among them).
+            after_tick(&world, kart, origin);
             let shot = self.camera.tick(&kart.camera_input(), &world);
             // A cut (look-back) is drawn at once, never swept to through the kart.
             self.shots = Some(match self.shots {
@@ -427,6 +431,7 @@ impl Session {
             fire: kart.fire_size(),
             failed_boost: kart.failed_boost(),
             engine: kart.engine_sound(),
+            hidden: kart.flicker_hidden(),
         }
     }
 }

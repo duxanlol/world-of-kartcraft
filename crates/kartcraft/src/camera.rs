@@ -279,6 +279,14 @@ pub struct ChaseCamera {
     tilt: [f32; 2],
     /// The eye's yaw (4096ths), easing after its aim.
     yaw: f32,
+    /// Last tick's eye and look-at (`cameraPos`, `lookAtPos`), before the wall pull.
+    last: Option<(Vec3, Vec3)>,
+    /// Through a blast (`BlastedLerp.unkOffset`): the look-at's height over the eye and the
+    /// eye's over the ground, held from the blast's first frame until the kart lands.
+    blast: Option<(f32, f32)>,
+    /// After it (`BlastedLerp.desiredPos`, `desiredRot`, `framesRemaining`): how far the eye and
+    /// the look-at were from where they now belong, given back over 8 frames.
+    blast_ease: (Vec3, Vec3, i32),
 }
 
 /// The ground's grade along `heading` around the kart at `at` (rise per run): a least-squares
@@ -317,6 +325,35 @@ impl ChaseCamera {
             tuning: self.tuning,
             ..Default::default()
         };
+    }
+
+    /// A blast's camera (`CAM.c:1312-1392`, spec 3.2), for every tuning: from the blast's first
+    /// frame the eye may not rise above the height over the ground it had then, so it does not
+    /// follow the tumble's flight, until the kart is out of the tumble and on the ground; then
+    /// how far the eye and look-at were from where they now belong is given back over 8 frames
+    /// (8/8 first, so the first frame holds still).
+    fn blasted(&mut self, k: &CameraInput, eye: &mut Vec3, look: &mut Vec3) {
+        let (last_eye, last_look) = self.last.unwrap_or((*eye, *look));
+        if !k.blasted && k.grounded && self.blast.take().is_some() {
+            self.blast_ease = (last_eye - *eye, last_look - *look, 8);
+        }
+        if k.blasted || self.blast.is_some() {
+            let (_, over) = *self
+                .blast
+                .get_or_insert((last_look.y - last_eye.y, last_eye.y - k.ground));
+            let ceiling = k.ground + over;
+            if last_eye.y < eye.y && ceiling < eye.y {
+                eye.y = ceiling;
+            }
+            return;
+        }
+        let (d_eye, d_look, n) = &mut self.blast_ease;
+        if *n > 0 {
+            let share = *n as f32 / 8.0;
+            *eye += *d_eye * share;
+            *look += *d_look * share;
+            *n -= 1;
+        }
     }
 
     /// One 30 Hz frame for `k`, over `world`'s ground.
@@ -423,6 +460,8 @@ impl ChaseCamera {
         // 2.5: the ground's lean, filtered (after use, as the game does).
         self.roll = (224 * self.roll + 32 * k.roll) >> 8;
 
+        self.blasted(k, &mut eye, &mut look);
+
         // 5: never closer than vertDistance over the ground under the eye.
         match world.ground(eye + Vec3::Y * 256.0, 2304.0) {
             Some(hit) => {
@@ -445,6 +484,11 @@ impl ChaseCamera {
                 }
             }
         }
+        // Through a blast the look-at keeps its height over the eye (`CAM.c:1447-1450`).
+        if let Some((look_over, _)) = self.blast {
+            look.y = eye.y + look_over;
+        }
+        self.last = Some((eye, look));
         // CTR's camera has no wall test (its tracks keep walls out from behind the kart); WoW's
         // pillars and trees do not, so a tuning may bring the eye in short of what blocks it.
         let to_eye = eye - look;
@@ -493,6 +537,9 @@ mod tests {
             turbo: false,
             fire_speed_cap: 0,
             travel: None,
+            blasted: false,
+            grounded: true,
+            ground: 0.0,
         }
     }
 
@@ -1015,5 +1062,105 @@ mod tests {
             "{moved:?}"
         );
         assert!((view_deg(&moved) - view_deg(&base)).abs() < 0.01);
+    }
+
+    /// A floor at y = 0 in 100 lu tiles 1000 lu each way, small enough for the grid to keep, so
+    /// the eye finds the ground under it.
+    fn tiled() -> Collision {
+        let mut tris = Vec::new();
+        for i in -10..10 {
+            for j in -10..10 {
+                let (x0, z0) = (i as f32 * 100.0, j as f32 * 100.0);
+                let (x1, z1) = (x0 + 100.0, z0 + 100.0);
+                tris.push([[x0, 0.0, z0], [x0, 0.0, z1], [x1, 0.0, z1]]);
+                tris.push([[x0, 0.0, z0], [x1, 0.0, z1], [x1, 0.0, z0]]);
+            }
+        }
+        Collision::new(tris, 160.0)
+    }
+
+    /// A kart blasted at `t` = 0, flung up 300 lu and down again over 20 ticks, still tumbling
+    /// on the ground to tick 24: the shots.
+    fn blast_flight(tuning: CameraTuning) -> Vec<Shot> {
+        let world = tiled();
+        let mut cam = ChaseCamera {
+            tuning,
+            ..Default::default()
+        };
+        let mut k = input(6000);
+        for _ in 0..60 {
+            cam.tick(&k, &world);
+        }
+        let mut shots = Vec::new();
+        for t in 0..40 {
+            let flying = t < 20;
+            k.blasted = t < 24;
+            k.grounded = !flying;
+            k.position.y = if flying {
+                300.0 * (std::f32::consts::PI * t as f32 / 20.0).sin()
+            } else {
+                0.0
+            };
+            shots.push(cam.tick(&k, &world));
+        }
+        shots
+    }
+
+    #[test]
+    fn a_blasted_kart_s_flight_does_not_lift_the_eye_and_it_eases_back_after_the_landing() {
+        for tuning in [
+            CameraTuning::CTR,
+            CameraTuning::KARTCRAFT,
+            CameraTuning::SMOOTH,
+        ] {
+            let world = tiled();
+            let mut steady = ChaseCamera {
+                tuning,
+                ..Default::default()
+            };
+            let mut rest = steady.tick(&input(6000), &world);
+            for _ in 0..60 {
+                rest = steady.tick(&input(6000), &world);
+            }
+            let shots = blast_flight(tuning);
+            // CAM.c:1335-1345: the eye never rises over its height at the blast, and the look-at
+            // keeps its height over the eye.
+            for (t, s) in shots[..24].iter().enumerate() {
+                assert!(s.eye.y <= rest.eye.y + 0.01, "{tuning:?} tick {t}: {s:?}");
+                let over = s.look.y - s.eye.y;
+                assert!((over - (rest.look.y - rest.eye.y)).abs() < 0.01, "tick {t}");
+            }
+            // Landed (tick 20) but still tumbling to tick 24: held; then 8 ticks back, the first
+            // of them where the last left off.
+            assert!(
+                (shots[24].eye - shots[23].eye).length() < 0.01,
+                "{tuning:?}"
+            );
+            assert!(
+                (shots[24].look - shots[23].look).length() < 0.01,
+                "{tuning:?}"
+            );
+            let settled = &shots[32];
+            assert!(
+                (settled.eye - rest.eye).length() < 0.01,
+                "{tuning:?} {settled:?}"
+            );
+            assert!(
+                (settled.look - rest.look).length() < 0.01,
+                "{tuning:?} {settled:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn without_a_blast_the_eye_rises_with_the_kart() {
+        let world = tiled();
+        let mut cam = ChaseCamera::default();
+        let mut k = input(6000);
+        let rest = cam.tick(&k, &world);
+        k.position.y = 300.0;
+        k.grounded = false;
+        let up = cam.tick(&k, &world);
+        assert!(up.eye.y > rest.eye.y + 250.0, "{rest:?} {up:?}");
     }
 }

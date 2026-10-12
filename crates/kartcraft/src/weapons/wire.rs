@@ -117,6 +117,42 @@ pub enum Up {
     Detonate,
     /// Fire with our shield up: launch it as a shield bomb (`W Z`), a shot of our own counter.
     ShieldShot { shot: u16, aim: Aim },
+    /// We lost Wumpa by no one's hit (`W P`): the server takes it and answers with our total.
+    Lose(Loss),
+}
+
+/// Wumpa lost by no one's hit (`RB_Player_ModifyWumpa`'s other callers).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Loss {
+    /// A powerslide spun out: SpinFirst's 1 (`VehPhysProc.c:2868-2871`).
+    SpinOut,
+    /// Aku Aku put us back after a fall: the mask grab's 2 (`VehStuckProc.c:648-651`).
+    MaskGrab,
+}
+
+impl Loss {
+    pub fn code(self) -> char {
+        match self {
+            Loss::SpinOut => 'S',
+            Loss::MaskGrab => 'M',
+        }
+    }
+
+    pub fn from_code(c: &str) -> Option<Self> {
+        Some(match c {
+            "S" => Loss::SpinOut,
+            "M" => Loss::MaskGrab,
+            _ => return None,
+        })
+    }
+
+    /// The Wumpa it costs, none while masked (`RB_Player.c:153-161`).
+    pub fn wumpa(self) -> u8 {
+        match self {
+            Loss::SpinOut => 1,
+            Loss::MaskGrab => 2,
+        }
+    }
 }
 
 fn flags(aim: &Aim) -> String {
@@ -161,6 +197,7 @@ impl Up {
             } => format!("H\t{shooter}\t{shot}\t{}", kind.code()),
             Up::Detonate => "D".to_string(),
             Up::ShieldShot { shot, aim } => format!("Z\t{shot}\t{}", place(aim)),
+            Up::Lose(loss) => format!("P\t{}", loss.code()),
         };
         format!("{PREFIX}{body}")
     }
@@ -184,6 +221,7 @@ impl Up {
                 shot: shot_number(f[1])?,
                 aim: aim(f[2], "0", "")?,
             },
+            "P" if f.len() >= 2 => Up::Lose(Loss::from_code(f[1])?),
             _ => return None,
         })
     }
@@ -418,11 +456,15 @@ mod tests {
                     ..aim_at(false, false)
                 },
             },
+            Up::Lose(Loss::SpinOut),
+            Up::Lose(Loss::MaskGrab),
         ] {
             let line = up.line();
             assert!(line.len() < MAX_LINE, "{line}");
             assert_eq!(Up::parse(&line), Some(up), "{line}");
         }
+        assert_eq!(Up::Lose(Loss::MaskGrab).line(), "KARTCRAFT\tW\tP\tM");
+        assert_eq!(Up::parse("KARTCRAFT\tW\tP\tX"), None);
         assert_eq!(
             Up::Fire {
                 shot: 5,
