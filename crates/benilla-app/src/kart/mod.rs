@@ -13,6 +13,7 @@
 
 mod autotest;
 mod bindings;
+pub(crate) mod freecam;
 mod garage;
 mod ghost;
 mod ground;
@@ -176,13 +177,16 @@ fn update(
     profession: profession::Profession,
     mut score: ResMut<score::KartScore>,
     settings: Res<settings::KartSettings>,
-    (remotes, mut extras, races, mut arms, mut rumble, mut show): (
+    (remotes, mut extras, races, mut arms, mut rumble, mut show, mut free, mouse, buttons): (
         Res<remote::RemoteKarts>,
         ResMut<kartcraft::hud::HudExtras>,
         Res<race::Races>,
         ResMut<kartcraft::weapons::Weapons>,
         ResMut<kartcraft::rumble::Rumble>,
         ResMut<showcase::Showcase>,
+        ResMut<freecam::FreeCam>,
+        Res<bevy::input::mouse::AccumulatedMouseMotion>,
+        Res<ButtonInput<MouseButton>>,
     ),
 ) {
     let now = time.elapsed_secs();
@@ -346,7 +350,9 @@ fn update(
     };
     // A showcase run's tape drives; the camera binding steps through its cameras.
     let cycle = showing && controls.camera;
-    let controls = if showing {
+    // The free camera flying takes the controls; the kart holds still meanwhile.
+    let fly = controls;
+    let controls = if showing || free.flying() {
         input::Controls::default()
     } else {
         controls
@@ -485,6 +491,18 @@ fn update(
         drive.camera = Some(camera);
         drive.fov = fov;
         drive.engine_camera = true;
+    } else {
+        // The free camera (`/kartfree`): flown with the right mouse held to look, or parked.
+        let look = if buttons.pressed(MouseButton::Right) {
+            mouse.delta
+        } else {
+            Vec2::ZERO
+        };
+        if let Some((camera, fov)) = free.frame(&view, &fly, look, dt) {
+            drive.camera = Some(camera);
+            drive.fov = fov;
+            drive.engine_camera = true;
+        }
     }
 }
 
@@ -595,6 +613,8 @@ pub(crate) fn plugin(app: &mut App) {
         .net_handler(benilla_protocol::SessionEventKind::Chat, weapons::on_chat)
         .net_handler(benilla_protocol::SessionEventKind::Chat, showcase::on_chat)
         .init_resource::<showcase::Showcase>()
+        .init_resource::<freecam::FreeCam>()
+        .init_resource::<kartcraft::hud::HudHidden>()
         .init_resource::<race::Races>()
         .init_resource::<race::RaceText>()
         .init_resource::<ghost::Ghosts>()

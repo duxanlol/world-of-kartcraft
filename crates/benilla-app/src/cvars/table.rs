@@ -786,6 +786,20 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "0",
         "Kartcraft's own — CTR's ground types under the kart; 1.12 has no kart",
     ),
+    // The clean screen for filming (`/kartclean`): CTR's HUD and the guide arrow step aside with
+    // the WoW interface; held for the session only (`load_config`).
+    ours(
+        "KartHideHud",
+        "0",
+        "Kartcraft's own — the kart HUD's clean screen; 1.12 has no kart",
+    ),
+    // The free camera for filming the kart (`kart::freecam`): off, fly, tripod, low or orbit;
+    // held for the session only (`load_config`).
+    ours(
+        "KartFreeCam",
+        "off",
+        "Kartcraft's own — the kart's free camera; 1.12 has no kart",
+    ),
     // How tall a race checkpoint's sheet of light stands, yards (`kart::race`); looks only.
     ours(
         "KartGateHeight",

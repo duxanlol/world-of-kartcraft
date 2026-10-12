@@ -1997,6 +1997,8 @@ pub(crate) struct GuideHud {
     pub(crate) tilt: f32,
     /// The field of view it is seen through, degrees (`KartArrowFov`): narrower is flatter.
     pub(crate) fov: f32,
+    /// Stepped aside with the rest of the HUD for a clean picture (`KartHideHud`).
+    pub(crate) clean: bool,
 }
 
 impl Default for GuideHud {
@@ -2009,6 +2011,7 @@ impl Default for GuideHud {
             editing: false,
             tilt: 30.0,
             fov: 45.0,
+            clean: false,
         }
     }
 }
@@ -2094,7 +2097,7 @@ pub(crate) fn guide(
         (_, Some((_, cam_at, _))) if hud.editing => {
             Some(cam_at.translation() + wow_to_bevy([100.0, 0.0, 0.0]))
         }
-        (Some((race, next)), _) if hud.shown => {
+        (Some((race, next)), _) if hud.shown && !hud.clean => {
             Some(ground_at(&collide, race.points[next], drive.pos.y))
         }
         _ => None,

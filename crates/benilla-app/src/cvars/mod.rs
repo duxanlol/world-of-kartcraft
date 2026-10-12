@@ -633,6 +633,9 @@ fn load_config(world: &mut World) {
         cvars.own_for_session("gxApi", None);
         // The guide arrow's placement mode lasts while its window is up, never past a quit.
         cvars.own_for_session("KartArrowMove", None);
+        // The kart's free camera is for one filming session.
+        cvars.own_for_session("KartFreeCam", None);
+        cvars.own_for_session("KartHideHud", None);
         match stored {
             StoredConfig::Absent => {} // no file, hermetic capture, or no install
             StoredConfig::Bad(msg) => {
@@ -1971,6 +1974,7 @@ mod tests {
             strings,
             vec![
                 "KartClass",
+                "KartFreeCam",
                 "KartRacer",
                 "gxApi",
                 "gxResolution",
