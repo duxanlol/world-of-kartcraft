@@ -43,8 +43,8 @@ pub(crate) use motion::{
     grounded_y, jump_seed, CreatureSwimming, FacingStep, RemoteMotion, Spline, SplineStopped,
     UnitMoveModes,
 };
-// Only the ground-census probe reads it.
-#[cfg(feature = "dev")]
+// Read only by the instruments, which a player build leaves out.
+#[allow(unused_imports)]
 pub(crate) use motion::ground_derived;
 // Only the ground-census probe reads this, so a build without the instruments leaves it unused.
 // Not a `cfg`: seam knowledge lives in three fixed places, and this file is not one of them.

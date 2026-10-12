@@ -96,6 +96,14 @@ const VERDICTS: &[(&str, Verdict)] = &[
         Open("`kartcraft::input::log_pads` names a pad as it comes and goes; it acts on nothing"),
     ),
     (
+        "GamepadRumbleRequest",
+        Open("an OUTPUT (the kart's rumble, `kartcraft::rumble`), not a channel the player feeds"),
+    ),
+    (
+        "GamepadRumbleIntensity",
+        Open("the strength of that OUTPUT rumble request; the cover has nothing to take from it"),
+    ),
+    (
         "GamepadConnectionEvent",
         Open("`kartcraft::input::log_pads` names a pad as it comes and goes; it acts on nothing"),
     ),

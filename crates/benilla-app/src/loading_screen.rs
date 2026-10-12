@@ -27,8 +27,8 @@ use benilla_world::world_map::CurrentMap;
 
 /// The cover's input half: while it is up the client takes no input (a source cut in `PreUpdate`).
 mod input;
-// The probes that drive input through the cover read it; the player build has none.
-#[cfg(feature = "dev")]
+// Read only by the instruments, which a player build leaves out.
+#[allow(unused_imports)]
 pub(crate) use input::CoverInput;
 
 // The bar, from the `LoadingScreen.cpp` descriptor table at `0x7ffd34` (read by `0x407150`):

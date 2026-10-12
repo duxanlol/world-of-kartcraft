@@ -31,8 +31,8 @@ pub(super) use spline::{
     create_spline, ground_clamp_creatures, mark_swimming_creatures, monster_move_spline,
     sample_splines, trace_create_spline, trace_move_snap,
 };
-// Only the ground-census probe reads it.
-#[cfg(feature = "dev")]
+// Read only by the instruments, which a player build leaves out.
+#[allow(unused_imports)]
 pub(crate) use spline::ground_derived;
 pub(crate) use spline::{CreatureSwimming, GroundClamped, Spline, SplineStopped};
 
