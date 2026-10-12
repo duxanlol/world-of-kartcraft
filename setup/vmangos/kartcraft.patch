@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..a75d13b
+index 0000000..2933c27
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,3218 @@
+@@ -0,0 +1,3244 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -2390,6 +2390,29 @@ index 0000000..a75d13b
 +        return true;
 +    }
 +
++    // A time trial for `player` on `c`: out of the queue, any ready check and every other race
++    // first, then a race of one, its roster and the line that marks it a time trial. The caller
++    // puts them on the grid and starts it (StartRace). No one joins it, and the Race Finder never
++    // lists it.
++    static uint32 OpenTimeTrial(Player* player, Course const& c, uint32 instance, uint32 now)
++    {
++        ObjectGuid const guid = player->GetObjectGuid();
++        QuitAll(guid, now);
++        uint32 raceId = s_nextRace++;
++        Race& r = s_races[raceId];
++        r.course = &c;
++        r.host = guid;
++        r.created = now;
++        r.timeTrial = true;
++        r.instance = instance;
++        r.racers.push_back({ guid, player->GetName() });
++        // The roster makes the client's race, the next line marks it a time trial, and the
++        // course, countdown and records follow (StartRace).
++        SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(raceId) + "\t" + Roster(r));
++        SendRace(r, "KARTCRAFT\tR\tTT\t" + std::to_string(raceId));
++        return raceId;
++    }
++
 +    // The finder's verbs; false when the line is not one of them.
 +    static bool HandleFinder(Player* player, std::vector<std::string> const& f, uint32 now)
 +    {
@@ -2457,6 +2480,23 @@ index 0000000..a75d13b
 +            Race& r = race->second;
 +            r.racers.push_back({ guid, player->GetName() });
 +            SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(race->first) + "\t" + Roster(r));
++        }
++        else if (verb == "TB" && f.size() > 2)
++        {
++            // A time trial from the track browser, from anywhere, as a Race Finder race: a
++            // teleport to the course's grid (a far one settles longer) and, after it, the way
++            // back ("R\tRet"). Not a party course: that one is raced inside its dungeon, from
++            // its Race Marshal.
++            Course const* course = FindCourse(f[2]);
++            if (!course || PartyCourse(*course) || !CanBeRacedOff(player))
++                return true;
++            Origin from = { player->GetMapId(), player->GetPositionX(), player->GetPositionY(),
++                player->GetPositionZ(), player->GetOrientation(), now };
++            bool const far = player->GetMapId() != course->map;
++            uint32 raceId = OpenTimeTrial(player, *course, 0, now);
++            if (TeleportToGrid(player, *course, 0, 0))
++                s_origins[player->GetGUIDLow()] = from;
++            StartRace(raceId, s_races[raceId], now, far ? GRID_COUNTDOWN + FAR_SETTLE : GRID_COUNTDOWN);
 +        }
 +        else if (verb == "Q-")
 +        {
@@ -2742,30 +2782,16 @@ index 0000000..a75d13b
 +        }
 +        else if (verb == "T" && f.size() > 2)
 +        {
-+            // A time trial: alone on the grid's first slot, the usual countdown, then the laps,
-+            // with no crates and no items. Out of the queue, any ready check and every other race
-+            // first; no one joins it, and the Race Finder never lists it.
++            // A time trial at the course's start, the Race Marshal's (OpenTimeTrial): alone on
++            // the grid's first slot, the usual countdown, then the laps, no crates or items.
 +            Course const* course = FindCourse(f[2]);
 +            uint32 const instance = course && PartyCourse(*course) ? player->GetInstanceId() : 0;
 +            if (!course || player->GetMapId() != course->map || !CanRaceOn(player, *course, instance) ||
 +                (!marshal && DistanceTo(player, course->points[0]) > START_RADIUS))
 +                return;
-+            ObjectGuid const guid = player->GetObjectGuid();
-+            QuitAll(guid, now);
-+            uint32 raceId = s_nextRace++;
-+            Race& r = s_races[raceId];
-+            r.course = course;
-+            r.host = guid;
-+            r.created = now;
-+            r.timeTrial = true;
-+            r.instance = instance;
-+            r.racers.push_back({ guid, player->GetName() });
-+            // The roster makes the client's race, the next line marks it a time trial, and the
-+            // course, countdown and records follow (StartRace).
-+            SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(raceId) + "\t" + Roster(r));
-+            SendRace(r, "KARTCRAFT\tR\tTT\t" + std::to_string(raceId));
++            uint32 raceId = OpenTimeTrial(player, *course, instance, now);
 +            TeleportToGrid(player, *course, 0, instance);
-+            StartRace(raceId, r, now, GRID_COUNTDOWN);
++            StartRace(raceId, s_races[raceId], now, GRID_COUNTDOWN);
 +        }
 +        else if (verb == "J" && race != s_races.end())
 +        {
