@@ -121,13 +121,33 @@ pub struct Collision {
 
 impl Collision {
     /// Buckets the faces in `cell`-sized XZ squares; degenerate and non-finite faces are dropped.
+    /// The faces are taken in one order whatever order they come in (nearest the frame's origin
+    /// first), so a probe that ties between two faces breaks the tie the same way over the same
+    /// faces however they were gathered: a recorded run replays exactly.
     pub fn new(triangles: impl IntoIterator<Item = [[f32; 3]; 3]>, cell: f32) -> Self {
         let mut out = Self {
             cell,
             tris: Vec::new(),
             cells: HashMap::new(),
         };
-        for t in triangles {
+        let mut keyed: Vec<(f32, [[f32; 3]; 3])> = triangles
+            .into_iter()
+            .map(|t| {
+                let [a, b, c] = t.map(Vec3::from_array);
+                (((a + b + c) / 3.0).length_squared(), t)
+            })
+            .collect();
+        keyed.sort_by(|(ka, a), (kb, b)| {
+            ka.total_cmp(kb).then_with(|| {
+                a.iter()
+                    .flatten()
+                    .zip(b.iter().flatten())
+                    .map(|(x, y)| x.total_cmp(y))
+                    .find(|o| o.is_ne())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        });
+        for (_, t) in keyed {
             let [a, b, c] = t.map(Vec3::from_array);
             let Some(tri) = Triangle::new(a, b, c) else {
                 continue;

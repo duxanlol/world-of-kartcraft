@@ -5,7 +5,8 @@
 //! ([`seat`]) and the kart is drawn under it (`kartcraft::model`). Banked turbo chains feed the
 //! Karting profession ([`profession`]) and the score on screen ([`score`]). In a race CTR's
 //! weapons are live ([`weapons`]): crates, items, shots and hits through the server; in a time
-//! trial there are none, and the ghost of our best run on the course races us ([`ghost`]). Its
+//! trial there are none, and the ghost of our best run on the course races us ([`ghost`]). A GM's
+//! `/kartshow` plays a recorded showcase run through cinematic cameras ([`showcase`]). Its
 //! settings
 //! are CVars the layer's settings window writes ([`settings`]); its controls are key bindings
 //! ([`bindings`]).
@@ -23,6 +24,7 @@ mod remote;
 mod score;
 mod seat;
 pub(crate) mod settings;
+mod showcase;
 mod sound;
 mod ui;
 pub(crate) use garage::{class_list, racer_list};
@@ -174,16 +176,18 @@ fn update(
     profession: profession::Profession,
     mut score: ResMut<score::KartScore>,
     settings: Res<settings::KartSettings>,
-    (remotes, mut extras, races, mut arms, mut rumble): (
+    (remotes, mut extras, races, mut arms, mut rumble, mut show): (
         Res<remote::RemoteKarts>,
         ResMut<kartcraft::hud::HudExtras>,
         Res<race::Races>,
         ResMut<kartcraft::weapons::Weapons>,
         ResMut<kartcraft::rumble::Rumble>,
+        ResMut<showcase::Showcase>,
     ),
 ) {
     let now = time.elapsed_secs();
     let host = &mut *host;
+    show.hear(now);
     // On a Kartcraft server the Summon Kart aura is the ride.
     let server_kart = profession.server_kart();
     let auras = profession.auras();
@@ -275,6 +279,12 @@ fn update(
         score.clear_live();
         return;
     }
+    // A showcase run drives the kart from its start, once we are in it there.
+    show.arrive(&mut host.session, &collide, drive.pos, now);
+    let showing = show.driving();
+    if !showing {
+        host.session.pads_off(false);
+    }
 
     // The crate test hook: in a race with weapons, steer for a crate and fire at it.
     let crate_aim = if input::autopilot_on()
@@ -334,6 +344,13 @@ fn update(
     } else {
         input::read(&bindings::keys(&overlay), &pads)
     };
+    // A showcase run's tape drives; the camera binding steps through its cameras.
+    let cycle = showing && controls.camera;
+    let controls = if showing {
+        input::Controls::default()
+    } else {
+        controls
+    };
     if server_kart {
         profession.dpad(controls.dpad);
     }
@@ -388,21 +405,28 @@ fn update(
     // What each nearby kart rams with, as the race's weapons know it.
     let mut nearby = remotes.nearby(drive.pos, BUMP_RANGE);
     arms.arm(&mut nearby);
-    let events = host.session.step_with(
-        &collide,
-        now,
-        dt,
-        &kartcraft::kart_input(&controls),
-        &mods,
-        &nearby,
-        |world, kart, origin| arms.tick(world, kart, origin),
-    );
+    let events = if showing {
+        show.step(&mut host.session, &collide, view.ground, now, dt)
+    } else {
+        host.session.step_with(
+            &collide,
+            now,
+            dt,
+            &kartcraft::kart_input(&controls),
+            &mods,
+            &nearby,
+            |world, kart, origin| arms.tick(world, kart, origin),
+        )
+    };
     arms.blend = host.session.tick_fraction();
     arms.feed(&mut audio);
     for event in &events {
         audio.observe(event);
         rumble.observe(event);
-        host.chain.observe(now, event);
+        // A showcase run earns no chain: it is a recording, not driving.
+        if !showing {
+            host.chain.observe(now, event);
+        }
     }
     let Some(kart) = host.session.kart() else {
         return;
@@ -456,6 +480,12 @@ fn update(
     drive.speed = view.speed;
     drive.camera = view.camera;
     drive.fov = view.fov;
+    // A showcase run is filmed by its own cameras.
+    if let Some((camera, fov)) = show.frame(&view, cycle, dt) {
+        drive.camera = Some(camera);
+        drive.fov = fov;
+        drive.engine_camera = true;
+    }
 }
 
 /// Our character in the kart's seat: the body takes the kart's tilt and sits its chair pose's
@@ -563,6 +593,8 @@ pub(crate) fn plugin(app: &mut App) {
         .net_handler(benilla_protocol::SessionEventKind::Chat, remote::on_chat)
         .net_handler(benilla_protocol::SessionEventKind::Chat, race::on_chat)
         .net_handler(benilla_protocol::SessionEventKind::Chat, weapons::on_chat)
+        .net_handler(benilla_protocol::SessionEventKind::Chat, showcase::on_chat)
+        .init_resource::<showcase::Showcase>()
         .init_resource::<race::Races>()
         .init_resource::<race::RaceText>()
         .init_resource::<ghost::Ghosts>()
@@ -584,10 +616,12 @@ pub(crate) fn plugin(app: &mut App) {
                 input::log_pads,
                 race_name,
                 pads::feed,
+                showcase::hook,
                 // The ground under the pads is read through the mover's trace, after its doors.
                 kartcraft::pads::lay.after(crate::go_anim::publish_ghost_door_exclusions),
                 update.in_set(KartDriveSet),
                 race::update,
+                showcase::banner,
                 sound::overtakes,
                 ghost::update,
                 weapons::update,

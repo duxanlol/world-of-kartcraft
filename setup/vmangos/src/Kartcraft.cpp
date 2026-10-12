@@ -364,6 +364,24 @@ namespace Kartcraft
         return c.map != 0 && c.map != 1;
     }
 
+    // A showcase run (/kartshow; the client's kart/showcase.rs): its key, what it is and where it
+    // starts (WoW x, y, z and facing). The run itself is the client's own input tape; the server
+    // only takes a GM to its start.
+    struct ShowRun
+    {
+        char const* name;
+        char const* title;
+        char const* note;
+        uint32 map;
+        float x;
+        float y;
+        float z;
+        float o;
+    };
+
+    // The runs: showcase/showcase.json, made into this table by setup/vmangos/pack.py.
+#include "KartcraftShowcase.h"
+
     // How near a checkpoint (yards, across the ground) a racer must pass, how near the start a
     // driver must be to host or join, how long a countdown runs (ms), and how long a race may
     // last before it is dropped (ms).
@@ -2158,6 +2176,62 @@ namespace Kartcraft
         }
     }
 
+    // The showcase's verb, GM accounts only: "R\tShow" lists the runs, "R\tShow\t<name>" takes us
+    // to the run's start and back into the kart, and answers "R\tShow\t<name>" for the client to
+    // play it once there; "R\tShow\tstop" answers "R\tShow-". False when the line is not it.
+    static bool HandleShow(Player* player, std::vector<std::string> const& f)
+    {
+        if (f[1] != "Show")
+            return false;
+        ChatHandler chat(player->GetSession());
+        if (player->GetSession()->GetSecurity() < SEC_GAMEMASTER)
+        {
+            chat.SendSysMessage("Only a GM can play the showcase runs.");
+            return true;
+        }
+        if (f.size() < 3 || f[2].empty())
+        {
+            chat.SendSysMessage("Showcase runs (/kartshow <name> plays one, /kartshow stop):");
+            for (ShowRun const& r : SHOW_RUNS)
+                chat.PSendSysMessage("  %s: %s, %s", r.name, r.title, r.note);
+            return true;
+        }
+        if (f[2] == "stop")
+        {
+            SendLine(player, "KARTCRAFT\tR\tShow-");
+            return true;
+        }
+        ShowRun const* run = nullptr;
+        for (ShowRun const& r : SHOW_RUNS)
+            if (f[2] == r.name)
+                run = &r;
+        if (!run)
+        {
+            chat.PSendSysMessage("No showcase run is named %s: /kartshow lists them.", f[2].c_str());
+            return true;
+        }
+        ObjectGuid const guid = player->GetObjectGuid();
+        if (InAnyRace(guid))
+        {
+            chat.SendSysMessage("Leave the race first (/leaverace).");
+            return true;
+        }
+        // A teleport belongs to the world thread, as a Race Marshal's is; on foot for it, as onto a
+        // grid (TeleportOnto), and back in the kart after.
+        ShowRun const to = *run;
+        sWorld.GetMessager().AddMessage([guid, to](World*)
+        {
+            Player* p = ObjectAccessor::FindPlayer(guid);
+            if (!p || !p->IsInWorld() || !p->IsAlive())
+                return;
+            p->RemoveAurasDueToSpell(SPELL_SUMMON_KART);
+            p->TeleportTo(to.map, to.x, to.y, to.z + 0.5f, to.o);
+            p->m_Events.AddEventAtOffset(new KartAgainEvent(p), KART_AGAIN_DELAY);
+        });
+        SendLine(player, std::string("KARTCRAFT\tR\tShow\t") + to.name);
+        return true;
+    }
+
     // The finder's verbs; false when the line is not one of them.
     static bool HandleFinder(Player* player, std::vector<std::string> const& f, uint32 now)
     {
@@ -2446,6 +2520,9 @@ namespace Kartcraft
             RaceMode(player, f[2] == "1");
             return;
         }
+        // The showcase's verb works on foot, as a GM's teleport does.
+        if (f.size() >= 2 && HandleShow(player, f))
+            return;
         // The finder's verbs work on foot; the rest need the kart, but for a marshal's and for
         // leaving: a racer the marshal put in on foot may leave before the kart's aura lands.
         if (f.size() < 2 || HandleFinder(player, f, now) ||

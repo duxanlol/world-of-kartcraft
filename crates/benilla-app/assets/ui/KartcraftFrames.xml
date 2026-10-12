@@ -39,6 +39,9 @@
 
         The kart's controls are the layer's Bindings.xml, named here for Key Bindings as an
         addon names its own.
+
+        A GM's /kartshow asks the server for the showcase runs (kart/showcase.rs): bare it lists
+        them, /kartshow <name> plays one ("R<TAB>Show<TAB><name>"), /kartshow stop stops it.
     -->
     <Script><![CDATA[
         BINDING_HEADER_KARTCRAFT = "World of Kartcraft"
@@ -1661,6 +1664,17 @@
             SLASH_BENILLA_RACEWAIT1 = "/racewait"
             SlashCmdList["BENILLA_RACEWAIT"] = function(msg)
                 BenillaKart_Send("FillWait\t" .. (string.gsub(msg or "", "%D", "")))
+            end
+            -- GMs: the showcase runs. Bare, the server lists them; with a name it takes us to
+            -- that run's start and the kart plays it; "stop" stops one (the server checks).
+            SLASH_BENILLA_KARTSHOW1 = "/kartshow"
+            SlashCmdList["BENILLA_KARTSHOW"] = function(msg)
+                local name = string.lower((string.gsub(msg or "", "^%s*(.-)%s*$", "%1")))
+                if name == "" then
+                    BenillaKart_Send("Show")
+                else
+                    BenillaKart_Send("Show\t" .. name)
+                end
             end
         end
     ]]></Script>

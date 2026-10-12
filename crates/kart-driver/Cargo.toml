@@ -14,3 +14,5 @@ ctr-kart = { path = "../ctr-kart" }
 glam = "0.30"
 # The course file the `kart-drive` binary reads and the report it prints.
 serde_json = "1"
+# The showcase runs' file.
+serde = { version = "1", features = ["derive"] }

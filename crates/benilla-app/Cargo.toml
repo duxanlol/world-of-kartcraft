@@ -68,6 +68,8 @@ mint = "0.5"
 rand = "0.8"
 # Kart mode: CTR's kart over the world (World of Kartcraft), GPL-3.0; see NOTICE.
 kartcraft = { path = "../kartcraft" }
+# The showcase runs' tapes and their playback (`kart::showcase`), GPL-3.0 as well.
+kart-driver = { path = "../kart-driver" }
 serde_json = "1"
 
 # Wayland clipboard over the standard `wl_data_device`; arboard's speaks `wlr-data-control`,

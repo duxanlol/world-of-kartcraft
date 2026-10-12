@@ -17,6 +17,8 @@ pub mod preview;
 pub mod render;
 pub mod roads;
 pub mod select;
+pub mod showcase;
+pub mod soup;
 pub mod terrain;
 pub mod wmo_floor;
 

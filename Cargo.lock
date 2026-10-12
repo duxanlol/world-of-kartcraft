@@ -526,6 +526,7 @@ dependencies = [
  "half",
  "image",
  "include_dir",
+ "kart-driver",
  "kartcraft",
  "kira",
  "libc",
@@ -4152,6 +4153,7 @@ version = "0.2.0"
 dependencies = [
  "ctr-kart",
  "glam 0.30.10",
+ "serde",
  "serde_json",
 ]
 

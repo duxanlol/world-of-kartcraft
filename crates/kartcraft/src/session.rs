@@ -125,8 +125,9 @@ pub struct Session {
     /// does or as asphalt everywhere ([`Session::set_ground`]).
     ground: Ground,
     terrain_physics: bool,
-    /// The turbo pads to fire, Bevy world ([`crate::pads`]).
+    /// The turbo pads to fire, Bevy world ([`crate::pads`]), and whether they are off for now.
     pads: Vec<crate::pads::Pad>,
+    pads_off: bool,
     /// The last step's [`Feedback`].
     feedback: Feedback,
 }
@@ -200,6 +201,7 @@ fn under_kart(
     ground: Ground,
     physics: bool,
     pads: &[crate::pads::Pad],
+    pads_off: bool,
     here: Vec3,
 ) {
     kart.ground_type = if physics {
@@ -207,7 +209,7 @@ fn under_kart(
     } else {
         ctr_kart::Terrain::ASPHALT
     };
-    if pads.iter().any(|p| p.contains(here)) {
+    if !pads_off && pads.iter().any(|p| p.contains(here)) {
         kart.turbo_pad();
     }
 }
@@ -317,6 +319,12 @@ impl Session {
         self.pads = pads;
     }
 
+    /// Turns the turbo pads off for the coming ticks, or on again: a recorded run drives as it
+    /// was recorded, with no pad laid since.
+    pub fn pads_off(&mut self, off: bool) {
+        self.pads_off = off;
+    }
+
     /// What shapes the chase camera from the next tick on ([`crate::camera::CameraTuning`]).
     pub fn tune_camera(&mut self, tuning: crate::camera::CameraTuning) {
         self.camera.tuning = tuning;
@@ -351,6 +359,22 @@ impl Session {
         now: f32,
         dt: f32,
         input: &Input,
+        mods: &Modifiers,
+        nearby: &[NearbyKart],
+        after_tick: impl FnMut(&Collision, &mut Kart, Vec3),
+    ) -> Vec<Event> {
+        self.step_driven(collide, now, dt, |_| *input, mods, nearby, after_tick)
+    }
+
+    /// [`Session::step_with`], asking `input` for each tick's controls: a showcase's tape is
+    /// played tick by tick, however many ticks a frame runs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn step_driven(
+        &mut self,
+        collide: &WorldCollision,
+        now: f32,
+        dt: f32,
+        mut input: impl FnMut(&Kart) -> Input,
         mods: &Modifiers,
         nearby: &[NearbyKart],
         mut after_tick: impl FnMut(&Collision, &mut Kart, Vec3),
@@ -408,9 +432,11 @@ impl Session {
                 self.ground,
                 self.terrain_physics,
                 &self.pads,
+                self.pads_off,
                 from_lu(before, origin),
             );
-            kart.tick_among(&world, input, mods, &others);
+            let controls = input(kart);
+            kart.tick_among(&world, &controls, mods, &others);
             let fb = &mut self.feedback;
             fb.frames = fb.frames.saturating_add(1);
             if kart.against_wall() {
@@ -603,7 +629,7 @@ mod tests {
         };
         for _ in 0..ticks {
             let here = from_lu(kart.pose().position, Vec3::ZERO);
-            under_kart(&mut kart, ground, physics, pads, here);
+            under_kart(&mut kart, ground, physics, pads, false, here);
             kart.tick(&world, &gas, &Modifiers::default());
         }
         kart

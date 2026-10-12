@@ -516,6 +516,272 @@ impl ChaseCamera {
     }
 }
 
+/// The showcase's cameras (`/kartshow`), never the race's: a tripod on the ground that pans and
+/// tilts after the kart and slowly zooms to keep it a size on the screen, a low tracking shot
+/// alongside at wheel height, a slow orbit round it, and the chase camera. Bevy world, yards,
+/// seconds; every move is eased, and a change of camera is a blend, never a cut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CineMode {
+    Tripod,
+    Low,
+    Orbit,
+    Chase,
+}
+
+impl CineMode {
+    pub const ALL: [CineMode; 4] = [
+        CineMode::Tripod,
+        CineMode::Low,
+        CineMode::Orbit,
+        CineMode::Chase,
+    ];
+
+    pub fn named(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.name() == name)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            CineMode::Tripod => "tripod",
+            CineMode::Low => "low",
+            CineMode::Orbit => "orbit",
+            CineMode::Chase => "chase",
+        }
+    }
+}
+
+/// The kart as the showcase's cameras follow it: its origin, its drawn heading's forward (flat)
+/// and its velocity, Bevy world.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CineSubject {
+    pub position: Vec3,
+    pub forward: Vec3,
+    pub velocity: Vec3,
+}
+
+/// A frame's camera: where the eye is, what it looks at, the vertical field of view (radians).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CineShot {
+    pub eye: Vec3,
+    pub look: Vec3,
+    pub fov: f32,
+}
+
+/// How long a change of camera blends, seconds.
+pub const CINE_BLEND: f32 = 1.2;
+/// The tripod's eye-line onto the kart: the screen height (yards at the kart) its slow zoom
+/// keeps, and the zoom's limits and pace.
+const TRIPOD_FRAME: f32 = 11.0;
+const TRIPOD_FOV_MIN: f32 = 0.30;
+const TRIPOD_FOV_MAX: f32 = 1.0;
+const TRIPOD_ZOOM_TAU: f32 = 1.4;
+/// The tripod's pan: how quickly its aim follows the kart, and how far ahead of it (seconds of
+/// its velocity) it leads.
+const TRIPOD_PAN_TAU: f32 = 0.22;
+const TRIPOD_LEAD: f32 = 0.12;
+/// The low tracking shot: beside the kart (to its right), a little behind, at wheel height.
+const LOW_SIDE: f32 = 4.5;
+const LOW_BACK: f32 = 1.5;
+const LOW_HEIGHT: f32 = 0.45;
+const LOW_TAU: f32 = 0.16;
+const LOW_FOV: f32 = 0.95;
+/// The travel direction's easing for the low shot: a slide swings the nose, not the shot.
+const LOW_HEADING_TAU: f32 = 0.35;
+/// The orbit: its radius and height over the kart, its turn rate (rad/s) and how quickly its
+/// centre follows the kart.
+pub const ORBIT_RADIUS: f32 = 9.0;
+const ORBIT_HEIGHT: f32 = 2.6;
+const ORBIT_RATE: f32 = 0.32;
+const ORBIT_TAU: f32 = 0.12;
+const ORBIT_FOV: f32 = 0.9;
+/// Where on the kart the cameras aim: a little over its origin.
+const AIM_LIFT: f32 = 0.6;
+
+/// The share of a gap an ease with time constant `tau` closes over `dt`.
+fn ease(tau: f32, dt: f32) -> f32 {
+    if tau <= 0.0 {
+        1.0
+    } else {
+        1.0 - (-dt / tau).exp()
+    }
+}
+
+/// The showcase's camera: its mode, its tripod's place and what it eases.
+#[derive(Clone, Debug)]
+pub struct CineCamera {
+    mode: CineMode,
+    tripod: Vec3,
+    aim: Option<Vec3>,
+    low_eye: Option<Vec3>,
+    heading: Option<Vec3>,
+    orbit_centre: Option<Vec3>,
+    orbit_angle: f32,
+    fov: Option<f32>,
+    /// The last shot, and the shot a change of camera blends from with the seconds since.
+    last: Option<CineShot>,
+    blend: Option<(CineShot, f32)>,
+}
+
+impl CineCamera {
+    /// A camera starting in `mode`, its tripod standing at `tripod` (Bevy world).
+    pub fn new(mode: CineMode, tripod: Vec3) -> Self {
+        Self {
+            mode,
+            tripod,
+            aim: None,
+            low_eye: None,
+            heading: None,
+            orbit_centre: None,
+            orbit_angle: 0.0,
+            fov: None,
+            last: None,
+            blend: None,
+        }
+    }
+
+    pub fn mode(&self) -> CineMode {
+        self.mode
+    }
+
+    /// Switches to `mode`, blending over [`CINE_BLEND`] from the shot on screen.
+    pub fn set_mode(&mut self, mode: CineMode) {
+        if mode == self.mode {
+            return;
+        }
+        self.mode = mode;
+        if let Some(last) = self.last {
+            self.blend = Some((last, 0.0));
+        }
+        // The new camera starts its eases afresh from where the kart is.
+        self.low_eye = None;
+        self.orbit_centre = None;
+        self.aim = None;
+        self.fov = None;
+    }
+
+    /// This frame's shot of `kart`, `dt` after the last; `chase` is the chase camera's eye and
+    /// look-at, for [`CineMode::Chase`] (or a fallback behind the kart).
+    pub fn shot(
+        &mut self,
+        kart: &CineSubject,
+        chase: Option<(Vec3, Vec3)>,
+        chase_fov: f32,
+        dt: f32,
+    ) -> CineShot {
+        let target = kart.position + Vec3::Y * AIM_LIFT;
+        let travel = {
+            let flat = Vec3::new(kart.velocity.x, 0.0, kart.velocity.z);
+            if flat.length() > 2.0 {
+                flat.normalize()
+            } else {
+                kart.forward
+            }
+        };
+        let heading = match self.heading {
+            Some(h) => h
+                .lerp(travel, ease(LOW_HEADING_TAU, dt))
+                .normalize_or(travel),
+            None => travel,
+        };
+        self.heading = Some(heading);
+        let shot = match self.mode {
+            CineMode::Tripod => {
+                let want = target + kart.velocity * TRIPOD_LEAD;
+                let aim = match self.aim {
+                    Some(a) => a.lerp(want, ease(TRIPOD_PAN_TAU, dt)),
+                    None => want,
+                };
+                self.aim = Some(aim);
+                let distance = (aim - self.tripod).length().max(1.0);
+                let want_fov = (2.0 * (TRIPOD_FRAME / (2.0 * distance)).atan())
+                    .clamp(TRIPOD_FOV_MIN, TRIPOD_FOV_MAX);
+                let fov = match self.fov {
+                    Some(f) => f + (want_fov - f) * ease(TRIPOD_ZOOM_TAU, dt),
+                    None => want_fov,
+                };
+                self.fov = Some(fov);
+                CineShot {
+                    eye: self.tripod,
+                    look: aim,
+                    fov,
+                }
+            }
+            CineMode::Low => {
+                let right = Vec3::Y.cross(heading).normalize_or(Vec3::X) * -1.0;
+                let want =
+                    kart.position + right * LOW_SIDE - heading * LOW_BACK + Vec3::Y * LOW_HEIGHT;
+                let eye = match self.low_eye {
+                    Some(e) => e.lerp(want, ease(LOW_TAU, dt)),
+                    None => want,
+                };
+                self.low_eye = Some(eye);
+                let want_aim = target + heading * 2.0;
+                let aim = match self.aim {
+                    Some(a) => a.lerp(want_aim, ease(LOW_TAU * 0.6, dt)),
+                    None => want_aim,
+                };
+                self.aim = Some(aim);
+                CineShot {
+                    eye,
+                    look: aim,
+                    fov: LOW_FOV,
+                }
+            }
+            CineMode::Orbit => {
+                let centre = match self.orbit_centre {
+                    Some(c) => c.lerp(target, ease(ORBIT_TAU, dt)),
+                    None => target,
+                };
+                self.orbit_centre = Some(centre);
+                if self.last.is_none() || self.blend.is_some_and(|(_, t)| t == 0.0) {
+                    // Start the circle where the camera is now seen from, behind the kart.
+                    let back = -heading;
+                    self.orbit_angle = back.z.atan2(back.x);
+                }
+                self.orbit_angle = (self.orbit_angle + ORBIT_RATE * dt) % std::f32::consts::TAU;
+                let (s, c) = self.orbit_angle.sin_cos();
+                CineShot {
+                    eye: centre + Vec3::new(c * ORBIT_RADIUS, ORBIT_HEIGHT, s * ORBIT_RADIUS),
+                    // The eye circles the eased centre; the aim stays on the kart itself.
+                    look: target,
+                    fov: ORBIT_FOV,
+                }
+            }
+            CineMode::Chase => {
+                let (eye, look) = chase.unwrap_or((
+                    target - heading * 6.0 + Vec3::Y * 2.0,
+                    target + heading * 3.0,
+                ));
+                CineShot {
+                    eye,
+                    look,
+                    fov: chase_fov,
+                }
+            }
+        };
+        // A change of camera eases across from the last shot.
+        let out = match self.blend.as_mut() {
+            Some((from, t)) => {
+                *t += dt;
+                let k = (*t / CINE_BLEND).clamp(0.0, 1.0);
+                let k = k * k * (3.0 - 2.0 * k);
+                let blended = CineShot {
+                    eye: from.eye.lerp(shot.eye, k),
+                    look: from.look.lerp(shot.look, k),
+                    fov: from.fov + (shot.fov - from.fov) * k,
+                };
+                if *t >= CINE_BLEND {
+                    self.blend = None;
+                }
+                blended
+            }
+            None => shot,
+        };
+        self.last = Some(out);
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1198,5 +1464,160 @@ mod tests {
         k.grounded = false;
         let up = cam.tick(&k, &world);
         assert!(up.eye.y > rest.eye.y + 250.0, "{rest:?} {up:?}");
+    }
+}
+
+#[cfg(test)]
+mod cine_tests {
+    use super::*;
+
+    /// A kart driving round a circle of `r` yards at `speed` yd/s, `t` seconds in.
+    fn circling(t: f32, r: f32, speed: f32) -> CineSubject {
+        let a = t * speed / r;
+        let position = Vec3::new(r * a.cos(), 0.0, r * a.sin());
+        let velocity = Vec3::new(-a.sin(), 0.0, a.cos()) * speed;
+        CineSubject {
+            position,
+            forward: velocity.normalize(),
+            velocity,
+        }
+    }
+
+    fn run(cam: &mut CineCamera, secs: f32, mut f: impl FnMut(f32, &CineShot)) {
+        let dt = 1.0 / 60.0;
+        let mut t = 0.0;
+        while t < secs {
+            let kart = circling(t, 25.0, 30.0);
+            let shot = cam.shot(&kart, None, 1.0, dt);
+            f(t, &shot);
+            t += dt;
+        }
+    }
+
+    #[test]
+    fn the_tripod_stands_still_and_keeps_the_kart_in_the_middle() {
+        let tripod = Vec3::new(60.0, 2.0, 0.0);
+        let mut cam = CineCamera::new(CineMode::Tripod, tripod);
+        let mut worst: f32 = 0.0;
+        run(&mut cam, 6.0, |t, shot| {
+            assert_eq!(shot.eye, tripod, "the tripod does not move");
+            if t > 0.5 {
+                let kart = circling(t, 25.0, 30.0).position + Vec3::Y * AIM_LIFT;
+                let off = (shot.look - shot.eye)
+                    .normalize()
+                    .angle_between((kart - shot.eye).normalize());
+                worst = worst.max(off);
+            }
+        });
+        // Within a few degrees of dead centre, however it pans.
+        assert!(worst.to_degrees() < 6.0, "{}", worst.to_degrees());
+    }
+
+    #[test]
+    fn the_tripod_zooms_in_as_the_kart_goes_away() {
+        let mut cam = CineCamera::new(CineMode::Tripod, Vec3::ZERO);
+        let near = CineSubject {
+            position: Vec3::new(0.0, 0.0, 15.0),
+            forward: Vec3::Z,
+            velocity: Vec3::ZERO,
+        };
+        let far = CineSubject {
+            position: Vec3::new(0.0, 0.0, 60.0),
+            ..near
+        };
+        let mut fov_near = 0.0;
+        for _ in 0..600 {
+            fov_near = cam.shot(&near, None, 1.0, 1.0 / 60.0).fov;
+        }
+        let first_far = cam.shot(&far, None, 1.0, 1.0 / 60.0).fov;
+        let mut fov_far = first_far;
+        for _ in 0..600 {
+            fov_far = cam.shot(&far, None, 1.0, 1.0 / 60.0).fov;
+        }
+        assert!(fov_far < fov_near * 0.5, "{fov_near} -> {fov_far}");
+        // Slowly: a frame moves the zoom a little.
+        assert!((fov_near - first_far).abs() < 0.02);
+    }
+
+    #[test]
+    fn the_orbit_circles_the_kart_at_its_radius_and_height() {
+        let mut cam = CineCamera::new(CineMode::Orbit, Vec3::ZERO);
+        let still = CineSubject {
+            position: Vec3::new(5.0, 1.0, -3.0),
+            forward: Vec3::Z,
+            velocity: Vec3::ZERO,
+        };
+        let mut angles = Vec::new();
+        for _ in 0..300 {
+            let shot = cam.shot(&still, None, 1.0, 1.0 / 60.0);
+            let centre = still.position + Vec3::Y * AIM_LIFT;
+            let flat = (shot.eye - centre).with_y(0.0);
+            assert!((flat.length() - ORBIT_RADIUS).abs() < 1e-3);
+            assert!((shot.eye.y - centre.y - ORBIT_HEIGHT).abs() < 1e-3);
+            assert!((shot.look - centre).length() < 1e-3);
+            angles.push(flat.z.atan2(flat.x));
+        }
+        // Turning steadily one way.
+        let turned = (angles[299] - angles[0]).rem_euclid(std::f32::consts::TAU);
+        assert!(
+            (turned - ORBIT_RATE * 299.0 / 60.0).abs() < 0.01,
+            "{turned}"
+        );
+    }
+
+    #[test]
+    fn the_low_shot_rides_beside_the_kart_at_wheel_height() {
+        let mut cam = CineCamera::new(CineMode::Low, Vec3::ZERO);
+        let mut shot = None;
+        for i in 0..300 {
+            let kart = CineSubject {
+                position: Vec3::new(0.0, 0.0, i as f32 * 0.5),
+                forward: Vec3::Z,
+                velocity: Vec3::Z * 30.0,
+            };
+            shot = Some((kart, cam.shot(&kart, None, 1.0, 1.0 / 60.0)));
+        }
+        let (kart, shot) = shot.unwrap();
+        let rel = shot.eye - kart.position;
+        assert!(rel.y < 1.0, "at wheel height: {rel:?}");
+        // To the kart's right (facing +Z in Bevy, right is −X) and level with it, a stride back.
+        assert!(rel.x < -3.0, "beside it: {rel:?}");
+        assert!(rel.z.abs() < 8.0, "{rel:?}");
+    }
+
+    #[test]
+    fn a_change_of_camera_blends_and_never_snaps() {
+        let mut cam = CineCamera::new(CineMode::Tripod, Vec3::new(80.0, 3.0, 0.0));
+        let dt = 1.0 / 60.0;
+        let mut last: Option<CineShot> = None;
+        let mut worst = 0.0f32;
+        let mut t = 0.0;
+        let mut switched = 0;
+        while t < 12.0 {
+            // Every three seconds, the next camera.
+            if (t / 3.0) as usize > switched {
+                switched += 1;
+                cam.set_mode(CineMode::ALL[switched % 4]);
+            }
+            let kart = circling(t, 25.0, 30.0);
+            let shot = cam.shot(&kart, None, 1.0, dt);
+            if let Some(l) = last {
+                worst = worst.max((shot.eye - l.eye).length() / dt);
+                assert!((shot.fov - l.fov).abs() < 0.05, "the field of view eases");
+            }
+            last = Some(shot);
+            t += dt;
+        }
+        // No frame jumps: the eye never moves faster than the kart's own pace and the blend's
+        // crossing (some 80 yards in 1.2 s) allow.
+        assert!(worst < 130.0, "{worst} yd/s");
+    }
+
+    #[test]
+    fn modes_read_by_name() {
+        for m in CineMode::ALL {
+            assert_eq!(CineMode::named(m.name()), Some(m));
+        }
+        assert_eq!(CineMode::named("crane"), None);
     }
 }
