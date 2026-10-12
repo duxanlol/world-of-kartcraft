@@ -941,8 +941,50 @@
             BenillaKartScoreFrame:Show()
         end
 
+        -- In the kart the action bars and the unit frames step aside: each goes under a hidden
+        -- holder, where the stock code's own Show() cannot bring it back, and returns to
+        -- UIParent when we climb out. Chat, the minimap, buffs and the rest stay.
+        BENILLA_KART_HIDDEN_FRAMES = {
+            "MainMenuBar", "MultiBarBottomLeft", "MultiBarBottomRight", "MultiBarLeft",
+            "MultiBarRight", "PlayerFrame", "TargetFrame", "PetFrame", "PartyMemberFrame1",
+            "PartyMemberFrame2", "PartyMemberFrame3", "PartyMemberFrame4",
+        }
+
+        function BenillaKartSeated_Set(seated)
+            if not BenillaKartHiddenHolder then
+                BenillaKartHiddenHolder = CreateFrame("Frame", nil, UIParent)
+                BenillaKartHiddenHolder:Hide()
+                BenillaKartHiddenHolder.parents = {}
+            end
+            local holder = BenillaKartHiddenHolder
+            for _, name in ipairs(BENILLA_KART_HIDDEN_FRAMES) do
+                local frame = getglobal(name)
+                if frame then
+                    if seated and not holder.parents[name] then
+                        holder.parents[name] = frame:GetParent() or UIParent
+                        -- Stepping aside is no lost target: TargetFrame's OnHide would play it.
+                        local onhide = frame:GetScript("OnHide")
+                        frame:SetScript("OnHide", nil)
+                        frame:SetParent(holder)
+                        frame:SetScript("OnHide", onhide)
+                    elseif not seated and holder.parents[name] then
+                        frame:SetParent(holder.parents[name])
+                        holder.parents[name] = nil
+                        -- 1.12's SetParent does not show a frame it moves under a visible parent
+                        -- from a hidden one: a shown frame is hidden and shown again to appear.
+                        if frame:IsShown() then
+                            frame:Hide()
+                            frame:Show()
+                        end
+                    end
+                end
+            end
+        end
+
         function BenillaKartEvents_OnEvent()
-            if event == "CHAT_MSG_ADDON" then
+            if event == "BENILLA_KART_SEATED" then
+                BenillaKartSeated_Set(arg1 == 1)
+            elseif event == "CHAT_MSG_ADDON" then
                 if arg1 == BENILLA_KART_PREFIX then BenillaKartFinder_OnLine(arg2) end
             elseif event == "BENILLA_KART_RACE" then
                 BenillaKartRace_Show(arg1, arg2)
@@ -2678,6 +2720,7 @@
                 this:RegisterEvent("BENILLA_KART_RACERS")
                 this:RegisterEvent("BENILLA_KART_COURSE_NAMES")
                 this:RegisterEvent("BENILLA_KART_GARAGE")
+                this:RegisterEvent("BENILLA_KART_SEATED")
             </OnLoad>
             <OnEvent>BenillaKartEvents_OnEvent()</OnEvent>
             <OnUpdate>BenillaKartEvents_OnUpdate()</OnUpdate>

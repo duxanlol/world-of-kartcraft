@@ -20,6 +20,7 @@
 //!
 //! - `BENILLA_KART_TRACKMAP(name, laps, points)`: the race map's track when it changes, its
 //!   checkpoints `x,y;x,y;...` (WoW x, y); an empty name when there is no race.
+//! - `BENILLA_KART_SEATED(seated)`: 1 when we climb into the kart, 0 when we climb out.
 //! - `BENILLA_KART_RACERS(list)`: the racers on it, one `name<TAB>x<TAB>y<TAB>place<TAB>me<TAB>near`
 //!   a line (`me`, `near` 1 or 0), at most RACERS_HZ times a second and only when one moved.
 //!
@@ -39,6 +40,7 @@ pub(crate) struct Sent {
     race: Option<(String, Vec<String>)>,
     score: Option<Option<ScoreLines>>,
     courses: bool,
+    seated: Option<bool>,
     /// The skill the garage was last sent at.
     garage: Option<Option<u16>>,
     /// The race map's track and racers as last sent, and when the racers were.
@@ -105,6 +107,13 @@ pub(crate) fn feed(
             overlay.score.clone().map(score_args).unwrap_or_default(),
         );
         sent.score = Some(overlay.score.clone());
+    }
+    if sent.seated != Some(overlay.seated) {
+        script.fire_event(
+            "BENILLA_KART_SEATED",
+            vec![ScriptValue::Number(f64::from(u8::from(overlay.seated)))],
+        );
+        sent.seated = Some(overlay.seated);
     }
     if sent.garage != Some(overlay.skill) {
         script.fire_event("BENILLA_KART_GARAGE", garage_args(overlay.skill));

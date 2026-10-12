@@ -225,6 +225,46 @@ fn the_kart_s_race_and_score_reach_their_frames() {
 }
 
 #[test]
+fn in_the_kart_the_bars_and_unit_frames_step_aside_and_come_back() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let shown = |s: &mut UiScript, frame: &str| {
+        s.eval::<bool>(&format!("return {frame}:IsVisible() == 1"))
+            .unwrap()
+    };
+    let seated = |s: &mut UiScript, on: bool| {
+        s.fire_event(
+            "BENILLA_KART_SEATED",
+            vec![ScriptValue::Number(f64::from(u8::from(on)))],
+        );
+        s.tick(0.0);
+    };
+    s.tick(0.0);
+    assert!(shown(&mut s, "MainMenuBar") && shown(&mut s, "PlayerFrame"));
+    assert!(shown(&mut s, "ChatFrame1") && shown(&mut s, "MinimapCluster"));
+
+    seated(&mut s, true);
+    assert!(!shown(&mut s, "MainMenuBar") && !shown(&mut s, "PlayerFrame"));
+    // The stock code's own Show() cannot bring a frame back while we drive.
+    s.eval::<()>("PlayerFrame:Show()").unwrap();
+    s.tick(0.0);
+    assert!(!shown(&mut s, "PlayerFrame"));
+    // Chat and the minimap stay.
+    assert!(shown(&mut s, "ChatFrame1") && shown(&mut s, "MinimapCluster"));
+
+    seated(&mut s, false);
+    assert!(shown(&mut s, "MainMenuBar") && shown(&mut s, "PlayerFrame"));
+    assert_eq!(
+        s.eval::<String>("return PlayerFrame:GetParent():GetName()")
+            .unwrap(),
+        "UIParent"
+    );
+}
+
+#[test]
 fn forty_courses_scroll_and_a_tick_follows_its_course() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK
