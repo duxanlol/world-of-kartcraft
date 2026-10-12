@@ -2063,3 +2063,40 @@ fn the_track_browser_starts_a_time_trial_on_the_track_shown() {
         .unwrap();
     assert!(!enabled(&s));
 }
+
+#[test]
+fn a_party_mate_s_queue_queues_us_and_the_party_leaves_together() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 3);
+    s.run(
+        "BenillaKartSaid = {} local said = BenillaKart_Say \
+         BenillaKart_Say = function(t) table.insert(BenillaKartSaid, t) said(t) end",
+    )
+    .unwrap();
+
+    // The leader queued the party for Elwynn: we are queued, and keep our place.
+    from_server(&mut s, "R\tQp\telwynn\tLeaderguy");
+    assert_eq!(
+        s.eval::<String>("return BenillaKartFinder.queued").unwrap(),
+        "elwynn"
+    );
+    s.run("BenillaKartEvents_OnUpdate()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tW"]);
+
+    // A mate left: the party is out of the queue, and we are told.
+    from_server(&mut s, "R\tQx\tparty");
+    assert!(s
+        .eval::<bool>("return BenillaKartFinder.queued == nil")
+        .unwrap());
+    assert_eq!(
+        s.eval::<Vec<String>>("return BenillaKartSaid").unwrap(),
+        [
+            "Leaderguy queued your party in the Race Finder.",
+            "Your party left the Race Finder queue.",
+        ]
+    );
+}

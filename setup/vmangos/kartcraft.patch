@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..2933c27
+index 0000000..47350af
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,3244 @@
+@@ -0,0 +1,3336 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -1895,6 +1895,9 @@ index 0000000..2933c27
 +        std::vector<bool> courses; // [i]: COURSES[i]
 +        uint32 joined;
 +        uint32 seen;
++        // Queued with their party (its group id): the party pops together or not at all, and
++        // leaves the queue together. 0 alone.
++        uint32 party = 0;
 +    };
 +
 +    struct Pop
@@ -2127,15 +2130,47 @@ index 0000000..2933c27
 +
 +    static void EndPop(uint32 id, Pop& pop, uint32 now)
 +    {
++        auto accepted = [&pop](ObjectGuid guid)
++        {
++            return std::find(pop.accepted.begin(), pop.accepted.end(), guid) != pop.accepted.end();
++        };
++        // A party goes back only whole: one who said no takes their party out with them.
++        auto whole = [&pop, &accepted](uint32 party)
++        {
++            return !party || std::all_of(pop.members.begin(), pop.members.end(),
++                [&](Queued const& m) { return m.party != party || accepted(m.guid); });
++        };
 +        // Those who said yes go back to the front of the queue, keeping their place.
 +        for (Queued q : pop.members)
-+            if (std::find(pop.accepted.begin(), pop.accepted.end(), q.guid) != pop.accepted.end())
++            if (accepted(q.guid) && whole(q.party))
 +            {
 +                q.seen = now;
 +                s_queue.insert(s_queue.begin(), q);
 +            }
 +        for (Queued const& q : pop.members)
++        {
 +            SendTo(q.guid, "KARTCRAFT\tR\tPop-\t" + std::to_string(id));
++            if (accepted(q.guid) && !whole(q.party))
++                SendTo(q.guid, "KARTCRAFT\tR\tQx\tparty");
++        }
++    }
++
++    // Out of the queue, and their whole party with them ("R\tQx\tparty" to the rest).
++    static void LeaveQueue(ObjectGuid guid)
++    {
++        auto mine = std::find_if(s_queue.begin(), s_queue.end(), [guid](Queued const& q) { return q.guid == guid; });
++        if (mine == s_queue.end())
++            return;
++        uint32 const party = mine->party;
++        for (auto it = s_queue.begin(); it != s_queue.end();)
++            if (it->guid == guid || (party && it->party == party))
++            {
++                if (it->guid != guid)
++                    SendTo(it->guid, "KARTCRAFT\tR\tQx\tparty");
++                it = s_queue.erase(it);
++            }
++            else
++                it = std::next(it);
 +    }
 +
 +    static void LaunchPop(Pop& pop, uint32 now)
@@ -2165,9 +2200,13 @@ index 0000000..2933c27
 +    // Drops the stale, fails late ready checks and pops the courses that are ready.
 +    static void UpdateFinder(uint32 now)
 +    {
-+        s_queue.erase(std::remove_if(s_queue.begin(), s_queue.end(), [now](Queued const& q) {
-+            return WorldTimer::getMSTimeDiff(q.seen, now) > QUEUE_STALE || !ObjectAccessor::FindPlayer(q.guid);
-+        }), s_queue.end());
++        // The stale go, and a stale racer's party with them.
++        std::vector<ObjectGuid> stale;
++        for (Queued const& q : s_queue)
++            if (WorldTimer::getMSTimeDiff(q.seen, now) > QUEUE_STALE || !ObjectAccessor::FindPlayer(q.guid))
++                stale.push_back(q.guid);
++        for (ObjectGuid const& guid : stale)
++            LeaveQueue(guid);
 +        for (auto it = s_origins.begin(); it != s_origins.end();)
 +            it = WorldTimer::getMSTimeDiff(it->second.at, now) > RETURN_KEEP ? s_origins.erase(it) : std::next(it);
 +
@@ -2215,14 +2254,43 @@ index 0000000..2933c27
 +        Pop& pop = s_pops[popId];
 +        pop.course = &COURSES[best];
 +        pop.created = now;
-+        for (auto it = s_queue.begin(); it != s_queue.end() && pop.members.size() < MAX_RACERS;)
-+            if (it->courses[best])
++        // Oldest first, a party whole: all of it ticked the course and fits, or none of it.
++        std::vector<size_t> take;
++        std::set<uint32> parties;
++        for (size_t i = 0; i < s_queue.size() && take.size() < MAX_RACERS; ++i)
++        {
++            Queued const& q = s_queue[i];
++            if (!q.courses[best])
++                continue;
++            if (!q.party)
 +            {
-+                pop.members.push_back(*it);
-+                it = s_queue.erase(it);
++                take.push_back(i);
++                continue;
 +            }
-+            else
-+                it = std::next(it);
++            if (!parties.insert(q.party).second)
++                continue;
++            std::vector<size_t> unit;
++            bool all = true;
++            for (size_t j = 0; j < s_queue.size(); ++j)
++                if (s_queue[j].party == q.party)
++                {
++                    unit.push_back(j);
++                    all = all && s_queue[j].courses[best];
++                }
++            if (all && take.size() + unit.size() <= MAX_RACERS)
++                take.insert(take.end(), unit.begin(), unit.end());
++        }
++        // A party that does not fit can leave too few: no race of one.
++        if (take.size() < 2)
++        {
++            s_pops.erase(popId);
++            return;
++        }
++        std::sort(take.begin(), take.end());
++        for (size_t i : take)
++            pop.members.push_back(s_queue[i]);
++        for (auto i = take.rbegin(); i != take.rend(); ++i)
++            s_queue.erase(s_queue.begin() + *i);
 +        std::string check = "KARTCRAFT\tR\tPop\t" + std::to_string(popId) + "\t" + pop.course->key + "\t" +
 +            std::to_string(pop.members.size()) + "\t" + std::to_string(POP_ANSWER / IN_MILLISECONDS);
 +        for (Queued const& q : pop.members)
@@ -2299,8 +2367,7 @@ index 0000000..2933c27
 +    // or finished; the racers left behind get their new roster.
 +    static void QuitAll(ObjectGuid guid, uint32 now)
 +    {
-+        s_queue.erase(std::remove_if(s_queue.begin(), s_queue.end(), [guid](Queued const& q) { return q.guid == guid; }),
-+            s_queue.end());
++        LeaveQueue(guid);
 +        for (auto it = s_pops.begin(); it != s_pops.end();)
 +        {
 +            Pop& p = it->second;
@@ -2446,10 +2513,39 @@ index 0000000..2933c27
 +                SendLine(player, "KARTCRAFT\tR\tQx\tracing");
 +                return true;
 +            }
-+            if (mine != s_queue.end())
-+                mine->courses = mask;
-+            else
-+                s_queue.push_back({ guid, mask, now, now });
++            // In a party, the whole party queues: every member who can, for the same courses, as
++            // one (Queued::party); each mate's client is told ("R\tQp\t<courses>\t<who>") so it
++            // shows the queue and keeps its own place with the heartbeat.
++            Group* group = player->GetGroup();
++            if (group && group->GetMembersCount() > MAX_RACERS)
++            {
++                ChatHandler(player->GetSession()).SendSysMessage("A party larger than a race can't queue together.");
++                return true;
++            }
++            uint32 const party = group ? group->GetId() : 0;
++            auto enqueue = [&](Player* who)
++            {
++                ObjectGuid const g = who->GetObjectGuid();
++                auto entry = std::find_if(s_queue.begin(), s_queue.end(), [g](Queued const& q) { return q.guid == g; });
++                if (entry != s_queue.end())
++                {
++                    entry->courses = mask;
++                    entry->party = party;
++                }
++                else
++                    s_queue.push_back({ g, mask, now, now, party });
++            };
++            enqueue(player);
++            if (group)
++                for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
++                {
++                    Player* mate = itr->getSource();
++                    if (!mate || mate == player || !mate->IsInWorld() || mate->InBattleGround() ||
++                        mate->GetMap()->Instanceable() || !LeaveWaitingRaces(mate))
++                        continue;
++                    enqueue(mate);
++                    SendLine(mate, "KARTCRAFT\tR\tQp\t" + f[2] + "\t" + player->GetName());
++                }
 +        }
 +        else if (verb == "Lobby")
 +            SendLobby(player);
@@ -2474,8 +2570,7 @@ index 0000000..2933c27
 +            race = s_races.find(id);
 +            if (race == s_races.end())
 +                return true;
-+            if (mine != s_queue.end())
-+                s_queue.erase(mine);
++            LeaveQueue(guid);
 +            SummonKart(player);
 +            Race& r = race->second;
 +            r.racers.push_back({ guid, player->GetName() });
@@ -2499,10 +2594,7 @@ index 0000000..2933c27
 +            StartRace(raceId, s_races[raceId], now, far ? GRID_COUNTDOWN + FAR_SETTLE : GRID_COUNTDOWN);
 +        }
 +        else if (verb == "Q-")
-+        {
-+            if (mine != s_queue.end())
-+                s_queue.erase(mine);
-+        }
++            LeaveQueue(guid);
 +        else if (verb == "W")
 +        {
 +            if (mine == s_queue.end())
