@@ -409,6 +409,11 @@ namespace Kartcraft
         uint8 finishers = 0;
         // A time trial (the Race Marshal's "R\tT"): one racer, no items, its own records.
         bool timeTrial = false;
+        // CTR's ground types ("R\tGT"): every racer's client drives off-road as slow as CTR's
+        // grounds while it is on, whatever its own KartTerrain says. The host's choice; a Race
+        // Finder race takes FINDER_GROUND_TYPES, and a time trial never has them, so its board
+        // stays one board.
+        bool groundTypes = false;
         std::vector<Racer> racers;
         // Weapons, live from the start: the crates, the shots relayed in the last SHOT_LIFETIME
         // keyed by shooter low guid << 16 | shot, and the race's MixRNG state.
@@ -1434,11 +1439,12 @@ namespace Kartcraft
                 std::to_string(BestOf(board, x.guid.GetCounter(), r.course->key)));
     }
 
-    // Sends the course and the countdown: the race is on once it runs out. A time trial has no
-    // crates: its racer starts with nothing and is sent no layout.
+    // Sends the ground types, the course and the countdown: the race is on once it runs out. A
+    // time trial has no crates: its racer starts with nothing and is sent no layout.
     static void StartRace(uint32 id, Race& r, uint32 now, uint32 countdown)
     {
         r.start = now + countdown;
+        SendRace(r, "KARTCRAFT\tR\tGT\t" + std::to_string(id) + "\t" + (r.groundTypes ? "1" : "0"));
         std::string points;
         for (auto const& p : r.course->points)
             points += (points.empty() ? "" : ";") + std::to_string(int32(p.first)) + ":" + std::to_string(int32(p.second));
@@ -1479,6 +1485,8 @@ namespace Kartcraft
     // before the client acknowledges it, so they reach the grid before GO.
     constexpr uint32 FAR_SETTLE = 20 * IN_MILLISECONDS;
     constexpr float GRID_SPACING = 4.f;
+    // A Race Finder race's ground types: off, as nobody hosts it to choose.
+    constexpr bool FINDER_GROUND_TYPES = false;
 
     struct Queued
     {
@@ -1700,6 +1708,7 @@ namespace Kartcraft
         r.course = pop.course;
         r.host = pop.members.front().guid;
         r.created = now;
+        r.groundTypes = FINDER_GROUND_TYPES;
         size_t slot = 0;
         bool far = false;
         for (Queued const& q : pop.members)
@@ -2179,6 +2188,7 @@ namespace Kartcraft
 
         if (verb == "H" && f.size() > 2)
         {
+            // "R\tH\t<key>\t1" hosts with ground types on; a race already waiting keeps its own.
             Course const* course = FindCourse(f[2]);
             if (!course || player->GetMapId() != course->map || (!marshal && DistanceTo(player, course->points[0]) > START_RADIUS))
                 return;
@@ -2203,6 +2213,7 @@ namespace Kartcraft
             r.course = course;
             r.host = player->GetObjectGuid();
             r.created = now;
+            r.groundTypes = f.size() > 3 && f[3] == "1";
             r.racers.push_back({ player->GetObjectGuid(), player->GetName() });
             WorldPacket data;
             std::string open = "KARTCRAFT\tR\tO\t" + std::to_string(raceId) + "\t" + course->key + "\t" +
@@ -2377,6 +2388,7 @@ namespace Kartcraft
     constexpr uint32 MARSHAL_HELP_TEXT = 190001; // npc_text: "How do races work?"
     constexpr uint32 MARSHAL_RECORDS_TEXT = 190002; // npc_text: over the course records
     constexpr uint32 MARSHAL_TRIALS_TEXT = 190003;  // npc_text: over the time trial leaderboard
+    constexpr uint32 MARSHAL_HOST_TEXT = 190004;    // npc_text: over hosting's ground types choice
     // The leaderboard's length.
     constexpr size_t TRIAL_BOARD_TOP = 10;
     // A marshal belongs to the courses whose "marshal" spot is its spawn point, this near (yards).
@@ -2395,6 +2407,8 @@ namespace Kartcraft
         MARSHAL_TRACKS, // action: the course's index in COURSES the browser opens at
         MARSHAL_TRIAL,  // action: the course's index in COURSES
         MARSHAL_TRIALS, // action: the course's index in COURSES, or COURSES.size() for the list
+        MARSHAL_HOST_PLAIN,  // action: the course's index in COURSES; ground types off
+        MARSHAL_HOST_GROUND, // action: the course's index in COURSES; ground types on
     };
 
     // The courses that start at this marshal: those placed with it, else (a marshal spawned
@@ -2470,7 +2484,8 @@ namespace Kartcraft
                     if (x.guid == r.host)
                         host = x.name;
                 menu.AddMenuItem(GOSSIP_ICON_TALK, "Join " + host + "'s race on " + r.course->name + " (" +
-                    std::to_string(r.racers.size()) + (r.racers.size() == 1 ? " racer)" : " racers)"),
+                    std::to_string(r.racers.size()) + (r.racers.size() == 1 ? " racer" : " racers") +
+                    (r.groundTypes ? ", ground types on)" : ")"),
                     MARSHAL_JOIN, j.first, "", false);
                 --room;
             }
@@ -2579,6 +2594,19 @@ namespace Kartcraft
         player->PlayerTalkClass->SendGossipMenu(MARSHAL_TRIALS_TEXT, marshal->GetObjectGuid());
     }
 
+    // Hosting `course` (an index in COURSES): with CTR's ground types or without, for every racer.
+    static void MarshalHost(Player* player, Creature* marshal, uint32 course)
+    {
+        GossipMenu& menu = player->PlayerTalkClass->GetGossipMenu();
+        menu.ClearMenu();
+        std::string const name = COURSES[course].name;
+        menu.AddMenuItem(GOSSIP_ICON_BATTLE, "Host " + name + ": ground types off", MARSHAL_HOST_PLAIN, course, "", false);
+        menu.AddMenuItem(GOSSIP_ICON_BATTLE, "Host " + name + ": ground types on (off-road slows)", MARSHAL_HOST_GROUND,
+            course, "", false);
+        menu.AddMenuItem(GOSSIP_ICON_CHAT, "Back", MARSHAL_BACK, 0, "", false);
+        player->PlayerTalkClass->SendGossipMenu(MARSHAL_HOST_TEXT, marshal->GetObjectGuid());
+    }
+
     static bool MarshalSelect(Player* player, Creature* marshal, uint32 sender, uint32 action)
     {
         std::string line;
@@ -2586,7 +2614,15 @@ namespace Kartcraft
         {
             case MARSHAL_HOST:
                 if (action < COURSES.size() && AtMarshal(MarshalCourses(marshal), &COURSES[action]))
-                    line = std::string("R\tH\t") + COURSES[action].key;
+                {
+                    MarshalHost(player, marshal, action);
+                    return true;
+                }
+                break;
+            case MARSHAL_HOST_PLAIN:
+            case MARSHAL_HOST_GROUND:
+                if (action < COURSES.size() && AtMarshal(MarshalCourses(marshal), &COURSES[action]))
+                    line = std::string("R\tH\t") + COURSES[action].key + (sender == MARSHAL_HOST_GROUND ? "\t1" : "");
                 break;
             case MARSHAL_TRIAL:
                 if (action < COURSES.size() && AtMarshal(MarshalCourses(marshal), &COURSES[action]))

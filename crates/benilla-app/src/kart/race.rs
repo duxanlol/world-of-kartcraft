@@ -20,6 +20,10 @@
 //! HUD, and a board that sets our time against our best before the run and the time trial record,
 //! which the server keeps apart from the races'.
 //!
+//! CTR's ground types are the race's (`GT`, the host's choice; off in a Race Finder race and a
+//! time trial): from the countdown to our finish it rules over our own `KartTerrain`
+//! ([`Races::ground_types`], `super::ground`), so every racer drives the same course.
+//!
 //! The Race Finder is a WoW window in the client's UI layer (`assets/ui/KartcraftFrames.xml`,
 //! opened from its minimap button or `/racefinder`) that queues, keeps its place, answers the
 //! ready check and leaves races (`/leaverace`) over the addon channel itself. Here only a pending
@@ -272,6 +276,9 @@ pub(crate) struct Active {
     before: Option<(u32, u32)>,
     /// A time trial (`TT`): us alone, no crates or items, and our ghost to race.
     time_trial: bool,
+    /// The race's ground types (`GT`), the host's choice: every racer drives off-road as CTR's
+    /// grounds hold it, or on asphalt everywhere, whatever their own `KartTerrain`.
+    ground_types: bool,
     done: bool,
     /// Last frame's start-light timer, for the lights' sounds.
     lights: Option<i32>,
@@ -687,6 +694,15 @@ impl Races {
         })
     }
 
+    /// Whether the kart drives on CTR's grounds by the race's rule rather than our own
+    /// `KartTerrain`: `Some` from the countdown until we finish or leave, the race's `GT` (off
+    /// until it comes, and always off in a time trial, whose board is one board); `None` outside
+    /// a race, where the setting applies.
+    pub(crate) fn ground_types(&self) -> Option<bool> {
+        let r = self.race.as_ref()?;
+        (r.go_at.is_some() && !r.done).then_some(r.ground_types && !r.time_trial)
+    }
+
     /// Whether the kart must hold on the line: a countdown is running.
     pub(crate) fn holding(&self, now: f32) -> bool {
         self.race
@@ -752,6 +768,13 @@ impl Races {
                 if let Some(race) = self.race.as_mut().filter(|r| r.id == id) {
                     race.time_trial = true;
                     info!("kart race: {id} is a time trial");
+                }
+            }
+            // The race's ground types, "1" on, sent with its course at the start.
+            Some("GT") if f.len() >= 3 => {
+                if let Some(race) = self.race.as_mut().filter(|r| r.id == id) {
+                    race.ground_types = f[2] == "1";
+                    info!("kart race: {id} ground types {}", f[2]);
                 }
             }
             Some("C") if f.len() >= 5 => {
@@ -848,13 +871,18 @@ fn left_without_kart(kart_aura: Option<bool>, now: f32, grace_until: f32) -> boo
 
 /// The banner while the race counts down, `left` seconds to GO: the seconds to the start, then
 /// CTR's 3, 2, 1 in the kart; on the way to the grid (out of the kart, a teleport's load), the
-/// seconds still.
-fn countdown_banner(left: f32, in_kart: bool) -> String {
+/// seconds still. A race with ground types on says so before the 3, 2, 1.
+fn countdown_banner(left: f32, in_kart: bool, ground_types: bool) -> String {
     let secs = left.ceil().max(1.0) as u32;
+    let note = if ground_types {
+        " — ground types on"
+    } else {
+        ""
+    };
     match (in_kart, secs) {
         (true, 1..=3) => secs.to_string(),
-        (true, _) => format!("Race starts in {secs}"),
-        (false, _) => format!("Getting to the start... race starts in {secs}"),
+        (true, _) => format!("Race starts in {secs}{note}"),
+        (false, _) => format!("Getting to the start... race starts in {secs}{note}"),
     }
 }
 
@@ -955,7 +983,9 @@ pub(crate) fn update(
         clear_hud(&mut extras, &mut audio);
         if let Some(race) = &races.race {
             text.banner = match race.go_at {
-                Some(go) if now < go => countdown_banner(go - now, false),
+                Some(go) if now < go => {
+                    countdown_banner(go - now, false, race.ground_types && !race.time_trial)
+                }
                 _ => "Getting to the start...".into(),
             };
         }
@@ -1019,7 +1049,7 @@ pub(crate) fn update(
         text.banner = if lights && timer <= kartcraft::hud::LIGHTS_TIMER_START {
             String::new()
         } else {
-            countdown_banner(go - now, true)
+            countdown_banner(go - now, true, race.ground_types && !race.time_trial)
         };
         return;
     }
@@ -1169,7 +1199,7 @@ fn start_banner(here: &[&Course]) -> String {
 }
 
 /// The results board: the finished in order with their times, a new best marked, then the course
-/// record and our own best. Empty until someone finishes.
+/// record and our own best, and the race's ground types when on. Empty until someone finishes.
 fn board(race: &Active) -> Vec<String> {
     if race.finished.is_empty() {
         return Vec::new();
@@ -1199,6 +1229,9 @@ fn board(race: &Active) -> Vec<String> {
     }
     if race.best != 0 {
         lines.push(format!("Your best: {}", clock(race.best)));
+    }
+    if race.ground_types {
+        lines.push("Ground types: on".into());
     }
     lines
 }
@@ -1986,6 +2019,49 @@ mod tests {
     }
 
     #[test]
+    fn the_race_s_ground_types_rule_from_the_countdown_to_the_finish() {
+        let mut races = racer();
+        assert_eq!(
+            races.ground_types(),
+            None,
+            "outside a race: our own setting"
+        );
+        hear(&mut races, "L\t5\tRacer,Goblin", 1.0);
+        assert_eq!(races.ground_types(), None, "waiting to race: still ours");
+        // Another race's line is not ours; ours comes with the course at the start.
+        hear(&mut races, "GT\t6\t1", 2.0);
+        hear(&mut races, "GT\t5\t1", 2.0);
+        hear(&mut races, "C\t5\tsprint\t0\t1:2;3:4;5:6", 2.0);
+        assert_eq!(races.ground_types(), None, "no countdown yet");
+        hear(&mut races, "G\t5\t8000\tRacer,Goblin", 2.0);
+        assert_eq!(races.ground_types(), Some(true), "the race's rule");
+        // A finish board says so.
+        hear(&mut races, "F\t5\tRacer\t1\t60000\t", 20.0);
+        let race = races.race.as_ref().unwrap();
+        assert_eq!(board(race).last().unwrap(), "Ground types: on");
+        assert_eq!(races.ground_types(), None, "finished: ours again");
+
+        // Off is off whatever our setting, and a server that sends no `GT` races off.
+        for line in ["GT\t5\t0", ""] {
+            let mut races = racer();
+            hear(&mut races, "L\t5\tRacer,Goblin", 1.0);
+            hear(&mut races, line, 1.0);
+            hear(&mut races, "G\t5\t8000\tRacer,Goblin", 1.0);
+            assert_eq!(races.ground_types(), Some(false), "{line:?}");
+            hear(&mut races, "X", 2.0);
+            assert_eq!(races.ground_types(), None, "left: ours again");
+        }
+
+        // A time trial is always off, even sent on: its leaderboard is one board.
+        let mut races = racer();
+        hear(&mut races, "L\t7\tRacer", 1.0);
+        hear(&mut races, "TT\t7", 1.0);
+        hear(&mut races, "GT\t7\t1", 1.0);
+        hear(&mut races, "G\t7\t8000\tRacer", 1.0);
+        assert_eq!(races.ground_types(), Some(false));
+    }
+
+    #[test]
     fn a_new_roster_with_us_in_it_replaces_the_race_we_were_in() {
         let mut races = racer();
         hear(&mut races, "L\t3\tRacer,Goblin", 1.0);
@@ -2588,18 +2664,28 @@ mod tests {
 
     #[test]
     fn the_countdown_banner_shows_the_seconds_to_the_start() {
-        assert_eq!(countdown_banner(24.2, true), "Race starts in 25");
-        assert_eq!(countdown_banner(3.5, true), "Race starts in 4");
-        assert_eq!(countdown_banner(2.1, true), "3");
-        assert_eq!(countdown_banner(0.2, true), "1");
+        assert_eq!(countdown_banner(24.2, true, false), "Race starts in 25");
+        assert_eq!(countdown_banner(3.5, true, false), "Race starts in 4");
+        assert_eq!(countdown_banner(2.1, true, false), "3");
+        assert_eq!(countdown_banner(0.2, true, false), "1");
         assert_eq!(
-            countdown_banner(17.0, false),
+            countdown_banner(17.0, false, false),
             "Getting to the start... race starts in 17"
         );
         assert_eq!(
-            countdown_banner(0.4, false),
+            countdown_banner(0.4, false, false),
             "Getting to the start... race starts in 1"
         );
+        // A race with ground types on says so, but not over CTR's 3, 2, 1.
+        assert_eq!(
+            countdown_banner(9.5, true, true),
+            "Race starts in 10 — ground types on"
+        );
+        assert_eq!(
+            countdown_banner(17.0, false, true),
+            "Getting to the start... race starts in 17 — ground types on"
+        );
+        assert_eq!(countdown_banner(2.1, true, true), "3");
     }
 
     #[test]

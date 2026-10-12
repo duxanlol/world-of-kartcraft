@@ -15,7 +15,9 @@
 //!
 //! WoW has no ice ground (Winterspring's ice is Snow), so CTR's ice is never read. The ground is
 //! read every frame whatever `KartTerrain` says, for the skid and rolling sounds; the setting
-//! decides only whether the kart drives on it ([`kartcraft::Session::set_ground`]).
+//! decides only whether the kart drives on it ([`kartcraft::Session::set_ground`]). In a race the
+//! race decides instead, the same for every racer: its ground types, the host's choice, from the
+//! countdown until we finish or leave ([`super::race::Races::ground_types`]).
 
 use benilla_assets::coords::bevy_to_wow;
 use benilla_world::world_point::{Subject, WorldPoint};
@@ -56,18 +58,26 @@ pub(crate) fn ground_under(in_water: bool, on_terrain: bool, sound_class: Option
     }
 }
 
+/// Whether the kart drives on the ground under it: by the race's rule while one rules, else by
+/// our own `KartTerrain`.
+pub(crate) fn drives_on_ground(race: Option<bool>, setting: bool) -> bool {
+    race.unwrap_or(setting)
+}
+
 /// Reads the ground under our kart where it was last drawn and hands it to the session, which
-/// drives on it with `KartTerrain` on. Through a hop it keeps the ground it left.
+/// drives on it as [`drives_on_ground`] says. Through a hop it keeps the ground it left.
 pub(super) fn sample(
     view: Res<KartView>,
     settings: Res<super::settings::KartSettings>,
+    races: Res<super::race::Races>,
     world: WorldPoint,
     footsteps: Option<Res<Footsteps>>,
     mut host: ResMut<super::Host>,
 ) {
+    let physics = drives_on_ground(races.ground_types(), settings.terrain);
     if !view.active || !view.grounded {
         let ground = view.ground;
-        host.session.set_ground(ground, settings.terrain);
+        host.session.set_ground(ground, physics);
         return;
     }
     let at = view.transform.translation;
@@ -83,7 +93,7 @@ pub(super) fn sample(
         f.0.sound_class_of(terrain)
     });
     let ground = ground_under(in_water, on_terrain, class);
-    host.session.set_ground(ground, settings.terrain);
+    host.session.set_ground(ground, physics);
 }
 
 #[cfg(test)]
@@ -113,5 +123,15 @@ mod tests {
         assert_eq!(ground_under(false, false, Some(6)), Ground::Asphalt);
         assert_eq!(ground_under(false, true, None), Ground::Asphalt);
         assert_eq!(ground_under(false, true, Some(6)), Ground::Grass);
+    }
+
+    #[test]
+    fn a_race_s_ground_types_override_our_setting_and_only_in_a_race() {
+        // Outside a race: our own KartTerrain.
+        assert!(drives_on_ground(None, true));
+        assert!(!drives_on_ground(None, false));
+        // In one: the race's rule, whatever ours.
+        assert!(drives_on_ground(Some(true), false));
+        assert!(!drives_on_ground(Some(false), true));
     }
 }

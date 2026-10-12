@@ -243,8 +243,9 @@ display): `drives_kart()` checks `unit_auras()`.
 
 Client → server:
 
-- `R\tH\t<courseKey>`: host. The player must be within `START_RADIUS` 60 yd of point 0 on the
-  course's map.
+- `R\tH\t<courseKey>[\t1]`: host. The player must be within `START_RADIUS` 60 yd of point 0 on the
+  course's map. A trailing `1` hosts with ground types on (`GT`); without it they are off. A race
+  already waiting on the course takes the player in and keeps its own ground types.
 - `R\tJ\t<id>`: join. Only before the start, at most 8 racers, near the start, no duplicates.
 - `R\tS\t<id>`: start. Host only.
 - `R\tK\t<id>\t<index>`: checkpoint passed.
@@ -259,7 +260,15 @@ Server → client:
 
 - `R\tO\t<id>\t<key>\t<name>\t<host>`: offer, to players within 120 yd **including** the host.
 - `R\tL\t<id>\t<roster csv>`: roster, to the racers.
-- `R\tC\t<id>\t<key>\t<laps>\t<x:y;x:y;...>`: checkpoints, at the start.
+- `R\tGT\t<id>\t<0|1>`: the race's ground types, at the start just before `C`, to every racer.
+  `1`: grass, dirt, snow, mud and water slow every racer as CTR's grounds do; `0`: asphalt
+  everywhere. From the countdown until a racer finishes or leaves, the client drives by this and
+  not by its own `KartTerrain` (`kart::race::Races::ground_types`), so every racer drives the
+  same course; outside a race the setting applies. A hosted race takes the host's choice (the
+  Race Marshal's "Host" page, default off); a Race Finder race `FINDER_GROUND_TYPES` (off); a
+  time trial is always off, so its leaderboard stays one board of like runs. A client that hears
+  no `GT` races off. Hosted races with ground types on share the races' board: they can only be
+  slower.
 - `R\tG\t<id>\t<countdown ms 4000>\t<roster>`: countdown.
 - `R\tP\t<id>\t<name>\t<lap>\t<checkpoint>`: progress.
 - `R\tF\t<id>\t<name>\t<place>\t<ms>[\t<r|p>]`: finish; `r` a new course record, `p` a new
