@@ -44,6 +44,8 @@ constant in the code cites its line in the decompilation.
   radius is 320 lu, or 512 juiced, and never hurts the owner.
 - Missile speeds are 80 or 96 lu/frame, and missiles turn 64 or 128 units per frame. They have no
   lifetime. A missile whose target leaves keeps flying straight. Its blast radius is 128 lu.
+  When its target drops a mine, it chases that driver's last TNT or Nitro for 10 frames
+  (`framesSeekTargetTnt`), and holds its heading if there is none, as after a beaker.
 - Contact tests follow `RB_Hazard_CollideWithDrivers`: a cylinder of XZ < r and |dy| < 2r for
   bombs, missiles and orbs, and a sphere for mines. The radii are 96, 192, 120 and 80 lu. The
   owner is spared for 60 frames (bomb, missile) or 10 (orb, shield bomb, mine).
@@ -85,7 +87,6 @@ constant in the code cites its line in the decompilation.
   only to float precision. Velocities are lu per frame without the `ms >> 5` scaling, because a
   frame is always 32 ms.
 - **Not modelled:**
-  - the missile's 10-frame TNT decoy (`framesSeekTargetTnt`);
   - beaker throwing (Up held);
   - weapons breaking crates: crates are the server's, and a claim must come from a kart near
     the crate;
