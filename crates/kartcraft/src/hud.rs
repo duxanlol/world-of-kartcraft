@@ -124,6 +124,10 @@ fn screen_width(window_width: f32, height: f32) -> usize {
     ((window_width / (PIXEL_ASPECT * scale)).round() as usize).clamp(64, 4096)
 }
 
+/// The HUD stepped aside for a clean picture (the host's clean screen); the kart drives on.
+#[derive(Resource, Default)]
+pub struct HudHidden(pub bool);
+
 /// Spawns the HUD's image and its three crops, hidden until we drive.
 pub fn spawn(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut hud: ResMut<KartHud>) {
     if renderer().is_none() {
@@ -187,11 +191,12 @@ pub fn draw(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut crops: Query<(&HudCrop, &mut Node, &mut Visibility), Without<HudBanner>>,
     mut banner: Query<(&mut Node, &mut Visibility), With<HudBanner>>,
+    hidden: Option<Res<HudHidden>>,
 ) {
     let (Some(renderer), Some(handle)) = (renderer(), hud.image.clone()) else {
         return;
     };
-    let shown = view.active;
+    let shown = view.active && !hidden.is_some_and(|h| h.0);
     for (_, _, mut vis) in &mut crops {
         *vis = if shown {
             Visibility::Inherited

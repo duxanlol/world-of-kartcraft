@@ -64,6 +64,9 @@
         BINDING_NAME_KARTCRAFT_LEAVERACE = "Leave Race"
         BINDING_NAME_KARTCRAFT_SETTINGS = "Kartcraft Settings"
         BINDING_NAME_KARTCRAFT_GARAGE = "Kart Garage"
+        BINDING_NAME_KARTCRAFT_CLEANSCREEN = "Clean Screen (hide all interface)"
+        BINDING_NAME_KARTCRAFT_FREECAM = "Free Camera (fly, park, off)"
+        BINDING_NAME_KARTCRAFT_NEXTKART = "Next Kart"
         BENILLA_KART_PREFIX = "KARTCRAFT"
         -- What the finder offers, { key, name } in the kart's order, from BENILLA_KART_COURSES:
         -- the zones, keyed "z<place>".
@@ -1638,6 +1641,74 @@
             BenillaKartGarage_Refresh()
         end
 
+        -- /kartclean and its binding: every interface off for a clean picture, the WoW one
+        -- (UIParent, as Alt+Z hides it) and the kart's (KartHideHud: CTR's HUD and the guide
+        -- arrow), or both back. UIParent showing again by any road (Alt+Z) brings the kart's back.
+        function BenillaKart_CleanScreen()
+            if UIParent:IsShown() then
+                SetCVar("KartHideHud", "1")
+                UIParent:Hide()
+            else
+                UIParent:Show()
+            end
+        end
+
+        function BenillaKart_WatchUIParent()
+            if BenillaKartUIParentWatched then return end
+            BenillaKartUIParentWatched = 1
+            local onshow = UIParent:GetScript("OnShow")
+            UIParent:SetScript("OnShow", function()
+                if onshow then onshow() end
+                SetCVar("KartHideHud", "0")
+            end)
+        end
+
+        -- /kartnext: the next racer's kart in the garage's list, round to the first, said in chat.
+        function BenillaKartGarage_Next()
+            local racers = BenillaKartGarage.racers or {}
+            local n = table.getn(racers)
+            if n == 0 then
+                DEFAULT_CHAT_FRAME:AddMessage("Kartcraft: no karts in the garage yet.")
+                return
+            end
+            local now = GetCVar("KartRacer")
+            local at = 0
+            for i = 1, n do
+                if racers[i].key == now then at = i end
+            end
+            local r = racers[mod(at, n) + 1]
+            SetCVar("KartRacer", r.key)
+            DEFAULT_CHAT_FRAME:AddMessage(format("Kartcraft: %s's kart (%d of %d).", r.name, mod(at, n) + 1, n))
+            if BenillaKartGarageFrame:IsVisible() then BenillaKartGarage_Refresh() end
+        end
+
+        -- /kartfree [fly|tripod|low|orbit|off]: the free camera for filming the kart (KartFreeCam,
+        -- kart/freecam.rs). Without a word it steps off, fly, tripod and back to off.
+        BENILLA_KART_FREECAM_HELP = {
+            fly = "Free camera: flying. W/S forward and back, A/D sideways, Space up, X down, Shift faster, hold the right mouse button to look. The kart waits. /kartfree again parks it.",
+            tripod = "Free camera: parked. It follows the kart from where it stands; drive past it. /kartfree again for the chase camera.",
+            low = "Free camera: low tracking shot beside the kart.",
+            orbit = "Free camera: orbiting the kart.",
+            off = "Free camera: off, back to the chase camera.",
+        }
+
+        function BenillaKartFreeCam(msg)
+            local want = string.lower(msg or "")
+            want = string.gsub(want, "^%s*(.-)%s*$", "%1")
+            if want == "" then
+                local now = string.lower(GetCVar("KartFreeCam") or "off")
+                if now == "off" then want = "fly"
+                elseif now == "fly" then want = "tripod"
+                else want = "off" end
+            end
+            if not BENILLA_KART_FREECAM_HELP[want] then
+                DEFAULT_CHAT_FRAME:AddMessage("Kartcraft: /kartfree fly, tripod, low, orbit or off.")
+                return
+            end
+            SetCVar("KartFreeCam", want)
+            DEFAULT_CHAT_FRAME:AddMessage("Kartcraft: " .. BENILLA_KART_FREECAM_HELP[want])
+        end
+
         function BenillaKartGarage_PickRacer(i)
             local r = BenillaKartGarage.racers[i]
             if r then
@@ -1704,6 +1775,12 @@
             SlashCmdList["BENILLA_UNSTUCK"] = function() BenillaKart_Unstuck() end
             SLASH_BENILLA_GARAGE1 = "/garage"
             SlashCmdList["BENILLA_GARAGE"] = function() BenillaKartGarage_Toggle() end
+            SLASH_BENILLA_KARTFREE1 = "/kartfree"
+            SlashCmdList["BENILLA_KARTFREE"] = function(msg) BenillaKartFreeCam(msg) end
+            SLASH_BENILLA_KARTNEXT1 = "/kartnext"
+            SLASH_BENILLA_KARTCLEAN1 = "/kartclean"
+            SlashCmdList["BENILLA_KARTCLEAN"] = function() BenillaKart_CleanScreen() end
+            SlashCmdList["BENILLA_KARTNEXT"] = function() BenillaKartGarage_Next() end
             -- GMs: the Race Finder's wait for a second racer, in seconds (the server checks).
             SLASH_BENILLA_RACEWAIT1 = "/racewait"
             SlashCmdList["BENILLA_RACEWAIT"] = function(msg)
@@ -2731,6 +2808,7 @@
                 this:RegisterEvent("BENILLA_KART_COURSE_NAMES")
                 this:RegisterEvent("BENILLA_KART_GARAGE")
                 this:RegisterEvent("BENILLA_KART_SEATED")
+                BenillaKart_WatchUIParent()
             </OnLoad>
             <OnEvent>BenillaKartEvents_OnEvent()</OnEvent>
             <OnUpdate>BenillaKartEvents_OnUpdate()</OnUpdate>

@@ -1345,7 +1345,8 @@ fn key_bindings_lists_the_kart_s_controls_and_they_run() {
         names,
         "Accelerate,Brake / Reverse,Steer Left,Steer Right,Hop / Powerslide,\
          Boost (Second Shoulder),Fire Item,Toggle Camera Distance,Look Back,Wumpa Juice,Turbo Boost,Super Engine,Aku Aku,\
-         Summon / Dismiss Kart,Race Finder,Leave Race,Kartcraft Settings,Kart Garage"
+         Summon / Dismiss Kart,Race Finder,Leave Race,Kartcraft Settings,Kart Garage,\
+         Clean Screen (hide all interface),Free Camera (fly, park, off),Next Kart"
     );
     s.run("RunBinding('KARTCRAFT_GARAGE')").unwrap();
     assert!(s
@@ -1956,4 +1957,72 @@ fn the_minimap_menu_toggles_the_race_marshals() {
     pick(&mut s, "Show Race Marshals");
     assert_eq!(s.cvar("KartRaceMarshals").as_deref(), Some("1"));
     assert!(ticked(&mut s));
+}
+
+#[test]
+fn kartfree_steps_the_free_camera_and_kartnext_walks_the_garage() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let cvar = |s: &UiScript, name: &str| -> String {
+        s.eval(&format!("return string.lower(GetCVar('{name}'))"))
+            .unwrap()
+    };
+    // Off, fly, tripod and back to off; a word picks a camera; a wrong word changes nothing.
+    assert_eq!(cvar(&s, "KartFreeCam"), "off");
+    for want in ["fly", "tripod", "off"] {
+        s.run("SlashCmdList['BENILLA_KARTFREE']('')").unwrap();
+        assert_eq!(cvar(&s, "KartFreeCam"), want);
+    }
+    s.run("SlashCmdList['BENILLA_KARTFREE'](' Orbit ')")
+        .unwrap();
+    assert_eq!(cvar(&s, "KartFreeCam"), "orbit");
+    s.run("SlashCmdList['BENILLA_KARTFREE']('sideways')")
+        .unwrap();
+    assert_eq!(cvar(&s, "KartFreeCam"), "orbit");
+    s.run("SlashCmdList['BENILLA_KARTFREE']('')").unwrap();
+    assert_eq!(cvar(&s, "KartFreeCam"), "off");
+
+    // /kartnext walks the garage's racers from the one driven, round to the first.
+    s.fire_event(
+        "BENILLA_KART_GARAGE",
+        vec![
+            ScriptValue::Number(0.0),
+            ScriptValue::Str("turn\tTurning\t0\tEasy".into()),
+            ScriptValue::Str("crash\tCrash\ncortex\tCortex\ntiny\tTiny".into()),
+        ],
+    );
+    s.run("SetCVar('KartRacer', 'cortex')").unwrap();
+    s.run("SlashCmdList['BENILLA_KARTNEXT']('')").unwrap();
+    assert_eq!(cvar(&s, "KartRacer"), "tiny");
+    s.run("SlashCmdList['BENILLA_KARTNEXT']('')").unwrap();
+    assert_eq!(cvar(&s, "KartRacer"), "crash");
+}
+
+#[test]
+fn the_clean_screen_hides_every_interface_and_alt_z_brings_it_all_back() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let s = loaded();
+    let state = |s: &UiScript| -> (bool, String) {
+        (
+            s.eval::<bool>("return UIParent:IsShown() == 1").unwrap(),
+            s.eval::<String>("return GetCVar('KartHideHud')").unwrap(),
+        )
+    };
+    assert_eq!(state(&s), (true, "0".into()));
+    s.run("SlashCmdList['BENILLA_KARTCLEAN']('')").unwrap();
+    assert_eq!(state(&s), (false, "1".into()));
+    // The command again brings both back.
+    s.run("SlashCmdList['BENILLA_KARTCLEAN']('')").unwrap();
+    assert_eq!(state(&s), (true, "0".into()));
+    // Hidden by the binding, shown by WoW's own Alt+Z: the kart's HUD comes back with it.
+    s.run("BenillaKart_CleanScreen()").unwrap();
+    assert_eq!(state(&s), (false, "1".into()));
+    s.run("UIParent:Show()").unwrap();
+    assert_eq!(state(&s), (true, "0".into()));
 }

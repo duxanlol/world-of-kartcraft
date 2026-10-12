@@ -26,4 +26,7 @@
     <Binding name="KARTCRAFT_LEAVERACE">BenillaKart_LeaveRace()</Binding>
     <Binding name="KARTCRAFT_SETTINGS">BenillaKartSettings_Toggle()</Binding>
     <Binding name="KARTCRAFT_GARAGE">BenillaKartGarage_Toggle()</Binding>
+    <Binding name="KARTCRAFT_CLEANSCREEN">BenillaKart_CleanScreen()</Binding>
+    <Binding name="KARTCRAFT_FREECAM">BenillaKartFreeCam("")</Binding>
+    <Binding name="KARTCRAFT_NEXTKART">BenillaKartGarage_Next()</Binding>
 </Bindings>

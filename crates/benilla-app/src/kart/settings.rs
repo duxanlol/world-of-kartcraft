@@ -14,6 +14,10 @@
 //!   are recorded and kept either way.
 //! - `KartTerrain`: the kart drives on CTR's grounds (grass and dirt hold it to 140/256 of its
 //!   top speed, [`super::ground`]); off, as asphalt everywhere. Per player, client-side.
+//! - `KartHideHud`: CTR's HUD and the guide arrow step aside for a clean picture, with the WoW
+//!   interface (the layer's clean screen, `/kartclean`); held for the session only.
+//! - `KartFreeCam`: the free camera for filming the kart (`/kartfree`, [`super::freecam`]):
+//!   `off`, `fly`, `tripod`, `low` or `orbit`; held for the session only.
 //! - `KartGateHeight`: how tall a race checkpoint's sheet of light stands (yards, 0 to 40; 0 leaves
 //!   the beams at its ends alone). How it looks only: the gate passed is as wide as ever.
 //! - `KartRumble`: the controller shakes on crashes, hard landings and wall scrapes
@@ -158,6 +162,8 @@ pub(crate) fn on_cvar(
     ev: On<crate::cvars::CvarChanged>,
     mut hud: ResMut<GuideHud>,
     mut settings: ResMut<KartSettings>,
+    mut free: ResMut<super::freecam::FreeCam>,
+    mut hidden: ResMut<kartcraft::hud::HudHidden>,
 ) {
     match ev.key().as_str() {
         "kartarrowshow" => hud.shown = ev.flag(),
@@ -174,6 +180,11 @@ pub(crate) fn on_cvar(
         "kartghost" => settings.ghost = ev.flag(),
         "kartterrain" => settings.terrain = ev.flag(),
         "kartrumble" => settings.rumble = ev.flag(),
+        "karthidehud" => {
+            hidden.0 = ev.flag();
+            hud.clean = ev.flag();
+        }
+        "kartfreecam" => free.set(super::freecam::FreeMode::named(&ev.new)),
         "kartgateheight" => settings.gate_height = ev.num().clamp(0.0, GATE_HEIGHT_MAX),
         "kartcamwallpull" => settings.camera.wall_pull = ev.flag(),
         "kartcamtravel" => settings.camera.travel = ev.flag(),
@@ -207,6 +218,8 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<GuideHud>()
             .init_resource::<KartSettings>()
+            .init_resource::<super::super::freecam::FreeCam>()
+            .init_resource::<kartcraft::hud::HudHidden>()
             .add_observer(on_cvar);
         app
     }
@@ -327,6 +340,20 @@ mod tests {
         assert!(app.world().resource::<KartSettings>().rumble);
         set(&mut app, "KartRumble", "0");
         assert!(!app.world().resource::<KartSettings>().rumble);
+        use super::super::freecam::{FreeCam, FreeMode};
+        set(&mut app, "KartFreeCam", "orbit");
+        assert_eq!(
+            app.world().resource::<FreeCam>().mode(),
+            FreeMode::Locked(kartcraft::camera::CineMode::Orbit)
+        );
+        set(&mut app, "KartFreeCam", "off");
+        assert_eq!(app.world().resource::<FreeCam>().mode(), FreeMode::Off);
+        set(&mut app, "KartHideHud", "1");
+        assert!(app.world().resource::<kartcraft::hud::HudHidden>().0);
+        assert!(app.world().resource::<GuideHud>().clean);
+        set(&mut app, "KartHideHud", "0");
+        assert!(!app.world().resource::<kartcraft::hud::HudHidden>().0);
+        assert!(!app.world().resource::<GuideHud>().clean);
         set(&mut app, "KartGateHeight", "3.5");
         assert_eq!(app.world().resource::<KartSettings>().gate_height, 3.5);
         set(&mut app, "KartGateHeight", "500");
