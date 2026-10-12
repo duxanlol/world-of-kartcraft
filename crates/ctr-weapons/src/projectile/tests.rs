@@ -486,6 +486,47 @@ fn a_bomb_and_a_missile_that_meet_both_go() {
 }
 
 #[test]
+fn a_tnt_dropped_by_the_target_draws_its_missile_ten_frames() {
+    let world = flat(50000.0);
+    let karts = [kart(1, 0.0, -3000.0), kart(2, 0.0, 6000.0)];
+    let yaw_of = |field: &Field| match field.get(key(1, 1)) {
+        Some(Body::Missile(m)) => (m.core.yaw, m.seeking_tnt()),
+        other => panic!("{other:?}"),
+    };
+    let mut field = Field::new();
+    let missile = Missile::new(1, Vec3::ZERO, 0, false, Some(2));
+    field.launch(key(1, 1), Body::Missile(missile));
+    field.step(&world, &karts);
+    assert_eq!(yaw_of(&field), (0, 0), "straight at its target");
+    // The target drops a TNT off to the right: the missile turns for it, 64 a frame.
+    let tnt = Mine::drop(2, MineKind::Tnt, Vec3::new(5000.0, 0.0, 1000.0), &world);
+    field.launch(key(2, 1), Body::Mine(tnt));
+    field.step(&world, &karts);
+    assert_eq!(yaw_of(&field), (MISSILE_TURN, DECOY_FRAMES - 1));
+    for _ in 0..9 {
+        field.step(&world, &karts);
+    }
+    let (yaw, left) = yaw_of(&field);
+    assert_eq!((yaw, left), (10 * MISSILE_TURN, 0));
+    // Then back after its target.
+    field.step(&world, &karts);
+    assert_eq!(yaw_of(&field).0, 9 * MISSILE_TURN);
+    // A beaker sets the flag but is no TNT: the missile holds its heading and stops seeking.
+    let mut field = Field::new();
+    let missile = Missile::new(1, Vec3::ZERO, 256, false, Some(2));
+    field.launch(key(1, 1), Body::Missile(missile));
+    let beaker = Mine::drop(
+        2,
+        MineKind::Beaker { red: false },
+        Vec3::new(3000.0, 0.0, 2500.0),
+        &world,
+    );
+    field.launch(key(2, 1), Body::Mine(beaker));
+    field.step(&world, &karts);
+    assert_eq!(yaw_of(&field), (256, 0));
+}
+
+#[test]
 fn a_blast_sets_off_mines_in_reach() {
     let world = flat(50000.0);
     let mut field = Field::new();

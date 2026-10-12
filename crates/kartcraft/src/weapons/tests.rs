@@ -441,3 +441,110 @@ fn a_mask_grab_reports_its_wumpa_in_a_race_and_not_outside_one() {
         vec![(ME, Up::Lose(wire::Loss::MaskGrab))]
     );
 }
+
+#[test]
+fn a_rain_cloud_spins_our_item_until_the_servers_new_roll() {
+    let (mut w, world, mut kart) = setup();
+    w.receive(Down::Item {
+        item: Item::Bomb3,
+        shots: 3,
+    });
+    tick(&mut w, &world, &mut kart, usize::from(ROLL_FRAMES) + 2);
+    assert_eq!(w.held(), HeldView::Item(Item::Bomb3));
+    w.receive(Down::Cloud {
+        victim: ME,
+        effect: CloudEffect::ItemRoll,
+        locked: true,
+    });
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(w.held(), HeldView::Spinning);
+    assert!(w.our_look().cloud);
+    assert_eq!(kart.cloud(), Some(CloudEffect::ItemRoll));
+    // Fire does nothing for the cloud's 240 frames, and the roulette waits past them.
+    for _ in 0..CLOUD_FRAMES + 30 {
+        w.press(true, false);
+        tick(&mut w, &world, &mut kart, 1);
+    }
+    assert!(w.outbox.is_empty(), "{:?}", w.outbox);
+    assert_eq!(w.held(), HeldView::Spinning);
+    assert!(!w.our_look().cloud);
+    assert_eq!(kart.cloud(), None);
+    w.receive(Down::Item {
+        item: Item::Turbo,
+        shots: 1,
+    });
+    tick(&mut w, &world, &mut kart, 2);
+    assert_eq!(w.held(), HeldView::Item(Item::Turbo));
+    // A slow cloud on another racer only hangs over its kart.
+    w.receive(Down::Cloud {
+        victim: THEM,
+        effect: CloudEffect::Slow,
+        locked: false,
+    });
+    tick(&mut w, &world, &mut kart, 1);
+    assert!(w.others().any(|(id, _, look)| id == THEM && look.cloud));
+    assert_eq!(kart.cloud(), None);
+}
+
+#[test]
+fn a_masked_kart_ramming_us_is_reported_once() {
+    let (mut w, world, mut kart) = setup();
+    let there = ORIGIN + Vec3::X * 60.0;
+    w.receive(shot(THEM, Item::Mask, 1, there));
+    tick(&mut w, &world, &mut kart, 1);
+    let mut nearby = [crate::NearbyKart {
+        id: THEM,
+        ..Default::default()
+    }];
+    w.arm(&mut nearby);
+    assert!(nearby[0].masked && !nearby[0].shielded && !nearby[0].turbo);
+    let touching = ctr_kart::OtherKart {
+        position: kart.pose().position + Vec3::Z * 60.0,
+        weight: 256,
+        id: THEM,
+        masked: true,
+        ..Default::default()
+    };
+    for _ in 0..5 {
+        kart.events.clear();
+        kart.tick_among(
+            &world,
+            &ctr_kart::Input::default(),
+            &ctr_kart::Modifiers::default(),
+            &[touching],
+        );
+        w.tick(&world, &mut kart, ORIGIN);
+    }
+    assert_eq!(
+        std::mem::take(&mut w.outbox),
+        vec![(
+            ME,
+            Up::Ram {
+                attacker: THEM,
+                ram: Ram::Mask
+            }
+        )]
+    );
+    // The relay sets our Wumpa; a shield ram relayed takes the attacker's shield off its ghost.
+    w.receive(shot(THEM, Item::Shield, 2, there));
+    tick(&mut w, &world, &mut kart, 1);
+    w.arm(&mut nearby);
+    assert!(nearby[0].shielded);
+    w.receive(Down::Ram {
+        victim: ME,
+        attacker: THEM,
+        ram: Ram::Shield,
+        wumpa: 4,
+    });
+    tick(&mut w, &world, &mut kart, 1);
+    w.arm(&mut nearby);
+    assert!(!nearby[0].shielded);
+    // A turbo relayed arms it for the item's 75 frames.
+    w.receive(shot(THEM, Item::Turbo, 3, there));
+    tick(&mut w, &world, &mut kart, 1);
+    w.arm(&mut nearby);
+    assert!(nearby[0].turbo);
+    tick(&mut w, &world, &mut kart, 75);
+    w.arm(&mut nearby);
+    assert!(!nearby[0].turbo);
+}

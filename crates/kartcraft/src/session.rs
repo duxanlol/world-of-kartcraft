@@ -334,6 +334,10 @@ impl Session {
                 position: to_lu(n.position, origin),
                 velocity: n.velocity * to_speed,
                 weight: n.weight,
+                id: n.id,
+                masked: n.masked,
+                shielded: n.shielded,
+                turbo: n.turbo,
             })
             .collect();
         self.owed = (self.owed + dt.min(0.1)).min(0.25);
@@ -437,12 +441,17 @@ impl Session {
 }
 
 /// Another driver's kart near ours, for bumping: its origin (Bevy world, yards), velocity (yd/s)
-/// and CollisionWeight (256 if unknown).
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// and CollisionWeight (256 if unknown); its racer (low guid) and what it rams with
+/// ([`crate::weapons::Weapons::arm`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct NearbyKart {
     pub position: Vec3,
     pub velocity: Vec3,
     pub weight: i32,
+    pub id: u32,
+    pub masked: bool,
+    pub shielded: bool,
+    pub turbo: bool,
 }
 
 #[cfg(test)]

@@ -366,13 +366,16 @@ fn update(
         }
     }
     let dt = time.delta_secs();
+    // What each nearby kart rams with, as the race's weapons know it.
+    let mut nearby = remotes.nearby(drive.pos, BUMP_RANGE);
+    arms.arm(&mut nearby);
     let events = host.session.step_with(
         &collide,
         now,
         dt,
         &kartcraft::kart_input(&controls),
         &mods,
-        &remotes.nearby(drive.pos, BUMP_RANGE),
+        &nearby,
         |world, kart, origin| arms.tick(world, kart, origin),
     );
     arms.blend = host.session.tick_fraction();

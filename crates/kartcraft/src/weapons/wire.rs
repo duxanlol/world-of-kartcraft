@@ -3,7 +3,8 @@
 //! read. Positions are WoW world coordinates in yards (2 decimals), yaws WoW orientations in
 //! radians (3), guids decimal low guids, items CTR's ids.
 
-use ctr_weapons::{HitKind, Item};
+use ctr_kart::Ram;
+use ctr_weapons::{CloudEffect, HitKind, Item};
 
 pub const PREFIX: &str = "KARTCRAFT\tW\t";
 /// A whole line stays under 200 bytes.
@@ -98,6 +99,21 @@ pub enum Down {
     Detonate { shooter: Guid },
     /// The shooter pressed Fire with its shield up: the shield leaves as a shield bomb (`W Z`).
     ShieldShot { shooter: Guid, shot: u16, aim: Aim },
+    /// A red beaker's rain cloud over `victim` starts or starts again (`W R`), 7.68 s from now
+    /// with this effect; `locked`: its held item went into the roulette, to be rolled anew (`I`).
+    Cloud {
+        victim: Guid,
+        effect: CloudEffect,
+        locked: bool,
+    },
+    /// `attacker` rammed `victim` with its mask, shield or turbo (`W B`): the victim's reaction
+    /// shows everywhere, a shield ram spends the attacker's shield.
+    Ram {
+        victim: Guid,
+        attacker: Guid,
+        ram: Ram,
+        wumpa: u8,
+    },
 }
 
 /// Racer → server.
@@ -119,6 +135,28 @@ pub enum Up {
     ShieldShot { shot: u16, aim: Aim },
     /// We lost Wumpa by no one's hit (`W P`): the server takes it and answers with our total.
     Lose(Loss),
+    /// We were rammed by `attacker`'s mask, shield or turbo, and it took (`W B`).
+    Ram { attacker: Guid, ram: Ram },
+}
+
+/// A ram on the wire: `M` mask, `S` shield, `T` turbo.
+pub fn ram_code(ram: Ram) -> char {
+    match ram {
+        Ram::Mask => 'M',
+        Ram::Shield => 'S',
+        Ram::Turbo => 'T',
+    }
+}
+
+fn ram_of(s: &str) -> Option<Ram> {
+    let mut c = s.chars();
+    let ram = match c.next()? {
+        'M' => Ram::Mask,
+        'S' => Ram::Shield,
+        'T' => Ram::Turbo,
+        _ => return None,
+    };
+    c.next().is_none().then_some(ram)
 }
 
 /// Wumpa lost by no one's hit (`RB_Player_ModifyWumpa`'s other callers).
@@ -198,6 +236,7 @@ impl Up {
             Up::Detonate => "D".to_string(),
             Up::ShieldShot { shot, aim } => format!("Z\t{shot}\t{}", place(aim)),
             Up::Lose(loss) => format!("P\t{}", loss.code()),
+            Up::Ram { attacker, ram } => format!("B\t{attacker}\t{}", ram_code(*ram)),
         };
         format!("{PREFIX}{body}")
     }
@@ -222,6 +261,10 @@ impl Up {
                 aim: aim(f[2], "0", "")?,
             },
             "P" if f.len() >= 2 => Up::Lose(Loss::from_code(f[1])?),
+            "B" if f.len() >= 3 => Up::Ram {
+                attacker: f[1].parse().ok()?,
+                ram: ram_of(f[2])?,
+            },
             _ => return None,
         })
     }
@@ -259,6 +302,17 @@ impl Down {
             Down::ShieldShot { shooter, shot, aim } => {
                 format!("Z\t{shooter}\t{shot}\t{}", place(aim))
             }
+            Down::Cloud {
+                victim,
+                effect,
+                locked,
+            } => format!("R\t{victim}\t{}\t{}", effect.id(), u8::from(*locked)),
+            Down::Ram {
+                victim,
+                attacker,
+                ram,
+                wumpa,
+            } => format!("B\t{victim}\t{attacker}\t{}\t{wumpa}", ram_code(*ram)),
         };
         format!("{PREFIX}{body}")
     }
@@ -316,6 +370,17 @@ impl Down {
                 shooter: f[1].parse().ok()?,
                 shot: shot_number(f[2])?,
                 aim: aim(f[3], "0", "")?,
+            },
+            "R" if f.len() >= 4 => Down::Cloud {
+                victim: f[1].parse().ok()?,
+                effect: CloudEffect::from_id(f[2].parse().ok()?)?,
+                locked: f[3] == "1",
+            },
+            "B" if f.len() >= 5 => Down::Ram {
+                victim: f[1].parse().ok()?,
+                attacker: f[2].parse().ok()?,
+                ram: ram_of(f[3])?,
+                wumpa: f[4].parse().ok()?,
             },
             _ => return None,
         })
@@ -449,6 +514,10 @@ mod tests {
                 kind: HitKind::TntOnHead,
             },
             Up::Detonate,
+            Up::Ram {
+                attacker: 4242,
+                ram: Ram::Turbo,
+            },
             Up::ShieldShot {
                 shot: 3,
                 aim: Aim {
@@ -500,6 +569,17 @@ mod tests {
                 wumpa: 4,
             },
             Down::Detonate { shooter: 9 },
+            Down::Cloud {
+                victim: 7,
+                effect: CloudEffect::NoHop,
+                locked: true,
+            },
+            Down::Ram {
+                victim: 7,
+                attacker: 9,
+                ram: Ram::Shield,
+                wumpa: 2,
+            },
             Down::ShieldShot {
                 shooter: 9,
                 shot: 2,
@@ -543,6 +623,28 @@ mod tests {
             "no item 14"
         );
         assert!(Down::parse("KARTCRAFT\tR\tG\t1\t4000").is_none());
+        assert_eq!(
+            Down::parse("KARTCRAFT\tW\tR\t12\t1\t0"),
+            Some(Down::Cloud {
+                victim: 12,
+                effect: CloudEffect::ItemRoll,
+                locked: false
+            })
+        );
+        assert!(
+            Down::parse("KARTCRAFT\tW\tR\t12\t4\t0").is_none(),
+            "no effect 4"
+        );
+        assert_eq!(
+            Down::parse("KARTCRAFT\tW\tB\t12\t30\tM\t7"),
+            Some(Down::Ram {
+                victim: 12,
+                attacker: 30,
+                ram: Ram::Mask,
+                wumpa: 7
+            })
+        );
+        assert!(Up::parse("KARTCRAFT\tW\tB\t30\tX").is_none());
         assert!(
             Up::parse("KARTCRAFT\tW\tS\t0\t1,2,3,4\t0\t").is_none(),
             "shot 0"

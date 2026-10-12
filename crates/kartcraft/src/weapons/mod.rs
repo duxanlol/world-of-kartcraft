@@ -20,7 +20,8 @@ use std::sync::OnceLock;
 
 use benilla_assets::coords::{bevy_to_wow, wow_to_bevy};
 use bevy::prelude::*;
-use ctr_kart::{Collision, Kart};
+use ctr_kart::{CloudEffect, Collision, Kart, Ram};
+use ctr_weapons::cloud::CLOUD_FRAMES;
 use ctr_weapons::held::ROLL_FRAMES;
 use ctr_weapons::projectile::TNT_BLOWUP_RADIUS;
 use ctr_weapons::{
@@ -50,8 +51,11 @@ const CREDIT_FRAMES: u64 = 5;
 const RESULT_WAIT: u64 = 60;
 /// Frames our shield or bomb waits for its relay before the held item lets go of it.
 const RELAY_WAIT: u32 = 60;
-/// The rain cloud's 7680 ms (`231/RB_MaskShieldCloud.c:466-641`).
-const CLOUD_FRAMES: u64 = 240;
+/// A ram by the same kart is reported once in this many frames: karts stay touching a while.
+const RAM_REPEAT: u64 = 30;
+/// The turbo item's reserves, 2400 ms (`VehPickupItem.c`): another kart rams with it this long
+/// after its relay.
+const TURBO_ITEM_FRAMES: u64 = 75;
 /// Effects (explosions, debris) are kept this many frames; the longest, `warpedburst`, plays 30.
 const EFFECT_FRAMES: u64 = 32;
 /// Weapons farther than this (yards) are not heard.
@@ -147,6 +151,8 @@ pub struct Other {
     look: Look,
     /// The last frame it carried a TNT.
     tnt_at: Option<u64>,
+    /// Until when its turbo item burns, frames.
+    turbo_until: u64,
     seen: bool,
 }
 
@@ -219,7 +225,10 @@ pub struct Weapons {
     bomb_wait: Option<u32>,
     effects: Vec<Effect>,
     thrown: Vec<Thrown>,
-    clouds: HashMap<KartId, u64>,
+    /// The rain clouds over karts: until when (frames) and their effect.
+    clouds: HashMap<KartId, (u64, CloudEffect)>,
+    /// When each kart's ram on us was last reported, frames.
+    rammed: HashMap<KartId, u64>,
     ours: Look,
     honked: Option<i32>,
     origin: Option<Vec3>,
@@ -437,6 +446,7 @@ impl Weapons {
                 ghost,
                 look: Look::default(),
                 tnt_at: None,
+                turbo_until: 0,
                 seen: true,
             }
         });
@@ -452,6 +462,27 @@ impl Weapons {
 
     pub fn end_others(&mut self) {
         self.others.retain(|_, o| o.seen);
+    }
+
+    /// What each nearby kart rams ours with (`VehPhysCrash_Attack`): its mask, its shield and its
+    /// turbo item, as their relays put them on its ghost.
+    pub fn arm(&self, nearby: &mut [crate::NearbyKart]) {
+        for n in nearby {
+            let Some(o) = self.others.get(&n.id) else {
+                continue;
+            };
+            n.masked = o.ghost.masked();
+            n.shielded = o.ghost.shield().is_some();
+            n.turbo = o.turbo_until > self.frame;
+        }
+    }
+
+    /// The rain cloud over our kart, if any.
+    pub fn our_cloud(&self) -> Option<CloudEffect> {
+        self.clouds
+            .get(&self.me)
+            .filter(|c| c.0 > self.frame)
+            .map(|c| c.1)
     }
 
     /// This frame's weapon sounds into the kart's audio.
@@ -523,12 +554,24 @@ impl Weapons {
         self.step_field(world, kart, origin);
         self.fly_thrown(world, origin);
         self.credit_wumpa();
-        let cloud = self.clouds.get(&self.me).is_some_and(|&t| t > self.frame);
+        self.our_cloud_tick(kart);
+        let cloud = self.our_cloud().is_some();
         self.ours = Look::of(kart, &self.ours, self.frame, cloud);
         self.effects
             .retain(|e| self.frame.saturating_sub(e.born) < EFFECT_FRAMES);
         let frame = self.frame;
-        self.clouds.retain(|_, until| *until > frame);
+        self.clouds.retain(|_, c| c.0 > frame);
+    }
+
+    /// The cloud's effect on our kart for its next frames (`RB_RainCloud_ThTick`); when it goes,
+    /// a roulette it held waits for the server's roll, as a crate's does.
+    fn our_cloud_tick(&mut self, kart: &mut Kart) {
+        let cloud = self.our_cloud();
+        kart.set_cloud(cloud);
+        if cloud.is_none() && self.held.locked() {
+            self.held.cloud_unlock();
+            self.rolling_for = u64::from(ROLL_FRAMES);
+        }
     }
 
     fn apply(&mut self, down: Down, world: &Collision, kart: &mut Kart, origin: Vec3) {
@@ -572,7 +615,13 @@ impl Weapons {
                 if by == self.me {
                     info!("kart weapons: took crate {index} ({})", kind.code());
                 }
-                if by == self.me && kind == CrateKind::Weapon && self.held.can_take_crate() {
+                // Under an `ITEM_ROLL` cloud a crate gives nothing either (`RB_Crate.c:185-191`).
+                let clouded = self.our_cloud() == Some(CloudEffect::ItemRoll);
+                if by == self.me
+                    && kind == CrateKind::Weapon
+                    && self.held.can_take_crate()
+                    && !clouded
+                {
                     self.held.start_roulette();
                     self.rolling_for = 0;
                 }
@@ -631,6 +680,61 @@ impl Weapons {
                 );
                 self.sound(Sfx::ShieldPop, wow_to_bevy(aim.at));
             }
+            Down::Cloud {
+                victim,
+                effect,
+                locked,
+            } => {
+                info!(
+                    "kart weapons: rain cloud on {victim}, effect {}{}",
+                    effect.id(),
+                    if locked { ", item rolling" } else { "" }
+                );
+                self.clouds
+                    .insert(victim, (self.frame + u64::from(CLOUD_FRAMES), effect));
+                if victim == self.me && locked {
+                    self.held.cloud_lock();
+                    self.rolling_for = 0;
+                }
+            }
+            Down::Ram {
+                victim,
+                attacker,
+                ram,
+                wumpa,
+            } => self.relayed_ram(victim, attacker, ram, wumpa, kart),
+        }
+    }
+
+    /// The server's word on a ram (`W B`): the victim's reaction where its own client did not
+    /// show it, our Wumpa, and a shield spent by ramming.
+    fn relayed_ram(
+        &mut self,
+        victim: KartId,
+        attacker: KartId,
+        ram: Ram,
+        wumpa: u8,
+        kart: &mut Kart,
+    ) {
+        info!(
+            "kart weapons: {victim} rammed by {attacker} ({}), {wumpa} Wumpa left",
+            wire::ram_code(ram)
+        );
+        if victim == self.me {
+            self.wumpa_total = wumpa;
+            self.wumpa = self.wumpa.min(wumpa);
+        } else if let Some(o) = self.others.get_mut(&victim) {
+            if !o.local {
+                o.ghost.hit(ram.kind());
+            }
+        }
+        if ram == Ram::Shield {
+            // Ours went when we touched; this is the server's word if we did not see it.
+            if attacker == self.me {
+                kart.spend_shield();
+            } else if let Some(o) = self.others.get_mut(&attacker) {
+                o.ghost.spend_shield();
+            }
         }
     }
 
@@ -660,6 +764,8 @@ impl Weapons {
             Item::Turbo => {
                 if mine {
                     kart.fire_turbo(j);
+                } else if let Some(o) = self.others.get_mut(&s.shooter) {
+                    o.turbo_until = self.frame + TURBO_ITEM_FRAMES;
                 }
                 None
             }
@@ -687,6 +793,8 @@ impl Weapons {
                 } else if let Some(o) = self.others.get_mut(&s.shooter) {
                     o.ghost.mask(j);
                 }
+                // `ACTION_MASK_WEAPON` blows a rain cloud away (`RB_MaskShieldCloud.c:527-532`).
+                self.clouds.remove(&s.shooter);
                 let sfx = if good_guy(&racer) { Sfx::Aku } else { Sfx::Uka };
                 self.sound(sfx, from);
                 None
@@ -890,6 +998,21 @@ impl Weapons {
                 ctr_kart::Event::MaskGrab if self.live() => {
                     self.outbox.push((self.me, Up::Lose(wire::Loss::MaskGrab)));
                 }
+                ctr_kart::Event::Rammed { by, ram } => {
+                    let last = self.rammed.insert(by, self.frame);
+                    if last.is_none_or(|t| self.frame.saturating_sub(t) >= RAM_REPEAT) {
+                        self.outbox.push((self.me, Up::Ram { attacker: by, ram }));
+                    }
+                }
+                // A demo dummy we rammed takes it here, and reports it as its own client would.
+                ctr_kart::Event::Rammer { other, ram } => {
+                    let me = self.me;
+                    if let Some(o) = self.others.get_mut(&other).filter(|o| o.local) {
+                        if o.ghost.hit(ram.kind()) {
+                            self.outbox.push((other, Up::Ram { attacker: me, ram }));
+                        }
+                    }
+                }
                 ctr_kart::Event::TntThrownOff => {
                     self.serial += 1;
                     self.thrown.push(Thrown {
@@ -927,7 +1050,7 @@ impl Weapons {
             };
             self.sounds.push((sfx, 1.0));
         }
-        if self.held.view() == HeldView::Spinning {
+        if self.held.view() == HeldView::Spinning && !self.held.locked() {
             self.rolling_for += 1;
             // No roll from the server: the crate gave nothing after all.
             if self.rolling_for > u64::from(ROLL_FRAMES) + RESULT_WAIT {
@@ -1080,7 +1203,7 @@ impl Weapons {
                     _ => {}
                 }
             }
-            let cloud = self.clouds.get(&id).is_some_and(|&t| t > frame);
+            let cloud = self.clouds.get(&id).is_some_and(|c| c.0 > frame);
             o.look = Look::of(&o.ghost, &o.look, frame, cloud);
         }
         for at in pops {
@@ -1210,9 +1333,9 @@ impl Weapons {
                     }
                 }
             }
-            Outcome::RainCloud { kart: id } => {
-                self.clouds.insert(id, self.frame + CLOUD_FRAMES);
-            }
+            // The cloud comes with the server's `R`, once the victim's spin-out took
+            // (`RB_GenericMine.c:172-176`).
+            Outcome::RainCloud { .. } => {}
             Outcome::Exploded { at, .. } => self.ended(key, from_lu(at, origin)),
             Outcome::Destroyed { at } => self.ended(key, from_lu(at, origin)),
             Outcome::Expired => {

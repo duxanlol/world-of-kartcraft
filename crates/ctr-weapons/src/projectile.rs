@@ -289,7 +289,14 @@ impl Tracker {
             self.target = None;
             return;
         };
-        self.yaw = turn(self.yaw, yaw_to(k.position - self.pos), rate);
+        self.steer_to(Some(k.position), rate, speed, backward);
+    }
+
+    /// Turn toward `at` (or hold the yaw) and fly along it.
+    fn steer_to(&mut self, at: Option<Vec3>, rate: i32, speed: f32, backward: bool) {
+        if let Some(at) = at {
+            self.yaw = turn(self.yaw, yaw_to(at - self.pos), rate);
+        }
         let v = heading(self.yaw) * if backward { -speed } else { speed };
         self.vel.x = v.x;
         self.vel.z = v.z;
@@ -430,7 +437,15 @@ impl Bomb {
 pub struct Missile {
     core: Tracker,
     juiced: bool,
+    /// `framesSeekTargetTnt`: frames left chasing the target's dropped TNT instead of it.
+    seek_tnt: u8,
+    /// Where that TNT is this frame, if it still is ([`Field::step`] says).
+    decoy: Option<Vec3>,
 }
+
+/// `framesSeekTargetTnt = 10`: a mine dropped by the target distracts a missile ten frames
+/// (`RB_MovingExplosive.c:73-82`).
+pub const DECOY_FRAMES: u8 = 10;
 
 impl Missile {
     /// A missile from `pos` facing `yaw`, homing on `target`; none flies straight
@@ -444,7 +459,14 @@ impl Missile {
         Self {
             core: Tracker::new(owner, pos, yaw, speed, target),
             juiced,
+            seek_tnt: 0,
+            decoy: None,
         }
+    }
+
+    /// Frames left chasing a decoy TNT.
+    pub fn seeking_tnt(&self) -> u8 {
+        self.seek_tnt
     }
 
     pub fn owner(&self) -> KartId {
@@ -488,7 +510,18 @@ impl Missile {
         } else {
             (MISSILE_TURN, MISSILE_SPEED)
         };
-        self.core.steer(karts, rate, speed, false);
+        let decoy = self.decoy.take();
+        if self.seek_tnt != 0 && self.core.target.is_some() {
+            // `RB_MovingExplosive.c:97-117`: aim at the target's thrown TNT; with none left, hold
+            // the heading and stop seeking.
+            self.seek_tnt -= 1;
+            if decoy.is_none() {
+                self.seek_tnt = 0;
+            }
+            self.core.steer_to(decoy, rate, speed, false);
+        } else {
+            self.core.steer(karts, rate, speed, false);
+        }
         if !self.core.advance(world, MISSILE_GRAVITY) || self.core.contact(karts) {
             return self.explode(karts);
         }
@@ -847,6 +880,10 @@ pub struct ShotKey {
 #[derive(Clone, Debug, Default)]
 pub struct Field {
     live: Vec<(ShotKey, Body)>,
+    /// Who dropped a mine since the last step (`ACTION_DROPPING_MINE`, read the next frame).
+    dropping: Vec<KartId>,
+    /// Each kart's last TNT or Nitro dropped (`driver->instTntSend`, `VehPickupItem.c:1280`).
+    tnt_sent: Vec<(KartId, ShotKey)>,
 }
 
 impl Field {
@@ -867,7 +904,15 @@ impl Field {
         {
             return false;
         }
-        if matches!(body, Body::Mine(_)) {
+        if let Body::Mine(m) = &body {
+            // A TNT or Nitro is the driver's `instTntSend`; a beaker only sets the flag
+            // (`VehPickupItem.c:1280-1281`, `:1476`).
+            let owner = m.owner();
+            self.dropping.push(owner);
+            if !matches!(m.kind(), MineKind::Beaker { .. }) {
+                self.tnt_sent.retain(|(o, _)| *o != owner);
+                self.tnt_sent.push((owner, key));
+            }
             let pooled = |b: &Body| matches!(b, Body::Mine(m) if !m.evicted && !m.done);
             if self.live.iter().filter(|(_, b)| pooled(b)).count() >= MINE_POOL {
                 if let Some((_, Body::Mine(oldest))) = self.live.iter_mut().find(|(_, b)| pooled(b))
@@ -915,12 +960,32 @@ impl Field {
         self.live.is_empty()
     }
 
+    /// Where `owner`'s last TNT or Nitro is, if it is still down.
+    fn tnt_of(&self, owner: KartId) -> Option<Vec3> {
+        let (_, key) = self.tnt_sent.iter().find(|(o, _)| *o == owner)?;
+        self.get(*key).filter(|b| !b.done()).map(|b| b.position())
+    }
+
     /// One frame of every weapon, in launch order.
     pub fn step(&mut self, world: &Collision, karts: &[KartView]) -> Vec<(ShotKey, Outcome)> {
         let mut out = Vec::new();
+        let dropped = std::mem::take(&mut self.dropping);
         for i in 0..self.live.len() {
             if self.live[i].1.done() {
                 continue;
+            }
+            // A missile whose target dropped a mine last frame chases that driver's TNT ten
+            // frames (`RB_MovingExplosive.c:73-117`).
+            if let Body::Missile(m) = &self.live[i].1 {
+                if let Some(target) = m.core.target {
+                    let decoy = self.tnt_of(target);
+                    if let Body::Missile(m) = &mut self.live[i].1 {
+                        if dropped.contains(&target) {
+                            m.seek_tnt = DECOY_FRAMES;
+                        }
+                        m.decoy = decoy;
+                    }
+                }
             }
             let key = self.live[i].0;
             let mut own = self.live[i].1.step(world, karts);
@@ -957,6 +1022,9 @@ impl Field {
             }
         }
         self.live.retain(|(_, b)| !b.done());
+        let live = &self.live;
+        self.tnt_sent
+            .retain(|(_, key)| live.iter().any(|(k, _)| k == key));
         out
     }
 

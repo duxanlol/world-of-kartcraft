@@ -113,6 +113,18 @@ pub enum Event {
     /// Revving on the grid, the engine held at its target too long: locked out of the start
     /// boost (OtherFX 0xF, `VehStuckProc.c:1093-1099`).
     OverRev,
+    /// Another kart (the caller's `OtherKart::id`) rammed us with its mask, shield or turbo, and
+    /// the hit went through (`Kart::hit`); a mask, shield or invincibility of ours kept it off.
+    Rammed {
+        by: u32,
+        ram: Ram,
+    },
+    /// We rammed another kart: its own side (the blast or squish) is its owner's to apply; ours,
+    /// a spent shield or the high jump, is done.
+    Rammer {
+        other: u32,
+        ram: Ram,
+    },
 }
 
 /// What hit the kart: `VehPickState_NewState`'s damage types 1 to 3, and a TNT crate touched
@@ -127,6 +139,67 @@ pub enum HitKind {
     Squished,
     /// A TNT crate driven into: thrown onto the head, where it counts down.
     TntOnHead,
+}
+
+/// What a kart rams another with (`VehPhysCrash_Attack`, `VehPhysCrash.c:199-252`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Ram {
+    /// Under the mask (`ACTION_MASK_WEAPON`): the other kart is blasted.
+    Mask,
+    /// The shield (`instBubbleHold`) meets a kart without one: it is blasted, the shield spent.
+    Shield,
+    /// Under the turbo item (`ACTION_TURBO_ITEM`, reserves left) at an impact over 0xA00 into a
+    /// kart with no reserves: it is squished, the rammer high-jumps.
+    Turbo,
+}
+
+impl Ram {
+    /// Damage type 2 for the mask and shield, 3 for the turbo.
+    pub fn kind(self) -> HitKind {
+        match self {
+            Ram::Mask | Ram::Shield => HitKind::Blasted,
+            Ram::Turbo => HitKind::Squished,
+        }
+    }
+}
+
+/// `VEH_PHYS_CRASH_TURBO_DAMAGE_IMPACT`: a turbo ram squishes above this impact (speed units).
+pub const RAM_TURBO_IMPACT: f32 = 0xA00 as f32;
+
+/// The red beaker's rain cloud over the kart (`RainCloudEffect`, `namespace_Vehicle.h:629-632`):
+/// the four effects a cloud can carry, `(MixRNG % 400) / 100` on a second beaker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CloudEffect {
+    /// Top speed less `DamagedSpeed` (`VehPhysGeneral.c:2093`).
+    Slow,
+    /// The held item spins in the roulette until the cloud goes (`RB_MaskShieldCloud.c:543-561`).
+    ItemRoll,
+    /// The ground under the kart is ice (`COLL.c:1476`).
+    Ice,
+    /// The shoulders do not hop (`VehPhysProc.c:921-929`).
+    NoHop,
+}
+
+impl CloudEffect {
+    /// CTR's numbering, 0 to 3.
+    pub fn id(self) -> u8 {
+        match self {
+            CloudEffect::Slow => 0,
+            CloudEffect::ItemRoll => 1,
+            CloudEffect::Ice => 2,
+            CloudEffect::NoHop => 3,
+        }
+    }
+
+    pub fn from_id(id: u8) -> Option<Self> {
+        Some(match id {
+            0 => CloudEffect::Slow,
+            1 => CloudEffect::ItemRoll,
+            2 => CloudEffect::Ice,
+            3 => CloudEffect::NoHop,
+            _ => return None,
+        })
+    }
 }
 
 /// The power shield around the kart.
@@ -389,7 +462,7 @@ fn stick_strength(distance: i32, max: i32) -> i32 {
 }
 
 /// Another kart this one can bump into.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct OtherKart {
     /// Its origin, lu, in this kart's space.
     pub position: Vec3,
@@ -397,6 +470,12 @@ pub struct OtherKart {
     pub velocity: Vec3,
     /// Its class's CollisionWeight.
     pub weight: i32,
+    /// The caller's name for it, carried in the ram events.
+    pub id: u32,
+    /// What it wears for a ram: its mask, its shield, the turbo item burning.
+    pub masked: bool,
+    pub shielded: bool,
+    pub turbo: bool,
 }
 
 /// What the chase camera reads from a kart (`docs/ctr-camera-spec.md` section 6).
@@ -536,6 +615,12 @@ pub struct Kart {
     mask: Option<Mask>,
     shield: Option<ShieldState>,
     tnt: Option<Tnt>,
+    /// The rain cloud's effect while one hangs over us (`driver->rainCloudEffect`).
+    cloud: Option<CloudEffect>,
+    /// `ACTION_TURBO_ITEM`: the reserves burning came from the turbo item.
+    turbo_item: bool,
+    /// `forcedJumpType = FORCED_JUMP_HIGH`, from a turbo ram, for this frame's jump.
+    high_jump: bool,
     /// `MixRNG_Scramble`'s 16-bit state, for the TNT's hop count and the tumble's direction.
     rng: u16,
     /// `EngineSound_Player`'s smoothed pitch and volume states and the drift's rising whine.
@@ -644,6 +729,9 @@ impl Kart {
             mask: None,
             shield: None,
             tnt: None,
+            cloud: None,
+            turbo_item: false,
+            high_jump: false,
             rng: 0,
             engine_pitch: 0,
             engine_volume: 0,
@@ -794,7 +882,12 @@ impl Kart {
     /// spheres push apart by the overlap, and both velocities bounce off the weighted mean
     /// (`VehPhysCrash_BounceSelf`, which takes 4/3 of the closing speed: a third bounces back).
     /// Only this kart's velocity is ours to change; the other's owner bumps it on their side.
+    /// Then `VehPhysCrash_Attack` both ways (`VehPhysCrash.c:575-576`): see [`Kart::ram`].
     fn collide_karts(&mut self, others: &[OtherKart]) {
+        // `VehTurbo_ThDestroy` clears `ACTION_TURBO_ITEM` with the flame, when reserves run out.
+        if self.reserves == 0 {
+            self.turbo_item = false;
+        }
         let weight = self.stats.collision_weight as f32;
         for other in others {
             let d = self.pos - other.position;
@@ -811,6 +904,9 @@ impl Kart {
             let w = other.weight as f32;
             let mean = (self.vel * weight + other.velocity * w) / (weight + w);
             let closing = (self.vel - mean).dot(dir);
+            // `vehicleCollisionImpactStrength`: the larger closing speed `VehPhysCrash_BounceSelf`
+            // sees, the other's toward us or ours toward it.
+            let impact = (other.velocity - mean).dot(dir).max(-closing).max(0.0);
             if closing < 0.0 {
                 let rel = self.vel - mean - dir * (closing * 4.0 / 3.0);
                 self.vel = rel + mean;
@@ -820,7 +916,80 @@ impl Kart {
             self.events.push(Event::Bump {
                 strength: (-closing).max(0.0) as i32,
             });
+            self.ram(other, impact);
         }
+    }
+
+    /// `VehPhysCrash_Attack(us, other)` then `(other, us)` (`VehPhysCrash.c:199-252`). Against
+    /// us: unless masked, its mask blasts us, its shield (with none of ours) blasts us, and its
+    /// turbo item over [`RAM_TURBO_IMPACT`] into a kart with no reserves squishes us; the last
+    /// one set wins. From us: our shield is spent on a kart without one, and our turbo ram makes
+    /// us high-jump. The other kart's own side is its owner's: ours only reports it. Its reserves
+    /// are not relayed: a kart not under the turbo item counts as having none.
+    fn ram(&mut self, other: &OtherKart, impact: f32) {
+        let ours_masked = self.masked();
+        let ours_shielded = self.shield.is_some();
+        let ours_turbo = self.turbo_item && self.reserves != 0;
+        if !ours_masked {
+            let mut against = None;
+            if other.masked {
+                against = Some(Ram::Mask);
+            }
+            if other.shielded && !ours_shielded {
+                against = Some(Ram::Shield);
+            }
+            if impact > RAM_TURBO_IMPACT && other.turbo && self.reserves == 0 {
+                against = Some(Ram::Turbo);
+            }
+            if let Some(ram) = against {
+                if self.hit(ram.kind()) {
+                    self.events.push(Event::Rammed { by: other.id, ram });
+                }
+            }
+        }
+        if !other.masked {
+            let mut from = None;
+            if ours_masked {
+                from = Some(Ram::Mask);
+            }
+            if ours_shielded && !other.shielded {
+                // `SHIELD_FLAG_CRASH_ATTACK`: the shield pops (`RB_MaskShieldCloud.c:393-408`),
+                // unless the other's ram already took it.
+                if self.shield.take().is_some() {
+                    self.events.push(Event::ShieldPopped);
+                }
+                from = Some(Ram::Shield);
+            }
+            if impact > RAM_TURBO_IMPACT && ours_turbo && !other.turbo {
+                self.high_jump = true;
+                from = Some(Ram::Turbo);
+            }
+            if let Some(ram) = from {
+                self.events.push(Event::Rammer {
+                    other: other.id,
+                    ram,
+                });
+            }
+        }
+    }
+
+    /// Another kart's shield spent ramming (`SHIELD_FLAG_CRASH_ATTACK`): it pops, with no
+    /// invincibility after. False with no shield up.
+    pub fn spend_shield(&mut self) -> bool {
+        if self.shield.take().is_none() {
+            return false;
+        }
+        self.events.push(Event::ShieldPopped);
+        true
+    }
+
+    /// The rain cloud over us, or none: the caller times it (`RB_RainCloud_ThTick`).
+    pub fn set_cloud(&mut self, cloud: Option<CloudEffect>) {
+        self.cloud = cloud;
+    }
+
+    pub fn cloud(&self) -> Option<CloudEffect> {
+        self.cloud
     }
 
     /// `EngineSound_Player` (`HOWL_Engine.c`), the player's steady-state branch: the pitch chases
@@ -1222,6 +1391,8 @@ impl Kart {
     pub fn fire_turbo(&mut self, juiced: bool) {
         let fire = if juiced { 256 } else { 128 };
         if self.fire_increment(TURBO_ITEM_RESERVES, FireKind::Freeze, fire) {
+            // `VehFire.c:335-339`: `ACTION_TURBO_ITEM`, for a turbo ram.
+            self.turbo_item = true;
             self.events.push(Event::Turbo);
         }
     }
@@ -1627,12 +1798,16 @@ impl Kart {
         }
         self.flags &= CARRY;
 
-        // The jump button (5.1): a tap buffers a hop and names the drift's button.
+        // The jump button (5.1): a tap buffers a hop and names the drift's button. A cloud's
+        // jump lockout takes the hop and the held button (`VehPhysProc.c:921-929`).
+        let hop = self.cloud != Some(CloudEffect::NoHop);
         if (tapped_r1 || tapped_l1) && self.state != State::Drifting {
             self.drift_button = if tapped_r1 { Button::R1 } else { Button::L1 };
-            self.jump_buffer = JUMP_BUFFER_FRAMES;
+            if hop {
+                self.jump_buffer = JUMP_BUFFER_FRAMES;
+            }
         }
-        if input.r1 || input.l1 {
+        if (input.r1 || input.l1) && hop {
             self.flags |= JUMP_BUTTON_HELD;
         }
 
@@ -1723,7 +1898,7 @@ impl Kart {
         if self.tnt.is_some() {
             subtract = DAMAGED_SPEED >> 1;
         }
-        if self.squish != 0 {
+        if self.squish != 0 || self.cloud == Some(CloudEffect::Slow) {
             subtract = DAMAGED_SPEED;
         }
         if self.clock != 0 {
@@ -2159,7 +2334,12 @@ impl Kart {
         }
         if grounded {
             self.flags |= TOUCH_GROUND;
-            self.terrain = Terrain::ASPHALT;
+            // `COLL.c:1476`: a cloud's ice effect makes any ground ice.
+            self.terrain = if self.cloud == Some(CloudEffect::Ice) {
+                Terrain::ICE
+            } else {
+                Terrain::ASPHALT
+            };
             if !was {
                 self.flags |= STARTED_TOUCH_GROUND;
                 self.grip_timer = LANDING_GRIP_MS;
@@ -2220,6 +2400,11 @@ impl Kart {
         }
         let lockout = self.blasted || matches!(self.state, State::Crashing(_) | State::Spinning(_));
         if self.grounded() && self.jump_forced != 0 {
+            self.process_jump(&mut mv);
+        } else if std::mem::take(&mut self.high_jump) {
+            // `FORCED_JUMP_HIGH` (`VehPhysGeneral.c:1395-1409`): three times the jump force.
+            self.jump_forced = JUMP_FORCED_MS;
+            self.jump_vel = 3 * JUMP_FORCE;
             self.process_jump(&mut mv);
         } else if !lockout && self.coyote != 0 && self.jump_buffer != 0 && self.jump_cooldown == 0 {
             self.jump_forced = JUMP_FORCED_MS;

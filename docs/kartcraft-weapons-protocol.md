@@ -115,6 +115,47 @@ a hit's spin-out is paid with the hit), `M` Aku Aku put the kart back after a fa
 grab, 2 Wumpa, `VehStuckProc.c:648-651`). The server takes it (none while masked) and answers
 the sender alone with `W\tF\t<wumpa total>`. Sent only inside a race, as CTR takes it only there.
 
+### Server → racers: a rain cloud
+
+A spin-out (`S`) reported against a juiced beaker shot (a red beaker) puts CTR's rain cloud on
+the victim (`RB_RainCloud_Init`, `231/RB_MaskShieldCloud.c:568-641`). After the `H` relay every
+racer gets `W\tR\t<victim guid>\t<effect>\t<locked 0|1>`. The cloud lasts 7680 ms from that line.
+Effects are CTR's: `0` slow (top speed less `DamagedSpeed`), `1` item roll, `2` ice (any ground is
+ice), `3` no hop.
+
+- A first cloud is `1` if the victim holds an item with a shot left, else `0`. Under a live cloud,
+  another red beaker restarts the time and draws the effect anew: `(MixRNG % 400) / 100`.
+- `locked 1`: the victim's held item is gone into the roulette. The victim's client shows it
+  spinning, and Fire does not stop it. The server takes no shots from the victim. A weapon crate
+  gives a racer under a `1` cloud nothing, locked or not (`RB_Crate.c:185-191`).
+- When the cloud goes, a locked roulette is rolled anew as a crate's would be, and the victim gets
+  `W\tI\t<item>\t<shots>`. Its shots are accepted at once. A redraw that leaves `1` rolls it at
+  once, too: CTR's roll timer, no longer held at 5 frames, runs out.
+- The victim's own mask (an `S` of item 7) blows the cloud away, with no roll.
+
+### Client → server: I was rammed
+
+`W\tB\t<attacker guid>\t<how>`, where `how` is `M` mask, `S` shield or `T` turbo
+(`VehPhysCrash_Attack`, `Vehicle/VehPhysCrash.c:199-252`). The victim's client decides it as it
+decides a weapon hit, from the karts touching and what the other kart wears there: a mask or a
+shield blasts, and a turbo item burning, at a closing speed over 0xA00, squishes a kart with no
+reserves. It sends the line only when the hit took (no mask, shield or invincibility of its own),
+at most once a second per attacker.
+
+The server accepts it when the attacker is another racer of the race, within 20 yd of the victim
+(both server positions trail their karts), and is armed:
+- `M`: its mask is up (as for the Wumpa rule below).
+- `S`: it has a relayed Shield up (as for `Z`). The ram spends it: a later `Z` is refused.
+- `T`: it fired a Turbo in the last 3 s (CTR's 2400 ms of reserves, and slack).
+
+It takes Wumpa as for the hit (`M` and `S` −3 as a blast, `T` −1 as a squish, none while the victim
+is masked) and relays to every racer:
+`W\tB\t<victim guid>\t<attacker guid>\t<how>\t<wumpa left of victim>`.
+
+Every client shows the reaction on the victim's kart. A shield ram takes the attacker's shield off.
+The attacker's own side is its own client's, from the same touch: its shield pops, and a turbo ram
+makes it high-jump (`FORCED_JUMP_HIGH`, three times the hop's force).
+
 ### Limits
 
 At most 20 `W` lines a second from one sender; the rest are dropped. At most 12 live shots per
@@ -144,7 +185,11 @@ Notes on `setup/vmangos/src/Kartcraft.cpp`'s `W` handling, where this page leave
   uniformly over ids 0–11 (Spring becomes Turbo). The lap-1 downgrade uses the racer's lap, so on
   a sprint (no laps) Race4 is always downgraded to Race3.
 - **Respawns** are applied on the next Kartcraft line from anyone (karts send state ten times a
-  second), so a `U` may come up to about 100 ms after the 1000 ms.
+  second), so a `U` may come up to about 100 ms after the 1000 ms. A rain cloud's end, and the
+  `I` of the roulette it held, come the same way.
+- **A red beaker** is a Beaker shot relayed juiced. Only an `S` hit naming it brings the cloud.
+- **A turbo ram** counts from the attacker's last relayed Turbo. The server does not know a
+  kart's reserves, so a drift boost does not count, and braking out of the turbo is not seen.
 
 ## How the client reads this
 
@@ -185,7 +230,18 @@ server's rules in-process, so it runs the same code.
   included. With our shield up, Fire sends `Z` from our kart and takes the shield off it at once;
   the shield bomb launches on the relay, and another's shield leaves their ghost then.
 
-Not on this wire: a TNT thrown off by hopping (it goes off where it lands,
-without damage), the rain cloud's effects beyond its look, and weapons breaking crates.
+- **Rain clouds.** `R` hangs the cloud over the victim's kart for 240 frames. Over ours it is
+  `ctr-kart`'s cloud effect (slow, ice or no hop); `locked` puts our item into the roulette
+  (`Held::cloud_lock`) until the `I`. A roulette still locked when our cloud goes waits 60 frames
+  more for the `I`, as a crate's does. A field's red-beaker outcome brings no cloud by itself.
+- **Rams.** Each nearby kart is bumped with what its ghost wears: its mask and shield, and the turbo
+  item for 75 frames after its relayed Turbo (`Weapons::arm`). `ctr-kart` decides the ram both
+  ways in its kart collision. A ram on us that took is sent as `B`. Our side, a spent shield or the
+  high jump, is applied at once. A demo dummy we ram is blasted or squished here and reports it.
+  `B` relayed shows the victim's reaction on its ghost, and a shield ram takes the attacker's
+  shield, ours included, if it is still up.
+
+Not on this wire: a TNT thrown off by hopping (it goes off where it lands, without damage), and
+weapons breaking crates.
 Weapons are stepped only inside our session's collision, 120 yd round our kart: a shot farther
 out finds no ground and goes off.

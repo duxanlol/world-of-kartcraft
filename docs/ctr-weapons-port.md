@@ -23,7 +23,13 @@ constant in the code cites its line in the decompilation.
   the server (`set_result`) and shows on the frame after the timer reaches 0. Each ×3 shot sets a
   5-frame gap. After the last shot, the item stays shown for 5 frames (×3) or 30 frames (single)
   and then disappears. While a bomb is out, Fire detonates it; while a shield is up, Fire launches
-  it. Call `tick()` first and then `fire()` in the same frame, which is CTR's order.
+  it. Call `tick()` first and then `fire()` in the same frame, which is CTR's order. A rain cloud's
+  `cloud_lock` holds the roulette 5 frames from its end, past any Fire, until the next result.
+- **`cloud`**: `RainCloud::rain`, the red beaker's cloud as the server rules it
+  (`RB_RainCloud_Init` and `_ThTick`). A first cloud is item roll over a held item, else slow; a
+  second beaker draws `(MixRNG % 400) / 100`. It says when a locked roulette is rolled anew and when
+  crates give nothing. The effects on the kart (slow, ice, no hop) are `ctr-kart`'s
+  `CloudEffect`.
 - **`projectile`**: `Bomb` (also the shield bomb), `Missile`, `WarpOrb` and `Mine` (TNT, Nitro,
   beaker). Each has `step(world, karts) -> Vec<Outcome>`. `Field` holds a race's live weapons and
   enforces the caps: 12 bombs and missiles, and a pool of 10 mines in which the oldest mine goes
@@ -38,6 +44,8 @@ constant in the code cites its line in the decompilation.
   radius is 320 lu, or 512 juiced, and never hurts the owner.
 - Missile speeds are 80 or 96 lu/frame, and missiles turn 64 or 128 units per frame. They have no
   lifetime. A missile whose target leaves keeps flying straight. Its blast radius is 128 lu.
+  When its target drops a mine, it chases that driver's last TNT or Nitro for 10 frames
+  (`framesSeekTargetTnt`), and holds its heading if there is none, as after a beaker.
 - Contact tests follow `RB_Hazard_CollideWithDrivers`: a cylinder of XZ < r and |dy| < 2r for
   bombs, missiles and orbs, and a sphere for mines. The radii are 96, 192, 120 and 80 lu. The
   owner is spared for 60 frames (bomb, missile) or 10 (orb, shield bomb, mine).
@@ -49,7 +57,7 @@ constant in the code cites its line in the decompilation.
     (320 lu, owner included).
   - With a mask or shield, the TNT only blows up.
   - Nitro blasts you and blows up with a 128 lu radius to players.
-  - A beaker spins you out; a red one also adds the rain cloud.
+  - A beaker spins you out; a red one also adds the rain cloud, once the spin took.
 - An `Outcome::Hit` is a damage attempt. The victim's own kart applies the mask, shield and
   invincibility checks, as `VehPickState_NewState` does.
 
@@ -79,11 +87,12 @@ constant in the code cites its line in the decompilation.
   only to float precision. Velocities are lu per frame without the `ms >> 5` scaling, because a
   frame is always 32 ms.
 - **Not modelled:**
-  - the missile's 10-frame TNT decoy (`framesSeekTargetTnt`);
   - beaker throwing (Up held);
-  - weapons breaking crates;
+  - weapons breaking crates: crates are the server's, and a claim must come from a kart near
+    the crate;
   - bot weapon AI;
-  - Clock, Turbo, Mask and Shield effects on karts (`ctr-kart`'s job).
+  - Clock, Turbo, Mask, Shield and rain-cloud effects on karts, and rams with them
+    (`VehPhysCrash_Attack`): `ctr-kart`'s job.
 - **Battle-only items** (Invisibility, Super Engine) have ids and the BattleDefault table, but
   there are no battle rules.
 
