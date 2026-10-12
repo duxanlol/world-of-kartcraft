@@ -2,7 +2,7 @@
 //! `kart.json` (a racer's kart without its driver, its wheels and textures, ready to draw) and
 //! the kart sound effects as WAV, its visual effects (`effects.json`), the 1P race HUD
 //! (`hud.json`), its weapons, crates and Wumpa fruit (`weapons.json`) and the race music
-//! (rendered from the CSEQ sequences).
+//! (rendered from the CSEQ sequences), and the characters' voices (CD-XA and HOWL lines).
 //! No game data is part of this crate; everything is read from the disc at setup time.
 //!
 //! Format knowledge (the file layouts, re-implemented here in Rust) comes from:
@@ -27,6 +27,7 @@ pub mod hud_draw;
 pub mod kart;
 pub mod mpk;
 pub mod music;
+pub mod voice;
 pub mod vram;
 pub mod weapons;
 

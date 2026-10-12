@@ -301,6 +301,11 @@ pub struct SoundSpec {
 /// Engine class of Crash (BALANCED = 0), player slot 0 (`EngineSound_Player`:
 /// `EngineAudio_Recalculate(engine * 4 + driverID, ...)`).
 pub const ENGINE_BALANCED_P1: usize = 0;
+/// The other engine classes' samples for player slot 0: `enum EngineClass` (BALANCED, ACCEL,
+/// SPEED, TURN) times 4 (`HOWL_Engine.c:323`).
+pub const ENGINE_ACCEL_P1: usize = 4;
+pub const ENGINE_SPEED_P1: usize = 8;
+pub const ENGINE_TURN_P1: usize = 12;
 
 /// A weapon/pickup OtherFX row: played at full event volume with no distortion.
 const fn weapon(file: &'static str, id: usize, loop_: bool, reference: &'static str) -> SoundSpec {
@@ -326,7 +331,7 @@ const fn terrain(file: &'static str, id: usize, reference: &'static str) -> Soun
     }
 }
 
-pub const SOUNDS: [SoundSpec; 49] = [
+pub const SOUNDS: [SoundSpec; 56] = [
     SoundSpec {
         file: "engine.wav",
         source: Source::Engine(ENGINE_BALANCED_P1),
@@ -425,6 +430,62 @@ pub const SOUNDS: [SoundSpec; 49] = [
         distort: 0x80,
         volume: 0xFF,
         reference: "COLL.c wall scrub impact: OtherFX_Play_LowLevel(6, 1, volume max) (+ voice line 6, rumble)",
+    },
+    SoundSpec {
+        file: "wall_rub.wav",
+        source: Source::Other(0x14),
+        loop_: true,
+        distort: 0x80,
+        volume: 0xFF,
+        reference: "VehEmitter.c:1356-1405 VEH_EMITTER_WALL_RUB_SFX = 0x14: OtherFX_RecycleNew every frame while scraping a wall, its volume (engineVol) +0x14 a frame scraping, -0x14 a frame after, to 0xFF",
+    },
+    SoundSpec {
+        file: "bump_soft.wav",
+        source: Source::Other(0xB),
+        loop_: false,
+        distort: 0x80,
+        volume: 0xFF,
+        reference: "HOWL_OtherFXRecycle.c:44-63 OtherFX_DriverCrashing: kart-on-kart crash at volume <= 0xA0 plays 0xB",
+    },
+    SoundSpec {
+        file: "bump_mid.wav",
+        source: Source::Other(0xC),
+        loop_: false,
+        distort: 0x80,
+        volume: 0xFF,
+        reference: "HOWL_OtherFXRecycle.c:44-63 OtherFX_DriverCrashing: volume 0xA1..0xDC plays 0xC",
+    },
+    SoundSpec {
+        file: "bump_hard.wav",
+        source: Source::Other(0xA),
+        loop_: false,
+        distort: 0x80,
+        volume: 0xFF,
+        reference: "HOWL_OtherFXRecycle.c:44-63 OtherFX_DriverCrashing: volume >= 0xDD plays 0xA",
+    },
+    SoundSpec {
+        file: "engine_accel.wav",
+        source: Source::Engine(ENGINE_ACCEL_P1),
+        loop_: true,
+        distort: 0x80,
+        volume: 0xFF,
+        reference: "HOWL_Engine.c:323 EngineSound_Player: EngineFX[engineID*4 + driverID], engineID ACCEL = 1 (namespace_Vehicle.h enum EngineClass)",
+    },
+    SoundSpec {
+        file: "engine_speed.wav",
+        source: Source::Engine(ENGINE_SPEED_P1),
+        loop_: true,
+        distort: 0x80,
+        volume: 0xFF,
+        reference: "HOWL_Engine.c:323 EngineSound_Player: engineID SPEED = 2",
+    },
+    SoundSpec {
+        file: "engine_turn.wav",
+        source: Source::Engine(ENGINE_TURN_P1),
+        loop_: true,
+        distort: 0x80,
+        volume: 0xFF,
+        reference: "HOWL_Engine.c:323 EngineSound_Player: engineID TURN = 3",
     },
     // Crates, Wumpa and the item roulette.
     weapon("roulette.wav", 0x5D, true, "RB_Crate.c:202 OtherFX_Play(0x5d, 0) when a weapon crate starts the roll; stopped by OtherFX_Stop2(0x5d) (UI_RenderFrame.c:875)"),
@@ -729,6 +790,41 @@ mod tests {
         files.sort_unstable();
         files.dedup();
         assert_eq!(files.len(), SOUNDS.len(), "a file is written twice");
+    }
+
+    #[test]
+    fn the_catalogue_names_the_feedback_sounds_and_every_engine_class() {
+        let row = |f: &str| {
+            SOUNDS
+                .iter()
+                .find(|s| s.file == f)
+                .unwrap_or_else(|| panic!("{f}"))
+        };
+        let other = |f: &str| match row(f).source {
+            Source::Other(i) => i,
+            Source::Engine(_) => panic!("{f} is an engine"),
+        };
+        // VehEmitter.c:103, HOWL_OtherFXRecycle.c:44-63.
+        assert_eq!(other("wall_rub.wav"), 0x14);
+        assert!(row("wall_rub.wav").loop_);
+        assert_eq!(
+            [
+                other("bump_soft.wav"),
+                other("bump_mid.wav"),
+                other("bump_hard.wav")
+            ],
+            [0xB, 0xC, 0xA]
+        );
+        // EngineFX[class * 4 + slot 0], BALANCED, ACCEL, SPEED, TURN.
+        for (f, id) in [
+            ("engine.wav", 0),
+            ("engine_accel.wav", 4),
+            ("engine_speed.wav", 8),
+            ("engine_turn.wav", 12),
+        ] {
+            assert!(matches!(row(f).source, Source::Engine(i) if i == id), "{f}");
+            assert!(row(f).loop_);
+        }
     }
 
     #[test]

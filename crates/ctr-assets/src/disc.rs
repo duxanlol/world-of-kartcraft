@@ -102,6 +102,20 @@ impl Disc {
         Ok(out)
     }
 
+    /// Reads `count` whole 2352-byte sectors from `lba` (sync, header, XA subheader and the
+    /// payload): CD-XA audio is Mode 2 Form 2, whose 2324-byte payload only a raw image keeps.
+    /// `None` for a cooked `.iso`.
+    pub fn read_raw_sectors(&mut self, lba: u32, count: u32) -> Result<Option<Vec<u8>>> {
+        if self.layout == SectorLayout::Cooked {
+            return Ok(None);
+        }
+        let mut raw = vec![0u8; (count as u64 * RAW_SECTOR) as usize];
+        self.file.seek(SeekFrom::Start(lba as u64 * RAW_SECTOR))?;
+        let n = read_up_to(&mut self.file, &mut raw)?;
+        raw.truncate(n - n % RAW_SECTOR as usize);
+        Ok(Some(raw))
+    }
+
     /// Reads `len` bytes starting at sector `lba`.
     pub fn read_bytes(&mut self, lba: u32, len: usize) -> Result<Vec<u8>> {
         let sectors = len.div_ceil(SECTOR_DATA) as u32;

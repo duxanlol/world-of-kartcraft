@@ -618,6 +618,9 @@ pub struct TrackFile {
     pub bpm: u16,
     pub peak: i16,
     pub same_as: Option<String>,
+    /// The mask themes played over it: songs 1 and 2 of its CSEQ.
+    pub aku: Option<String>,
+    pub uka: Option<String>,
 }
 
 /// Renders every race track's music into `dir` as stereo WAV (`<track>.wav`, looping
@@ -632,6 +635,7 @@ pub fn extract(
     let howl = Howl::parse(&disc.read_bytes(lba, size as usize)?)?;
     std::fs::create_dir_all(dir).map_err(|e| Error(format!("{}: {e}", dir.display())))?;
     let mut out: Vec<TrackFile> = Vec::new();
+    let mut masks: Vec<(Vec<i16>, String)> = Vec::new();
     for (level, (name, seq)) in RACE_TRACKS.iter().enumerate() {
         let data = howl
             .seqs
@@ -647,6 +651,8 @@ pub fn extract(
                 bpm: prev.bpm,
                 peak: prev.peak,
                 same_as: Some(prev.track.to_string()),
+                aku: prev.aku.clone(),
+                uka: prev.uka.clone(),
             };
             out.push(t);
             continue;
@@ -658,7 +664,32 @@ pub fn extract(
         std::fs::write(&path, crate::audio::wav_channels(&r.pcm, 2, r.rate, true))
             .map_err(|e| Error(format!("{}: {e}", path.display())))?;
         let peak = r.pcm.iter().map(|s| s.saturating_abs()).max().unwrap_or(0);
+        // The mask themes: songs 1 (CSEQ_SONG_AKU) and 2 (CSEQ_SONG_UKA) of the same CSEQ, which
+        // Audio_SetMaskSong swaps in while a player wears the mask (HOWL_AudioState.c:142-190).
+        // Every track's render alike (they are, on the NTSC-U disc) is written once.
+        let mut theme = |song: usize, mask: &str| -> Result<Option<String>> {
+            if cseq.songs.len() <= song {
+                return Ok(None);
+            }
+            let m = render_song(&howl, &cseq, song, rate)?;
+            if let Some((_, file)) = masks.iter().find(|(pcm, _)| *pcm == m.pcm) {
+                return Ok(Some(file.clone()));
+            }
+            let file = if masks.iter().any(|(_, f)| f == &format!("{mask}.wav")) {
+                format!("{name}_{mask}.wav")
+            } else {
+                format!("{mask}.wav")
+            };
+            let path = dir.join(&file);
+            std::fs::write(&path, crate::audio::wav_channels(&m.pcm, 2, m.rate, true))
+                .map_err(|e| Error(format!("{}: {e}", path.display())))?;
+            masks.push((m.pcm, file.clone()));
+            Ok(Some(file))
+        };
+        let (aku, uka) = (theme(1, "aku")?, theme(2, "uka")?);
         out.push(TrackFile {
+            aku,
+            uka,
             file,
             track: name,
             level_id: level,
@@ -675,8 +706,11 @@ pub fn extract(
         "loop": "every file loops end-to-start seamlessly (it is the second pass of the song, so notes ringing over the loop point are included); the WAV smpl chunk marks the whole file as the loop",
         "final_lap": "HOWL_AudioState.c AUDIO_FINAL_LAP: once the final-lap XA sting has played ~1 s, Audio_SetMaskSong(20) raises the tempo by 20 BPM (Music_Adjust -> CseqMusic_ChangeTempo); approximate with playback speed (bpm + 20) / bpm (pitch rises too, unlike the game)",
         "final_lap_bpm_delta": 20,
+        "mask": "aku_file / uka_file: songs 1 and 2 of the track's CSEQ (CSEQ_SONG_AKU, CSEQ_SONG_UKA), played instead of song 0 while a player wears Aku Aku's or Uka Uka's mask (HOWL_AudioState.c:142-190 Audio_SetMaskSong)",
         "tracks": out.iter().map(|t| serde_json::json!({
             "file": t.file,
+            "aku_file": t.aku,
+            "uka_file": t.uka,
             "track": t.track,
             "level_id": t.level_id,
             "howl_sequence": t.howl_sequence,
