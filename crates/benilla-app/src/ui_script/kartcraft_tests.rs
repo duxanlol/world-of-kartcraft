@@ -1671,6 +1671,76 @@ fn the_race_map_draws_the_track_and_the_racers_on_it() {
 }
 
 #[test]
+fn the_results_board_stands_clear_of_the_race_map_and_the_banner() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    // The race map up, then the tallest board: eight racers, three laps, the record, our best
+    // and the ground types (14 lines), as the smoke run's finish showed them over the map.
+    s.fire_event(
+        "BENILLA_KART_TRACKMAP",
+        vec![
+            ScriptValue::Str("Elwynn Loop".into()),
+            ScriptValue::Number(3.0),
+            ScriptValue::Str("0,0;100,0;100,100;0,100".into()),
+        ],
+    );
+    let mut lines: Vec<String> = (1..=8)
+        .map(|i| format!("{i}. Racer{i}  1:0{i}.00"))
+        .collect();
+    lines.extend((1..=3).map(|i| format!("Lap {i}: 0:20.00")));
+    lines.extend([
+        "Course record: 1:00.00 by Racer1".to_string(),
+        "Your best: 1:00.00".to_string(),
+        "Ground types: on".to_string(),
+    ]);
+    s.fire_event(
+        "BENILLA_KART_RACE",
+        vec![
+            ScriptValue::Str("1ST — 1:01.00".into()),
+            ScriptValue::Str(lines.join("\n")),
+        ],
+    );
+    s.tick(0.0);
+    let rect = |s: &UiScript, frame: &str| -> [f64; 4] {
+        ["GetLeft", "GetRight", "GetBottom", "GetTop"]
+            .map(|m| s.eval::<f64>(&format!("return {frame}:{m}()")).unwrap())
+    };
+    for frame in ["BenillaKartMapFrame", "BenillaKartResultsFrame"] {
+        assert!(
+            s.eval::<bool>(&format!("return {frame}:IsVisible() == 1"))
+                .unwrap(),
+            "{frame} is not up"
+        );
+    }
+    let [ml, mr, mb, mt] = rect(&s, "BenillaKartMapFrame");
+    let [rl, rr, rb, rt] = rect(&s, "BenillaKartResultsFrame");
+    assert!(
+        rr <= ml || mr <= rl || rt <= mb || mt <= rb,
+        "the board {:?} overlaps the map {:?}",
+        [rl, rr, rb, rt],
+        [ml, mr, mb, mt]
+    );
+    // Whole on screen, and under the banner's line.
+    let (w, h): (f64, f64) = (
+        s.eval("return UIParent:GetWidth()").unwrap(),
+        s.eval("return UIParent:GetHeight()").unwrap(),
+    );
+    assert!(
+        rl >= 0.0 && rr <= w && rb >= 0.0 && rt <= h,
+        "{:?}",
+        [rl, rr, rb, rt]
+    );
+    let banner_bottom: f64 = s.eval("return BenillaKartRaceBanner:GetBottom()").unwrap();
+    assert!(
+        rt <= banner_bottom,
+        "board top {rt} over the banner at {banner_bottom}"
+    );
+}
+
+#[test]
 fn race_mode_is_asked_of_the_server_and_its_answer_ticks_the_menu() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK

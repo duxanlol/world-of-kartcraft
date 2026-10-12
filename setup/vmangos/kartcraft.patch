@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..78b77e6
+index 0000000..19a7a37
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,2815 @@
+@@ -0,0 +1,2921 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -399,9 +399,11 @@ index 0000000..78b77e6
 +    // A driver at a course's start hosts a race ("R\tH\t<course>"); drivers near it are told
 +    // ("R\tO") and join ("R\tJ\t<id>"); the host starts it ("R\tS\t<id>") and every racer gets the
 +    // course's checkpoints ("R\tC") and a countdown ("R\tG"). Each checkpoint a client reports
-+    // ("R\tK\t<id>\t<index>") is checked against the racer's real position and the course's order;
-+    // progress ("R\tP") and finishes ("R\tF") go to every racer, and a finish pays experience and
-+    // Karting skill by place. The courses are courses/courses.json (KartcraftCourses.h); clients
++    // ("R\tK\t<id>\t<index>") is checked against the course's order and against where the server
++    // has seen the racer (Witness); progress ("R\tP") and finishes ("R\tF") go to every racer, and
++    // a finish pays experience and Karting skill by place. A client that finds its progress ahead
++    // of its "R\tP" sends the missing reports again, so one lost report strands no one. DNF_WAIT
++    // after the first finish the race closes, the rest out of time ("R\tDNF\t<id>\t<name>"). The courses are courses/courses.json (KartcraftCourses.h); clients
 +    // learn a course from "R\tC". A time trial ("R\tT\t<course>", the Race Marshal's) is a race
 +    // of one, started at once and marked "R\tTT\t<id>": no crates, no items, and its own records.
 +
@@ -438,6 +440,11 @@ index 0000000..78b77e6
 +    constexpr uint32 COUNTDOWN = 4000;
 +    constexpr uint32 RACE_LIFETIME = 20 * MINUTE * IN_MILLISECONDS;
 +    constexpr size_t MAX_RACERS = 8;
++    // How long the others have to finish once the first racer is in (ms), then the race closes
++    // with them out of time ("R\tDNF"). Kartcraft's own rule: CTR lets its AI drive every
++    // unfinished kart home, which a race of players cannot; a minute, as kart racers commonly
++    // give the field after the winner.
++    constexpr uint32 DNF_WAIT = 60 * IN_MILLISECONDS;
 +
 +    struct Racer
 +    {
@@ -446,7 +453,10 @@ index 0000000..78b77e6
 +        uint8 lap = 0;
 +        uint8 checkpoint = 0;
 +        bool finished = false;
-+        uint8 place = 0; // finishing place, 1 = first
++        uint8 place = 0; // finishing place, 1 = first; 0 with `finished`, out of time (DNF)
++        // The passes the server has seen with its own eyes (Witness), counted as Passes counts:
++        // a report that reaches us after the position proving it still counts.
++        uint32 seen = 0;
 +        // Weapons: the item held (ITEM_NONE for none) and its shots left, when the crate that gave
 +        // it was taken (ms), the Wumpa count, and until when a fired mask protects (ms, 0 none).
 +        uint8 held = 15;
@@ -498,6 +508,8 @@ index 0000000..78b77e6
 +        uint32 created = 0;
 +        uint32 start = 0; // 0 until started
 +        uint8 finishers = 0;
++        // When the first racer finished (ms), for the rest's DNF_WAIT; 0 none yet.
++        uint32 firstFinish = 0;
 +        // A time trial (the Race Marshal's "R\tT"): one racer, no items, its own records.
 +        bool timeTrial = false;
 +        // CTR's ground types ("R\tGT"): every racer's client drives off-road as slow as CTR's
@@ -556,6 +568,50 @@ index 0000000..78b77e6
 +    static float GateRadius(Course const& c, uint32 index)
 +    {
 +        return index < c.gates.size() ? std::max(CHECKPOINT_RADIUS, c.gates[index]) : CHECKPOINT_RADIUS;
++    }
++
++    // Whether the server has the player within `radius` of `point`: where they stand, or where a
++    // near teleport not yet acknowledged puts them. vmangos moves a player only when the map
++    // thread handles their MSG_MOVE_TELEPORT_ACK (Player::ExecuteTeleportNear), and an addon line
++    // sent just after the ack runs on the AsyncPacket thread, often first.
++    static bool Near(Player* player, std::pair<float, float> const& point, float radius)
++    {
++        if (DistanceTo(player, point) <= radius)
++            return true;
++        if (!player->IsBeingTeleportedNear())
++            return false;
++        WorldLocation const& dest = player->GetTeleportDest();
++        float dx = dest.x - point.first;
++        float dy = dest.y - point.second;
++        return std::sqrt(dx * dx + dy * dy) <= radius;
++    }
++
++    // A racer's checkpoints passed in order: lap * checkpoints + the last one (a sprint's laps stay
++    // 0). Pass k is at checkpoint k % n; a circuit finishes on pass laps * n, a sprint on n - 1.
++    static uint32 Passes(Racer const& r, uint32 n)
++    {
++        return uint32(r.lap) * n + r.checkpoint;
++    }
++
++    static uint32 FinalPass(Course const& c)
++    {
++        uint32 n = uint32(c.points.size());
++        return c.laps ? uint32(c.laps) * n : n - 1;
++    }
++
++    // One look at where the server has the racer: near the checkpoint after the last it has seen
++    // them pass, that one is seen too. A step a look, so only in order; the looks come with every
++    // line the racer sends (the kart's state, ~20 a second while driving), so a pass is seen
++    // whenever the report of it arrives, and however late.
++    static void Witness(Racer& r, Course const& c, Player* player)
++    {
++        uint32 n = uint32(c.points.size());
++        r.seen = std::max(r.seen, Passes(r, n));
++        if (r.seen >= FinalPass(c))
++            return;
++        uint32 next = (r.seen + 1) % n;
++        if (Near(player, c.points[next], GateRadius(c, next)))
++            ++r.seen;
 +    }
 +
 +    static Course const* FindCourse(std::string const& key)
@@ -2469,8 +2525,15 @@ index 0000000..78b77e6
 +            Course const& c = *r.course;
 +            uint32 n = uint32(c.points.size());
 +            uint32 index = uint32(std::strtoul(f[3].c_str(), nullptr, 10));
-+            uint32 expected = c.laps ? (me->checkpoint + 1) % n : me->checkpoint + 1;
-+            if (index != expected || index >= n || DistanceTo(player, c.points[index]) > GateRadius(c, index))
++            // The next checkpoint only, and only once the server has seen the racer there: now, at
++            // a teleport's landing, or on any earlier look since the last pass (a report lost or
++            // overtaken, sent again by the client).
++            uint32 passes = Passes(*me, n);
++            uint32 expected = (passes + 1) % n;
++            if (index != expected || index >= n || passes >= FinalPass(c))
++                return;
++            Witness(*me, c, player);
++            if (me->seen <= passes)
 +                return;
 +            me->checkpoint = uint8(index);
 +            bool done = false;
@@ -2485,6 +2548,8 @@ index 0000000..78b77e6
 +                me->finished = true;
 +                uint32 place = ++r.finishers;
 +                me->place = uint8(place);
++                if (!r.firstFinish)
++                    r.firstFinish = now ? now : 1;
 +                uint32 ms = WorldTimer::getMSTimeDiff(r.start, now);
 +                std::string const best = RecordFinish(BoardOf(r), player->GetGUIDLow(), me->name, c, ms);
 +                SendRace(r, "KARTCRAFT\tR\tF\t" + std::to_string(id) + "\t" + me->name + "\t" +
@@ -2517,10 +2582,51 @@ index 0000000..78b77e6
 +    static std::string const PREFIX = "KARTCRAFT\t";
 +
 +    // One Kartcraft line, without its prefix; `marshal` as for HandleRace.
++    // Every line is a look at where its sender is, for each race under way they are still in.
++    static void WitnessSender(Player* player, uint32 now)
++    {
++        for (auto& entry : s_races)
++        {
++            Race& r = entry.second;
++            if (!r.start || int32(now - r.start) < 0)
++                continue;
++            for (Racer& x : r.racers)
++                if (x.guid == player->GetObjectGuid() && !x.finished)
++                    Witness(x, *r.course, player);
++        }
++    }
++
++    // DNF_WAIT after its first finish a race closes: everyone not in is out of time, told to all.
++    // Run with every line from anyone, as the Race Finder's matching is: racers in the kart send
++    // their state many times a second, so the close comes on time.
++    static void CloseLateRaces(uint32 now)
++    {
++        for (auto it = s_races.begin(); it != s_races.end();)
++        {
++            Race& r = it->second;
++            if (!r.firstFinish || WorldTimer::getMSTimeDiff(r.firstFinish, now) < DNF_WAIT)
++            {
++                it = std::next(it);
++                continue;
++            }
++            for (Racer& x : r.racers)
++                if (!x.finished)
++                {
++                    x.finished = true;
++                    x.place = 0;
++                    SendRace(r, "KARTCRAFT\tR\tDNF\t" + std::to_string(it->first) + "\t" + x.name);
++                }
++            it = s_races.erase(it);
++        }
++    }
++
 +    static void HandleLine(Player* player, std::string const& body, bool marshal)
 +    {
 +        std::lock_guard<std::mutex> lock(s_mutex);
-+        TickWeapons(WorldTimer::getMSTime());
++        uint32 const now = WorldTimer::getMSTime();
++        WitnessSender(player, now);
++        CloseLateRaces(now);
++        TickWeapons(now);
 +        if (body.compare(0, 2, "L\t") == 0)
 +        {
 +            float points = float(std::atof(body.c_str() + 2));

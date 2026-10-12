@@ -3,7 +3,10 @@
 //! `marshal`) with `.go xyz` (a GM account), finds the nearest unit named "Race Marshal", opens its
 //! menu (`CMSG_GOSSIP_HELLO`) and clicks an option by its text (`CMSG_GOSSIP_SELECT_OPTION`).
 //!
-//! - `host:<course>` clicks "Host a race: <name>", then "Start the race" once another racer is in.
+//! - `host:<course>` clicks "Host a race: <name>", then on the page that asks for the race's
+//!   ground types "Host <name>: ground types off" (`:ground` for "...: ground types on"), then
+//!   "Start the race" once another racer is in.
+//! - `trial:<course>` clicks "Time trial: <name>": a race of one, under way at once.
 //! - `join:<course>` clicks "Join ...'s race on <name>", asking again until a race is offered.
 //! - `queue:<course>` hops to Northshire's marshal instead, queues for the course in the Race
 //!   Finder (its Lua, as the window's button does), accepts the ready check on its popup, races,
@@ -41,6 +44,7 @@ enum Role {
     Host,
     Join,
     Queue,
+    Trial,
 }
 
 /// What the hook does next.
@@ -49,9 +53,11 @@ enum Step {
     #[default]
     Boot,
     Hopped(f64),
-    /// Asking the marshal for the option containing the text; `sent` is when the hello went.
+    /// Asking the marshal for the options containing the texts, one menu page after another
+    /// (`at` the page we are on); `sent` is when the hello, or the last click, went.
     Asking {
-        want: String,
+        wants: Vec<String>,
+        at: usize,
         sent: Option<f64>,
         tries: u32,
     },
@@ -84,46 +90,54 @@ pub(crate) struct Autotest {
     target: Option<([f32; 2], f64)>,
 }
 
+#[derive(Debug)]
 struct Plan {
     role: Role,
     course: &'static super::race::Course,
     leave_after: Option<f64>,
     warp_after: Option<f64>,
+    /// `host:` hosts with ground types on (`:ground` or `:ground=1`).
+    ground: bool,
 }
 
 fn plan() -> Option<&'static Plan> {
     static PLAN: std::sync::OnceLock<Option<Plan>> = std::sync::OnceLock::new();
-    PLAN.get_or_init(|| {
-        let spec = std::env::var("WOW_KART_MARSHAL").ok()?;
-        let mut parts = spec.split(':');
-        let role = match parts.next()? {
-            "host" => Role::Host,
-            "join" => Role::Join,
-            "queue" => Role::Queue,
-            other => {
-                error!("kart autotest: unknown role {other:?} in WOW_KART_MARSHAL={spec}");
-                return None;
-            }
-        };
-        let key = parts.next().unwrap_or("sprint");
-        let Some(course) = COURSES.iter().find(|c| c.key == key) else {
-            error!("kart autotest: no course {key:?}");
+    PLAN.get_or_init(|| parse(&std::env::var("WOW_KART_MARSHAL").ok()?))
+        .as_ref()
+}
+
+/// `WOW_KART_MARSHAL`'s value, `<role>:<course>[:<option>...]`, as a plan.
+fn parse(spec: &str) -> Option<Plan> {
+    let mut parts = spec.split(':');
+    let role = match parts.next()? {
+        "host" => Role::Host,
+        "join" => Role::Join,
+        "queue" => Role::Queue,
+        "trial" => Role::Trial,
+        other => {
+            error!("kart autotest: unknown role {other:?} in WOW_KART_MARSHAL={spec}");
             return None;
-        };
-        let rest: Vec<&str> = parts.collect();
-        let option = |key: &str| {
-            rest.iter()
-                .find_map(|p| p.strip_prefix(key)?.strip_prefix('='))
-                .and_then(|s| s.parse().ok())
-        };
-        Some(Plan {
-            role,
-            course,
-            leave_after: option("leave"),
-            warp_after: option("warp"),
-        })
+        }
+    };
+    let key = parts.next().unwrap_or("sprint");
+    let Some(course) = COURSES.iter().find(|c| c.key == key) else {
+        error!("kart autotest: no course {key:?}");
+        return None;
+    };
+    let rest: Vec<&str> = parts.collect();
+    let option = |key: &str| {
+        rest.iter()
+            .find_map(|p| p.strip_prefix(key)?.strip_prefix('='))
+            .and_then(|s| s.parse().ok())
+    };
+    let ground = rest.iter().any(|p| *p == "ground" || *p == "ground=1");
+    Some(Plan {
+        role,
+        course,
+        leave_after: option("leave"),
+        warp_after: option("warp"),
+        ground,
     })
-    .as_ref()
 }
 
 /// Whether the hook runs: the kart autopilot then holds still until GO.
@@ -246,9 +260,17 @@ fn drive(
             }
             Some(_) => {}
         },
-        Step::Asking { want, sent, tries } => {
+        Step::Asking {
+            wants,
+            at,
+            sent,
+            tries,
+        } => {
             // Already in a race here (one left waiting from before is still ours): on to it.
-            if plan.role == Role::Host && races.status().is_some() && want.starts_with("Host") {
+            if matches!(plan.role, Role::Host | Role::Trial)
+                && !test.start_asked
+                && races.status().is_some()
+            {
                 info!("kart autotest: already in a race — not hosting another");
                 test.step = Step::Waiting;
                 return;
@@ -281,7 +303,8 @@ fn drive(
             let menu = (gossip.npc == Some(marshal) && !gossip.options.is_empty())
                 .then_some(&gossip.options);
             if let (Some(options), Some(s)) = (menu, *sent) {
-                if let Some(o) = options.iter().find(|o| o.message.contains(want.as_str())) {
+                let want = wants[*at].as_str();
+                if let Some(o) = options.iter().find(|o| o.message.contains(want)) {
                     let labels: Vec<&str> = options.iter().map(|o| o.message.as_str()).collect();
                     info!("kart autotest: menu {labels:?}");
                     info!(
@@ -292,7 +315,13 @@ fn drive(
                         guid: marshal,
                         option: o.index,
                     });
-                    test.step = Step::Waiting;
+                    // The next page comes as the answer to the click: no hello for it.
+                    if *at + 1 < wants.len() {
+                        *at += 1;
+                        *sent = Some(now);
+                    } else {
+                        test.step = Step::Waiting;
+                    }
                     return;
                 }
                 if now - s < RETRY {
@@ -303,12 +332,17 @@ fn drive(
             }
             if sent.is_none_or(|s| now - s > RETRY) {
                 if *tries >= 30 {
-                    error!("kart autotest: FAILURE — never offered {want:?}");
+                    error!("kart autotest: FAILURE — never offered {:?}", wants[*at]);
                     test.step = Step::Done;
                     return;
                 }
                 *tries += 1;
-                info!("kart autotest: GossipHello to {marshal:#x} (try {tries}) for {want:?}");
+                // A hello opens the first page again.
+                *at = 0;
+                info!(
+                    "kart autotest: GossipHello to {marshal:#x} (try {tries}) for {:?}",
+                    wants[0]
+                );
                 send(ClientCommand::GossipHello { guid: marshal });
                 *sent = Some(now);
             }
@@ -320,7 +354,8 @@ fn drive(
                 } else if plan.role == Role::Host && roster.len() >= 2 && !test.start_asked {
                     test.start_asked = true;
                     test.step = Step::Asking {
-                        want: "Start the race".into(),
+                        wants: vec!["Start the race".into()],
+                        at: 0,
                         sent: None,
                         tries: 0,
                     };
@@ -404,14 +439,27 @@ fn click_popup(script: Option<&UiScript>, which: &str, button: u8) -> bool {
 }
 
 fn ask(plan: &Plan) -> Step {
-    let want = match plan.role {
-        Role::Host | Role::Queue => format!("Host a race: {}", plan.course.name),
-        Role::Join => format!("race on {}", plan.course.name),
-    };
     Step::Asking {
-        want,
+        wants: wants(plan.role, &plan.course.name, plan.ground),
+        at: 0,
         sent: None,
         tries: 0,
+    }
+}
+
+/// The marshal's options a role clicks, a menu page each: hosting asks for the race's ground
+/// types on a page of its own (`Kartcraft.cpp` `MARSHAL_HOST_PLAIN`, `MARSHAL_HOST_GROUND`).
+fn wants(role: Role, course: &str, ground: bool) -> Vec<String> {
+    match role {
+        Role::Host | Role::Queue => vec![
+            format!("Host a race: {course}"),
+            format!(
+                "Host {course}: ground types {}",
+                if ground { "on" } else { "off" }
+            ),
+        ],
+        Role::Join => vec![format!("race on {course}")],
+        Role::Trial => vec![format!("Time trial: {course}")],
     }
 }
 
@@ -441,7 +489,7 @@ fn hop(plan: &Plan, send: &impl Fn(ClientCommand)) -> bool {
     // Host and joiner either side of her facing, apart, so their karts do not bump.
     let a = m.o
         + match plan.role {
-            Role::Host | Role::Queue => 0.9,
+            Role::Host | Role::Queue | Role::Trial => 0.9,
             Role::Join => -0.9,
         };
     let (x, y) = (m.x + 2.5 * a.cos(), m.y + 2.5 * a.sin());
@@ -481,4 +529,68 @@ pub(crate) fn plugin(app: &mut App) {
     }
     app.init_resource::<Autotest>()
         .add_systems(Update, drive.in_set(crate::char_select::InWorldGated));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_hook_reads_its_role_course_and_options() {
+        let course = &COURSES[0];
+        let plan = parse(&format!("trial:{}:warp=4", course.key)).unwrap();
+        assert_eq!(plan.role, Role::Trial);
+        assert_eq!(plan.course.key, course.key);
+        assert_eq!((plan.warp_after, plan.leave_after), (Some(4.0), None));
+        assert!(!plan.ground);
+        for spec in [
+            "host:{}:ground",
+            "host:{}:ground=1",
+            "host:{}:leave=9:ground",
+        ] {
+            let plan = parse(&spec.replace("{}", &course.key)).unwrap();
+            assert!(plan.role == Role::Host && plan.ground, "{spec}");
+        }
+        assert!(
+            !parse(&format!("host:{}:ground=0", course.key))
+                .unwrap()
+                .ground
+        );
+        assert!(parse("drive:sprint").is_none(), "an unknown role");
+        assert!(parse("host:no-such-course").is_none());
+    }
+
+    #[test]
+    fn hosting_clicks_through_the_ground_types_page_and_a_trial_is_one_click() {
+        // The menu texts the server writes (`Kartcraft.cpp` MarshalHello and the host page).
+        let name = "Tower of Azora & Jasperlode Mine";
+        let main = format!("Host a race: {name} (3 laps)");
+        let plain = format!("Host {name}: ground types off");
+        let ground = format!("Host {name}: ground types on (off-road slows)");
+        let trial = format!("Time trial: {name} (3 laps)");
+        let pick = |wants: &[String], menus: &[&[&String]]| -> Vec<String> {
+            wants
+                .iter()
+                .zip(menus)
+                .map(|(want, menu)| {
+                    let hits: Vec<&&String> = menu.iter().filter(|o| o.contains(want)).collect();
+                    assert_eq!(hits.len(), 1, "{want:?} picks one of {menu:?}");
+                    hits[0].to_string()
+                })
+                .collect()
+        };
+        let pages: [&[&String]; 2] = [&[&main, &trial], &[&plain, &ground]];
+        assert_eq!(
+            pick(&wants(Role::Host, name, false), &pages),
+            [main.clone(), plain.clone()]
+        );
+        assert_eq!(
+            pick(&wants(Role::Host, name, true), &pages),
+            [main.clone(), ground.clone()]
+        );
+        assert_eq!(
+            pick(&wants(Role::Trial, name, false), &pages),
+            std::slice::from_ref(&trial)
+        );
+    }
 }
