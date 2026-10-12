@@ -515,16 +515,27 @@
                 BenillaKartTracksFrameTitle:SetText(track.name)
                 BenillaKartTracksFrameText:SetText(track.text)
                 BenillaKartTracksFrameShow:Enable()
+                if track.map > 1 then BenillaKartTracksFrameTrial:Disable() else BenillaKartTracksFrameTrial:Enable() end
             else
                 BenillaKartTracksFrameTitle:SetText("")
                 BenillaKartTracksFrameText:SetText("Pick a track to read about it and see it on the map.")
                 BenillaKartTracksFrameShow:Disable()
+                BenillaKartTracksFrameTrial:Disable()
             end
             if BenillaKartRoute.key and BenillaKartRoute.key == selected then
                 BenillaKartTracksFrameShow:SetText("Shown on the map")
             else
                 BenillaKartTracksFrameShow:SetText("Show on map")
             end
+        end
+
+        -- A time trial on the track shown, from wherever we are: the server takes us to its grid,
+        -- and offers the way back after. A party course is raced inside its dungeon instead.
+        function BenillaKartTrackBrowser_TimeTrial()
+            local track = BenillaKartTrackBrowser.selected and BenillaKartTrack(BenillaKartTrackBrowser.selected)
+            if not track or track.map > 1 then return end
+            BenillaKart_Send("TB\t" .. track.key)
+            BenillaKartTracksFrame:Hide()
         end
 
         function BenillaKartTrackBrowser_OnMouseWheel(delta)
@@ -2493,7 +2504,7 @@
 
     <!-- Over the world map, which it opens, so another track can be picked with the map up. -->
     <Frame name="BenillaKartTracksFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="FULLSCREEN_DIALOG">
-        <Size><AbsDimension x="340" y="470"/></Size>
+        <Size><AbsDimension x="340" y="498"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="-220" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -2583,6 +2594,12 @@
                     <OnVerticalScroll>FauxScrollFrame_OnVerticalScroll(BENILLA_KART_TRACK_ROW_HEIGHT, BenillaKartTrackBrowser_Refresh)</OnVerticalScroll>
                 </Scripts>
             </ScrollFrame>
+            <!-- A time trial on the track shown, from anywhere (BenillaKartTrackBrowser_TimeTrial). -->
+            <Button name="$parentTrial" inherits="UIPanelButtonTemplate" text="Time trial">
+                <Size><AbsDimension x="140" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="46"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartTrackBrowser_TimeTrial()</OnClick></Scripts>
+            </Button>
             <Button name="$parentShow" inherits="UIPanelButtonTemplate" text="Show on map">
                 <Size><AbsDimension x="140" y="22"/></Size>
                 <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="18"/></Offset></Anchor></Anchors>

@@ -1957,3 +1957,40 @@ fn the_minimap_menu_toggles_the_race_marshals() {
     assert_eq!(s.cvar("KartRaceMarshals").as_deref(), Some("1"));
     assert!(ticked(&mut s));
 }
+
+#[test]
+fn the_track_browser_starts_a_time_trial_on_the_track_shown() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    tracks(&mut s);
+    let enabled = |s: &UiScript| -> bool {
+        s.eval("return BenillaKartTracksFrameTrial:IsEnabled() == 1")
+            .unwrap()
+    };
+    s.run("BenillaKartTrackBrowser_Open()").unwrap();
+    s.tick(0.0);
+    // Nothing picked: nothing to race.
+    assert!(!enabled(&s));
+    s.run("BenillaKartTrackBrowser_Select('t2')").unwrap();
+    assert!(enabled(&s));
+    sent(&mut s);
+    s.run("BenillaKartTracksFrameTrial:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tTB\tt2"]);
+    assert!(!s
+        .eval::<bool>("return BenillaKartTracksFrame:IsVisible() == 1")
+        .unwrap());
+
+    // A party course is raced inside its dungeon, from its marshal: no time trial from here.
+    s.fire_event(
+        "BENILLA_KART_TRACKS",
+        vec![ScriptValue::Str(
+            "d1\tDeadmines Run\tThe Deadmines\t36\t0\tA sprint in the Deadmines.\t0.0,0.0;10.0,10.0".into(),
+        )],
+    );
+    s.run("BenillaKartTrackBrowser_Open() BenillaKartTrackBrowser_Select('d1')")
+        .unwrap();
+    assert!(!enabled(&s));
+}
