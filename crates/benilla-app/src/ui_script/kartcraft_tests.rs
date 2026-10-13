@@ -1902,7 +1902,6 @@ fn the_controller_test_lights_the_held_buttons_and_says_when_it_is_open() {
         "BENILLA_KART_PAD",
         vec![
             ScriptValue::Str("DualSense Wireless Controller".into()),
-            n(1.0),
             ScriptValue::Str("South RightTrigger".into()),
             n(-1.0),
             n(0.5),
@@ -1924,7 +1923,7 @@ fn the_controller_test_lights_the_held_buttons_and_says_when_it_is_open() {
     assert_eq!(
         s.eval::<String>("return BenillaKartPadFrameDevice:GetText()")
             .unwrap(),
-        "DualSense Wireless Controller, read directly"
+        "DualSense Wireless Controller"
     );
     let sticks: String = s
         .eval("return BenillaKartPadFrame.sticks:GetText()")

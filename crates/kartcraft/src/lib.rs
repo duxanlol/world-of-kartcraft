@@ -12,7 +12,6 @@ pub mod model;
 pub mod pads;
 pub mod rumble;
 pub mod session;
-pub mod sony;
 pub mod sound;
 pub mod voice;
 pub mod weapons;

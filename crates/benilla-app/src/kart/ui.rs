@@ -52,13 +52,12 @@ pub(crate) struct KartOverlay {
     pub(crate) pad: Option<PadView>,
 }
 
-/// The pad the kart reads, as the controller test shows it: its name (empty with none), whether
-/// it is read directly ([`kartcraft::sony`]), the buttons held as the layer's tokens, and the
-/// sticks and triggers in hundredths (left x, y, right x, y, L2, R2).
+/// The pad the kart reads, as the controller test shows it: its name (empty with none), the
+/// buttons held as the layer's tokens, and the sticks and triggers in hundredths (left x, y,
+/// right x, y, L2, R2).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct PadView {
     pub(crate) name: String,
-    pub(crate) direct: bool,
     pub(crate) held: String,
     pub(crate) axes: [i16; 6],
 }
@@ -92,20 +91,12 @@ const PAD_TOKENS: [(bevy::input::gamepad::GamepadButton, &str); 18] = {
 /// [`kartcraft::input::read`] would drive with.
 pub(super) fn pad_view(
     settings: Res<super::settings::KartSettings>,
-    pads: Query<(
-        &bevy::input::gamepad::Gamepad,
-        Has<kartcraft::sony::SonyPad>,
-        Option<&Name>,
-    )>,
+    pads: Query<(&bevy::input::gamepad::Gamepad, Option<&Name>)>,
     mut overlay: ResMut<KartOverlay>,
 ) {
     use bevy::input::gamepad::{GamepadAxis, GamepadButton};
     let view = settings.pad_test.then(|| {
-        let Some((pad, direct, name)) = pads
-            .iter()
-            .find(|(_, direct, _)| *direct)
-            .or_else(|| pads.iter().next())
-        else {
+        let Some((pad, name)) = pads.iter().next() else {
             return PadView::default();
         };
         let held: Vec<&str> = PAD_TOKENS
@@ -118,7 +109,6 @@ pub(super) fn pad_view(
         let trigger = |b| hundredths(pad.get(b).unwrap_or(0.0));
         PadView {
             name: name.map_or_else(|| "Controller".to_string(), |n| n.to_string()),
-            direct,
             held: held.join(" "),
             axes: [
                 axis(GamepadAxis::LeftStickX),

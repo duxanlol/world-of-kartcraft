@@ -21,10 +21,9 @@
 //! - `BENILLA_KART_TRACKMAP(name, laps, points)`: the race map's track when it changes, its
 //!   checkpoints `x,y;x,y;...` (WoW x, y); an empty name when there is no race.
 //! - `BENILLA_KART_SEATED(seated)`: 1 when we climb into the kart, 0 when we climb out.
-//! - `BENILLA_KART_PAD(name, direct, held, lx, ly, rx, ry, l2, r2)`: the controller test's pad
-//!   while it is open (`KartPadTest`), when it changes: its name (empty with none), 1 when read
-//!   directly, the buttons held as space-separated tokens, the sticks -1 to 1 and the triggers 0
-//!   to 1.
+//! - `BENILLA_KART_PAD(name, held, lx, ly, rx, ry, l2, r2)`: the controller test's pad while it
+//!   is open (`KartPadTest`), when it changes: its name (empty with none), the buttons held as
+//!   space-separated tokens, the sticks -1 to 1 and the triggers 0 to 1.
 //! - `BENILLA_KART_RACERS(list)`: the racers on it, one `name<TAB>x<TAB>y<TAB>place<TAB>me<TAB>near`
 //!   a line (`me`, `near` 1 or 0), at most RACERS_HZ times a second and only when one moved.
 //!
@@ -124,7 +123,6 @@ pub(crate) fn feed(
         if let Some(pad) = &overlay.pad {
             let mut args = vec![
                 ScriptValue::Str(pad.name.clone()),
-                ScriptValue::Number(f64::from(u8::from(pad.direct))),
                 ScriptValue::Str(pad.held.clone()),
             ];
             args.extend(

@@ -995,15 +995,13 @@
             BenillaKartPad_Set(nil)
         end
 
-        -- The pad's news: its name, read directly or not, the buttons held, the sticks and the
-        -- triggers. A held button's row lights green.
-        function BenillaKartPad_Set(name, direct, held, lx, ly, rx, ry, l2, r2)
+        -- The pad's news: its name, the buttons held, the sticks and the triggers. A held
+        -- button's row lights green.
+        function BenillaKartPad_Set(name, held, lx, ly, rx, ry, l2, r2)
             local f = BenillaKartPadFrame
             if not f or not f.rows then return end
             if not name or name == "" then
                 BenillaKartPadFrameDevice:SetText("No controller found: connect one and press a button.")
-            elseif direct == 1 then
-                BenillaKartPadFrameDevice:SetText(name .. ", read directly")
             else
                 BenillaKartPadFrameDevice:SetText(name)
             end
@@ -1234,7 +1232,7 @@
             elseif event == "CHAT_MSG_CHANNEL_NOTICE" then
                 BenillaKart_WorldChatNotice()
             elseif event == "BENILLA_KART_PAD" then
-                BenillaKartPad_Set(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9)
+                BenillaKartPad_Set(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8)
             elseif event == "CHAT_MSG_ADDON" then
                 if arg1 == BENILLA_KART_PREFIX then BenillaKartFinder_OnLine(arg2) end
             elseif event == "BENILLA_KART_RACE" then

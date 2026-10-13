@@ -23,8 +23,3 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The kart's sounds (the vendored kira, as the client's); the host supplies the output.
 kira = { version = "0.12", default-features = false, features = ["wav", "pcm"] }
-
-# PlayStation pads on Windows, read and rumbled over HID ourselves (`sony`): Windows.Gaming.Input
-# can neither rumble them nor read a Bluetooth one once rumble switches it to its full reports.
-[target.'cfg(windows)'.dependencies]
-hidapi = { version = "=2.6.3", default-features = false, features = ["windows-native"] }
