@@ -173,7 +173,7 @@ if ($settings['AZURE_STORAGE']) {
     }
     # The one file new players download (worldofkartcraft.com/download leads here): the launcher,
     # which fetches the rest.
-    az storage blob upload -c '$web' -n 'KartcraftLauncher.exe' -f (Join-Path $client 'Kartcraft Launcher.exe') --content-type application/vnd.microsoft.portable-executable --content-disposition 'attachment; filename="Kartcraft Launcher.exe"' --content-cache-control 'no-cache' --overwrite --no-progress @auth -o none
+    az storage blob upload -c '$web' -n 'KartcraftLauncher.exe' -f (Join-Path $client 'Kartcraft Launcher.exe') --content-type application/vnd.microsoft.portable-executable --content-disposition "attachment; filename*=UTF-8''Kartcraft%20Launcher.exe" --content-cache-control 'no-cache' --overwrite --no-progress @auth -o none
     if ($LASTEXITCODE) { throw 'uploading the launcher failed' }
 }
 
