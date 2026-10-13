@@ -81,10 +81,17 @@ impl Keys {
     }
 }
 
-/// The first connected pad's controls, else the keyboard's.
-pub fn read(keys: &Keys, pads: &Query<&Gamepad>) -> Controls {
+/// The first connected pad's controls, else the keyboard's. A PlayStation pad read directly
+/// ([`crate::sony::SonyPad`]) comes first: Windows lists the same pad too, and over Bluetooth that
+/// copy stops reading once the pad is switched to its full report.
+pub fn read(keys: &Keys, pads: &Query<(&Gamepad, Has<crate::sony::SonyPad>)>) -> Controls {
     let keyboard = from_keys(keys);
-    match pads.iter().next() {
+    let pad = pads
+        .iter()
+        .find(|(_, direct)| *direct)
+        .or_else(|| pads.iter().next())
+        .map(|(pad, _)| pad);
+    match pad {
         Some(pad) => merge(from_pad(pad), keyboard),
         None => keyboard,
     }

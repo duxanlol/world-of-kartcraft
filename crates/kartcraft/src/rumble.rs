@@ -76,13 +76,26 @@ impl Rumble {
 
 /// Hands this frame's pulses to every gamepad (where the app reads gamepads at all), unless
 /// the host turned the rumble off.
+///
+/// A PlayStation pad read directly ([`crate::sony`]) takes its pulses there; Bevy's rumble does
+/// not reach it.
 pub fn send(
     mut rumble: ResMut<Rumble>,
-    pads: Query<Entity, With<Gamepad>>,
+    pads: Query<Entity, (With<Gamepad>, Without<crate::sony::SonyPad>)>,
     requests: Option<ResMut<Messages<GamepadRumbleRequest>>>,
+    sony: Option<ResMut<crate::sony::SonyPads>>,
+    time: Res<Time>,
 ) {
     let pulses = std::mem::take(&mut rumble.pulses);
-    let Some(mut requests) = requests.filter(|_| !rumble.off) else {
+    if rumble.off {
+        return;
+    }
+    if let Some(mut sony) = sony {
+        for pulse in &pulses {
+            sony.shake(time.elapsed_secs_f64(), *pulse);
+        }
+    }
+    let Some(mut requests) = requests else {
         return;
     };
     for pulse in pulses {

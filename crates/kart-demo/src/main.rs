@@ -235,6 +235,7 @@ fn scene(app: &mut App) {
         .init_resource::<KartView>()
         .init_resource::<KartAudio>()
         .init_resource::<kartcraft::rumble::Rumble>()
+        .add_plugins(kartcraft::sony::SonyPadsPlugin)
         .init_resource::<effects::KartEffects>()
         .init_resource::<hud::KartHud>()
         .init_resource::<hud::HudExtras>()
@@ -339,7 +340,7 @@ fn spawn_hud(mut commands: Commands) {
 fn drive(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
-    pads: Query<&Gamepad>,
+    pads: Query<(&Gamepad, Has<kartcraft::sony::SonyPad>)>,
     collide: WorldCollision,
     mut demo: ResMut<Demo>,
     mut view: ResMut<KartView>,

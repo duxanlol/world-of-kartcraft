@@ -164,7 +164,7 @@ fn update(
         Res<crate::bindings::BindingsState>,
         ResMut<crate::cvars::Cvars>,
     ),
-    pads: Query<&Gamepad>,
+    pads: Query<(&Gamepad, Has<kartcraft::sony::SonyPad>)>,
     ui: Res<crate::ui_script::UiKeyboardCapture>,
     player: Res<crate::player::Player>,
     collide: WorldCollision,
@@ -594,6 +594,7 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<model::KartModel>()
         .init_resource::<sound::KartAudio>()
         .init_resource::<kartcraft::rumble::Rumble>()
+        .add_plugins(kartcraft::sony::SonyPadsPlugin)
         .init_resource::<score::KartScore>()
         .init_resource::<remote::RemoteKarts>()
         .init_resource::<seat::SeatFits>()
