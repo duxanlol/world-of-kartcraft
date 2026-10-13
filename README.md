@@ -1,6 +1,6 @@
 # World of Kartcraft
 
-Check the gameplay out here: https://youtu.be/eQ5wpt6eZOc
+Check it out: https://youtu.be/UWc98p6a6K4
 
 Crash Team Racing karting in World of Warcraft 1.12.1. Summon your kart like a mount and your
 character climbs in, with CTR's own driving model: hop into powerslides, fire boosts when the
