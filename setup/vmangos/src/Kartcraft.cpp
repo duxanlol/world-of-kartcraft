@@ -477,6 +477,10 @@ namespace Kartcraft
         ObjectGuid awaiting;
         uint32 awaitSince = 0;
         std::vector<Racer> racers;
+        // For its results (RecordResult): its id, when it started (unix time) and how many raced.
+        uint32 id = 0;
+        uint32 startedAt = 0;
+        uint8 field = 0;
         // Weapons, live from the start: the crates, the shots relayed in the last SHOT_LIFETIME
         // keyed by shooter low guid << 16 | shot, and the race's MixRNG state.
         std::vector<Crate> crates;
@@ -669,6 +673,40 @@ namespace Kartcraft
         } while (result->NextRow());
         sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Kartcraft: %u best %s times on %u courses.", count, what,
             uint32(board.records.size()));
+    }
+
+    // Every racer's result in every race, for the website's leaderboards and the ladder: a row a
+    // finish (its place and time), a DNF at the race's close and a retirement (place 0).
+    static void CreateResults()
+    {
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_results` ("
+            "`id` INT UNSIGNED NOT NULL AUTO_INCREMENT, "
+            "`race_at` INT UNSIGNED NOT NULL COMMENT 'when the race started, unix time', "
+            "`race` INT UNSIGNED NOT NULL COMMENT 'the server''s race id, since its start', "
+            "`course` VARCHAR(32) NOT NULL COMMENT 'course key, courses/courses.json', "
+            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
+            "`name` VARCHAR(12) NOT NULL COMMENT 'character name then', "
+            "`place` TINYINT UNSIGNED NOT NULL COMMENT '1 the winner; 0 did not finish', "
+            "`field` TINYINT UNSIGNED NOT NULL COMMENT 'racers at the start', "
+            "`ms` INT UNSIGNED NOT NULL COMMENT 'race time, ms; 0 did not finish', "
+            "`trial` TINYINT UNSIGNED NOT NULL COMMENT '1 a time trial', "
+            "`at` INT UNSIGNED NOT NULL COMMENT 'when the result came, unix time', "
+            "PRIMARY KEY (`id`), KEY `guid` (`guid`), KEY `course` (`course`, `ms`), KEY `at` (`at`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+    }
+
+    // One racer's result in a started race: `place` 0 did not finish.
+    static void RecordResult(Race const& r, Racer const& x, uint32 place, uint32 ms)
+    {
+        if (!r.start || !r.course)
+            return;
+        std::string escaped = x.name;
+        CharacterDatabase.escape_string(escaped);
+        CharacterDatabase.PExecute("INSERT INTO `kartcraft_results` (`race_at`, `race`, `course`, `guid`, "
+            "`name`, `place`, `field`, `ms`, `trial`, `at`) VALUES (%u, %u, '%s', %u, '%s', %u, %u, %u, %u, %u)",
+            r.startedAt, r.id, r.course->key, x.guid.GetCounter(), escaped.c_str(), place, uint32(r.field), ms,
+            r.timeTrial ? 1u : 0u, uint32(std::time(nullptr)));
     }
 
     // A finish of `ms` on `course`: "r" a new course record, "p" a new personal best, else "".
@@ -1194,6 +1232,8 @@ namespace Kartcraft
     // in the roster starts the race instead, as the clients already show (the first is the host).
     static void RemoveRacer(Race& race, std::vector<Racer>::iterator racer)
     {
+        if (race.start && !racer->finished)
+            RecordResult(race, *racer, 0, 0);
         uint32 low = racer->guid.GetCounter();
         race.racers.erase(racer);
         DropShots(race, low);
@@ -1788,6 +1828,9 @@ namespace Kartcraft
     static void StartRace(uint32 id, Race& r, uint32 now, uint32 countdown)
     {
         r.start = now + countdown;
+        r.id = id;
+        r.startedAt = uint32(std::time(nullptr));
+        r.field = uint8(std::min<size_t>(r.racers.size(), 255));
         OpenDoors(id, r);
         SendRace(r, "KARTCRAFT\tR\tGT\t" + std::to_string(id) + "\t" + (r.groundTypes ? "1" : "0"));
         std::string points;
@@ -2912,6 +2955,7 @@ namespace Kartcraft
                 if (!r.firstFinish)
                     r.firstFinish = now ? now : 1;
                 uint32 ms = WorldTimer::getMSTimeDiff(r.start, now);
+                RecordResult(r, *me, place, ms);
                 std::string const best = RecordFinish(BoardOf(r), player->GetGUIDLow(), me->name, c, ms);
                 SendRace(r, "KARTCRAFT\tR\tF\t" + std::to_string(id) + "\t" + me->name + "\t" +
                     std::to_string(place) + "\t" + std::to_string(ms) + "\t" + best);
@@ -2975,6 +3019,7 @@ namespace Kartcraft
                 {
                     x.finished = true;
                     x.place = 0;
+                    RecordResult(r, x, 0, 0);
                     SendRace(r, "KARTCRAFT\tR\tDNF\t" + std::to_string(it->first) + "\t" + x.name);
                 }
             it = s_races.erase(it);
@@ -3361,6 +3406,7 @@ namespace Kartcraft
         marshal->pGossipHello = &MarshalHello;
         marshal->pGossipSelect = &MarshalSelect;
         marshal->RegisterSelf(true);
+        CreateResults();
         LoadRecords(s_raceBoard, "race");
         LoadRecords(s_trialBoard, "time trial");
     }
