@@ -805,6 +805,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "1",
         "Kartcraft's own — race mode kept across logins; 1.12 has no kart",
     ),
+    // The cross-faction World channel, joined at login until the player leaves it.
+    ours(
+        "KartWorldChat",
+        "1",
+        "Kartcraft's own — the World channel joined at login; 1.12 has no such channel",
+    ),
     // The clean screen for filming (`/kartclean`): CTR's HUD and the guide arrow step aside with
     // the WoW interface; held for the session only (`load_config`).
     ours(

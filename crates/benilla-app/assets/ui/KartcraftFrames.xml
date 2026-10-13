@@ -930,6 +930,25 @@
             end
         end
 
+        -- The World channel, one for every faction (the server's AllowTwoSide.Interaction.Channel):
+        -- joined into the main chat window once a session, as /join does, unless the player left it
+        -- (KartWorldChat, on by default; a /join World brings it back).
+        function BenillaKart_WorldChatJoin()
+            if BenillaKartWorldJoined or GetCVar("KartWorldChat") == "0" then return end
+            BenillaKartWorldJoined = 1
+            JoinChannelByName("World", nil, DEFAULT_CHAT_FRAME:GetID())
+            ChatFrame_AddChannel(DEFAULT_CHAT_FRAME, "World")
+        end
+
+        function BenillaKart_WorldChatNotice()
+            if not arg9 or strlower(arg9) ~= "world" then return end
+            if arg1 == "YOU_LEFT" then
+                SetCVar("KartWorldChat", "0")
+            elseif arg1 == "YOU_JOINED" then
+                SetCVar("KartWorldChat", "1")
+            end
+        end
+
         -- A line of Kartcraft news in the chat, as the system's lines are.
         function BenillaKart_Say(text)
             if DEFAULT_CHAT_FRAME then
@@ -1123,6 +1142,9 @@
                 BenillaKartSeated_Set(arg1 == 1)
             elseif event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_REGEN_ENABLED" then
                 BenillaKart_RaceModeRestore()
+                if event == "PLAYER_ENTERING_WORLD" then BenillaKart_WorldChatJoin() end
+            elseif event == "CHAT_MSG_CHANNEL_NOTICE" then
+                BenillaKart_WorldChatNotice()
             elseif event == "CHAT_MSG_ADDON" then
                 if arg1 == BENILLA_KART_PREFIX then BenillaKartFinder_OnLine(arg2) end
             elseif event == "BENILLA_KART_RACE" then
@@ -2954,6 +2976,7 @@
                 this:RegisterEvent("BENILLA_KART_SEATED")
                 this:RegisterEvent("PLAYER_ENTERING_WORLD")
                 this:RegisterEvent("PLAYER_REGEN_ENABLED")
+                this:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
                 BenillaKart_WatchUIParent()
             </OnLoad>
             <OnEvent>BenillaKartEvents_OnEvent()</OnEvent>

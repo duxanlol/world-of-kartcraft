@@ -1876,6 +1876,57 @@ fn race_mode_is_asked_of_the_server_and_its_answer_ticks_the_menu() {
 }
 
 #[test]
+fn the_world_channel_is_joined_at_login_until_the_player_leaves_it() {
+    use benilla_ui::script::ChannelCommand;
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let joins = |s: &mut UiScript| -> Vec<String> {
+        s.take_channel_commands()
+            .into_iter()
+            .filter_map(|c| match c {
+                ChannelCommand::Join { name, .. } => Some(name),
+                _ => None,
+            })
+            .collect()
+    };
+    let notice = |s: &mut UiScript, what: &str| {
+        let mut args = vec![ScriptValue::Str(what.into())];
+        args.extend((2..=8).map(|_| ScriptValue::Str(String::new())));
+        args.push(ScriptValue::Str("World".into()));
+        s.fire_event("CHAT_MSG_CHANNEL_NOTICE", args);
+    };
+    s.run("SetCVar('KartWorldChat', '1') BenillaKartWorldJoined = nil")
+        .unwrap();
+    joins(&mut s);
+
+    // On by default: the login joins it into the main window; a zone-in does not again.
+    s.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
+    assert_eq!(joins(&mut s), ["World"]);
+    assert!(s
+        .eval::<bool>(
+            "for _, c in DEFAULT_CHAT_FRAME.channelList do if c == 'World' then return true end end \
+             return false"
+        )
+        .unwrap());
+    s.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
+    assert!(joins(&mut s).is_empty());
+    // Left: the next session's login keeps out of it; a /join brings it back.
+    notice(&mut s, "YOU_LEFT");
+    s.run("BenillaKartWorldJoined = nil").unwrap();
+    s.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
+    assert!(joins(&mut s).is_empty());
+    notice(&mut s, "YOU_JOINED");
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartWorldChat')").unwrap(),
+        "1"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+#[test]
 fn race_mode_is_asked_for_at_every_login_until_turned_off() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK

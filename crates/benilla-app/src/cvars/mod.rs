@@ -2282,6 +2282,10 @@ mod tests {
                 "KartRaceMode",
                 "the layer's KartcraftFrames.xml asks for race mode at every login by it",
             ),
+            (
+                "KartWorldChat",
+                "the layer's KartcraftFrames.xml joins the World channel at login by it",
+            ),
         ];
         let app_src = crate::test_support::src_dir();
         let ui_src = app_src

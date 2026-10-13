@@ -144,9 +144,10 @@ if (-not (Test-Path $Compose)) {
     Invoke-Native 'checking out vmangos-deploy' { git -C $Server checkout --quiet $ServerRev }
     Copy-Item (Join-Path $Server 'config\mangosd.conf.example') (Join-Path $Server 'config\mangosd.conf')
     Copy-Item (Join-Path $Server 'config\realmd.conf.example') (Join-Path $Server 'config\realmd.conf')
-    # Horde and Alliance race together: a PvP realm lets an account have both only with this.
+    # Horde and Alliance race together: a PvP realm lets an account have both only with this; and
+    # talk together, in say, whispers and every channel (the World channel the client joins).
     $MangosConf = Join-Path $Server 'config\mangosd.conf'
-    [IO.File]::WriteAllText($MangosConf, ([IO.File]::ReadAllText($MangosConf) -replace '(?m)^AllowTwoSide\.Accounts = 0', 'AllowTwoSide.Accounts = 1'))
+    [IO.File]::WriteAllText($MangosConf, ([IO.File]::ReadAllText($MangosConf) -replace '(?m)^AllowTwoSide\.Accounts = 0', 'AllowTwoSide.Accounts = 1' -replace '(?m)^AllowTwoSide\.Interaction\.Chat = 0', 'AllowTwoSide.Interaction.Chat = 1' -replace '(?m)^AllowTwoSide\.Interaction\.Channel = 0', 'AllowTwoSide.Interaction.Channel = 1'))
     # The example's `user:` lines only matter on Linux hosts; its time zone stays UTC.
     Copy-Item (Join-Path $Server 'compose.yaml.example') $Compose
 }
