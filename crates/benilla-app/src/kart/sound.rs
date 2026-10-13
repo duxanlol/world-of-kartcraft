@@ -35,12 +35,19 @@ pub(super) fn overtakes(
     match overtake(before, place, (time.elapsed_secs() - go) * 1000.0) {
         Some(Overtake::Passed(at)) => {
             let passer = order[at - 1].as_str();
-            let racer = remotes
+            let kart = remotes
                 .karts
                 .values()
-                .find(|k| names.as_ref().and_then(|n| n.peek(k.guid)) == Some(passer))
-                .map_or("", |k| remotes.racer(k.guid));
-            audio.say_as(line::OVERTAKE, racer);
+                .find(|k| names.as_ref().and_then(|n| n.peek(k.guid)) == Some(passer));
+            if audio.wow_voices {
+                // In their own character's voice; a racer whose kart is not relayed says nothing.
+                if let Some(k) = kart {
+                    audio.say_wow(line::OVERTAKE, Some(k.guid));
+                }
+            } else {
+                let racer = kart.map_or("", |k| remotes.racer(k.guid));
+                audio.say_as(line::OVERTAKE, racer);
+            }
         }
         Some(Overtake::Passing) => audio.say(line::OVERTAKE),
         None => {}
@@ -55,6 +62,7 @@ pub(super) fn update(
     output: Option<NonSendMut<crate::sound::SoundOutput>>,
     mut sounds: Local<Sounds>,
 ) {
+    audio.wow_voices = settings.wow_voices;
     let Some(mixer) = output.and_then(|o| o.into_inner().mixer.as_mut()) else {
         audio.cues.clear();
         return;
@@ -70,6 +78,41 @@ pub(super) fn update(
     sounds.update(&mut audio, drive.active, sfx, |data| {
         mixer.play_2d(data).ok()
     });
+}
+
+/// The racers' lines in their WoW characters' voices (`KartWowVoices`): a wound vocal from the
+/// character's own voice set, or the text-emote voice of their race and sex, played where they
+/// are as the client plays a grunt or a `/cheer`.
+pub(super) fn wow_voices(
+    mut audio: ResMut<KartAudio>,
+    me: Res<crate::net::SelfGuid>,
+    index: Res<crate::net::GuidIndex>,
+    emotes: Option<Res<crate::sound::EmoteSounds>>,
+    mut emote_out: MessageWriter<crate::net::EmoteMessage>,
+    mut injury_out: MessageWriter<crate::sound::InjuryVocal>,
+) {
+    use kartcraft::voice::WowLine;
+    for (said, who) in std::mem::take(&mut audio.wow_said) {
+        let Some(source) = who.or(me.0).and_then(|g| index.0.get(&g).copied()) else {
+            continue;
+        };
+        match said {
+            WowLine::Injury | WowLine::InjuryCrit => {
+                injury_out.write(crate::sound::InjuryVocal {
+                    source,
+                    crit: said == WowLine::InjuryCrit,
+                });
+            }
+            WowLine::Emote(command) => {
+                if let Some(text_id) = emotes.as_ref().and_then(|e| e.text_id(command)) {
+                    emote_out.write(crate::net::EmoteMessage {
+                        source: Some(source),
+                        kind: crate::net::EmoteKind::Text(text_id),
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// Other drivers' karts within this many yards are heard.
@@ -146,4 +189,45 @@ pub(super) fn remote_engines(
         }
         keep
     });
+}
+
+#[cfg(test)]
+mod tests {
+    /// `ChrRaces.dbc`'s male and female display ids of the eight 1.12 races, by race id.
+    const RACE_DISPLAYS: [(u32, [u32; 2]); 8] = [
+        (1, [49, 50]),
+        (2, [51, 52]),
+        (3, [53, 54]),
+        (4, [55, 56]),
+        (5, [57, 58]),
+        (6, [59, 60]),
+        (7, [1563, 1564]),
+        (8, [1478, 1479]),
+    ];
+
+    /// Every WoW line a racer can say has a voice for every race and sex: the wound vocals in the
+    /// body's voice set, the emote voices in `EmotesTextSound`.
+    #[test]
+    fn every_character_has_a_voice_for_every_wow_line() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let emotes = benilla_formats::load_emote_sound_catalog(&mut chain).expect("emotes");
+        let voices = benilla_formats::load_creature_voice_catalog(&mut chain).expect("voices");
+        for (race, displays) in RACE_DISPLAYS {
+            for (sex, display) in displays.into_iter().enumerate() {
+                let set = voices.for_display(display).expect("voice set");
+                assert!(
+                    set.injury[0] != 0 && set.injury[1] != 0,
+                    "race {race} sex {sex}"
+                );
+                for command in kartcraft::voice::EMOTES {
+                    let text = emotes.text_id(command).expect(command);
+                    assert!(
+                        emotes.voice(text, race, sex as u32).is_some_and(|k| k != 0),
+                        "{command}: race {race} sex {sex}"
+                    );
+                }
+            }
+        }
+    }
 }

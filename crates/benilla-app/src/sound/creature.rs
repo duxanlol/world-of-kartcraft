@@ -563,9 +563,67 @@ fn fall_landing_vocals(
     }
 }
 
+/// A unit's wound vocal asked for outside melee (Kartcraft's kart: a hit, a spin, a crash), from
+/// its own body's voice set (`UNIT_FIELD_NATIVEDISPLAYID`, so a morph or a mount does not change
+/// it): `[normal, critical]` as [`benilla_formats::CreatureVoice::injury`] holds them.
+#[derive(Message, Clone, Copy)]
+pub(crate) struct InjuryVocal {
+    pub(crate) source: Entity,
+    pub(crate) crit: bool,
+}
+
+fn injury_vocals(
+    mut asked: MessageReader<InjuryVocal>,
+    units: Query<(&ObjectStore, &NetEntity, &Transform)>,
+    voices: Option<Res<CreatureVoices>>,
+    kits: Option<ResMut<SoundKits>>,
+    assets: Option<Res<WorldAssets>>,
+    mut out: NonSendMut<SoundOutput>,
+    config: Res<SoundConfig>,
+    listener: Res<AudioListener>,
+) {
+    if asked.is_empty() {
+        return;
+    }
+    let (Some(voices), Some(mut kits), Some(assets)) = (voices, kits, assets) else {
+        asked.clear();
+        return;
+    };
+    let listener = listener.pos;
+    for a in asked.read() {
+        let Ok((store, net, transform)) = units.get(a.source) else {
+            continue;
+        };
+        let display = store
+            .0
+            .unit_native_displayid()
+            .and_then(|d| u32::try_from(d).ok())
+            .or(net.display_id);
+        let kit = display
+            .and_then(|d| voices.0.for_display(d))
+            .map_or(0, |v| v.injury[usize::from(a.crit)]);
+        if kit == 0 {
+            continue;
+        }
+        if let Err(e) = play_kit(
+            &mut kits,
+            &assets,
+            &mut out,
+            &config,
+            listener,
+            KitRef::Id(kit),
+            Some(transform.translation),
+            SoundCategory::Sfx,
+        ) {
+            warn!("injury vocal (kit {kit}): {e:#}");
+        }
+    }
+}
+
 /// Registration hook for [`super::SoundPlugin`].
 pub(super) fn plugin(app: &mut App) {
-    app.add_systems(Startup, load_creature_voices.after(AssetSet::Open))
+    app.add_message::<InjuryVocal>()
+        .add_systems(Startup, load_creature_voices.after(AssetSet::Open))
         .add_systems(
             Update,
             (
@@ -575,6 +633,7 @@ pub(super) fn plugin(app: &mut App) {
                 pet_talk_vocals,
                 pet_dismiss_sounds,
                 fall_landing_vocals,
+                injury_vocals,
                 creature_body_loops,
             )
                 .in_set(WorldStage::Present),

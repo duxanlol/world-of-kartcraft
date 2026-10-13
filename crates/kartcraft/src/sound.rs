@@ -186,9 +186,15 @@ pub struct KartAudio {
     pub wall_volume: u8,
     /// Voice lines to play this frame (files).
     pub voices: Vec<PathBuf>,
+    /// The racers speak in their WoW characters' voices ([`crate::voice::WowLine`]) instead of
+    /// CTR's cast; the host sets it, and plays [`KartAudio::wow_said`].
+    pub wow_voices: bool,
+    /// WoW lines to say this frame, and who says them (`None` us, else their guid).
+    pub wow_said: Vec<(crate::voice::WowLine, Option<u64>)>,
     /// The game frames left before another kart crash sounds (`VehPhysCrash.c:520-524`).
     bump_cooldown: u8,
     voice: crate::voice::Voice,
+    wow_pace: crate::voice::WowPace,
 }
 
 /// The final lap's music (`HOWL_AudioState.c:79-87`, `:330-345`): the XA sting (music index
@@ -320,7 +326,9 @@ impl KartAudio {
     }
 
     pub fn reset(&mut self) {
+        let wow_voices = self.wow_voices;
         *self = Self::default();
+        self.wow_voices = wow_voices;
     }
 
     /// The voices, reading the converted lines from `kart-data/audio/voice`.
@@ -334,7 +342,21 @@ impl KartAudio {
     /// Asks for our racer's ([`crate::model::our_kart`]) voice line `id`
     /// (`Voiceline_RequestPlay`).
     pub fn say(&mut self, id: u8) {
-        self.say_as(id, crate::model::our_kart());
+        if self.wow_voices {
+            self.say_wow(id, None);
+        } else {
+            self.say_as(id, crate::model::our_kart());
+        }
+    }
+
+    /// Asks for voice line `id` in a WoW character's voice: ours (`None`) or the racer's with
+    /// this guid.
+    pub fn say_wow(&mut self, id: u8, who: Option<u64>) {
+        if let Some(said) = crate::voice::wow_line(id) {
+            if self.wow_pace.request(id, who) {
+                self.wow_said.push((said, who));
+            }
+        }
     }
 
     /// Asks for voice line `id` in `racer`'s voice (another driver's kart look; `""` is Crash).
@@ -375,6 +397,7 @@ impl KartAudio {
             .saturating_add(WALL_RUB_STEP.saturating_mul(fb.wall_frames.min(13)));
         self.wall_volume = v.saturating_sub(WALL_RUB_STEP.saturating_mul(off.min(13)));
         self.bump_cooldown = self.bump_cooldown.saturating_sub(fb.frames);
+        self.wow_pace.advance(u32::from(fb.frames));
         let voice = self.voice();
         let said: Vec<PathBuf> = (0..fb.frames).filter_map(|_| voice.frame()).collect();
         self.voices.extend(said);

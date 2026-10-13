@@ -700,12 +700,14 @@ pub(crate) mod schedule_tests {
     ///   and the checkpoint arrows (in `kart::race::beams`, read through the camera's
     ///   `GlobalTransform`), the seat placement and the race map's feed add more pairs of the same
     ///   kind: each writes only its own arrow, seat pose or event feed, against the screens and
-    ///   world writers above.
+    ///   world writers above. The kart's WoW voices' wound vocal (`sound::creature::injury_vocals`)
+    ///   has `fall_landing_vocals`' pairs exactly: it reads a unit's `Transform` for where the
+    ///   grunt sounds, and a frame-old place is the same sound.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_012;
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_028;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

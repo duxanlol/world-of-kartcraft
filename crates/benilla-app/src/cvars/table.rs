@@ -768,6 +768,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "1",
         "Kartcraft's own — CTR's race music; 1.12 has no kart",
     ),
+    // The racers' voices: their WoW characters' (`kart::sound::wow_voices`), else CTR's cast's.
+    ours(
+        "KartWowVoices",
+        "1",
+        "Kartcraft's own — the racers' voices; 1.12 has no kart",
+    ),
     ours(
         "KartMusicVolume",
         "1",

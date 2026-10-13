@@ -278,10 +278,120 @@ impl Voice {
     }
 }
 
+/// What a racer says for a CTR voice line in their WoW character's own voice (Kartcraft's own:
+/// the racers are WoW characters, not CTR's cast). The hits and crashes are the character's
+/// wound vocal, the hard ones its critical; the rest are its text-emote voices, by `/command`,
+/// among those `EmotesTextSound.dbc` voices for every race and sex (1.12's `/laugh` and `/roar`
+/// sound from the body's animation instead, which a seated driver does not play).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WowLine {
+    Injury,
+    InjuryCrit,
+    Emote(&'static str),
+}
+
+/// The text emotes [`wow_line`] speaks with.
+pub const EMOTES: [&str; 7] = [
+    "thank", "bye", "cheer", "openfire", "charge", "incoming", "wait",
+];
+
+/// The WoW line for CTR's voice line `id`.
+pub fn wow_line(id: u8) -> Option<WowLine> {
+    Some(match id {
+        line::DAMAGE | line::SPIN => WowLine::Injury,
+        line::SQUISH | line::HARD_CRASH | line::WALL_CRASH => WowLine::InjuryCrit,
+        // A hit the mask or the shield shrugged off: CTR's victim laughs.
+        line::LAUGH => WowLine::Emote("thank"),
+        line::OVERTAKE => WowLine::Emote("bye"),
+        line::HANG_TIME | line::BIG_BOOST => WowLine::Emote("cheer"),
+        line::BOMB | line::MISSILE => WowLine::Emote("openfire"),
+        line::WARP_ORB => WowLine::Emote("charge"),
+        line::MINE => WowLine::Emote("incoming"),
+        line::CLOCK => WowLine::Emote("wait"),
+        _ => return None,
+    })
+}
+
+/// The WoW lines' pacing, CTR's own gates kept: lines 8 and up speak one time in 4
+/// (`HOWL_Voiceline.c:144-150`), and a racer speaks again only 0x3D frames after their last line
+/// (the bank lines' gap, `:156`). A speaker is `None` for us, else their guid.
+#[derive(Clone, Debug)]
+pub struct WowPace {
+    rng: u32,
+    frame: u64,
+    last: HashMap<Option<u64>, u64>,
+}
+
+impl Default for WowPace {
+    fn default() -> Self {
+        Self {
+            rng: 0x1234_5678,
+            frame: 0,
+            last: HashMap::new(),
+        }
+    }
+}
+
+impl WowPace {
+    /// Whether `who` says line `id` now.
+    pub fn request(&mut self, id: u8, who: Option<u64>) -> bool {
+        if id >= 8 && next(&mut self.rng) & 3 != 0 {
+            return false;
+        }
+        if self.last.get(&who).is_some_and(|at| self.frame - at < 0x3D) {
+            return false;
+        }
+        self.last.insert(who, self.frame);
+        true
+    }
+
+    /// CTR's game frames go by.
+    pub fn advance(&mut self, frames: u32) {
+        self.frame += u64::from(frames);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Event;
+
+    #[test]
+    fn ctr_lines_become_the_character_s_wow_voice() {
+        assert_eq!(wow_line(line::DAMAGE), Some(WowLine::Injury));
+        assert_eq!(wow_line(line::WALL_CRASH), Some(WowLine::InjuryCrit));
+        assert_eq!(wow_line(line::BIG_BOOST), Some(WowLine::Emote("cheer")));
+        assert_eq!(wow_line(line::OVERTAKE), Some(WowLine::Emote("bye")));
+        assert_eq!(wow_line(line::MISSILE), Some(WowLine::Emote("openfire")));
+        // Every line an event or a weapon asks for has a WoW voice, its emote listed.
+        for id in [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 14, 15, 16] {
+            match wow_line(id) {
+                Some(WowLine::Emote(e)) => assert!(EMOTES.contains(&e), "{e}"),
+                Some(_) => {}
+                None => panic!("line {id}"),
+            }
+        }
+    }
+
+    #[test]
+    fn wow_lines_keep_ctr_s_gap_per_speaker_and_its_roll_for_the_common_ones() {
+        let mut pace = WowPace::default();
+        assert!(pace.request(line::DAMAGE, None));
+        // Too soon for us; another racer is free to speak.
+        assert!(!pace.request(line::SPIN, None));
+        assert!(pace.request(line::SPIN, Some(7)));
+        pace.advance(0x3C);
+        assert!(!pace.request(line::DAMAGE, None));
+        pace.advance(1);
+        assert!(pace.request(line::DAMAGE, None));
+        // Lines 8 and up: about one time in four, never back to back within the gap.
+        let mut spoke = 0;
+        for _ in 0..400 {
+            pace.advance(0x3D);
+            spoke += u32::from(pace.request(line::BIG_BOOST, None));
+        }
+        assert!((60..140).contains(&spoke), "{spoke} of 400");
+    }
 
     fn lines() -> Lines {
         Lines {

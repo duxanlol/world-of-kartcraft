@@ -648,7 +648,7 @@ pub(crate) fn plugin(app: &mut App) {
                 race::beams,
                 race::guide,
                 model::update,
-                sound::update,
+                (sound::update, sound::wow_voices).chain(),
                 kartcraft::rumble::send,
                 score::track_skill,
                 ui::publish,

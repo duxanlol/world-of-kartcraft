@@ -43,6 +43,7 @@ mod vocal;
 mod water;
 mod weather;
 mod zone;
+pub(crate) use creature::InjuryVocal;
 pub(crate) use emote::EmoteSounds;
 /// First-play kit decodes so far, for the probe's tail line.
 pub(crate) fn kit_decodes() -> u32 {

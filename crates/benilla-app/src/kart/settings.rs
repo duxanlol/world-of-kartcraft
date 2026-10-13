@@ -20,6 +20,8 @@
 //!   `off`, `fly`, `tripod`, `low` or `orbit`; held for the session only.
 //! - `KartGateHeight`: how tall a race checkpoint's sheet of light stands (yards, 0 to 40; 0 leaves
 //!   the beams at its ends alone). How it looks only: the gate passed is as wide as ever.
+//! - `KartWowVoices`: the racers speak in their WoW characters' voices (wound vocals and
+//!   text-emote voices, [`kartcraft::voice::WowLine`]) instead of CTR's cast, on by default.
 //! - `KartRumble`: the controller shakes on crashes, hard landings and wall scrapes
 //!   ([`kartcraft::rumble`]), as CTR's vibration does, on by default.
 //! - `KartCam*`: the chase camera's shape, the camera window's (`/kartcam`), one CVar a
@@ -114,6 +116,8 @@ pub(crate) struct KartSettings {
     pub(crate) terrain: bool,
     /// Shake the controller ([`kartcraft::rumble`]).
     pub(crate) rumble: bool,
+    /// The racers speak in their WoW characters' voices, not CTR's cast's.
+    pub(crate) wow_voices: bool,
     /// A checkpoint gate's sheet of light, its height in yards.
     pub(crate) gate_height: f32,
     /// The chase camera's shape.
@@ -131,6 +135,7 @@ impl Default for KartSettings {
             ghost: true,
             terrain: false,
             rumble: true,
+            wow_voices: true,
             gate_height: GATE_HEIGHT_DEFAULT,
             camera: CameraTuning::default(),
         }
@@ -180,6 +185,7 @@ pub(crate) fn on_cvar(
         "kartghost" => settings.ghost = ev.flag(),
         "kartterrain" => settings.terrain = ev.flag(),
         "kartrumble" => settings.rumble = ev.flag(),
+        "kartwowvoices" => settings.wow_voices = ev.flag(),
         "karthidehud" => {
             hidden.0 = ev.flag();
             hud.clean = ev.flag();
