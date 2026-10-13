@@ -798,6 +798,13 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "0",
         "Kartcraft's own — the first drive's tip; 1.12 has no kart",
     ),
+    // Race mode (the minimap button's menu) asked for again at every login: the server ends it
+    // at logout.
+    ours(
+        "KartRaceMode",
+        "1",
+        "Kartcraft's own — race mode kept across logins; 1.12 has no kart",
+    ),
     // The clean screen for filming (`/kartclean`): CTR's HUD and the guide arrow step aside with
     // the WoW interface; held for the session only (`load_config`).
     ours(

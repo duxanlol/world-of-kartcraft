@@ -863,6 +863,7 @@
             elseif verb == "Un" then
                 BenillaKart_Say("Unstuck: no course starts within 300 yards.")
             elseif verb == "M" then
+                SetCVar("KartRaceMode", line[3] == "1" and "1" or "0")
                 if line[3] == "1" then
                     BenillaKartRaceMode = 1
                     BenillaKart_Say("Race mode on: nobody can target or attack you, and you can't attack anyone.")
@@ -919,6 +920,14 @@
         -- waiting in the queue in peace. The server answers with its state (refused in combat).
         function BenillaKart_RaceModeToggle()
             if BenillaKartRaceMode then BenillaKart_Send("M\t0") else BenillaKart_Send("M\t1") end
+        end
+
+        -- The server ends race mode at logout; it is kept as KartRaceMode (on by default) and asked
+        -- for again on entering the world, or once out of combat when it was refused in it.
+        function BenillaKart_RaceModeRestore()
+            if GetCVar("KartRaceMode") ~= "0" and not BenillaKartRaceMode then
+                BenillaKart_Send("M\t1")
+            end
         end
 
         -- A line of Kartcraft news in the chat, as the system's lines are.
@@ -1112,6 +1121,8 @@
         function BenillaKartEvents_OnEvent()
             if event == "BENILLA_KART_SEATED" then
                 BenillaKartSeated_Set(arg1 == 1)
+            elseif event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_REGEN_ENABLED" then
+                BenillaKart_RaceModeRestore()
             elseif event == "CHAT_MSG_ADDON" then
                 if arg1 == BENILLA_KART_PREFIX then BenillaKartFinder_OnLine(arg2) end
             elseif event == "BENILLA_KART_RACE" then
@@ -1249,7 +1260,7 @@
                 { text = "World of Kartcraft", isTitle = 1 },
                 { text = "Race Finder", func = BenillaKartFinder_Toggle },
                 { text = "Race mode", func = BenillaKart_RaceModeToggle, checkable = 1, checked = BenillaKartRaceMode,
-                  tooltipTitle = "Race mode", tooltipText = "Nobody can target or attack you, and you can't attack anyone: for waiting in the queue." },
+                  tooltipTitle = "Race mode", tooltipText = "Nobody can target or attack you, and you can't attack anyone: for waiting in the queue. Kept across logins." },
                 { text = "Track browser", func = BenillaKartTrackBrowser_Toggle },
                 { text = "Show Race Marshals", func = BenillaKart_MarshalsToggle, checkable = 1,
                   checked = GetCVar("KartRaceMarshals") ~= "0", keepShownOnClick = 1,
@@ -2941,6 +2952,8 @@
                 this:RegisterEvent("BENILLA_KART_COURSE_NAMES")
                 this:RegisterEvent("BENILLA_KART_GARAGE")
                 this:RegisterEvent("BENILLA_KART_SEATED")
+                this:RegisterEvent("PLAYER_ENTERING_WORLD")
+                this:RegisterEvent("PLAYER_REGEN_ENABLED")
                 BenillaKart_WatchUIParent()
             </OnLoad>
             <OnEvent>BenillaKartEvents_OnEvent()</OnEvent>

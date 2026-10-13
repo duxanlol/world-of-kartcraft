@@ -1876,6 +1876,44 @@ fn race_mode_is_asked_of_the_server_and_its_answer_ticks_the_menu() {
 }
 
 #[test]
+fn race_mode_is_asked_for_at_every_login_until_turned_off() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let login = |s: &mut UiScript| {
+        s.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
+        sent(s)
+    };
+    s.run("SetCVar('KartRaceMode', '1') BenillaKartRaceMode = nil")
+        .unwrap();
+    sent(&mut s);
+
+    // On by default: the first login asks; once on, a zone-in does not ask again.
+    assert_eq!(login(&mut s), ["KARTCRAFT\tR\tM\t1"]);
+    from_server(&mut s, "R\tM\t1");
+    assert!(login(&mut s).is_empty());
+    // Refused in combat at login: asked again once the fight is over.
+    s.run("BenillaKartRaceMode = nil").unwrap();
+    assert_eq!(login(&mut s), ["KARTCRAFT\tR\tM\t1"]);
+    from_server(&mut s, "R\tMx");
+    s.fire_event("PLAYER_REGEN_ENABLED", Vec::new());
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tM\t1"]);
+    from_server(&mut s, "R\tM\t1");
+    // Turned off (the menu entry's toggle): kept off at the next login.
+    s.run("BenillaKart_RaceModeToggle()").unwrap();
+    sent(&mut s);
+    from_server(&mut s, "R\tM\t0");
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartRaceMode')").unwrap(),
+        "0"
+    );
+    assert!(login(&mut s).is_empty());
+    s.run("SetCVar('KartRaceMode', '1')").unwrap();
+}
+
+#[test]
 fn the_finder_shows_the_queue_and_the_hosted_races_and_joins_one() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK

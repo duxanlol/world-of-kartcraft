@@ -2278,6 +2278,10 @@ mod tests {
                 "KartTipSeen",
                 "the layer's KartcraftFrames.xml shows the first drive's tip by it",
             ),
+            (
+                "KartRaceMode",
+                "the layer's KartcraftFrames.xml asks for race mode at every login by it",
+            ),
         ];
         let app_src = crate::test_support::src_dir();
         let ui_src = app_src
