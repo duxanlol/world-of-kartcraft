@@ -143,7 +143,8 @@ impl Default for KartSettings {
             wow_voices: true,
             gate_height: GATE_HEIGHT_DEFAULT,
             pad_test: false,
-            camera: CameraTuning::default(),
+            // CTR classic, everyone's to start with: the camera CTR's players know.
+            camera: CameraTuning::CTR,
         }
     }
 }
@@ -400,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn the_camera_cvars_default_to_kartcraft_s_tuning_inside_their_ranges() {
+    fn the_camera_cvars_default_to_ctr_classic_inside_their_ranges() {
         let mut from_cvars = CameraTuning::CTR;
         for k in &CAMERA_KNOBS {
             let value: f32 = registered(k.cvar).parse().unwrap();
@@ -413,8 +414,8 @@ mod tests {
         }
         from_cvars.wall_pull = registered("KartCamWallPull") != "0";
         from_cvars.travel = registered("KartCamTravel") != "0";
-        assert_eq!(from_cvars, CameraTuning::KARTCRAFT);
-        assert_eq!(KartSettings::default().camera, CameraTuning::KARTCRAFT);
+        assert_eq!(from_cvars, CameraTuning::CTR);
+        assert_eq!(KartSettings::default().camera, CameraTuning::CTR);
     }
 
     #[test]

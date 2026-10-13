@@ -928,7 +928,22 @@
         function BenillaKart_RaceModeRestore()
             if GetCVar("KartRaceMode") ~= "0" and not BenillaKartRaceMode then
                 BenillaKart_Send("M\t1")
+                BenillaKartRaceModeAsk = { at = GetTime() + 5, tries = 1 }
             end
+        end
+
+        -- Asked again every 5 s until the server says it is on, a few times: a login's first ask
+        -- can go before the server listens. Not in a fight, which it refuses.
+        BenillaKartRaceModeAsk = { at = 0, tries = 0 }
+        function BenillaKart_RaceModeRetry()
+            local a = BenillaKartRaceModeAsk
+            if a.tries == 0 or a.tries >= 6 or BenillaKartRaceMode or GetCVar("KartRaceMode") == "0" then
+                return
+            end
+            if GetTime() < a.at or (UnitAffectingCombat and UnitAffectingCombat("player")) then return end
+            a.at = GetTime() + 5
+            a.tries = a.tries + 1
+            BenillaKart_Send("M\t1")
         end
 
         -- The World channel, one for every faction (the server's AllowTwoSide.Interaction.Channel):
@@ -1779,8 +1794,8 @@
             return { key = key, text = text, values = values }
         end
 
-        -- The presets, kartcraft::camera::CameraTuning's KARTCRAFT (the CVars' defaults), SMOOTH
-        -- and CTR as the camera CVars' values.
+        -- The presets, kartcraft::camera::CameraTuning's KARTCRAFT, SMOOTH and CTR (the CVars'
+        -- defaults) as the camera CVars' values.
         BENILLA_KART_CAMERA_PRESETS = {}
         do
             local kartcraft = BenillaKartCamera_Preset("kartcraft", "Kartcraft", nil, {
@@ -2213,6 +2228,7 @@
         -- The heartbeat, and the end of a ready check nobody answered.
         function BenillaKartEvents_OnUpdate()
             BenillaKartMinimap_Update()
+            BenillaKart_RaceModeRetry()
             local f = BenillaKartFinder
             if (f.queued or f.check) and GetTime() >= f.beat then
                 f.beat = GetTime() + BENILLA_KART_HEARTBEAT
@@ -2831,10 +2847,10 @@
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="310" y="-536"/></Offset></Anchor></Anchors>
             </CheckButton>
 
-            <Button name="$parentReset" inherits="UIPanelButtonTemplate" text="Reset to Kartcraft">
+            <Button name="$parentReset" inherits="UIPanelButtonTemplate" text="Reset to CTR classic">
                 <Size><AbsDimension x="160" y="22"/></Size>
                 <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="18"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartCamera_Apply("kartcraft")</OnClick></Scripts>
+                <Scripts><OnClick>BenillaKartCamera_Apply("ctr")</OnClick></Scripts>
             </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>

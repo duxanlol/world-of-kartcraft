@@ -899,12 +899,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
     ),
     ours(
         "KartCamFov",
-        "45",
+        "73.74",
         "Kartcraft's own — the chase camera's field of view; 1.12 has no kart",
     ),
     ours(
         "KartCamAimDrop",
-        "70",
+        "0",
         "Kartcraft's own — how much lower the chase camera aims; 1.12 has no kart",
     ),
     ours(
@@ -939,7 +939,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     ),
     ours(
         "KartCamTilt",
-        "1",
+        "0",
         "Kartcraft's own — the chase camera's slope tilt; 1.12 has no kart",
     ),
     ours(
@@ -959,7 +959,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     ),
     ours(
         "KartCamWallPull",
-        "1",
+        "0",
         "Kartcraft's own — the chase camera's pull-in at walls; 1.12 has no kart",
     ),
     // The garage: the engine class picked (Turning, the one every new kart driver has; the Karting

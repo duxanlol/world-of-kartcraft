@@ -993,7 +993,7 @@ fn the_camera_window_tunes_the_chase_camera() {
         .unwrap()
     };
 
-    // /kartcam opens it at the CVars' values, Kartcraft's, and opening it writes nothing.
+    // /kartcam opens it at the CVars' values, CTR classic's, and opening it writes nothing.
     assert_eq!(
         s.eval::<String>("return SLASH_BENILLA_KARTCAM1").unwrap(),
         "/kartcam"
@@ -1001,10 +1001,10 @@ fn the_camera_window_tunes_the_chase_camera() {
     s.run("SlashCmdList['BENILLA_KARTCAM']('')").unwrap();
     s.tick(0.0);
     assert!(shown(&s));
-    assert_eq!(preset(&s), "Kartcraft");
-    assert_eq!(camera_tuning(&s), CameraTuning::KARTCRAFT);
+    assert_eq!(preset(&s), "CTR classic");
+    assert_eq!(camera_tuning(&s), CameraTuning::CTR);
     assert_eq!(label(&s, "Distance"), "Distance at speed: 6.1 yd");
-    assert_eq!(label(&s, "Fov"), "Field of view: 45.0\u{b0}");
+    assert_eq!(label(&s, "Fov"), "Field of view: 73.7\u{b0}");
     assert_eq!(label(&s, "Swing"), "Powerslide swing: 100%");
     assert_eq!(label(&s, "TurnSmoothing"), "Turn smoothing: none");
     assert_eq!(label(&s, "YawOffset"), "Angle round the kart: behind");
@@ -1017,7 +1017,7 @@ fn the_camera_window_tunes_the_chase_camera() {
         ("ChaseCamera", true),
         ("FarCamera", false),
         ("Travel", false),
-        ("WallPull", true),
+        ("WallPull", false),
     ] {
         assert_eq!(
             s.eval::<bool>(&format!(
@@ -1069,18 +1069,18 @@ fn the_camera_window_tunes_the_chase_camera() {
         s.tick(0.0);
         pick(s, text);
     };
-    choose(&mut s, "CTR classic");
-    assert_eq!(camera_tuning(&s), CameraTuning::CTR);
-    assert_eq!(preset(&s), "CTR classic");
-    assert_eq!(label(&s, "Fov"), "Field of view: 73.7\u{b0}");
-    assert!(!s
+    choose(&mut s, "Kartcraft");
+    assert_eq!(camera_tuning(&s), CameraTuning::KARTCRAFT);
+    assert_eq!(preset(&s), "Kartcraft");
+    assert_eq!(label(&s, "Fov"), "Field of view: 45.0\u{b0}");
+    assert!(s
         .eval::<bool>("return BenillaKartCameraFrameWallPull:GetChecked() == 1")
         .unwrap());
     let changes = s.take_cvar_changes();
     assert!(
         changes
             .iter()
-            .any(|(n, v)| n.eq_ignore_ascii_case("KartCamFov") && v == "73.74"),
+            .any(|(n, v)| n.eq_ignore_ascii_case("KartCamFov") && v == "45"),
         "the host hears the preset: {changes:?}"
     );
     choose(&mut s, "Smooth follow");
@@ -1109,10 +1109,11 @@ fn the_camera_window_tunes_the_chase_camera() {
     assert_eq!(s.cvar("KartCamTravel").as_deref(), Some("0"));
     assert_eq!(s.cvar("KartFarCamera").as_deref(), Some("1"));
 
-    // Reset puts every camera CVar back to Kartcraft's; near or far is the player's own.
+    // Reset puts every camera CVar back to CTR classic's, the default; near or far is the
+    // player's own.
     s.run("BenillaKartCameraFrameReset:Click()").unwrap();
-    assert_eq!(camera_tuning(&s), CameraTuning::KARTCRAFT);
-    assert_eq!(preset(&s), "Kartcraft");
+    assert_eq!(camera_tuning(&s), CameraTuning::CTR);
+    assert_eq!(preset(&s), "CTR classic");
     assert_eq!(
         s.eval::<f64>("return BenillaKartCameraFramePitch:GetValue()")
             .unwrap(),
@@ -2059,6 +2060,29 @@ fn the_controller_drives_the_kartcraft_menu_and_answers_its_popups() {
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tBack"]);
     assert_eq!(owns(&mut s), "");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+#[test]
+fn race_mode_is_asked_again_until_the_server_says_it_is_on() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    s.run("SetCVar('KartRaceMode', '1') BenillaKartRaceMode = nil")
+        .unwrap();
+    sent(&mut s);
+    s.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tM\t1"]);
+    // No answer: not again at once, again 5 s on.
+    s.tick(1.0);
+    assert!(sent(&mut s).is_empty());
+    s.tick(4.5);
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tM\t1"]);
+    // On now: no more asking.
+    from_server(&mut s, "R\tM\t1");
+    s.tick(6.0);
+    assert!(sent(&mut s).is_empty());
 }
 
 #[test]
