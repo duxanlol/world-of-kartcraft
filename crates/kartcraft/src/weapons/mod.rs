@@ -654,6 +654,18 @@ impl Weapons {
                     c.back_at = Some(self.frame);
                 }
             }
+            Down::Holding { item, shots } => {
+                // Only where we hold nothing, or our wheel waits for a roll: what we do hold
+                // stays as it is.
+                if self.held.view() == HeldView::Empty || self.held.awaiting() {
+                    info!("kart weapons: the server holds {item:?} for us ({shots} shots)");
+                    if self.held.view() != HeldView::Spinning {
+                        self.held.start_roulette();
+                        self.rolling_for = 0;
+                    }
+                    self.held.set_result(item);
+                }
+            }
             Down::Item { item, shots } => {
                 info!("kart weapons: the server rolled us {item:?} ({shots} shots)");
                 if self.held.view() != HeldView::Spinning {

@@ -751,9 +751,11 @@ namespace Kartcraft
     // size and slack, 16 yd. A dropped mine breaks only the crate it lands on: CRATE_RADIUS.
     constexpr float SHOT_SPEED = 92.f;
     constexpr float BREAK_REACH = 16.f;
-    // CTR's projectile pool, and the W lines one sender may send a second.
+    // CTR's projectile pool, and the W lines one sender may send a second: half again the 20 a
+    // second the client paces itself to, so a burst its sliding window allows never lands over a
+    // fixed second here.
     constexpr size_t MAX_LIVE_SHOTS = 12;
-    constexpr uint32 MAX_WEAPON_LINES = 20;
+    constexpr uint32 MAX_WEAPON_LINES = 30;
     // Wumpa: capped at 10, juiced at 10 (DRIVER_WUMPA_JUICED_COUNT).
     constexpr uint8 MAX_WUMPA = 10;
     // The mask protects 7680 ms, 11520 ms juiced (VehPickupItem.c:193-351).
@@ -1102,8 +1104,15 @@ namespace Kartcraft
     {
         if (kind == 'Q')
         {
-            if (me.held != ITEM_NONE || me.shots || (CloudUp(me, now) && me.cloudEffect == CLOUD_ITEM_ROLL))
+            if (CloudUp(me, now) && me.cloudEffect == CLOUD_ITEM_ROLL)
                 return;
+            // Holding one already, as the client claimed a weapon crate only with its slot empty:
+            // the two disagree (a fire line lost), so its roulette lands on what we hold.
+            if (me.held != ITEM_NONE || me.shots)
+            {
+                SendLine(player, "KARTCRAFT\tW\tY\t" + std::to_string(me.held) + "\t" + std::to_string(me.shots));
+                return;
+            }
             uint8 item = Roll(race, me, now);
             me.held = item;
             me.shots = item == ITEM_BOMB_3 || item == ITEM_MISSILE_3 ? 3 : 1;
@@ -1526,6 +1535,9 @@ namespace Kartcraft
                     flags += c;
 
             uint8 item = me->held;
+            // The client spent the shot when it fired: so does this, relayed or not.
+            if (--me->shots == 0)
+                me->held = ITEM_NONE;
             if (IsProjectile(item))
             {
                 size_t live = 0;
@@ -1535,8 +1547,6 @@ namespace Kartcraft
                     return;
             }
             bool juiced = me->wumpa >= MAX_WUMPA;
-            if (--me->shots == 0)
-                me->held = ITEM_NONE;
             if (item == ITEM_MASK)
             {
                 me->maskUntil = now + (juiced ? MASK_TIME_JUICED : MASK_TIME);

@@ -45,8 +45,10 @@ Each crate is `<kind>,<x>,<y>,<z>`. Kind is `Q` for a weapon crate ("?"), `F` fo
 - the crate is up and has regrown (533 ms after its `U`);
 - and, for `Q`, the sender holds nothing and has no shots left.
 
-For a `Q` crate the item is still rolled even if the sender already holds one: CTR breaks the
-crate and gives nothing.
+A `Q` crate taken by a sender who still holds an item breaks and gives nothing, as in CTR; the
+server says what it holds, `W\tY\t<item>\t<shots>`, for a client that thought its slot empty (a
+fire line the server never had): its roulette lands on that item. A client that holds an item
+ignores `Y`.
 
 Every racer gets `W\tX\t<index>\t<guid of taker>`, and the crate disappears. It comes back after
 its 30-frame cooldown (1000 ms) as `W\tU\t<index>` and regrows over 16 frames, 46 in all
@@ -178,8 +180,9 @@ makes it high-jump (`FORCED_JUMP_HIGH`, three times the hop's force).
 
 ### Limits
 
-At most 20 `W` lines a second from one sender; the rest are dropped. At most 12 live shots per
-race (CTR's 12-projectile pool); an extra fire is refused (no relay).
+At most 30 `W` lines a second from one sender, half again the 20 the client paces itself to; the
+rest are dropped. At most 12 live shots per race (CTR's 12-projectile pool); an extra fire is not
+relayed, but its shot is spent, as the client spent it when it fired.
 
 ## How the server reads this
 
@@ -225,7 +228,8 @@ server's rules in-process, so it runs the same code.
   server allows 12) breaks at once on our screen, as CTR breaks it the frame it is touched, and
   is claimed with `C`; with no answer in 30 frames the claim was refused and the crate is back,
   regrowing. `X` breaks it for everyone; taken by us, a `Q` crate starts the roulette at once if we hold
-  nothing, and `I` sets its result, shown when the 90-frame spin ends (Fire stops it after 20).
+  nothing, and `I` (or `Y`, what the server already holds for us) sets its result, shown when
+  the 90-frame spin ends (Fire stops it after 20).
   A roulette with no `I` 60 frames past its end is dropped. `U` regrows the crate over 16
   frames. `F` sets the Wumpa total, which the HUD counts up one fruit every 5 frames.
 - **Crates our shots break.** Each frame our live bombs, missiles, shield bombs and warp orbs

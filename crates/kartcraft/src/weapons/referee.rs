@@ -265,8 +265,23 @@ impl Referee {
                 .get(&to)
                 .and_then(|r| r.cloud)
                 .is_some_and(|(c, _)| c.blocks_crates());
-            if self.holds(to) || clouded {
+            if clouded {
                 return Vec::new();
+            }
+            // Holding one already, as the client claims a weapon crate only with its slot empty:
+            // the two disagree, so its roulette lands on what is held.
+            if self.holds(to) {
+                let r = self.racers.entry(to).or_default();
+                return match r.held {
+                    Some(item) => vec![(
+                        Some(to),
+                        Down::Holding {
+                            item,
+                            shots: r.shots,
+                        },
+                    )],
+                    None => Vec::new(),
+                };
             }
             // Anywhere in the field, for variety.
             let position = usize::from(self.rng.scramble()) % RACERS;
@@ -348,14 +363,18 @@ impl Referee {
                 let Some(item) = r.held.filter(|_| r.shots != 0) else {
                     return out;
                 };
-                if now - r.claimed < ROLL_MIN || (is_projectile(item) && live >= MAX_LIVE_SHOTS) {
+                if now - r.claimed < ROLL_MIN {
                     return out;
                 }
-                let juiced = ctr_weapons::item::juiced(r.wumpa);
+                // The client spent the shot when it fired: so does this, relayed or not.
                 r.shots -= 1;
                 if r.shots == 0 {
                     r.held = None;
                 }
+                if is_projectile(item) && live >= MAX_LIVE_SHOTS {
+                    return out;
+                }
+                let juiced = ctr_weapons::item::juiced(r.wumpa);
                 if item == Item::Mask {
                     r.mask_until = now + if juiced { MASK_TIME_JUICED } else { MASK_TIME };
                     // `ACTION_MASK_WEAPON` blows the cloud away (`RB_MaskShieldCloud.c:527-532`).
@@ -557,9 +576,39 @@ mod tests {
         assert!(r.tick(0.95).is_empty());
         assert_eq!(r.tick(1.0), vec![(None, Down::Back { index: 0 })]);
         assert!(r.handle(1, Up::Claim(0), [10.0, 20.0, 0.0], 1.5).is_empty());
-        // Holding an item, the crate breaks for nothing.
+        // Holding an item, the crate breaks for nothing but saying what is held, for a client
+        // that thought its slot empty.
         let out = r.handle(1, Up::Claim(0), [10.0, 20.0, 0.0], 1.6);
-        assert_eq!(out, vec![(None, Down::Taken { index: 0, by: 1 })]);
+        assert_eq!(out[0], (None, Down::Taken { index: 0, by: 1 }));
+        assert!(matches!(out[1], (Some(1), Down::Holding { .. })), "{out:?}");
+    }
+
+    #[test]
+    fn a_fire_the_full_pool_refuses_still_spends_the_item() {
+        let (mut r, _) = Referee::new(vec![spot(CrateKind::Weapon)], 100);
+        for shot in 1..=12 {
+            fire_from(
+                &mut r,
+                Item::Missile,
+                shot,
+                false,
+                10.0 + f32::from(shot) * 0.01,
+            );
+        }
+        // Twelve in flight: the next shot goes nowhere, but its item is spent, as the client spent
+        // it when it fired.
+        r.grant(1, Item::Bomb, 9.0);
+        let aim = Aim {
+            at: [10.0, 0.0, 0.0],
+            ..Aim::default()
+        };
+        assert!(r
+            .handle(1, Up::Fire { shot: 13, aim }, [0.0; 3], 10.5)
+            .is_empty());
+        assert!(!r.holds(1));
+        // So the next weapon crate rolls, not an empty wheel.
+        let out = r.handle(1, Up::Claim(0), [11.0, 20.0, 0.0], 10.6);
+        assert!(matches!(out[1], (Some(1), Down::Item { .. })), "{out:?}");
     }
 
     /// Racer 1 fires `item` from (10, 0) at `now` as shot `shot`, `dropped` behind or not.
@@ -600,9 +649,11 @@ mod tests {
         assert_eq!(r.tick(2.2), vec![(None, Down::Back { index: 0 })]);
         // Regrowing, it cannot be broken.
         assert!(r.handle(1, broke(1, 0), [0.0; 3], 2.5).is_empty());
-        // Full again; the shooter holds an item now, so it breaks for nothing.
+        // Full again; the shooter holds an item now, so it breaks for nothing but saying what is
+        // held.
         let out = r.handle(1, broke(1, 0), [0.0; 3], 2.8);
-        assert_eq!(out, vec![(None, Down::Taken { index: 0, by: 1 })]);
+        assert_eq!(out[0], (None, Down::Taken { index: 0, by: 1 }));
+        assert!(matches!(out[1], (Some(1), Down::Holding { .. })), "{out:?}");
     }
 
     #[test]

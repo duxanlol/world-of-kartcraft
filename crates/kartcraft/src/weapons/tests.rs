@@ -242,6 +242,45 @@ fn a_crate_while_holding_gives_no_roulette() {
 }
 
 #[test]
+fn a_crate_the_server_held_an_item_for_lands_the_roulette_on_it() {
+    let (mut w, world, mut kart) = setup();
+    w.receive(Down::Layout {
+        first: 0,
+        crates: vec![CrateSpot {
+            kind: CrateKind::Weapon,
+            at: [0.0; 3],
+        }],
+    });
+    // Our slot is empty, but the server still holds a missile for us (a fire line it never had):
+    // the crate's wheel spins and lands on it, not on nothing.
+    w.receive(Down::Taken { index: 0, by: ME });
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(w.held(), HeldView::Spinning);
+    w.receive(Down::Holding {
+        item: Item::Missile,
+        shots: 1,
+    });
+    tick(&mut w, &world, &mut kart, usize::from(ROLL_FRAMES) + 1);
+    assert_eq!(w.held(), HeldView::Item(Item::Missile));
+}
+
+#[test]
+fn what_the_server_holds_leaves_an_item_we_hold_alone() {
+    let (mut w, world, mut kart) = setup();
+    w.receive(Down::Item {
+        item: Item::Bomb3,
+        shots: 3,
+    });
+    tick(&mut w, &world, &mut kart, usize::from(ROLL_FRAMES) + 1);
+    w.receive(Down::Holding {
+        item: Item::Bomb3,
+        shots: 3,
+    });
+    tick(&mut w, &world, &mut kart, 1);
+    assert_eq!(w.held(), HeldView::Item(Item::Bomb3));
+}
+
+#[test]
 fn a_mine_we_drive_into_is_ours_to_report() {
     let (mut w, world, mut kart) = setup();
     let here = from_lu(kart.pose().position, ORIGIN);

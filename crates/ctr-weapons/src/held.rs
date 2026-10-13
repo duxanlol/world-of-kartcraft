@@ -231,6 +231,11 @@ impl Held {
         }
     }
 
+    /// A roulette spinning with no roll from the server yet.
+    pub fn awaiting(&self) -> bool {
+        self.rolling && self.result.is_none()
+    }
+
     pub fn view(&self) -> HeldView {
         if self.rolling {
             HeldView::Spinning

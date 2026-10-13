@@ -83,6 +83,10 @@ pub enum Down {
     Back { index: usize },
     /// Our roulette's result (`W I`).
     Item { item: Item, shots: u8 },
+    /// What the server holds for us when we took a weapon crate it gave nothing for: the two
+    /// disagreed (a fire line it never had), and an empty slot or a roulette with no roll yet takes
+    /// it.
+    Holding { item: Item, shots: u8 },
     /// Our Wumpa total (`W F`).
     Wumpa(u8),
     /// A shot to launch (`W S`).
@@ -287,6 +291,7 @@ impl Down {
             Down::Taken { index, by } => format!("X\t{index}\t{by}"),
             Down::Back { index } => format!("U\t{index}"),
             Down::Item { item, shots } => format!("I\t{}\t{shots}", item.id()),
+            Down::Holding { item, shots } => format!("Y\t{}\t{shots}", item.id()),
             Down::Wumpa(n) => format!("F\t{n}"),
             Down::Shot(s) => format!(
                 "S\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
@@ -352,6 +357,10 @@ impl Down {
                 index: f[1].parse().ok()?,
             },
             "I" if f.len() >= 3 => Down::Item {
+                item: Item::from_id(f[1].parse().ok()?)?,
+                shots: f[2].parse().ok()?,
+            },
+            "Y" if f.len() >= 3 => Down::Holding {
                 item: Item::from_id(f[1].parse().ok()?)?,
                 shots: f[2].parse().ok()?,
             },
@@ -569,6 +578,10 @@ mod tests {
             Down::Item {
                 item: Item::Missile3,
                 shots: 3,
+            },
+            Down::Holding {
+                item: Item::Missile3,
+                shots: 2,
             },
             Down::Wumpa(10),
             Down::Shot(Shot {
