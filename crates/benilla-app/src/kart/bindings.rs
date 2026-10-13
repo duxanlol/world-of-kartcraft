@@ -148,13 +148,14 @@ mod tests {
             "KARTCRAFT_CLEANSCREEN",
             "KARTCRAFT_FREECAM",
             "KARTCRAFT_NEXTKART",
+            "KARTCRAFT_GUIDE",
         ] {
             assert!(keys(command).is_empty(), "{command} starts unbound");
         }
         // Every row the file declares is a command the kart names or a Lua one.
         assert_eq!(
             benilla_ui::bindings_xml::parse(xml).unwrap().len(),
-            DRIVING.len() + 8
+            DRIVING.len() + 9
         );
     }
 }

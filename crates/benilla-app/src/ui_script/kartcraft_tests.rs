@@ -744,6 +744,7 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
             "Show Race Marshals",
             "Leave race",
             "Unstuck",
+            "Guide...",
             "Kart garage...",
             "Kartcraft settings...",
             "Kart camera...",
@@ -1346,7 +1347,8 @@ fn key_bindings_lists_the_kart_s_controls_and_they_run() {
         "Accelerate,Brake / Reverse,Steer Left,Steer Right,Hop / Powerslide,\
          Boost (Second Shoulder),Fire Item,Toggle Camera Distance,Look Back,Wumpa Juice,Turbo Boost,Super Engine,Aku Aku,\
          Summon / Dismiss Kart,Race Finder,Leave Race,Kartcraft Settings,Kart Garage,\
-         Clean Screen (hide all interface),Free Camera (fly, park, off),Next Kart"
+         Clean Screen (hide all interface),Free Camera (fly, park, off),Next Kart,\
+         Kartcraft Guide"
     );
     s.run("RunBinding('KARTCRAFT_GARAGE')").unwrap();
     assert!(s
@@ -2098,5 +2100,104 @@ fn a_party_mate_s_queue_queues_us_and_the_party_leaves_together() {
             "Leaderguy queued your party in the Race Finder.",
             "Your party left the Race Finder queue.",
         ]
+    );
+}
+
+#[test]
+fn the_guide_opens_once_on_the_first_login_and_walks_its_pages() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let shown = |s: &UiScript| -> bool {
+        s.eval("return BenillaKartGuideFrame:IsVisible() == 1")
+            .unwrap()
+    };
+    let text = |s: &UiScript, name: &str| -> String {
+        s.eval(&format!("return {name}:GetText()")).unwrap()
+    };
+    // The first login opens it on its first page, and marks it seen.
+    s.run("SetCVar('KartGuideSeen', '0')").unwrap();
+    s.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
+    s.tick(0.0);
+    assert!(shown(&s));
+    assert_eq!(
+        text(&s, "BenillaKartGuideFramePageTitle"),
+        "Welcome to World of Kartcraft"
+    );
+    assert_eq!(text(&s, "BenillaKartGuideFramePage"), "1 / 5");
+    assert_eq!(text(&s, "BenillaKartGuideFrameAction"), "Climb in now");
+    assert!(text(&s, "BenillaKartGuideFrameBody").contains("Press J to climb into your kart"));
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartGuideSeen')").unwrap(),
+        "1"
+    );
+    // Next walks the pages; the driving page names the bound keys; the last says Done and closes.
+    s.run("BenillaKartGuide_Turn(1)").unwrap();
+    assert_eq!(text(&s, "BenillaKartGuideFramePageTitle"), "Driving");
+    assert!(text(&s, "BenillaKartGuideFrameBody").contains("hold SPACE while you steer"));
+    for _ in 0..3 {
+        s.run("BenillaKartGuide_Turn(1)").unwrap();
+    }
+    assert_eq!(text(&s, "BenillaKartGuideFramePage"), "5 / 5");
+    assert_eq!(text(&s, "BenillaKartGuideFrameNext"), "Done");
+    s.run("BenillaKartGuide_Turn(1)").unwrap();
+    s.tick(0.0);
+    assert!(!shown(&s));
+    // Seen: the next login leaves it shut; /kartguide opens it again, on page one.
+    s.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
+    s.tick(0.0);
+    assert!(!shown(&s));
+    s.run("SlashCmdList['BENILLA_KARTGUIDE']('')").unwrap();
+    s.tick(0.0);
+    assert!(shown(&s));
+    assert_eq!(text(&s, "BenillaKartGuideFramePage"), "1 / 5");
+    // The racing page's button opens the Race Finder in its place.
+    s.run("BenillaKartGuide_Turn(1) BenillaKartGuide_Turn(1) BenillaKartGuide_Action()")
+        .unwrap();
+    s.tick(0.0);
+    assert!(!shown(&s));
+    assert!(s
+        .eval::<bool>("return BenillaKartFinderFrame:IsVisible() == 1")
+        .unwrap());
+}
+
+#[test]
+fn the_first_drive_shows_its_tip_once() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    s.run("SetCVar('KartTipSeen', '0')").unwrap();
+    let seated = |s: &mut UiScript, on: bool| {
+        s.fire_event(
+            "BENILLA_KART_SEATED",
+            vec![ScriptValue::Number(f64::from(u8::from(on)))],
+        );
+        s.tick(0.0);
+    };
+    seated(&mut s, true);
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartTipSeen')").unwrap(),
+        "1"
+    );
+    // The boost is bound as a modifier alone: named without its dash.
+    s.run("GetBindingKey = function() return 'SHIFT-' end")
+        .unwrap();
+    assert_eq!(
+        s.eval::<String>("return BenillaKartGuide_Key('KARTCRAFT_BOOST', 'x')")
+            .unwrap(),
+        "SHIFT"
+    );
+    seated(&mut s, false);
+    // The second time in, nothing more: the CVar holds.
+    s.run("BenillaKartGuide_FirstDrive = BenillaKartGuide_FirstDrive")
+        .unwrap();
+    seated(&mut s, true);
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartTipSeen')").unwrap(),
+        "1"
     );
 }

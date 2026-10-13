@@ -786,6 +786,18 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "0",
         "Kartcraft's own — CTR's ground types under the kart; 1.12 has no kart",
     ),
+    // The Kartcraft Guide opened once on the first login, and the first drive's tip shown once
+    // (the layer's `BenillaKartGuide`); kept, so neither comes back.
+    ours(
+        "KartGuideSeen",
+        "0",
+        "Kartcraft's own — the new player guide; 1.12 has no kart",
+    ),
+    ours(
+        "KartTipSeen",
+        "0",
+        "Kartcraft's own — the first drive's tip; 1.12 has no kart",
+    ),
     // The clean screen for filming (`/kartclean`): CTR's HUD and the guide arrow step aside with
     // the WoW interface; held for the session only (`load_config`).
     ours(

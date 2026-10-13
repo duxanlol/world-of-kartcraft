@@ -29,4 +29,5 @@
     <Binding name="KARTCRAFT_CLEANSCREEN">BenillaKart_CleanScreen()</Binding>
     <Binding name="KARTCRAFT_FREECAM">BenillaKartFreeCam("")</Binding>
     <Binding name="KARTCRAFT_NEXTKART">BenillaKartGarage_Next()</Binding>
+    <Binding name="KARTCRAFT_GUIDE">BenillaKartGuide_Toggle()</Binding>
 </Bindings>
