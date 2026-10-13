@@ -636,6 +636,9 @@ fn load_config(world: &mut World) {
         // The kart's free camera is for one filming session.
         cvars.own_for_session("KartFreeCam", None);
         cvars.own_for_session("KartHideHud", None);
+        // The controller test is open, and its motor tried, for this run only.
+        cvars.own_for_session("KartPadTest", None);
+        cvars.own_for_session("KartPadRumble", None);
         match stored {
             StoredConfig::Absent => {} // no file, hermetic capture, or no install
             StoredConfig::Bad(msg) => {

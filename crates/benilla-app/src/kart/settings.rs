@@ -24,6 +24,9 @@
 //!   text-emote voices, [`kartcraft::voice::WowLine`]) instead of CTR's cast, on by default.
 //! - `KartRumble`: the controller shakes on crashes, hard landings and wall scrapes
 //!   ([`kartcraft::rumble`]), as CTR's vibration does, on by default.
+//! - `KartPadTest`: the controller test window (`/kartpad`) is open, so the pad's state is fed
+//!   to it; `KartPadRumble`: `strong` or `weak` shakes that motor once, from the test's buttons.
+//!   Both held for the session only.
 //! - `KartCam*`: the chase camera's shape, the camera window's (`/kartcam`), one CVar a
 //!   [`kartcraft::camera::CameraTuning`] field ([`CAMERA_KNOBS`]), read every tick while driving.
 //!
@@ -120,6 +123,8 @@ pub(crate) struct KartSettings {
     pub(crate) wow_voices: bool,
     /// A checkpoint gate's sheet of light, its height in yards.
     pub(crate) gate_height: f32,
+    /// The controller test window is open.
+    pub(crate) pad_test: bool,
     /// The chase camera's shape.
     pub(crate) camera: CameraTuning,
 }
@@ -137,6 +142,7 @@ impl Default for KartSettings {
             rumble: true,
             wow_voices: true,
             gate_height: GATE_HEIGHT_DEFAULT,
+            pad_test: false,
             camera: CameraTuning::default(),
         }
     }
@@ -169,6 +175,7 @@ pub(crate) fn on_cvar(
     mut settings: ResMut<KartSettings>,
     mut free: ResMut<super::freecam::FreeCam>,
     mut hidden: ResMut<kartcraft::hud::HudHidden>,
+    rumble: Option<ResMut<kartcraft::rumble::Rumble>>,
 ) {
     match ev.key().as_str() {
         "kartarrowshow" => hud.shown = ev.flag(),
@@ -192,6 +199,20 @@ pub(crate) fn on_cvar(
         }
         "kartfreecam" => free.set(super::freecam::FreeMode::named(&ev.new)),
         "kartgateheight" => settings.gate_height = ev.num().clamp(0.0, GATE_HEIGHT_MAX),
+        "kartpadtest" => settings.pad_test = ev.flag(),
+        "kartpadrumble" => {
+            let (strong, weak) = match ev.new.as_str() {
+                "strong" => (1.0, 0.0),
+                "weak" => (0.0, 1.0),
+                _ => return,
+            };
+            let Some(mut rumble) = rumble else { return };
+            rumble.pulses.push(kartcraft::rumble::Pulse {
+                strong,
+                weak,
+                seconds: 0.6,
+            });
+        }
         "kartcamwallpull" => settings.camera.wall_pull = ev.flag(),
         "kartcamtravel" => settings.camera.travel = ev.flag(),
         key if key.starts_with("kartcam") => {

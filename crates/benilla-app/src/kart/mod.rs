@@ -31,7 +31,7 @@ mod ui;
 pub(crate) use garage::{class_list, racer_list};
 pub(crate) use race::{RaceMap, COURSES, ZONES};
 pub(crate) use seat::SEAT_ANIMS;
-pub(crate) use ui::{KartOverlay, RacerDot, ScoreLines};
+pub(crate) use ui::{KartOverlay, PadView, RacerDot, ScoreLines};
 mod weapons;
 
 use benilla_world::collision::WorldCollision;
@@ -652,7 +652,7 @@ pub(crate) fn plugin(app: &mut App) {
                 (sound::update, sound::wow_voices).chain(),
                 kartcraft::rumble::send,
                 score::track_skill,
-                ui::publish,
+                (ui::pad_view, ui::publish).chain(),
                 // Into the VM only once the interface is up, or the first frame's events are lost.
                 crate::ui_kart::feed.run_if(crate::ui_script::ingame_ui_up),
                 kartcraft::hud::draw,

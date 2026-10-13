@@ -768,6 +768,17 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "1",
         "Kartcraft's own — CTR's race music; 1.12 has no kart",
     ),
+    // The controller test (`/kartpad`): open, and a motor to try; both for the session only.
+    ours(
+        "KartPadTest",
+        "0",
+        "Kartcraft's own — the controller test window; 1.12 has no kart",
+    ),
+    ours(
+        "KartPadRumble",
+        "0",
+        "Kartcraft's own — the controller test's rumble; 1.12 has no kart",
+    ),
     // The racers' voices: their WoW characters' (`kart::sound::wow_voices`), else CTR's cast's.
     ours(
         "KartWowVoices",

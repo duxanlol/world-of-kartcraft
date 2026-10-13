@@ -48,6 +48,91 @@ pub(crate) struct KartOverlay {
     pub(crate) racers: Vec<RacerDot>,
     /// Whether we sit in the kart: the layer hides the action bars and unit frames meanwhile.
     pub(crate) seated: bool,
+    /// The controller test's view of the pad the kart reads (`/kartpad`), while it is open.
+    pub(crate) pad: Option<PadView>,
+}
+
+/// The pad the kart reads, as the controller test shows it: its name (empty with none), whether
+/// it is read directly ([`kartcraft::sony`]), the buttons held as the layer's tokens, and the
+/// sticks and triggers in hundredths (left x, y, right x, y, L2, R2).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct PadView {
+    pub(crate) name: String,
+    pub(crate) direct: bool,
+    pub(crate) held: String,
+    pub(crate) axes: [i16; 6],
+}
+
+/// Bevy's buttons and the tokens the controller test lists them by.
+const PAD_TOKENS: [(bevy::input::gamepad::GamepadButton, &str); 18] = {
+    use bevy::input::gamepad::GamepadButton as B;
+    [
+        (B::South, "South"),
+        (B::East, "East"),
+        (B::West, "West"),
+        (B::North, "North"),
+        (B::LeftTrigger, "LeftTrigger"),
+        (B::RightTrigger, "RightTrigger"),
+        (B::LeftTrigger2, "LeftTrigger2"),
+        (B::RightTrigger2, "RightTrigger2"),
+        (B::Select, "Select"),
+        (B::Start, "Start"),
+        (B::Mode, "Mode"),
+        (B::LeftThumb, "LeftThumb"),
+        (B::RightThumb, "RightThumb"),
+        (B::DPadUp, "DPadUp"),
+        (B::DPadRight, "DPadRight"),
+        (B::DPadDown, "DPadDown"),
+        (B::DPadLeft, "DPadLeft"),
+        (B::Other(0), "Touchpad"),
+    ]
+};
+
+/// The controller test's view, while `KartPadTest` holds it open: the pad
+/// [`kartcraft::input::read`] would drive with.
+pub(super) fn pad_view(
+    settings: Res<super::settings::KartSettings>,
+    pads: Query<(
+        &bevy::input::gamepad::Gamepad,
+        Has<kartcraft::sony::SonyPad>,
+        Option<&Name>,
+    )>,
+    mut overlay: ResMut<KartOverlay>,
+) {
+    use bevy::input::gamepad::{GamepadAxis, GamepadButton};
+    let view = settings.pad_test.then(|| {
+        let Some((pad, direct, name)) = pads
+            .iter()
+            .find(|(_, direct, _)| *direct)
+            .or_else(|| pads.iter().next())
+        else {
+            return PadView::default();
+        };
+        let held: Vec<&str> = PAD_TOKENS
+            .iter()
+            .filter(|(b, _)| pad.pressed(*b))
+            .map(|(_, t)| *t)
+            .collect();
+        let hundredths = |v: f32| (v.clamp(-1.0, 1.0) * 100.0).round() as i16;
+        let axis = |a| hundredths(pad.get(a).unwrap_or(0.0));
+        let trigger = |b| hundredths(pad.get(b).unwrap_or(0.0));
+        PadView {
+            name: name.map_or_else(|| "Controller".to_string(), |n| n.to_string()),
+            direct,
+            held: held.join(" "),
+            axes: [
+                axis(GamepadAxis::LeftStickX),
+                axis(GamepadAxis::LeftStickY),
+                axis(GamepadAxis::RightStickX),
+                axis(GamepadAxis::RightStickY),
+                trigger(GamepadButton::LeftTrigger2),
+                trigger(GamepadButton::RightTrigger2),
+            ],
+        }
+    });
+    if overlay.pad != view {
+        overlay.pad = view;
+    }
 }
 
 /// Each racer's dot: us where our kart is, another at their relayed kart when it is `near`, else

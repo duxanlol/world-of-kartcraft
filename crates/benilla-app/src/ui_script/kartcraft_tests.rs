@@ -748,6 +748,7 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
             "Kart garage...",
             "Kartcraft settings...",
             "Kart camera...",
+            "Controller test...",
             "Hide minimap button",
         ]
     );
@@ -1873,6 +1874,78 @@ fn race_mode_is_asked_of_the_server_and_its_answer_ticks_the_menu() {
             "Race mode: not while you're in combat.",
         ]
     );
+}
+
+#[test]
+fn the_controller_test_lights_the_held_buttons_and_says_when_it_is_open() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let cvar = |s: &mut UiScript, name: &str| -> String {
+        s.eval(&format!("return GetCVar('{name}')")).unwrap()
+    };
+    s.run("SlashCmdList[\"BENILLA_KARTPAD\"](\"\")").unwrap();
+    assert!(s
+        .eval::<bool>("return BenillaKartPadFrame:IsVisible() == 1")
+        .unwrap());
+    assert_eq!(cvar(&mut s, "KartPadTest"), "1");
+    assert_eq!(
+        s.eval::<String>("return BenillaKartPadFrameDevice:GetText()")
+            .unwrap(),
+        "No controller found: connect one and press a button."
+    );
+
+    let n = ScriptValue::Number;
+    s.fire_event(
+        "BENILLA_KART_PAD",
+        vec![
+            ScriptValue::Str("DualSense Wireless Controller".into()),
+            n(1.0),
+            ScriptValue::Str("South RightTrigger".into()),
+            n(-1.0),
+            n(0.5),
+            n(0.0),
+            n(0.0),
+            n(0.0),
+            n(1.0),
+        ],
+    );
+    let green = |s: &mut UiScript, token: &str| -> bool {
+        s.eval(&format!(
+            "local r, g = BenillaKartPadFrame.rows['{token}'].name:GetTextColor() \
+             return g > 0.9 and r < 0.5"
+        ))
+        .unwrap()
+    };
+    assert!(green(&mut s, "South") && green(&mut s, "RightTrigger"));
+    assert!(!green(&mut s, "East") && !green(&mut s, "LeftTrigger"));
+    assert_eq!(
+        s.eval::<String>("return BenillaKartPadFrameDevice:GetText()")
+            .unwrap(),
+        "DualSense Wireless Controller, read directly"
+    );
+    let sticks: String = s
+        .eval("return BenillaKartPadFrame.sticks:GetText()")
+        .unwrap();
+    assert!(
+        sticks.starts_with("Left stick -1.00, +0.50") && sticks.ends_with("R2 1.00"),
+        "{sticks}"
+    );
+    // Every row names what the button does, or that it does nothing.
+    assert_eq!(
+        s.eval::<String>("return BenillaKartPadFrame.rows['South'].what:GetText()")
+            .unwrap(),
+        "Gas"
+    );
+
+    // A rumble button shakes once and leaves the CVar ready for the next.
+    s.run("BenillaKartPadFrameStrong:Click()").unwrap();
+    assert_eq!(cvar(&mut s, "KartPadRumble"), "0");
+    s.run("BenillaKartPadFrame:Hide()").unwrap();
+    assert_eq!(cvar(&mut s, "KartPadTest"), "0");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
 #[test]

@@ -950,6 +950,93 @@
             end
         end
 
+        -- ── The controller test (/kartpad) ──
+
+        -- Each row: the button's token (the BENILLA_KART_PAD event's), its PlayStation and Xbox
+        -- names, and what it does in the kart (kartcraft's input.rs).
+        BENILLA_KART_PAD_ROWS = {
+            { "South", "Cross / A", "Gas" },
+            { "West", "Square / X", "Brake, reverse" },
+            { "East", "Circle / B", "Fire your weapon" },
+            { "North", "Triangle / Y", "" },
+            { "RightTrigger", "R1 / RB", "Hop and powerslide" },
+            { "LeftTrigger", "L1 / LB", "Boost" },
+            { "RightTrigger2", "R2 / RT", "Gas" },
+            { "LeftTrigger2", "L2 / LT", "Brake" },
+            { "DPadUp", "D-pad up", "Kart ability 1" },
+            { "DPadRight", "D-pad right", "Kart ability 2" },
+            { "DPadDown", "D-pad down", "Kart ability 3" },
+            { "DPadLeft", "D-pad left", "Kart ability 4" },
+            { "Select", "Create / View", "Switch camera" },
+            { "Start", "Options / Menu", "" },
+            { "LeftThumb", "L3", "" },
+            { "RightThumb", "R3", "Look back" },
+            { "Mode", "PS / Guide", "" },
+            { "Touchpad", "Touchpad click", "" },
+        }
+
+        function BenillaKartPad_Build(frame)
+            frame.rows = {}
+            local n = table.getn(BENILLA_KART_PAD_ROWS)
+            for i = 1, n do
+                local r = BENILLA_KART_PAD_ROWS[i]
+                local y = -60 - (i - 1) * 17
+                local name = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+                name:SetPoint("TOPLEFT", frame, "TOPLEFT", 30, y)
+                name:SetText(r[2])
+                local what = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+                what:SetPoint("TOPLEFT", frame, "TOPLEFT", 170, y)
+                what:SetText(r[3] ~= "" and r[3] or "(not used)")
+                frame.rows[r[1]] = { name = name, what = what }
+            end
+            frame.sticks = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+            frame.sticks:SetPoint("TOPLEFT", frame, "TOPLEFT", 30, -60 - n * 17 - 8)
+            frame.sticks:SetJustifyH("LEFT")
+            BenillaKartPad_Set(nil)
+        end
+
+        -- The pad's news: its name, read directly or not, the buttons held, the sticks and the
+        -- triggers. A held button's row lights green.
+        function BenillaKartPad_Set(name, direct, held, lx, ly, rx, ry, l2, r2)
+            local f = BenillaKartPadFrame
+            if not f or not f.rows then return end
+            if not name or name == "" then
+                BenillaKartPadFrameDevice:SetText("No controller found: connect one and press a button.")
+            elseif direct == 1 then
+                BenillaKartPadFrameDevice:SetText(name .. ", read directly")
+            else
+                BenillaKartPadFrameDevice:SetText(name)
+            end
+            local on = {}
+            for token in string.gfind(held or "", "%S+") do on[token] = 1 end
+            for token, row in pairs(f.rows) do
+                if on[token] then
+                    row.name:SetTextColor(0.25, 1, 0.25)
+                    row.what:SetTextColor(0.25, 1, 0.25)
+                else
+                    row.name:SetTextColor(1, 1, 1)
+                    row.what:SetTextColor(0.6, 0.6, 0.6)
+                end
+            end
+            f.sticks:SetText(format("Left stick %+.2f, %+.2f   (steer; down reverses)\nRight stick %+.2f, %+.2f\nL2 %.2f   R2 %.2f",
+                lx or 0, ly or 0, rx or 0, ry or 0, l2 or 0, r2 or 0))
+            if GetCVar("KartRumble") == "0" then
+                BenillaKartPadFrameRumbleNote:SetText("Rumble is off in the Kartcraft settings.")
+            else
+                BenillaKartPadFrameRumbleNote:SetText("")
+            end
+        end
+
+        -- A motor shaken once (KartPadRumble), set back so the next press shakes again.
+        function BenillaKartPad_Rumble(motor)
+            SetCVar("KartPadRumble", motor)
+            SetCVar("KartPadRumble", "0")
+        end
+
+        function BenillaKartPad_Toggle()
+            if BenillaKartPadFrame:IsVisible() then BenillaKartPadFrame:Hide() else BenillaKartPadFrame:Show() end
+        end
+
         -- A line of Kartcraft news in the chat, as the system's lines are.
         function BenillaKart_Say(text)
             if DEFAULT_CHAT_FRAME then
@@ -1146,6 +1233,8 @@
                 if event == "PLAYER_ENTERING_WORLD" then BenillaKart_WorldChatJoin() end
             elseif event == "CHAT_MSG_CHANNEL_NOTICE" then
                 BenillaKart_WorldChatNotice()
+            elseif event == "BENILLA_KART_PAD" then
+                BenillaKartPad_Set(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9)
             elseif event == "CHAT_MSG_ADDON" then
                 if arg1 == BENILLA_KART_PREFIX then BenillaKartFinder_OnLine(arg2) end
             elseif event == "BENILLA_KART_RACE" then
@@ -1298,6 +1387,7 @@
             table.insert(entries, { text = "Kart garage...", func = BenillaKartGarage_Toggle })
             table.insert(entries, { text = "Kartcraft settings...", func = BenillaKartSettings_Toggle })
             table.insert(entries, { text = "Kart camera...", func = BenillaKartCamera_Toggle })
+            table.insert(entries, { text = "Controller test...", func = BenillaKartPad_Toggle })
             table.insert(entries, { text = "Hide minimap button", func = BenillaKartMinimap_Hide })
             for i = 1, table.getn(entries) do
                 if not entries[i].checkable then entries[i].notCheckable = 1 end
@@ -1938,6 +2028,8 @@
             SLASH_BENILLA_KARTFREE1 = "/kartfree"
             SlashCmdList["BENILLA_KARTFREE"] = function(msg) BenillaKartFreeCam(msg) end
             SLASH_BENILLA_KARTNEXT1 = "/kartnext"
+            SLASH_BENILLA_KARTPAD1 = "/kartpad"
+            SlashCmdList["BENILLA_KARTPAD"] = function() BenillaKartPad_Toggle() end
             SLASH_BENILLA_KARTGUIDE1 = "/kartguide"
             SlashCmdList["BENILLA_KARTGUIDE"] = function() BenillaKartGuide_Toggle() end
             SLASH_BENILLA_KARTCLEAN1 = "/kartclean"
@@ -2983,6 +3075,7 @@
                 this:RegisterEvent("PLAYER_ENTERING_WORLD")
                 this:RegisterEvent("PLAYER_REGEN_ENABLED")
                 this:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
+                this:RegisterEvent("BENILLA_KART_PAD")
                 BenillaKart_WatchUIParent()
             </OnLoad>
             <OnEvent>BenillaKartEvents_OnEvent()</OnEvent>
@@ -2993,6 +3086,70 @@
     <!-- The Kartcraft Guide: five pages for a new player, open on the first login (KartGuideSeen),
          and from the minimap menu, /kartguide or its binding after. Each page has one button that
          does what it describes. -->
+    <!-- The controller test (/kartpad): each pad button and what it does in the kart, lit while
+         held; the sticks and triggers; the two motors to try. -->
+    <Frame name="BenillaKartPadFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
+        <Size><AbsDimension x="400" y="500"/></Size>
+        <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
+            <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
+            <TileSize><AbsValue val="32"/></TileSize>
+            <EdgeSize><AbsValue val="32"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
+                    <Size><AbsDimension x="256" y="64"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
+                </Texture>
+                <FontString inherits="GameFontNormal" text="Controller test">
+                    <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentDevice" inherits="GameFontNormalSmall" justifyH="LEFT">
+                    <Size><AbsDimension x="340" y="14"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="30" y="-36"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentRumbleNote" inherits="GameFontDisableSmall">
+                    <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="72"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <Button name="$parentStrong" inherits="UIPanelButtonTemplate" text="Rumble: heavy">
+                <Size><AbsDimension x="150" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="30" y="44"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartPad_Rumble("strong")</OnClick></Scripts>
+            </Button>
+            <Button name="$parentWeak" inherits="UIPanelButtonTemplate" text="Rumble: light">
+                <Size><AbsDimension x="150" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-30" y="44"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartPad_Rumble("weak")</OnClick></Scripts>
+            </Button>
+            <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="16"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartPadFrame:Hide()</OnClick></Scripts>
+            </Button>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
+                BenillaKart_Movable(this)
+                BenillaKartPad_Build(this)
+            </OnLoad>
+            <OnShow>
+                SetCVar("KartPadTest", "1")
+                PlaySound("igMainMenuOpen")
+            </OnShow>
+            <OnHide>
+                SetCVar("KartPadTest", "0")
+                PlaySound("igMainMenuClose")
+            </OnHide>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+
     <Frame name="BenillaKartGuideFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
         <Size><AbsDimension x="440" y="330"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
