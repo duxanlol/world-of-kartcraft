@@ -477,10 +477,12 @@ namespace Kartcraft
         ObjectGuid awaiting;
         uint32 awaitSince = 0;
         std::vector<Racer> racers;
-        // For its results (RecordResult): its id, when it started (unix time) and how many raced.
+        // For its results (RecordResult): its id, when it started (unix time) and how many raced,
+        // and each racer's place as it came (0 did not finish), for the ladder once all are in.
         uint32 id = 0;
         uint32 startedAt = 0;
         uint8 field = 0;
+        std::vector<std::pair<ObjectGuid, std::pair<std::string, uint32>>> placed;
         // Weapons, live from the start: the crates, the shots relayed in the last SHOT_LIFETIME
         // keyed by shooter low guid << 16 | shot, and the race's MixRNG state.
         std::vector<Crate> crates;
@@ -696,11 +698,146 @@ namespace Kartcraft
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
     }
 
-    // One racer's result in a started race: `place` 0 did not finish.
-    static void RecordResult(Race const& r, Racer const& x, uint32 place, uint32 ms)
+    // The ranked ladder: a rating a character a season, a season a calendar month (UTC, YYYYMM).
+    // Every race of two or more racers counts (not a time trial): once the last result is in,
+    // each pair of racers is a game won by the one placed ahead, a tie between two who did not
+    // finish, and each racer's rating moves by Elo's K * (score - expected) summed over the field
+    // and shared by its n - 1 games. Everyone starts a season at LADDER_START.
+    constexpr int32 LADDER_START = 1500;
+    constexpr double LADDER_K = 32.0;
+
+    struct LadderEntry
+    {
+        int32 rating = LADDER_START;
+        uint32 races = 0;
+        uint32 wins = 0;
+        std::string name;
+    };
+
+    static uint32 s_season = 0;
+    static std::unordered_map<uint32, LadderEntry> s_ladder; // guid low -> this season's entry
+
+    static uint32 SeasonNow()
+    {
+        std::time_t t = std::time(nullptr);
+        std::tm g{};
+#ifdef _WIN32
+        gmtime_s(&g, &t);
+#else
+        gmtime_r(&t, &g);
+#endif
+        return uint32((g.tm_year + 1900) * 100 + g.tm_mon + 1);
+    }
+
+    static void LoadLadder()
+    {
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_ladder` ("
+            "`season` INT UNSIGNED NOT NULL COMMENT 'YYYYMM, a calendar month in UTC', "
+            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
+            "`name` VARCHAR(12) NOT NULL COMMENT 'character name when it last raced', "
+            "`rating` INT NOT NULL, "
+            "`races` INT UNSIGNED NOT NULL, "
+            "`wins` INT UNSIGNED NOT NULL, "
+            "`at` INT UNSIGNED NOT NULL COMMENT 'last rated race, unix time', "
+            "PRIMARY KEY (`season`, `guid`), KEY `season_rating` (`season`, `rating`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+        s_season = SeasonNow();
+        s_ladder.clear();
+        std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
+            "SELECT `guid`, `name`, `rating`, `races`, `wins` FROM `kartcraft_ladder` WHERE `season` = %u", s_season);
+        if (!result)
+            return;
+        do
+        {
+            Field* f = result->Fetch();
+            LadderEntry& e = s_ladder[f[0].GetUInt32()];
+            e.name = f[1].GetCppString();
+            e.rating = f[2].GetInt32();
+            e.races = f[3].GetUInt32();
+            e.wins = f[4].GetUInt32();
+        } while (result->NextRow());
+        sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Kartcraft: %u racers on season %u's ladder.",
+            uint32(s_ladder.size()), s_season);
+    }
+
+    // A rating's place this season, 1 the best.
+    static uint32 LadderPlace(int32 rating)
+    {
+        uint32 above = 0;
+        for (auto const& e : s_ladder)
+            if (e.second.rating > rating)
+                ++above;
+        return above + 1;
+    }
+
+    // A race's results all in: the ratings move, are kept, and each racer is told.
+    static void RateRace(Race const& r)
+    {
+        size_t n = r.placed.size();
+        if (r.timeTrial || n < 2)
+            return;
+        if (SeasonNow() != s_season)
+        {
+            s_season = SeasonNow();
+            s_ladder.clear();
+        }
+        // A finisher's rank is their place; everyone who did not finish shares the last.
+        auto rank = [n](uint32 place) { return place ? place : uint32(n + 1); };
+        std::vector<int32> before(n);
+        for (size_t i = 0; i < n; ++i)
+            before[i] = s_ladder[r.placed[i].first.GetCounter()].rating;
+        std::vector<double> delta(n, 0.0);
+        for (size_t i = 0; i < n; ++i)
+            for (size_t j = 0; j < n; ++j)
+            {
+                if (i == j)
+                    continue;
+                uint32 a = rank(r.placed[i].second.second);
+                uint32 b = rank(r.placed[j].second.second);
+                double score = a < b ? 1.0 : a == b ? 0.5 : 0.0;
+                double expected = 1.0 / (1.0 + std::pow(10.0, (before[j] - before[i]) / 400.0));
+                delta[i] += LADDER_K * (score - expected) / double(n - 1);
+            }
+        uint32 now = uint32(std::time(nullptr));
+        for (size_t i = 0; i < n; ++i)
+        {
+            uint32 low = r.placed[i].first.GetCounter();
+            LadderEntry& e = s_ladder[low];
+            e.rating = before[i] + int32(std::lround(delta[i]));
+            e.races += 1;
+            if (r.placed[i].second.second == 1)
+                e.wins += 1;
+            e.name = r.placed[i].second.first;
+            std::string escaped = e.name;
+            CharacterDatabase.escape_string(escaped);
+            CharacterDatabase.PExecute("REPLACE INTO `kartcraft_ladder` (`season`, `guid`, `name`, `rating`, "
+                "`races`, `wins`, `at`) VALUES (%u, %u, '%s', %i, %u, %u, %u)", s_season, low, escaped.c_str(),
+                e.rating, e.races, e.wins, now);
+        }
+        for (size_t i = 0; i < n; ++i)
+        {
+            Player* p = ObjectAccessor::FindPlayer(r.placed[i].first);
+            if (!p)
+                continue;
+            LadderEntry const& e = s_ladder[r.placed[i].first.GetCounter()];
+            int32 change = e.rating - before[i];
+            char text[160];
+            std::snprintf(text, sizeof(text), "Ladder: %i -> %i (%s%i), #%u this season.", before[i], e.rating,
+                change >= 0 ? "+" : "", change, LadderPlace(e.rating));
+            ChatHandler(p->GetSession()).SendSysMessage(text);
+        }
+    }
+
+    // One racer's result in a started race: `place` 0 did not finish. The last of a race's
+    // results rates it on the ladder.
+    static void RecordResult(Race& r, Racer const& x, uint32 place, uint32 ms)
     {
         if (!r.start || !r.course)
             return;
+        r.placed.push_back({ x.guid, { x.name, place } });
+        if (r.placed.size() >= r.field)
+            RateRace(r);
         std::string escaped = x.name;
         CharacterDatabase.escape_string(escaped);
         CharacterDatabase.PExecute("INSERT INTO `kartcraft_results` (`race_at`, `race`, `course`, `guid`, "
@@ -3407,6 +3544,7 @@ namespace Kartcraft
         marshal->pGossipSelect = &MarshalSelect;
         marshal->RegisterSelf(true);
         CreateResults();
+        LoadLadder();
         LoadRecords(s_raceBoard, "race");
         LoadRecords(s_trialBoard, "time trial");
     }
