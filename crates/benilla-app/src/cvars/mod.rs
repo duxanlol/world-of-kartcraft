@@ -2270,6 +2270,14 @@ mod tests {
                 "KartMinimapAngle",
                 "the layer's KartcraftFrames.xml places its minimap button on the ring by it",
             ),
+            (
+                "KartGuideSeen",
+                "the layer's KartcraftFrames.xml opens the Kartcraft Guide on the first login by it",
+            ),
+            (
+                "KartTipSeen",
+                "the layer's KartcraftFrames.xml shows the first drive's tip by it",
+            ),
         ];
         let app_src = crate::test_support::src_dir();
         let ui_src = app_src

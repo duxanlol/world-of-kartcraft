@@ -67,6 +67,7 @@
         BINDING_NAME_KARTCRAFT_CLEANSCREEN = "Clean Screen (hide all interface)"
         BINDING_NAME_KARTCRAFT_FREECAM = "Free Camera (fly, park, off)"
         BINDING_NAME_KARTCRAFT_NEXTKART = "Next Kart"
+        BINDING_NAME_KARTCRAFT_GUIDE = "Kartcraft Guide"
         BENILLA_KART_PREFIX = "KARTCRAFT"
         -- What the finder offers, { key, name } in the kart's order, from BENILLA_KART_COURSES:
         -- the zones, keyed "z<place>".
@@ -927,6 +928,111 @@
             end
         end
 
+        -- ── The Kartcraft Guide ──
+
+        -- A binding's key as the player has it bound, else what it ships with; a modifier bound
+        -- alone ("SHIFT-") without its dash.
+        function BenillaKartGuide_Key(binding, fallback)
+            local key = GetBindingKey and GetBindingKey(binding)
+            if not key then return fallback end
+            if GetBindingText then key = GetBindingText(key, "KEY_") end
+            key = string.gsub(key, "%-$", "")
+            return key
+        end
+
+        -- The pages: a title, the text (built when shown, so it names the keys as they are bound),
+        -- and the one button that does what the page describes.
+        function BenillaKartGuide_Pages()
+            local NL = string.char(10)
+            local k = BenillaKartGuide_Key
+            local summon = k("KARTCRAFT_SUMMON", "J")
+            return {
+                { title = "Welcome to World of Kartcraft",
+                  text = "Crash Team Racing's karts, in World of Warcraft. Your own character drives, in your own gear." .. NL .. NL ..
+                      "Press " .. summon .. " to climb into your kart, and " .. summon .. " again to climb out. Summon Kart in your spellbook (General tab) does the same. It works anywhere outdoors." .. NL .. NL ..
+                      "Try it now, then drive around a little before you race.",
+                  action = "Climb in now", run = function() CastSpellByName("Summon Kart") end },
+                { title = "Driving",
+                  text = k("KARTCRAFT_ACCELERATE", "W") .. " accelerates, " .. k("KARTCRAFT_BRAKE", "S") .. " brakes and reverses, " ..
+                      k("KARTCRAFT_STEERLEFT", "A") .. " and " .. k("KARTCRAFT_STEERRIGHT", "D") .. " steer." .. NL .. NL ..
+                      "Powerslide: hold " .. k("KARTCRAFT_HOP", "SPACE") .. " while you steer into a turn. The turbo meter under the speedometer fills; press " ..
+                      k("KARTCRAFT_BOOST", "SHIFT") .. " when it turns red to boost. Up to three boosts per slide, each faster than the last." .. NL .. NL ..
+                      "PS4, PS5 and Xbox controllers work as they are: Cross / A for gas, R1 / RB to slide, L1 / LB to boost.",
+                  action = "Change keys", run = function()
+                      if KeyBindingFrame_LoadUI then KeyBindingFrame_LoadUI() end
+                      if KeyBindingFrame then ShowUIPanel(KeyBindingFrame) end
+                  end },
+                { title = "Racing",
+                  text = "Every course has a Race Marshal at its start, shown on your minimap and world map. Talk to one to host a race, join one, or run a time trial against your best time." .. NL .. NL ..
+                      "Or race from anywhere with the Race Finder: tick the courses you want and press Find race. When enough players match, accept, and you are taken to the starting grid." .. NL .. NL ..
+                      "/tracks lists every course and shows its route on the map.",
+                  action = "Open Race Finder", run = function() BenillaKartGuideFrame:Hide() BenillaKartFinder_Toggle() end },
+                { title = "Your kart",
+                  text = "Pick any CTR racer's kart in the Kart Garage." .. NL .. NL ..
+                      "Boosts in a row make a turbo chain. Chains raise your Karting skill and give your character experience. The skill opens faster engine classes in the garage and kart abilities like Turbo Boost and Aku Aku, on keys 1 to 4 while you drive.",
+                  action = "Open Kart Garage", run = function() BenillaKartGuideFrame:Hide() BenillaKartGarage_Toggle() end },
+                { title = "If you get stuck",
+                  text = "/unstuck puts a wedged kart back on a course." .. NL ..
+                      "/leaverace leaves the race you are in." .. NL ..
+                      "/kartcraft holds the settings: the camera, the music, the guide arrow." .. NL ..
+                      "/kartguide opens this guide again." .. NL .. NL ..
+                      "The Kartcraft button on your minimap has all of these. More help: worldofkartcraft.com/help",
+                  action = "Kartcraft settings", run = function() BenillaKartGuideFrame:Hide() BenillaKartSettings_Toggle() end },
+            }
+        end
+
+        function BenillaKartGuide_Show()
+            local frame = BenillaKartGuideFrame
+            local pages = BenillaKartGuide_Pages()
+            local n = table.getn(pages)
+            local page = pages[frame.page]
+            BenillaKartGuideFramePageTitle:SetText(page.title)
+            BenillaKartGuideFrameBody:SetText(page.text)
+            BenillaKartGuideFramePage:SetText(frame.page .. " / " .. n)
+            BenillaKartGuideFrameAction:SetText(page.action)
+            if frame.page > 1 then BenillaKartGuideFramePrev:Enable() else BenillaKartGuideFramePrev:Disable() end
+            if frame.page < n then BenillaKartGuideFrameNext:SetText("Next") else BenillaKartGuideFrameNext:SetText("Done") end
+        end
+
+        function BenillaKartGuide_Open(page)
+            BenillaKartGuideFrame.page = page or 1
+            BenillaKartGuide_Show()
+            BenillaKart_Open(BenillaKartGuideFrame)
+        end
+
+        function BenillaKartGuide_Toggle()
+            if BenillaKartGuideFrame:IsVisible() then
+                BenillaKartGuideFrame:Hide()
+            else
+                BenillaKartGuide_Open(1)
+            end
+        end
+
+        function BenillaKartGuide_Turn(by)
+            local frame = BenillaKartGuideFrame
+            local n = table.getn(BenillaKartGuide_Pages())
+            if frame.page + by > n then
+                frame:Hide()
+                return
+            end
+            frame.page = math.max(1, frame.page + by)
+            BenillaKartGuide_Show()
+        end
+
+        function BenillaKartGuide_Action()
+            BenillaKartGuide_Pages()[BenillaKartGuideFrame.page].run()
+        end
+
+        -- The first drive: the two keys that matter, once, where WoW says what just happened.
+        function BenillaKartGuide_FirstDrive()
+            if GetCVar("KartTipSeen") == "1" then return end
+            SetCVar("KartTipSeen", "1")
+            local hop, boost = BenillaKartGuide_Key("KARTCRAFT_HOP", "SPACE"), BenillaKartGuide_Key("KARTCRAFT_BOOST", "SHIFT")
+            local tip = "Hold " .. hop .. " through a turn to powerslide. Press " .. boost .. " when the meter turns red to boost."
+            if UIErrorsFrame then UIErrorsFrame:AddMessage(tip, 1.0, 0.82, 0.0, 1.0, 8) end
+            BenillaKart_Say("Kartcraft: " .. tip .. " /kartguide for more.")
+        end
+
         function BenillaKart_Movable(frame)
             frame:SetMovable(1)
             frame:RegisterForDrag("LeftButton")
@@ -972,6 +1078,7 @@
         }
 
         function BenillaKartSeated_Set(seated)
+            if seated then BenillaKartGuide_FirstDrive() end
             if not BenillaKartHiddenHolder then
                 BenillaKartHiddenHolder = CreateFrame("Frame", nil, UIParent)
                 BenillaKartHiddenHolder:Hide()
@@ -1153,6 +1260,7 @@
             if BenillaKartFinder.queued then
                 table.insert(entries, { text = "Leave queue", func = BenillaKartFinder_QueueClick })
             end
+            table.insert(entries, { text = "Guide...", func = BenillaKartGuide_Toggle })
             table.insert(entries, { text = "Kart garage...", func = BenillaKartGarage_Toggle })
             table.insert(entries, { text = "Kartcraft settings...", func = BenillaKartSettings_Toggle })
             table.insert(entries, { text = "Kart camera...", func = BenillaKartCamera_Toggle })
@@ -1795,6 +1903,8 @@
             SLASH_BENILLA_KARTFREE1 = "/kartfree"
             SlashCmdList["BENILLA_KARTFREE"] = function(msg) BenillaKartFreeCam(msg) end
             SLASH_BENILLA_KARTNEXT1 = "/kartnext"
+            SLASH_BENILLA_KARTGUIDE1 = "/kartguide"
+            SlashCmdList["BENILLA_KARTGUIDE"] = function() BenillaKartGuide_Toggle() end
             SLASH_BENILLA_KARTCLEAN1 = "/kartclean"
             SlashCmdList["BENILLA_KARTCLEAN"] = function() BenillaKart_CleanScreen() end
             SlashCmdList["BENILLA_KARTNEXT"] = function() BenillaKartGarage_Next() end
@@ -2835,6 +2945,84 @@
             </OnLoad>
             <OnEvent>BenillaKartEvents_OnEvent()</OnEvent>
             <OnUpdate>BenillaKartEvents_OnUpdate()</OnUpdate>
+        </Scripts>
+    </Frame>
+
+    <!-- The Kartcraft Guide: five pages for a new player, open on the first login (KartGuideSeen),
+         and from the minimap menu, /kartguide or its binding after. Each page has one button that
+         does what it describes. -->
+    <Frame name="BenillaKartGuideFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
+        <Size><AbsDimension x="440" y="330"/></Size>
+        <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
+            <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
+            <TileSize><AbsValue val="32"/></TileSize>
+            <EdgeSize><AbsValue val="32"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="BACKGROUND">
+                <Texture name="$parentGroundDim">
+                    <Anchors>
+                        <Anchor point="TOPLEFT"><Offset><AbsDimension x="15" y="-15"/></Offset></Anchor>
+                        <Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-15" y="15"/></Offset></Anchor>
+                    </Anchors>
+                    <Color r="0" g="0" b="0" a="0.7"/>
+                </Texture>
+            </Layer>
+            <Layer level="ARTWORK">
+                <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
+                    <Size><AbsDimension x="256" y="64"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
+                </Texture>
+                <FontString inherits="GameFontNormal" text="Kartcraft Guide">
+                    <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentPageTitle" inherits="GameFontNormalLarge" justifyH="LEFT">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="28" y="-40"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentBody" inherits="GameFontHighlight" justifyH="LEFT" justifyV="TOP">
+                    <Size><AbsDimension x="384" y="190"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="28" y="-70"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentPage" inherits="GameFontDisableSmall">
+                    <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="52"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <Button name="$parentAction" inherits="UIPanelButtonTemplate">
+                <Size><AbsDimension x="150" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="22"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartGuide_Action()</OnClick></Scripts>
+            </Button>
+            <Button name="$parentPrev" inherits="UIPanelButtonTemplate" text="Back">
+                <Size><AbsDimension x="90" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="22" y="22"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartGuide_Turn(-1)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentNext" inherits="UIPanelButtonTemplate" text="Next">
+                <Size><AbsDimension x="90" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-22" y="22"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartGuide_Turn(1)</OnClick></Scripts>
+            </Button>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
+                BenillaKart_Movable(this)
+                this:RegisterEvent("PLAYER_ENTERING_WORLD")
+            </OnLoad>
+            <OnEvent>
+                -- The first login on this install: the guide opens by itself, once.
+                if event == "PLAYER_ENTERING_WORLD" and GetCVar("KartGuideSeen") ~= "1" then
+                    SetCVar("KartGuideSeen", "1")
+                    BenillaKartGuide_Open(1)
+                end
+            </OnEvent>
+            <OnShow>PlaySound("igMainMenuOpen")</OnShow>
+            <OnHide>PlaySound("igMainMenuClose")</OnHide>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
         </Scripts>
     </Frame>
 </Ui>
