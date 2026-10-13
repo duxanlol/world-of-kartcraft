@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use bevy::input::gamepad::GamepadButton;
 use bevy::input::mouse::MouseButton;
 use bevy::prelude::KeyCode;
 
@@ -31,13 +32,44 @@ impl fmt::Display for KeyName {
     }
 }
 
-/// A bindable base input: a keyboard key by its 1.12 name, a mouse button, or one wheel direction.
+/// A bindable base input: a keyboard key by its 1.12 name, a mouse button, one wheel direction,
+/// or a controller button ([`PAD_BUTTONS`]).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum BindKey {
     Key(KeyName),
     Mouse(MouseButton),
     WheelUp,
     WheelDown,
+    Pad(GamepadButton),
+}
+
+/// Bevy's controller buttons by their binding names
+/// ([`benilla_ui::script::keybind::PAD_KEYS`]), Kartcraft's deviation: bottom, right, left and
+/// top face buttons (✕ ○ □ △, A B X Y), the D-pad, L1 and R1, L2 and R2, the stick clicks, then
+/// Options, Create and the PS button.
+pub(crate) const PAD_BUTTONS: [(GamepadButton, &str); 17] = [
+    (GamepadButton::South, "PAD1"),
+    (GamepadButton::East, "PAD2"),
+    (GamepadButton::West, "PAD3"),
+    (GamepadButton::North, "PAD4"),
+    (GamepadButton::DPadUp, "PADDUP"),
+    (GamepadButton::DPadDown, "PADDDOWN"),
+    (GamepadButton::DPadLeft, "PADDLEFT"),
+    (GamepadButton::DPadRight, "PADDRIGHT"),
+    (GamepadButton::LeftTrigger, "PADLSHOULDER"),
+    (GamepadButton::RightTrigger, "PADRSHOULDER"),
+    (GamepadButton::LeftTrigger2, "PADLTRIGGER"),
+    (GamepadButton::RightTrigger2, "PADRTRIGGER"),
+    (GamepadButton::LeftThumb, "PADLSTICK"),
+    (GamepadButton::RightThumb, "PADRSTICK"),
+    (GamepadButton::Start, "PADFORWARD"),
+    (GamepadButton::Select, "PADBACK"),
+    (GamepadButton::Mode, "PADSYSTEM"),
+];
+
+/// A controller button's binding name.
+pub(crate) fn pad_token(b: GamepadButton) -> Option<&'static str> {
+    PAD_BUTTONS.iter().find(|(p, _)| *p == b).map(|(_, n)| *n)
 }
 
 /// One parsed binding chord: the modifier set and the base input, matched by equality.
@@ -237,6 +269,9 @@ fn token_key(t: &str) -> Option<BindKey> {
         "MOUSEWHEELDOWN" => return Some(BindKey::WheelDown),
         _ => {}
     }
+    if let Some((b, _)) = PAD_BUTTONS.iter().find(|(_, n)| *n == t) {
+        return Some(BindKey::Pad(*b));
+    }
     // One character: what a layout names some key, which the namer writes as UTF-8 (`0x4b66b0`'s
     // `[0x21, 0xff]` arm through `0x41abb0`). [`key_token`] folds `a`-`z` up as the lookup does,
     // so a lowercase letter is no press's name.
@@ -316,6 +351,22 @@ fn token_key(t: &str) -> Option<BindKey> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every controller button's name is a key `SetBinding` takes and a chord that presses it,
+    /// modifiers too, and the validator's list is the codec's.
+    #[test]
+    fn every_controller_button_is_a_bindable_key() {
+        use benilla_ui::script::keybind::{normalize_binding_key, PAD_KEYS};
+        assert_eq!(PAD_KEYS.to_vec(), PAD_BUTTONS.map(|(_, n)| n).to_vec());
+        for (b, name) in PAD_BUTTONS {
+            for key in [name.to_string(), format!("SHIFT-{name}")] {
+                assert_eq!(normalize_binding_key(&key).as_deref(), Some(key.as_str()));
+                assert_eq!(Chord::parse(&key).map(|c| c.key), Some(BindKey::Pad(b)));
+            }
+            assert_eq!(pad_token(b), Some(name));
+        }
+        assert_eq!(normalize_binding_key("PAD5"), None);
+    }
 
     /// Ties this namer to the engine's `IsValidBindingKeyString`: every chord the install's
     /// `WTF\DefaultBindings.wtf` ships is a key string it accepts and a chord the dispatcher can

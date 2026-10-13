@@ -1035,6 +1035,250 @@
             if BenillaKartPadFrame:IsVisible() then BenillaKartPadFrame:Hide() else BenillaKartPadFrame:Show() end
         end
 
+        -- ── The controller in Kartcraft's windows ──
+        -- The controller's buttons as keys (the engine's PAD names), labelled for Key Bindings.
+        KEY_PAD1 = "Pad Cross / A"
+        KEY_PAD2 = "Pad Circle / B"
+        KEY_PAD3 = "Pad Square / X"
+        KEY_PAD4 = "Pad Triangle / Y"
+        KEY_PADDUP = "Pad Up"
+        KEY_PADDDOWN = "Pad Down"
+        KEY_PADDLEFT = "Pad Left"
+        KEY_PADDRIGHT = "Pad Right"
+        KEY_PADLSHOULDER = "Pad L1 / LB"
+        KEY_PADRSHOULDER = "Pad R1 / RB"
+        KEY_PADLTRIGGER = "Pad L2 / LT"
+        KEY_PADRTRIGGER = "Pad R2 / RT"
+        KEY_PADLSTICK = "Pad L3"
+        KEY_PADRSTICK = "Pad R3"
+        KEY_PADFORWARD = "Pad Options / Menu"
+        KEY_PADBACK = "Pad Create / View"
+        KEY_PADSYSTEM = "Pad PS / Guide"
+        BINDING_NAME_KARTCRAFT_MENU = "Kartcraft Menu"
+
+        -- The windows the controller drives, the first one shown in this order: its buttons, check
+        -- boxes and sliders, moved between by the D-pad where they stand on screen. A list that
+        -- scrolls by the wheel scrolls when the D-pad runs past its end; L1 and R1 turn a window's
+        -- pages.
+        BENILLA_PAD_WINDOWS = {
+            { name = "BenillaKartMenuFrame" },
+            { name = "BenillaKartTracksFrame", wheel = "BenillaKartTrackBrowser_OnMouseWheel" },
+            { name = "BenillaKartFinderFrame", wheel = "BenillaKartFinder_OnMouseWheel" },
+            { name = "BenillaKartGarageFrame" },
+            { name = "BenillaKartSettingsFrame" },
+            { name = "BenillaKartCameraFrame" },
+            { name = "BenillaKartGuideFrame", page = "BenillaKartGuide_Turn" },
+            { name = "BenillaKartPadFrame" },
+        }
+        -- The popups the controller answers: Cross is the first button, Circle the second.
+        BENILLA_PAD_POPUPS = { "BENILLA_KART_READY", "BENILLA_KART_RETURN" }
+        BenillaPad = { window = nil, focus = nil }
+
+        -- The window the controller drives now, and its entry.
+        function BenillaPad_Window()
+            for i = 1, table.getn(BENILLA_PAD_WINDOWS) do
+                local w = BENILLA_PAD_WINDOWS[i]
+                local frame = getglobal(w.name)
+                if frame and frame:IsVisible() then return frame, w end
+            end
+            return nil
+        end
+
+        -- A window's controls in reading order: shown and enabled buttons and check boxes, and
+        -- sliders, but no scroll bar's own.
+        function BenillaPad_Items(frame)
+            local items = {}
+            local function walk(f)
+                local kids = { f:GetChildren() }
+                for i = 1, table.getn(kids) do
+                    local k = kids[i]
+                    local name = k:GetName() or ""
+                    if k:IsVisible() and not string.find(name, "ScrollBar") then
+                        local t = k:GetObjectType()
+                        if (t == "Button" or t == "CheckButton") and k:IsEnabled() == 1 then
+                            table.insert(items, k)
+                        elseif t == "Slider" then
+                            table.insert(items, k)
+                        end
+                        if t ~= "Slider" then walk(k) end
+                    end
+                end
+            end
+            walk(frame)
+            return items
+        end
+
+        local function BenillaPad_Centre(item)
+            local l, b, w, h = item:GetLeft(), item:GetBottom(), item:GetWidth(), item:GetHeight()
+            if not l or not b then return 0, 0 end
+            return l + w / 2, b + h / 2
+        end
+
+        -- The highlight: the focused button lit, and an arrow at its left.
+        function BenillaPad_Show(item)
+            local old = BenillaPad.focus
+            if old and old ~= item and old.UnlockHighlight then old:UnlockHighlight() end
+            BenillaPad.focus = item
+            if not item then
+                BenillaPadCursor:Hide()
+                return
+            end
+            if item.LockHighlight then item:LockHighlight() end
+            BenillaPadCursor:ClearAllPoints()
+            BenillaPadCursor:SetPoint("RIGHT", item, "LEFT", -2, 0)
+            BenillaPadCursor:Show()
+        end
+
+        -- The control nearest the focus in a direction (dx, dy one of -1, 0, 1, up positive): the
+        -- least distance along it, sideways distance counting double.
+        function BenillaPad_Nearest(items, from, dx, dy)
+            local fx, fy = BenillaPad_Centre(from)
+            local best, score
+            for i = 1, table.getn(items) do
+                local it = items[i]
+                if it ~= from then
+                    local x, y = BenillaPad_Centre(it)
+                    local along = (x - fx) * dx + (y - fy) * dy
+                    local side = math.abs((x - fx) * dy) + math.abs((y - fy) * dx)
+                    if along > 2 then
+                        local s = along + 2 * side
+                        if not score or s < score then best, score = it, s end
+                    end
+                end
+            end
+            return best
+        end
+
+        -- The first control a window's focus starts on: the top one, the leftmost of those.
+        function BenillaPad_First(items)
+            local best, bx, by
+            for i = 1, table.getn(items) do
+                local x, y = BenillaPad_Centre(items[i])
+                if not best or y > by + 4 or (math.abs(y - by) <= 4 and x < bx) then
+                    best, bx, by = items[i], x, y
+                end
+            end
+            return best
+        end
+
+        -- A slider's step along its range.
+        function BenillaPad_Slide(slider, dir)
+            local lo, hi = slider:GetMinMaxValues()
+            local step = slider.GetValueStep and slider:GetValueStep() or 0
+            if not step or step <= 0 then step = (hi - lo) / 20 end
+            slider:SetValue(math.max(lo, math.min(hi, slider:GetValue() + dir * step)))
+        end
+
+        -- A controller press, from the engine before its binding: true when a popup or a window
+        -- took it.
+        function BenillaPad_OnButton(key)
+            if StaticPopup_Visible then
+                for i = 1, table.getn(BENILLA_PAD_POPUPS) do
+                    local dialog = StaticPopup_Visible(BENILLA_PAD_POPUPS[i])
+                    if dialog then
+                        if key == "PAD1" then getglobal(dialog .. "Button1"):Click() return true end
+                        if key == "PAD2" then getglobal(dialog .. "Button2"):Click() return true end
+                    end
+                end
+            end
+            local frame, w = BenillaPad_Window()
+            if not frame then return false end
+            local items = BenillaPad_Items(frame)
+            local focus = BenillaPad.focus
+            local present = false
+            for i = 1, table.getn(items) do if items[i] == focus then present = true end end
+            if BenillaPad.window ~= frame or not present then
+                BenillaPad.window = frame
+                focus = BenillaPad_First(items)
+                BenillaPad_Show(focus)
+                -- The first press only finds the focus, unless it is the one that acts on it.
+                if key ~= "PAD1" and key ~= "PAD2" then return true end
+            end
+            local dirs = { PADDUP = { 0, 1 }, PADDDOWN = { 0, -1 }, PADDLEFT = { -1, 0 }, PADDRIGHT = { 1, 0 } }
+            local d = dirs[key]
+            if d then
+                if focus and focus:GetObjectType() == "Slider" and d[1] ~= 0 then
+                    BenillaPad_Slide(focus, d[1])
+                    return true
+                end
+                local next = focus and BenillaPad_Nearest(items, focus, d[1], d[2])
+                if next then
+                    BenillaPad_Show(next)
+                elseif d[2] ~= 0 and w.wheel and getglobal(w.wheel) then
+                    -- Past the list's end: scroll it a notch, the focus on the same row.
+                    getglobal(w.wheel)(d[2])
+                end
+                return true
+            elseif key == "PAD1" then
+                if focus and focus:GetObjectType() ~= "Slider" then focus:Click() end
+                return true
+            elseif key == "PAD2" then
+                frame:Hide()
+                return true
+            elseif (key == "PADLSHOULDER" or key == "PADRSHOULDER") and w.page and getglobal(w.page) then
+                getglobal(w.page)(key == "PADLSHOULDER" and -1 or 1)
+                return true
+            end
+            return false
+        end
+
+        -- What the controller's window or popup holds now, asked every frame: the whole pad while
+        -- a window is up (the kart coasts), Cross and Circle while a popup is. It also lets the
+        -- highlight go with a window closed by the mouse.
+        function BenillaPad_Owns()
+            local frame = BenillaPad_Window()
+            if not frame and BenillaPad.focus then
+                BenillaPad.window = nil
+                BenillaPad_Show(nil)
+            end
+            if frame then return "ALL" end
+            if StaticPopup_Visible then
+                for i = 1, table.getn(BENILLA_PAD_POPUPS) do
+                    if StaticPopup_Visible(BENILLA_PAD_POPUPS[i]) then return "PAD1 PAD2" end
+                end
+            end
+            return ""
+        end
+
+        -- ── The Kartcraft menu (Options on the controller) ──
+        -- Its entries: the label (or a function making it) and what choosing it does.
+        BENILLA_KART_MENU = {
+            { function() return BenillaKartFinder.queued and "Leave the queue" or "Find a race" end,
+              function() BenillaKartFinder_QueueClick() end },
+            { "Race Finder", function() BenillaKart_Open(BenillaKartFinderFrame) end },
+            { "Tracks and time trials", function() BenillaKartTrackBrowser_Toggle() end },
+            { function() return BenillaKartRaceMode and "Race mode: on" or "Race mode: off" end,
+              function() BenillaKart_RaceModeToggle() end },
+            { "Leave race", function() BenillaKart_LeaveRace() end },
+            { "Unstuck", function() BenillaKart_Unstuck() end },
+            { "Kart garage", function() BenillaKartGarage_Toggle() end },
+            { "Kartcraft settings", function() BenillaKartSettings_Toggle() end },
+            { "Guide", function() BenillaKartGuide_Toggle() end },
+            { "Controller test", function() BenillaKartPad_Toggle() end },
+        }
+
+        function BenillaKartMenu_Refresh()
+            for i = 1, table.getn(BENILLA_KART_MENU) do
+                local label = BENILLA_KART_MENU[i][1]
+                if type(label) == "function" then label = label() end
+                getglobal("BenillaKartMenuFrameEntry" .. i):SetText(label)
+            end
+        end
+
+        -- An entry chosen: the menu goes first, so a window it opens takes the controller.
+        function BenillaKartMenu_Choose(i)
+            BenillaKartMenuFrame:Hide()
+            BENILLA_KART_MENU[i][2]()
+        end
+
+        function BenillaKartMenu_Toggle()
+            if BenillaKartMenuFrame:IsVisible() then
+                BenillaKartMenuFrame:Hide()
+            else
+                BenillaKart_Open(BenillaKartMenuFrame)
+            end
+        end
+
         -- A line of Kartcraft news in the chat, as the system's lines are.
         function BenillaKart_Say(text)
             if DEFAULT_CHAT_FRAME then
@@ -1985,7 +2229,7 @@
         -- (a dev build's harness) still defines everything above.
         if StaticPopupDialogs then
             StaticPopupDialogs["BENILLA_KART_READY"] = {
-                text = "Race ready: %s (%d racers).\nJoin it?",
+                text = "Race ready: %s (%d racers).\nJoin it?\n\n|cff999999Controller: Cross / A to join, Circle / B to decline|r",
                 button1 = ACCEPT,
                 button2 = DECLINE,
                 timeout = 20,
@@ -1996,7 +2240,7 @@
             }
             -- After a Race Finder race, as the dungeon finder offers the way out of a dungeon.
             StaticPopupDialogs["BENILLA_KART_RETURN"] = {
-                text = "Return to where you were before the race?",
+                text = "Return to where you were before the race?\n\n|cff999999Controller: Cross / A to return, Circle / B to stay|r",
                 button1 = "Return",
                 button2 = "Stay",
                 timeout = 0,
@@ -2026,6 +2270,8 @@
             SLASH_BENILLA_KARTFREE1 = "/kartfree"
             SlashCmdList["BENILLA_KARTFREE"] = function(msg) BenillaKartFreeCam(msg) end
             SLASH_BENILLA_KARTNEXT1 = "/kartnext"
+            SLASH_BENILLA_KARTMENU1 = "/kartmenu"
+            SlashCmdList["BENILLA_KARTMENU"] = function() BenillaKartMenu_Toggle() end
             SLASH_BENILLA_KARTPAD1 = "/kartpad"
             SlashCmdList["BENILLA_KARTPAD"] = function() BenillaKartPad_Toggle() end
             SLASH_BENILLA_KARTGUIDE1 = "/kartguide"
@@ -3084,6 +3330,112 @@
     <!-- The Kartcraft Guide: five pages for a new player, open on the first login (KartGuideSeen),
          and from the minimap menu, /kartguide or its binding after. Each page has one button that
          does what it describes. -->
+    <!-- The Kartcraft menu (Options on the controller, KARTCRAFT_MENU): what racing needs, one
+         entry each, for a player on the controller alone. -->
+    <Frame name="BenillaKartMenuFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
+        <Size><AbsDimension x="280" y="344"/></Size>
+        <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
+            <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
+            <TileSize><AbsValue val="32"/></TileSize>
+            <EdgeSize><AbsValue val="32"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
+                    <Size><AbsDimension x="256" y="64"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
+                </Texture>
+                <FontString inherits="GameFontNormal" text="World of Kartcraft">
+                    <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString inherits="GameFontDisableSmall" text="D-pad to move, Cross to choose, Circle to close">
+                    <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="48"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <Button name="$parentEntry1" inherits="UIPanelButtonTemplate" id="1">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-34"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry2" inherits="UIPanelButtonTemplate" id="2">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-60"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry3" inherits="UIPanelButtonTemplate" id="3">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-86"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry4" inherits="UIPanelButtonTemplate" id="4">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-112"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry5" inherits="UIPanelButtonTemplate" id="5">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-138"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry6" inherits="UIPanelButtonTemplate" id="6">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-164"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry7" inherits="UIPanelButtonTemplate" id="7">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-190"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry8" inherits="UIPanelButtonTemplate" id="8">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-216"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry9" inherits="UIPanelButtonTemplate" id="9">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-242"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry10" inherits="UIPanelButtonTemplate" id="10">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-268"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenuFrame:Hide()</OnClick></Scripts>
+            </Button>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
+                BenillaKart_Movable(this)
+            </OnLoad>
+            <OnShow>
+                BenillaKartMenu_Refresh()
+                PlaySound("igMainMenuOpen")
+            </OnShow>
+            <OnHide>PlaySound("igMainMenuClose")</OnHide>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+
+    <!-- The controller's highlight: an arrow at the focused control's left (BenillaPad_Show). -->
+    <Frame name="BenillaPadCursor" parent="UIParent" hidden="true" frameStrata="TOOLTIP">
+        <Size><AbsDimension x="20" y="20"/></Size>
+        <Layers>
+            <Layer level="OVERLAY">
+                <Texture file="Interface\ChatFrame\ChatFrameExpandArrow" setAllPoints="true"/>
+            </Layer>
+        </Layers>
+    </Frame>
+
     <!-- The controller test (/kartpad): each pad button and what it does in the kart, lit while
          held; the sticks and triggers; the two motors to try. -->
     <Frame name="BenillaKartPadFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">

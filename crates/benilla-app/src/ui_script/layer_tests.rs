@@ -486,13 +486,17 @@ fn every_global_the_layer_defines_takes_the_benilla_prefix() {
         &super::content::read("Bindings.xml").expect("the layer's Bindings.xml"),
     )
     .unwrap();
+    // The controller's key names ([`benilla_ui::script::keybind::PAD_KEYS`]), labelled as the
+    // stock `KEY_*` strings label a key.
     let label = |n: &str| {
-        bindings.iter().any(|b| {
-            n.strip_prefix("BINDING_NAME_") == Some(b.name.as_str())
-                || b.header
-                    .as_deref()
-                    .is_some_and(|h| n.strip_prefix("BINDING_HEADER_") == Some(h))
-        })
+        n.strip_prefix("KEY_")
+            .is_some_and(|k| benilla_ui::script::keybind::PAD_KEYS.contains(&k))
+            || bindings.iter().any(|b| {
+                n.strip_prefix("BINDING_NAME_") == Some(b.name.as_str())
+                    || b.header
+                        .as_deref()
+                        .is_some_and(|h| n.strip_prefix("BINDING_HEADER_") == Some(h))
+            })
     };
     let unprefixed: Vec<&String> = log[start..end]
         .iter()

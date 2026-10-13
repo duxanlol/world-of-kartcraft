@@ -346,7 +346,7 @@ fn update(
     } else if ui.typing {
         input::Controls::default()
     } else {
-        input::read(&bindings::keys(&overlay), &pads)
+        input::read(&bindings::keys(&overlay), &pads, &ui.pad_owned, ui.pad_all)
     };
     // A showcase run's tape drives; the camera binding steps through its cameras.
     let cycle = showing && controls.camera;

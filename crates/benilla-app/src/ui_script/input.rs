@@ -77,6 +77,53 @@ fn feed_wheel(
 /// Feeds cursor, buttons, wheel and keys into the UI engine, publishing [`PlayerUiHover`] (the
 /// pointer arbiter yields to the UI) and [`UiKeyboardCapture`] (a key a box or frame ate never
 /// fires its binding). Runs in the `UiInput` set, before `WorldStage::Input` and every key reader.
+/// Controller presses to the interface first, Kartcraft's deviation: a key-capture frame takes one
+/// as a key by its `PAD` name (the Key Bindings page binds it so), else the layer's
+/// `BenillaPad_OnButton(name)` may (a menu's highlight, a popup's answer); either way its binding
+/// does not run. Then the buttons the layer holds while its window is up (`BenillaPad_Owns()`: the
+/// names, or `ALL`), which the kart leaves alone.
+pub(super) fn feed_pad(
+    script: Option<NonSendMut<UiScript>>,
+    pads: Query<&bevy::input::gamepad::Gamepad>,
+    mut capture: ResMut<UiKeyboardCapture>,
+) {
+    capture.pad_consumed.clear();
+    let Some(mut script) = script else {
+        capture.pad_owned.clear();
+        capture.pad_all = false;
+        return;
+    };
+    if !capture.typing {
+        let pressed: Vec<_> = pads
+            .iter()
+            .flat_map(|p| p.get_just_pressed().copied().collect::<Vec<_>>())
+            .collect();
+        for b in pressed {
+            let Some(name) = crate::bindings::chord::pad_token(b) else {
+                continue;
+            };
+            let taken = script.frame_key_input(name)
+                || script
+                    .eval::<bool>(&format!(
+                        "return BenillaPad_OnButton ~= nil and BenillaPad_OnButton(\"{name}\") == true"
+                    ))
+                    .unwrap_or(false);
+            if taken {
+                capture.pad_consumed.push(b);
+            }
+        }
+    }
+    let owned: String = script
+        .eval("return BenillaPad_Owns ~= nil and BenillaPad_Owns() or ''")
+        .unwrap_or_default();
+    capture.pad_all = owned == "ALL";
+    capture.pad_owned = crate::bindings::chord::PAD_BUTTONS
+        .iter()
+        .filter(|(_, n)| owned.split_whitespace().any(|o| o == *n))
+        .map(|(b, _)| *b)
+        .collect();
+}
+
 pub(super) fn feed_ui_input(
     script: Option<NonSendMut<UiScript>>,
     // Carries the `wl_display` the Wayland clipboard backend needs, once winit has a surface.

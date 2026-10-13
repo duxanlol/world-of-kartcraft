@@ -115,6 +115,13 @@ pub(crate) struct UiKeyboardCapture {
     /// The arrows fall through: the focused box is in alt-arrow mode and ALT is up, so the
     /// reference declines them at `0x77b1c4` and `CGWorldFrame` runs their bindings.
     pub(crate) arrows_fall_through: bool,
+    /// Controller buttons the interface took this frame ([`input::feed_pad`]), whose binding does
+    /// not run.
+    pub(crate) pad_consumed: Vec<bevy::input::gamepad::GamepadButton>,
+    /// Controller buttons the layer holds while its menu or popup is up (`BenillaPad_Owns`), which
+    /// the kart does not read; `pad_all` holds every button and the sticks.
+    pub(crate) pad_owned: Vec<bevy::input::gamepad::GamepadButton>,
+    pub(crate) pad_all: bool,
 }
 
 /// A left press the UI consumed without hitting a frame (a payload dropped on empty world), which
@@ -326,6 +333,7 @@ impl Plugin for UiScriptPlugin {
                 (
                     extract::tick_script,
                     input::feed_ui_input.in_set(crate::char_select::InWorldGated),
+                    input::feed_pad.in_set(crate::char_select::InWorldGated),
                 )
                     .chain()
                     .in_set(UiInput)

@@ -58,7 +58,31 @@ pub fn normalize_binding_key(key: &str) -> Option<String> {
     is_valid_binding_key(key).then(|| key.to_ascii_uppercase())
 }
 
-/// `IsValidBindingKeyString 0x4b7890`, arm for arm.
+/// The controller's buttons as binding keys, by the names later clients give them: `PAD1` to
+/// `PAD4` the face buttons (bottom, right, left, top), the D-pad, the shoulders and triggers, the
+/// stick clicks, and the middle buttons (`PADFORWARD` Options or Menu, `PADBACK` Create or View,
+/// `PADSYSTEM` the PS or Guide button). Kartcraft's deviation: 1.12 binds no controller.
+pub const PAD_KEYS: [&str; 17] = [
+    "PAD1",
+    "PAD2",
+    "PAD3",
+    "PAD4",
+    "PADDUP",
+    "PADDDOWN",
+    "PADDLEFT",
+    "PADDRIGHT",
+    "PADLSHOULDER",
+    "PADRSHOULDER",
+    "PADLTRIGGER",
+    "PADRTRIGGER",
+    "PADLSTICK",
+    "PADRSTICK",
+    "PADFORWARD",
+    "PADBACK",
+    "PADSYSTEM",
+];
+
+/// `IsValidBindingKeyString 0x4b7890`, arm for arm, and the controller's keys.
 fn is_valid_binding_key(key: &str) -> bool {
     // 1. Modifier prefixes, in any order and any number of times (`0x4b78a0`-`0x4b78d0`).
     let mut rest = key;
@@ -79,6 +103,10 @@ fn is_valid_binding_key(key: &str) -> bool {
                 return true;
             }
         }
+    }
+    // Deviation, Kartcraft's: the controller's buttons ([`PAD_KEYS`]), which 1.12 has no key for.
+    if PAD_KEYS.contains(&rest) {
+        return true;
     }
     // 4. The 26 names at `0x846c20`-`0x846c84`: no lone modifier, `SCROLLLOCK` or `PAUSE`.
     const NAMES: [&str; 26] = [

@@ -589,7 +589,8 @@ fn a_finder_race_offers_the_way_back_and_new_bests_reach_the_chat() {
     assert_eq!(
         s.eval::<String>("return StaticPopup1Text:GetText()")
             .unwrap(),
-        "Return to where you were before the race?"
+        "Return to where you were before the race?\n\n|cff999999Controller: Cross / A to return, \
+         Circle / B to stay|r"
     );
     assert_eq!(
         s.eval::<String>("return StaticPopup1Button1:GetText()")
@@ -1349,7 +1350,7 @@ fn key_bindings_lists_the_kart_s_controls_and_they_run() {
          Boost (Second Shoulder),Fire Item,Toggle Camera Distance,Look Back,Wumpa Juice,Turbo Boost,Super Engine,Aku Aku,\
          Summon / Dismiss Kart,Race Finder,Leave Race,Kartcraft Settings,Kart Garage,\
          Clean Screen (hide all interface),Free Camera (fly, park, off),Next Kart,\
-         Kartcraft Guide"
+         Kartcraft Guide,Kartcraft Menu"
     );
     s.run("RunBinding('KARTCRAFT_GARAGE')").unwrap();
     assert!(s
@@ -1995,6 +1996,68 @@ fn the_world_channel_is_joined_at_login_until_the_player_leaves_it() {
         s.eval::<String>("return GetCVar('KartWorldChat')").unwrap(),
         "1"
     );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+#[test]
+fn the_controller_drives_the_kartcraft_menu_and_answers_its_popups() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let press = |s: &mut UiScript, key: &str| -> bool {
+        let taken = s
+            .eval(&format!("return BenillaPad_OnButton('{key}') == true"))
+            .unwrap();
+        s.tick(0.0);
+        taken
+    };
+    let owns = |s: &mut UiScript| -> String { s.eval("return BenillaPad_Owns()").unwrap() };
+    let focus = |s: &mut UiScript| -> String {
+        s.eval("return BenillaPad.focus and BenillaPad.focus:GetName() or ''")
+            .unwrap()
+    };
+    let shown = |s: &mut UiScript, frame: &str| -> bool {
+        s.eval(&format!("return {frame}:IsVisible() == 1")).unwrap()
+    };
+
+    // Nothing open: a press is the binding's, and the kart's buttons are its own.
+    assert!(!press(&mut s, "PADDDOWN"));
+    assert_eq!(owns(&mut s), "");
+
+    // The menu: the first press finds the top entry, the D-pad moves, Cross chooses.
+    s.run("BenillaKartMenu_Toggle()").unwrap();
+    s.tick(0.0);
+    assert_eq!(owns(&mut s), "ALL");
+    assert!(press(&mut s, "PADDDOWN"));
+    assert_eq!(focus(&mut s), "BenillaKartMenuFrameEntry1");
+    assert!(press(&mut s, "PADDDOWN"));
+    assert_eq!(focus(&mut s), "BenillaKartMenuFrameEntry2");
+    assert!(press(&mut s, "PADDUP"));
+    assert!(press(&mut s, "PADDDOWN"));
+    assert!(press(&mut s, "PAD1"));
+    assert!(!shown(&mut s, "BenillaKartMenuFrame"));
+    assert!(
+        shown(&mut s, "BenillaKartFinderFrame"),
+        "Race Finder chosen"
+    );
+    // Its window takes the controller in turn; Circle closes it and gives the pad back.
+    assert!(press(&mut s, "PADDDOWN"));
+    assert!(focus(&mut s).starts_with("BenillaKartFinderFrame"));
+    assert!(press(&mut s, "PAD2"));
+    assert!(!shown(&mut s, "BenillaKartFinderFrame"));
+    assert_eq!(owns(&mut s), "");
+    assert_eq!(focus(&mut s), "");
+
+    // A popup takes Cross and Circle only, while it is up.
+    sent(&mut s);
+    s.run("StaticPopup_Show('BENILLA_KART_RETURN')").unwrap();
+    assert_eq!(owns(&mut s), "PAD1 PAD2");
+    assert!(!press(&mut s, "PAD4"));
+    assert!(press(&mut s, "PAD1"));
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tBack"]);
+    assert_eq!(owns(&mut s), "");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 

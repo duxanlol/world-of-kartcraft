@@ -140,6 +140,8 @@ pub(crate) struct BindingOverlay {
     /// and the owner's stock-plane ones; a stock-plane default on a key the stock defaults bind
     /// is dropped, so the owner never takes a stock key.
     defaults: &'static [(&'static str, &'static str)],
+    /// The controller buttons the mode reads itself, which no binding gets while it is on.
+    pads: &'static [bevy::input::gamepad::GamepadButton],
     /// The mode is on: the plane's keys are its own.
     pub(crate) active: bool,
     /// Commands down this frame, and those whose key went down this frame.
@@ -157,6 +159,20 @@ impl BindingOverlay {
             defaults,
             ..Default::default()
         }
+    }
+
+    /// The controller buttons the mode reads itself.
+    pub(crate) fn with_pads(
+        mut self,
+        pads: &'static [bevy::input::gamepad::GamepadButton],
+    ) -> Self {
+        self.pads = pads;
+        self
+    }
+
+    /// Does the mode read this controller button itself right now?
+    pub(crate) fn takes_pad(&self, b: bevy::input::gamepad::GamepadButton) -> bool {
+        self.active && self.pads.contains(&b)
     }
 
     /// Is a key bound to this command down (only while the mode is on)?
@@ -218,6 +234,7 @@ enum Held {
     Key(KeyCode),
     Mouse(MouseButton),
     Wheel,
+    Pad(bevy::input::gamepad::GamepadButton),
 }
 
 impl BindingsState {
@@ -475,7 +492,7 @@ fn latch_and_dispatch(
     mut notches: Local<WheelNotches>,
     mut focus_lost: MessageReader<bevy::input::keyboard::KeyboardFocusLost>,
     cover: Option<Res<crate::loading_screen::LoadingScreen>>,
-    overlay: Res<BindingOverlay>,
+    (overlay, gamepads): (Res<BindingOverlay>, Query<&bevy::input::gamepad::Gamepad>),
 ) {
     state.just.clear();
     state.fired.clear();
@@ -529,9 +546,14 @@ fn latch_and_dispatch(
     // ── The pressed-key reconcile ── against bevy's button planes, before this frame's messages:
     // a release the window never saw drops off the list, and a window deactivate empties it, the
     // reference's `0x424790` wipe, so a key held across an alt-tab re-latches on its next repeat.
+    // Every controller button down, on any controller.
+    let pads_down: Vec<bevy::input::gamepad::GamepadButton> = gamepads
+        .iter()
+        .flat_map(|g| g.get_pressed().copied().collect::<Vec<_>>())
+        .collect();
     state
         .down
-        .retain(|&kc| physically_down(Held::Key(kc), &keys, &buttons));
+        .retain(|&kc| physically_down(Held::Key(kc), &keys, &buttons, &pads_down));
 
     // ── Keyboard ── press edges run their command, gated on ownership and the capture arm;
     // release edges unlatch and run the `runOnUp` up-half.
@@ -622,6 +644,35 @@ fn latch_and_dispatch(
         }
     }
 
+    // ── Controller buttons ── Kartcraft's deviation (`chord::PAD_BUTTONS`): a press is a key
+    // press by its `PAD` name, as a modifier-held one is its chord. Not while typing, not one the
+    // interface took first (`UiKeyboardCapture::pad_consumed`: a key-capture frame, the layer's
+    // menus and popups), and not one the overlay's mode reads itself (the kart's driving buttons).
+    for pad in &gamepads {
+        for &b in pad.get_just_pressed() {
+            if typing
+                || sup
+                || capture.pad_consumed.contains(&b)
+                || overlay.takes_pad(b)
+                || state.latched.iter().any(|(k, _)| *k == Held::Pad(b))
+            {
+                continue;
+            }
+            let chord = Chord {
+                alt,
+                ctrl,
+                shift,
+                key: BindKey::Pad(b),
+            };
+            if let Some(command) = dispatch.resolve(chord, false) {
+                press(&mut state, &mut script, command, Held::Pad(b));
+            }
+        }
+        for &b in pad.get_just_released() {
+            release(&mut state, &mut script, Held::Pad(b));
+        }
+    }
+
     // ── Wheel ── each notch is a press and its release, back to back: the reference hands one
     // chord to `CBindings::ExecuteBinding` with `isDown=1` (`0x483d6f`) then `isDown=0`
     // (`0x483d82`) per wheel message. A `runOnUp` command runs both halves; a plain one's up leg is
@@ -656,7 +707,7 @@ fn latch_and_dispatch(
     // here.
     let mut stuck: Vec<Held> = Vec::new();
     for (k, _) in &state.latched {
-        if !physically_down(*k, &keys, &buttons) && !stuck.contains(k) {
+        if !physically_down(*k, &keys, &buttons, &pads_down) && !stuck.contains(k) {
             stuck.push(*k);
         }
     }
@@ -679,6 +730,7 @@ fn physically_down(
     key: Held,
     keys: &ButtonInput<KeyCode>,
     buttons: &ButtonInput<MouseButton>,
+    pads: &[bevy::input::gamepad::GamepadButton],
 ) -> bool {
     match key {
         Held::Key(KeyCode::Enter) => {
@@ -688,6 +740,7 @@ fn physically_down(
         Held::Mouse(b) => buttons.pressed(b),
         // A notch is a press and a release in one frame; it is never "held".
         Held::Wheel => false,
+        Held::Pad(b) => pads.contains(&b),
     }
 }
 
@@ -745,6 +798,8 @@ fn poll_overlay(
             Some(BindKey::Key(n)) => (down.contains(&n), pressed_now.contains(&n)),
             Some(BindKey::Mouse(b)) => (buttons.pressed(b), buttons.just_pressed(b)),
             Some(BindKey::WheelUp | BindKey::WheelDown) => (false, false),
+            // The kart reads the controller itself (`kartcraft::input::DRIVING_PADS`).
+            Some(BindKey::Pad(_)) => (false, false),
             // A lone modifier, held as `modifiers_held` found it.
             None => {
                 let mods = [

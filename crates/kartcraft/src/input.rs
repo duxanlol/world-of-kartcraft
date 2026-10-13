@@ -82,13 +82,32 @@ impl Keys {
 }
 
 /// The first connected pad's controls, else the keyboard's.
-pub fn read(keys: &Keys, pads: &Query<&Gamepad>) -> Controls {
+/// `held`: the buttons the interface holds while its menu or popup is up, which do not drive;
+/// `all`: it holds the whole pad.
+pub fn read(keys: &Keys, pads: &Query<&Gamepad>, held: &[GamepadButton], all: bool) -> Controls {
     let keyboard = from_keys(keys);
-    match pads.iter().next() {
-        Some(pad) => merge(from_pad(pad), keyboard),
+    match pads.iter().next().filter(|_| !all) {
+        Some(pad) => merge(from_pad(pad, held), keyboard),
         None => keyboard,
     }
 }
+
+/// The buttons [`from_pad`] drives with, which are no binding's while we drive.
+pub const DRIVING_PADS: &[GamepadButton] = &[
+    GamepadButton::South,
+    GamepadButton::West,
+    GamepadButton::East,
+    GamepadButton::RightTrigger,
+    GamepadButton::LeftTrigger,
+    GamepadButton::RightTrigger2,
+    GamepadButton::LeftTrigger2,
+    GamepadButton::DPadUp,
+    GamepadButton::DPadRight,
+    GamepadButton::DPadDown,
+    GamepadButton::DPadLeft,
+    GamepadButton::Select,
+    GamepadButton::RightThumb,
+];
 
 /// How far the stick must lean before it steers over the keys.
 const STICK_OVER_KEYS: f32 = 0.15;
@@ -113,31 +132,35 @@ fn merge(pad: Controls, keys: Controls) -> Controls {
 }
 
 /// The first pad's controls.
-fn from_pad(pad: &Gamepad) -> Controls {
+fn from_pad(pad: &Gamepad, held: &[GamepadButton]) -> Controls {
+    // A button the interface holds does not drive.
+    let free = |b: GamepadButton| !held.contains(&b);
+    let pressed = |b| free(b) && pad.pressed(b);
+    let just = |b| free(b) && pad.just_pressed(b);
     // The triggers accelerate and brake too, for those who drive a racing game that way.
-    let trigger = |b| pad.get(b).unwrap_or(0.0) > 0.4;
+    let trigger = |b| free(b) && pad.get(b).unwrap_or(0.0) > 0.4;
     Controls {
         // Raw: the driving model applies CTR's own dead zone and response curve.
         steer: pad
             .get(GamepadAxis::LeftStickX)
             .unwrap_or(0.0)
             .clamp(-1.0, 1.0),
-        accelerate: pad.pressed(GamepadButton::South) || trigger(GamepadButton::RightTrigger2),
-        brake: pad.pressed(GamepadButton::West) || trigger(GamepadButton::LeftTrigger2),
+        accelerate: pressed(GamepadButton::South) || trigger(GamepadButton::RightTrigger2),
+        brake: pressed(GamepadButton::West) || trigger(GamepadButton::LeftTrigger2),
         reverse: pad.get(GamepadAxis::LeftStickY).unwrap_or(0.0) < -0.6,
-        hop: pad.pressed(GamepadButton::RightTrigger),
-        hop_alt: pad.pressed(GamepadButton::LeftTrigger),
-        fire: pad.just_pressed(GamepadButton::East),
+        hop: pressed(GamepadButton::RightTrigger),
+        hop_alt: pressed(GamepadButton::LeftTrigger),
+        fire: just(GamepadButton::East),
         dpad: [
-            pad.just_pressed(GamepadButton::DPadUp),
-            pad.just_pressed(GamepadButton::DPadRight),
-            pad.just_pressed(GamepadButton::DPadDown),
-            pad.just_pressed(GamepadButton::DPadLeft),
+            just(GamepadButton::DPadUp),
+            just(GamepadButton::DPadRight),
+            just(GamepadButton::DPadDown),
+            just(GamepadButton::DPadLeft),
         ],
         // CTR swaps the camera with L2 and looks back with R2, but the triggers here are the gas
         // and the brake (above); Select and the right stick's click are free on either pad.
-        camera: pad.just_pressed(GamepadButton::Select),
-        look_back: pad.pressed(GamepadButton::RightThumb),
+        camera: just(GamepadButton::Select),
+        look_back: pressed(GamepadButton::RightThumb),
         pad: true,
     }
 }

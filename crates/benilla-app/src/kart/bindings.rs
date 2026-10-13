@@ -70,10 +70,16 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("4", ABILITIES[3]),
     ("J", SUMMON),
     ("I", "KARTCRAFT_RACEFINDER"),
+    // The controller's free buttons (the rest drive, [`kartcraft::input::DRIVING_PADS`]): △ or Y
+    // summons the kart, Options or Menu opens the Kartcraft menu.
+    ("PAD4", SUMMON),
+    ("PADFORWARD", "KARTCRAFT_MENU"),
 ];
 
 pub(super) fn plugin(app: &mut bevy::prelude::App) {
-    app.insert_resource(BindingOverlay::new(DRIVING, DEFAULTS));
+    app.insert_resource(
+        BindingOverlay::new(DRIVING, DEFAULTS).with_pads(kartcraft::input::DRIVING_PADS),
+    );
 }
 
 /// The keyboard's controls this frame, off the keys bound to the driving controls.
@@ -155,7 +161,7 @@ mod tests {
         // Every row the file declares is a command the kart names or a Lua one.
         assert_eq!(
             benilla_ui::bindings_xml::parse(xml).unwrap().len(),
-            DRIVING.len() + 9
+            DRIVING.len() + 10
         );
     }
 }
