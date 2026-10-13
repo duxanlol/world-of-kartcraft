@@ -281,6 +281,8 @@ pub struct ChaseCamera {
     yaw: f32,
     /// Last tick's eye and look-at (`cameraPos`, `lookAtPos`), before the wall pull.
     last: Option<(Vec3, Vec3)>,
+    /// What the wall pull takes off the boom (lu), eased: in fast, out slowly.
+    pulled: Option<f32>,
     /// Through a blast (`BlastedLerp.unkOffset`): the look-at's height over the eye and the
     /// eye's over the ground, held from the blast's first frame until the kart lands.
     blast: Option<(f32, f32)>,
@@ -289,17 +291,31 @@ pub struct ChaseCamera {
     blast_ease: (Vec3, Vec3, i32),
 }
 
+/// The wall pull: the nearest the eye comes to the look-at (lu), and the share of the way it moves
+/// in a 30 Hz frame toward a nearer wall and back out to open road.
+const PULL_NEAREST: f32 = 48.0;
+const PULL_IN: f32 = 0.6;
+const PULL_OUT: f32 = 0.12;
+
+/// How far under a roof the eye keeps (lu): out of the near plane's reach of it; and how far over
+/// the kart a roof is looked for.
+const ROOF_GAP: f32 = 16.0;
+const ROOF_REACH: f32 = 512.0;
+
 /// The ground's grade along `heading` around the kart at `at` (rise per run): a least-squares
 /// line through the ground at [`GRADE_SAMPLES`], so no one bump or hollow swings it. `None` with
 /// fewer than three samples on ground.
-fn grade(world: &Collision, at: Vec3, heading: i32) -> Option<f32> {
+fn grade(world: &Collision, at: Vec3, heading: i32, roof: f32) -> Option<f32> {
     let f = fwd(heading);
     let mut points = [(0.0, 0.0); GRADE_SAMPLES.len()];
     let mut n = 0;
     for s in GRADE_SAMPLES {
         // From over the steepest heeded grade at that distance, down twice as far.
+        // Under a roof, from under it.
         let over = 128.0 + GRADE_MAX * s.abs();
-        if let Some(hit) = world.ground(at + f * s + Vec3::Y * over, 2.0 * over) {
+        let top = (at.y + over).min(roof - 1.0);
+        let point = at + f * s;
+        if let Some(hit) = world.ground(Vec3::new(point.x, top, point.z), top - (at.y - over)) {
             points[n] = (s, hit.point.y - at.y);
             n += 1;
         }
@@ -446,8 +462,14 @@ impl ChaseCamera {
         // rig about the kart's middle with `tilt` of the ground's grade along the heading, read
         // over several samples, clamped and filtered, so the camera sits over a slope as it sits
         // over flat road and the kart keeps its place on the screen.
+        // WoW's tunnels, gates and halls have roofs CTR's tracks do not: the roof straight over
+        // the kart, so the ground is never looked for on its top and the eye keeps under it.
+        let roof = world
+            .ray(k.position + Vec3::Y * PIVOT_H, Vec3::Y, ROOF_REACH)
+            .map_or(f32::INFINITY, |hit| k.position.y + PIVOT_H + hit.distance);
         let target = if tuning.tilt > 0.0 {
-            grade(world, k.position, k.heading).map_or(self.tilt[1], |g| g.atan() * tuning.tilt)
+            grade(world, k.position, k.heading, roof)
+                .map_or(self.tilt[1], |g| g.atan() * tuning.tilt)
         } else {
             0.0
         };
@@ -468,8 +490,17 @@ impl ChaseCamera {
 
         self.blasted(k, &mut eye, &mut look);
 
-        // 5: never closer than vertDistance over the ground under the eye.
-        match world.ground(eye + Vec3::Y * 256.0, 2304.0) {
+        // 5: never closer than vertDistance over the ground under the eye: the ground just under
+        // it, as on open road; with none (the eye sunk into a hill) the first ground down from
+        // 256 lu over it, as CTR looks, but from under a roof, never on its top.
+        let below = world.ground(eye + Vec3::Y * 8.0, 2056.0);
+        let probe_top = (eye.y + 256.0).min(roof - 1.0);
+        match below.or_else(|| {
+            world.ground(
+                Vec3::new(eye.x, probe_top, eye.z),
+                probe_top - (eye.y - 2048.0),
+            )
+        }) {
             Some(hit) => {
                 eye.y = eye.y.max(hit.point.y + zoom.clearance);
                 if self.blend > 0 {
@@ -490,6 +521,12 @@ impl ChaseCamera {
                 }
             }
         }
+        // Under a roof the eye keeps ROOF_GAP under it, over the ground's clearance if both
+        // cannot hold.
+        if roof.is_finite() {
+            eye.y = eye.y.min(roof - ROOF_GAP);
+            look.y = look.y.min(roof - ROOF_GAP);
+        }
         // Through a blast the look-at keeps its height over the eye (`CAM.c:1447-1450`).
         if let Some((look_over, _)) = self.blast {
             look.y = eye.y + look_over;
@@ -499,10 +536,25 @@ impl ChaseCamera {
         // pillars and trees do not, so a tuning may bring the eye in short of what blocks it.
         let to_eye = eye - look;
         let reach = to_eye.length();
-        if tuning.wall_pull {
-            if let Some(hit) = world.ray(look, to_eye, reach) {
-                eye = look + to_eye * ((hit.distance - 12.0).max(24.0) / reach);
-            }
+        // A wall crossing the line comes in over a couple of frames and goes out over a quarter of
+        // a second, so a pillar flicking past is a dip, not a jump; and never nearer than
+        // PULL_NEAREST, out of the driver's head.
+        if tuning.wall_pull && reach > 0.0 {
+            // What the wall takes off the boom; the boom's own length (turbo, speed) passes through.
+            let short = world
+                .ray(look, to_eye, reach)
+                .map_or(0.0, |hit| reach - (hit.distance - 12.0).max(PULL_NEAREST))
+                .max(0.0);
+            let held = match self.pulled.filter(|_| !cut) {
+                Some(last) if short > last => last + (short - last) * PULL_IN,
+                Some(last) => last + (short - last) * PULL_OUT,
+                None => short,
+            };
+            let held = held.clamp(0.0, (reach - PULL_NEAREST).max(0.0));
+            self.pulled = Some(held);
+            eye = look + to_eye * ((reach - held) / reach);
+        } else {
+            self.pulled = None;
         }
         self.started = true;
         // The screen's roll, `(angle[0] * rollS) >> 8` with `angle[0]` the bank in 256ths.
@@ -931,6 +983,127 @@ mod tests {
             shot = cam.tick(&input(13000), world);
         }
         shot
+    }
+
+    /// A flat road through a tunnel: a roof slab `roof` lu over the road (its underside), 20 lu
+    /// thick, long and wide enough to cover the kart and its camera.
+    fn tunnel(roof: f32) -> Collision {
+        let (s, w) = (50000.0, 3000.0);
+        let (lo, hi) = (roof, roof + 20.0);
+        Collision::new(
+            [
+                [[-s, 0.0, -s], [-s, 0.0, s], [s, 0.0, s]],
+                [[-s, 0.0, -s], [s, 0.0, s], [s, 0.0, -s]],
+                // The roof's underside and its top.
+                [[-w, lo, -w], [w, lo, w], [-w, lo, w]],
+                [[-w, lo, -w], [w, lo, -w], [w, lo, w]],
+                [[-w, hi, -w], [-w, hi, w], [w, hi, w]],
+                [[-w, hi, -w], [w, hi, w], [w, hi, -w]],
+            ],
+            160.0,
+        )
+    }
+
+    /// The flat road with a wall square across the line behind the kart, `behind` lu back, as wide
+    /// as `half` either side, standing from the road to well over the eye.
+    fn wall(behind: f32, half: f32) -> Collision {
+        let s = 50000.0;
+        let (z, h) = (-behind, 1000.0);
+        Collision::new(
+            [
+                [[-s, 0.0, -s], [-s, 0.0, s], [s, 0.0, s]],
+                [[-s, 0.0, -s], [s, 0.0, s], [s, 0.0, -s]],
+                [[-half, 0.0, z], [half, 0.0, z], [half, h, z]],
+                [[-half, 0.0, z], [half, h, z], [-half, h, z]],
+            ],
+            160.0,
+        )
+    }
+
+    #[test]
+    fn a_pillar_flicking_across_the_line_dips_the_camera_and_does_not_jump_it() {
+        let open = settle(&mut ChaseCamera::default(), &flat());
+        let open_reach = (open.eye - open.look).length();
+        // One frame a pillar stands just behind the kart, then it is gone.
+        let pillar = wall(40.0, 20.0);
+        let mut cam = ChaseCamera::default();
+        settle(&mut cam, &flat());
+        let dip = cam.tick(&input(13000), &pillar);
+        let reach = (dip.eye - dip.look).length();
+        assert!(
+            reach >= PULL_NEAREST - 0.01,
+            "into the driver's head: {reach}"
+        );
+        // Back on open road it eases out, not snapping: each frame a little further.
+        let mut last = reach;
+        for _ in 0..30 {
+            let shot = cam.tick(&input(13000), &flat());
+            let r = (shot.eye - shot.look).length();
+            assert!(
+                r >= last - 0.01 && r - last < open_reach * 0.2,
+                "{last} -> {r}"
+            );
+            last = r;
+        }
+        assert!(last > open_reach * 0.95, "{last} of {open_reach}");
+    }
+
+    #[test]
+    fn a_wall_that_stays_brings_the_camera_in_within_a_few_frames() {
+        let blocked = wall(120.0, 2000.0);
+        let mut cam = ChaseCamera::default();
+        settle(&mut cam, &flat());
+        let mut shot = cam.tick(&input(13000), &blocked);
+        for _ in 0..4 {
+            shot = cam.tick(&input(13000), &blocked);
+        }
+        // In front of the wall, not seeing through it.
+        assert!(shot.eye.z > -120.0, "{shot:?}");
+    }
+
+    #[test]
+    fn in_a_tunnel_the_camera_holds_as_on_open_road() {
+        let open = settle(&mut ChaseCamera::default(), &flat());
+        // A roof 80 lu over the eye and the look-at, as a gate's arch or a tunnel's: inside the
+        // 256 lu over the eye the ground under it was looked for from, so its top was taken for
+        // the ground and the eye stood over the roof.
+        let roof = open.eye.y.max(open.look.y) + 80.0;
+        let world = tunnel(roof);
+        let mut cam = ChaseCamera::default();
+        settle(&mut cam, &world);
+        let mut heights = Vec::new();
+        for _ in 0..90 {
+            let shot = cam.tick(&input(13000), &world);
+            assert!(shot.eye.y < roof, "eye {} over the roof {roof}", shot.eye.y);
+            assert!(
+                (shot.eye - open.eye).length() < 1.0,
+                "{:?} vs open road {:?}",
+                shot.eye,
+                open.eye
+            );
+            heights.push(shot.eye.y);
+        }
+        let spread = heights.iter().cloned().fold(f32::MIN, f32::max)
+            - heights.iter().cloned().fold(f32::MAX, f32::min);
+        assert!(spread < 1.0, "the eye wanders {spread} lu");
+    }
+
+    #[test]
+    fn under_a_roof_lower_than_the_camera_it_keeps_under_it() {
+        let open = settle(&mut ChaseCamera::default(), &flat());
+        let roof = open.eye.y.min(open.look.y) - 20.0;
+        let world = tunnel(roof);
+        let mut cam = ChaseCamera::default();
+        settle(&mut cam, &world);
+        for _ in 0..90 {
+            let shot = cam.tick(&input(13000), &world);
+            assert!(
+                shot.eye.y < roof && shot.look.y < roof,
+                "{shot:?} under {roof}"
+            );
+            // Still behind the kart, not drawn into it.
+            assert!(shot.eye.z < -100.0, "{shot:?}");
+        }
     }
 
     #[test]
