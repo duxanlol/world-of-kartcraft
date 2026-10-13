@@ -150,6 +150,32 @@ impl Disc {
     }
 }
 
+impl Disc {
+    /// The game's id from its `SYSTEM.CNF` boot line, as the case prints it: `BOOT =
+    /// cdrom:\SCUS_944.26;1` is `SCUS-94426`.
+    pub fn game_id(&mut self) -> Result<String> {
+        let (lba, size) = self.find_file("SYSTEM.CNF")?;
+        let text = self.read_bytes(lba, size as usize)?;
+        game_id(&String::from_utf8_lossy(&text))
+            .ok_or_else(|| Error("SYSTEM.CNF names no boot file".into()))
+    }
+}
+
+/// `SYSTEM.CNF`'s boot file as a game id: the name after the last `\` or `:`, before `;`, its
+/// `_` and `.` taken out, a dash after the four letters.
+pub fn game_id(system_cnf: &str) -> Option<String> {
+    let line = system_cnf
+        .lines()
+        .find(|l| l.trim_start().to_ascii_uppercase().starts_with("BOOT"))?;
+    let file = line.rsplit(['\\', ':']).next()?.split(';').next()?.trim();
+    let id: String = file
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    (id.len() > 4).then(|| format!("{}-{}", &id[..4], &id[4..]))
+}
+
 fn read_up_to(file: &mut File, buf: &mut [u8]) -> std::io::Result<usize> {
     let mut n = 0;
     while n < buf.len() {
@@ -225,6 +251,17 @@ fn names_match(iso_name: &str, wanted: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_boot_line_names_the_game() {
+        let us = "BOOT = cdrom:\\SCUS_944.26;1\r\nTCB = 4\r\nEVENT = 10\r\n";
+        assert_eq!(game_id(us).as_deref(), Some("SCUS-94426"));
+        assert_eq!(
+            game_id("boot=cdrom:SCES_021.05;1").as_deref(),
+            Some("SCES-02105")
+        );
+        assert_eq!(game_id("TCB = 4"), None);
+    }
 
     fn record(name: &str, lba: u32, size: u32, dir: bool) -> Vec<u8> {
         let mut r = vec![0u8; 33 + name.len() + (1 - name.len() % 2)];

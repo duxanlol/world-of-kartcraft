@@ -39,6 +39,18 @@ fn run(
     hud: bool,
 ) -> Result<(), String> {
     let mut disc = Disc::open(disc).map_err(|e| e.to_string())?;
+    // Only the US disc's files sit where the bigfile's indices say (`big.rs`): another version
+    // would convert into karts that are not there, so it is refused by name.
+    match disc.game_id() {
+        Ok(id) if id == "SCUS-94426" => {}
+        Ok(id) => return Err(wrong_disc(&id)),
+        Err(e) => {
+            return Err(format!(
+                "This doesn't look like a PlayStation disc ({e}). World of Kartcraft needs the US \
+                 Crash Team Racing, SCUS-94426."
+            ))
+        }
+    }
     let mut bf = BigFile::open(&mut disc).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
     let names: Vec<&str> = if all { KARTS.to_vec() } else { vec![kart_name] };
@@ -175,4 +187,22 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Another disc than the US Crash Team Racing, named by its id's publisher prefix.
+fn wrong_disc(id: &str) -> String {
+    let what = match id {
+        "SCES-02105" => "the European Crash Team Racing",
+        "SCPS-10118" | "SCPS-91230" => "the Japanese Crash Team Racing",
+        _ if id.starts_with("SCES") || id.starts_with("SLES") => "a European PlayStation game",
+        _ if id.starts_with("SCPS") || id.starts_with("SLPS") || id.starts_with("SCPM") => {
+            "a Japanese PlayStation game"
+        }
+        _ => "another PlayStation game",
+    };
+    format!(
+        "This disc image is {what} ({id}). World of Kartcraft needs the US version of Crash Team \
+         Racing, SCUS-94426: other versions keep their files elsewhere, and the karts would come \
+         out invisible."
+    )
 }
