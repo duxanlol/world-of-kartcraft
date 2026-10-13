@@ -1279,6 +1279,19 @@ namespace Kartcraft
         return it == s_layer.end() ? 0 : it->second;
     }
 
+    // The kart abilities (the Karting profession's buffs) are the open world's: never in a race
+    // or a time trial.
+    static constexpr uint32 KART_ABILITIES[] = { SPELL_WUMPA_JUICE, SPELL_TURBO_BOOST, SPELL_SUPER_ENGINE, SPELL_AKU_AKU };
+
+    // Whether a player is in a race's layer: from its countdown until they leave it.
+    static bool InRace(Unit const* u)
+    {
+        if (s_layered.load(std::memory_order_acquire) == 0 || !u->IsPlayer())
+            return false;
+        std::shared_lock<std::shared_timed_mutex> lock(s_layerMutex);
+        return LayerOf(u) != 0;
+    }
+
     bool SameLayer(WorldObject const* a, WorldObject const* b)
     {
         if (s_layered.load(std::memory_order_acquire) == 0 || a == b || !a->IsPlayer() || !b->IsPlayer())
@@ -1321,7 +1334,12 @@ namespace Kartcraft
             }
             for (ObjectGuid const& guid : moved)
                 if (Player* p = ObjectAccessor::FindPlayer(guid))
+                {
                     p->UpdateVisibilityAndView();
+                    if (layers.count(guid))
+                        for (uint32 spell : KART_ABILITIES)
+                            p->RemoveAurasDueToSpell(spell);
+                }
         });
     }
 
@@ -3365,6 +3383,8 @@ namespace Kartcraft
             case SPELL_AKU_AKU:
                 if (!caster->HasAura(SPELL_SUMMON_KART))
                     return SPELL_FAILED_ONLY_MOUNTED;
+                if (InRace(caster))
+                    return SPELL_FAILED_NOT_HERE;
                 break;
         }
         return SPELL_CAST_OK;
