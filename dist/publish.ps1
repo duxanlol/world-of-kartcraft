@@ -59,6 +59,12 @@ if (-not $NoBuild) {
         if ($LASTEXITCODE) { throw 'building the client failed' }
         cargo build --release -p kart-demo -p ctr-assets
         if ($LASTEXITCODE) { throw 'building the demo and converter failed' }
+        # The launcher carries the presets in itself: it is one file, with no defaults.cfg beside it.
+        $env:KARTCRAFT_SERVER = $settings['SERVER']
+        $env:KARTCRAFT_UPDATE_URL = $settings['UPDATE_URL']
+        $env:KARTCRAFT_REGISTER_URL = $settings['REGISTER_URL']
+        cargo build --release -p kartcraft-launcher
+        if ($LASTEXITCODE) { throw 'building the launcher failed' }
     } finally { Pop-Location }
 }
 
@@ -70,6 +76,7 @@ $shipped = [ordered]@{
     'WorldOfKartcraft.exe' = Join-Path $bin 'benilla.exe'
     'kartcraft-demo.exe'   = Join-Path $bin 'kartcraft-demo.exe'
     'ctr-extract.exe'      = Join-Path $bin 'ctr-extract.exe'
+    'Kartcraft Launcher.exe' = Join-Path $bin 'kartcraft-launcher.exe'
     'LICENSE-MIT.txt'      = Join-Path $repo 'LICENSE-MIT'
     'LICENSE-APACHE.txt'   = Join-Path $repo 'LICENSE-APACHE'
     'LICENSE-GPL-3.0.txt'  = Join-Path $repo 'LICENSE-GPL-3.0'
@@ -164,6 +171,10 @@ if ($settings['AZURE_STORAGE']) {
     foreach ($name in $remote) {
         if ($keep -notcontains ($name -replace '^files/', '')) { az storage blob delete -c '$web' -n $name @auth -o none }
     }
+    # The one file new players download (worldofkartcraft.com/download leads here): the launcher,
+    # which fetches the rest.
+    az storage blob upload -c '$web' -n 'KartcraftLauncher.exe' -f (Join-Path $client 'Kartcraft Launcher.exe') --content-type application/vnd.microsoft.portable-executable --content-disposition 'attachment; filename="Kartcraft Launcher.exe"' --content-cache-control 'no-cache' --overwrite --no-progress @auth -o none
+    if ($LASTEXITCODE) { throw 'uploading the launcher failed' }
 }
 
 Write-Host '== WorldOfKartcraft.zip =='
@@ -179,7 +190,7 @@ Remove-Item -Recurse -Force $stage
 $mb = [math]::Round((Get-Item $full).Length / 1MB, 1)
 Write-Host ''
 Write-Host "Published $version."
-Write-Host "  New friends: send dist\WorldOfKartcraft.zip ($mb MB)."
+Write-Host "  New friends: send dist\WorldOfKartcraft\Kartcraft Launcher.exe, or the zip ($mb MB)."
 if ($settings['AZURE_STORAGE']) {
     Write-Host "  Everyone else updates the next time they start the game, from Azure storage."
 } else {

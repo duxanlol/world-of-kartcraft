@@ -55,6 +55,11 @@ if defined UPDATES if exist "%~dp0update.ps1" (
 rem A new launcher replaces this one and runs in its place, all on one line: cmd reads a batch
 rem file as it goes, so nothing of the old one may be read after the move.
 if exist "%~dp0Play Kartcraft.bat.new" (move /y "%~dp0Play Kartcraft.bat.new" "%~f0" >nul & "%~f0" %*)
+rem Once an update has brought the launcher, it does all of this in a window: it takes over.
+if /i not "%~1"=="demo" if exist "%~dp0Kartcraft Launcher.exe" (
+    start "" "%~dp0Kartcraft Launcher.exe"
+    exit /b 0
+)
 
 :ctr
 if not exist "kart-data\kart.json" if not defined CTR_DISC if not defined CTR_SEARCHED call :findctr
