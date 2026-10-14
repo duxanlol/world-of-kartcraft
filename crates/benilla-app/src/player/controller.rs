@@ -408,7 +408,8 @@ pub(super) fn control(
             return;
         }
         // `0x514560`, after `apply_server_moves`, so this frame's root edge is already in `modes`.
-        let may_translate = mover.may_translate(player.modes.rooted);
+        // A race's start roots us as well, on foot before the kart is back on the grid.
+        let may_translate = mover.may_translate(player.modes.rooted || pointer.6.held);
         let axes = input::move_axes(
             binds,
             &buttons,

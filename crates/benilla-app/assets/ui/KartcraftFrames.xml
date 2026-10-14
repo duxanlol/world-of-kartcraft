@@ -1344,12 +1344,25 @@
             { "Controller test", function() BenillaKartPad_Toggle() end },
         }
 
+        -- The menu as wide as its widest entry: a challenge names its course, and a long name
+        -- fits on its button, every button the same width, the window around them.
+        BENILLA_KART_MENU_WIDTH = 220
+        BENILLA_KART_MENU_PADDING = 32
+        BENILLA_KART_MENU_MARGIN = 60
+
         function BenillaKartMenu_Refresh()
+            local widest = BENILLA_KART_MENU_WIDTH
             for i = 1, table.getn(BENILLA_KART_MENU) do
                 local label = BENILLA_KART_MENU[i][1]
                 if type(label) == "function" then label = label() end
-                getglobal("BenillaKartMenuFrameEntry" .. i):SetText(label)
+                local entry = getglobal("BenillaKartMenuFrameEntry" .. i)
+                entry:SetText(label)
+                widest = math.max(widest, entry:GetTextWidth() + BENILLA_KART_MENU_PADDING)
             end
+            for i = 1, table.getn(BENILLA_KART_MENU) do
+                getglobal("BenillaKartMenuFrameEntry" .. i):SetWidth(widest)
+            end
+            BenillaKartMenuFrame:SetWidth(widest + BENILLA_KART_MENU_MARGIN)
         end
 
         -- An entry chosen: the menu goes first, so a window it opens takes the controller.

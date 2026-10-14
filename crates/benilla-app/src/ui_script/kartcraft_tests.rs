@@ -2704,6 +2704,51 @@ fn the_first_drive_shows_its_tip_once() {
 }
 
 #[test]
+fn the_kartcraft_menu_widens_to_a_challenge_s_long_course_name() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    // A font that measures: 7 units a character, as the game's font engine answers in the call.
+    s.set_text_measurer(Box::new(super::FixedWidthFont(7.0)));
+    let width = |s: &UiScript, frame: &str| -> f64 {
+        s.eval(&format!("return {frame}:GetWidth()")).unwrap()
+    };
+    // Short names: the menu as it was.
+    s.run("BenillaKartChallenge = { daily = 'd', weekly = 'w' } BenillaKartCourseNames = { d = 'Loop', w = 'Dash' } BenillaKartMenu_Refresh()")
+        .unwrap();
+    assert_eq!(width(&s, "BenillaKartMenuFrameEntry2"), 220.0);
+    assert_eq!(width(&s, "BenillaKartMenuFrame"), 280.0);
+
+    // A long one: every entry as wide as it needs, the window around them.
+    s.run(
+        "BenillaKartCourseNames.w = 'Brackwell Pumpkin Patch to Elwynn Forest Sprint Deluxe' \
+         BenillaKartMenu_Refresh()",
+    )
+    .unwrap();
+    let text: f64 = s
+        .eval("return BenillaKartMenuFrameEntry3:GetTextWidth()")
+        .unwrap();
+    assert_eq!(
+        s.eval::<String>("return BenillaKartMenuFrameEntry3:GetText()")
+            .unwrap(),
+        "Weekly: Brackwell Pumpkin Patch to Elwynn Forest Sprint Deluxe"
+    );
+    let entry = width(&s, "BenillaKartMenuFrameEntry3");
+    assert!(
+        entry > 220.0 && entry >= text + 32.0,
+        "entry {entry} for text {text}"
+    );
+    assert_eq!(
+        width(&s, "BenillaKartMenuFrameEntry1"),
+        entry,
+        "all the same width"
+    );
+    assert_eq!(width(&s, "BenillaKartMenuFrame"), entry + 60.0);
+}
+
+#[test]
 fn the_kart_s_shortcuts_show_in_the_kart_out_of_a_race_and_open_their_windows() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK
