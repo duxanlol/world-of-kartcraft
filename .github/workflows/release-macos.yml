@@ -3,9 +3,8 @@
 # is set up for it, uploaded to the Azure static website as the `macos/` folder beside the Windows
 # updates, where every installed Mac launcher looks on its next start.
 #
-# It runs only when started by hand (Actions → "Release macOS" → Run workflow), on the branch or
-# tag picked there, so a Windows publish never ships a Mac build nobody asked for. To run it after
-# each Windows publish: `gh workflow run release-macos.yml --ref main` at the end of publish.ps1.
+# It runs when started by hand (Actions → "Release macOS" → Run workflow; promote.sh does it for
+# the players) and on every push to the staging branch, which always builds the staging channel.
 #
 # Two channels, picked when it is started: production (the players', the website's root) and
 # staging (the testers', its `staging/` folder, the staging server), as publish.ps1 -Channel has.
@@ -21,6 +20,9 @@
 name: Release macOS
 
 on:
+  # Every push to the staging branch builds for the testers (deploy-staging.sh pushes there).
+  push:
+    branches: [staging]
   workflow_dispatch:
     inputs:
       channel:
@@ -33,7 +35,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-macos-${{ inputs.channel }}
+  group: release-macos-${{ (inputs.channel || 'staging') }}
   cancel-in-progress: false
 
 jobs:
@@ -54,9 +56,9 @@ jobs:
           key: release-macos
       - name: Presets
         env:
-          SERVER: ${{ inputs.channel == 'staging' && vars.KARTCRAFT_STAGING_SERVER || vars.KARTCRAFT_SERVER }}
-          UPDATE_URL: ${{ inputs.channel == 'staging' && vars.KARTCRAFT_STAGING_UPDATE_URL || vars.KARTCRAFT_UPDATE_URL }}
-          REGISTER_URL: ${{ inputs.channel == 'staging' && vars.KARTCRAFT_STAGING_REGISTER_URL || vars.KARTCRAFT_REGISTER_URL }}
+          SERVER: ${{ (inputs.channel || 'staging') == 'staging' && vars.KARTCRAFT_STAGING_SERVER || vars.KARTCRAFT_SERVER }}
+          UPDATE_URL: ${{ (inputs.channel || 'staging') == 'staging' && vars.KARTCRAFT_STAGING_UPDATE_URL || vars.KARTCRAFT_UPDATE_URL }}
+          REGISTER_URL: ${{ (inputs.channel || 'staging') == 'staging' && vars.KARTCRAFT_STAGING_REGISTER_URL || vars.KARTCRAFT_REGISTER_URL }}
         run: |
           mkdir -p .setup
           { echo "SERVER=$SERVER"; echo "UPDATE_URL=$UPDATE_URL"; echo "REGISTER_URL=$REGISTER_URL"; } > .setup/publish.cfg
@@ -65,7 +67,7 @@ jobs:
       - name: Keep the build
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: world-of-kartcraft-macos-${{ inputs.channel }}
+          name: world-of-kartcraft-macos-${{ (inputs.channel || 'staging') }}
           path: |
             dist/macos/out/World of Kartcraft.zip
             dist/macos/out/updates
@@ -80,7 +82,7 @@ jobs:
           ACCOUNT: ${{ vars.AZURE_STORAGE }}
           KEY: ${{ secrets.AZURE_STORAGE_KEY }}
           # The channel's folder in the website: staging/macos/ or macos/.
-          DIR: ${{ inputs.channel == 'staging' && 'staging/macos' || 'macos' }}
+          DIR: ${{ (inputs.channel || 'staging') == 'staging' && 'staging/macos' || 'macos' }}
         run: |
           set -euo pipefail
           auth=(--account-name "$ACCOUNT" --account-key "$KEY" --only-show-errors -o none)
