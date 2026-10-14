@@ -12,6 +12,7 @@
     <Binding name="KARTCRAFT_BRAKE">-- read by the kart while it drives</Binding>
     <Binding name="KARTCRAFT_STEERLEFT">-- read by the kart while it drives</Binding>
     <Binding name="KARTCRAFT_STEERRIGHT">-- read by the kart while it drives</Binding>
+    <Binding name="KARTCRAFT_REVERSE">-- read by the kart while it drives</Binding>
     <Binding name="KARTCRAFT_HOP">-- read by the kart while it drives</Binding>
     <Binding name="KARTCRAFT_BOOST">-- read by the kart while it drives</Binding>
     <Binding name="KARTCRAFT_FIRE">-- read by the kart while it drives</Binding>

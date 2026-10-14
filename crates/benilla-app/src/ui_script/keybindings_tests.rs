@@ -377,6 +377,14 @@ fn the_controller_capsule_holds_the_pad_buttons_apart_from_the_keys() {
     s.run("BenillaOptionsFrameContainerUnbind:Click()").unwrap();
     assert_eq!(holder(&s, "PAD2"), "");
     assert_eq!(keys(&s), "W,UP");
+    // R2 is the pad's modifier: alone it binds nothing, held with a button it is that button's
+    // SHIFT- chord, which reads "R2 + ".
+    s.run(&format!("{ROW}3Key3Button:Click()")).unwrap();
+    assert!(press(&mut s, "PADRTRIGGER"));
+    assert!(armed(&s), "R2 alone is a modifier, not a key");
+    assert!(press(&mut s, "SHIFT-PADDUP"));
+    assert_eq!(holder(&s, "SHIFT-PADDUP"), "MOVEFORWARD");
+    assert!(pad_text(&s).contains("R2 + "), "{}", pad_text(&s));
     // Escape disarms the Controller capsule.
     s.run(&format!("{ROW}3Key3Button:Click()")).unwrap();
     press(&mut s, "ESCAPE");

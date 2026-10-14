@@ -1348,7 +1348,7 @@ fn key_bindings_lists_the_kart_s_controls_and_they_run() {
     assert_eq!(label, "World of Kartcraft");
     assert_eq!(
         names,
-        "Accelerate,Brake / Reverse,Steer Left,Steer Right,Hop / Powerslide,\
+        "Accelerate,Brake / Reverse,Steer Left,Steer Right,Reverse,Hop / Powerslide,\
          Boost (Second Shoulder),Fire Item,Toggle Camera Distance,Look Back,Wumpa Juice,Turbo Boost,Super Engine,Aku Aku,\
          Summon / Dismiss Kart,Race Finder,Leave Race,Unstuck,Kartcraft Settings,Kart Garage,\
          Clean Screen (hide all interface),Free Camera (fly, park, off),Next Kart,\

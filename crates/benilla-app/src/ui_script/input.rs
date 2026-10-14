@@ -132,7 +132,17 @@ pub(super) fn feed_pad(
                 capture.pad_consumed.push(b);
                 continue;
             }
-            let taken = script.frame_key_input(name)
+            // R2 held is the pad's Shift: a key-capture frame gets that press as its SHIFT- chord.
+            let modified = b != kartcraft::input::PAD_MODIFIER
+                && pads
+                    .iter()
+                    .any(|p| kartcraft::input::pad_down(p, kartcraft::input::PAD_MODIFIER));
+            let chord = if modified {
+                format!("SHIFT-{name}")
+            } else {
+                name.to_string()
+            };
+            let taken = script.frame_key_input(&chord)
                 || script
                     .eval::<bool>(&format!(
                         "return BenillaPad_OnButton ~= nil and BenillaPad_OnButton(\"{name}\") == true"

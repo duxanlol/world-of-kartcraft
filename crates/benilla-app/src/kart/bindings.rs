@@ -5,8 +5,9 @@
 //! and sit out of the kart; while we drive they are the kart's alone. The controller's buttons are
 //! bindings too, Kartcraft's deviation: each driving control ships with its pad button beside its
 //! keys ([`kartcraft::input::PAD_LAYOUT`]), rebindable on the Key Bindings page's Controller
-//! column; the left stick steers and reverses as ever. Summon Kart is an ordinary binding, read by
-//! its press.
+//! column: the D-pad steers and reverses as the left stick does, and R2 is the pad's Shift, so the
+//! abilities are R2 with the D-pad (`SHIFT-PADDUP`, ...). Summon Kart is an ordinary binding,
+//! read by its press.
 
 use kartcraft::input::Keys;
 
@@ -16,6 +17,9 @@ pub(super) const ACCELERATE: &str = "KARTCRAFT_ACCELERATE";
 pub(super) const BRAKE: &str = "KARTCRAFT_BRAKE";
 pub(super) const STEER_LEFT: &str = "KARTCRAFT_STEERLEFT";
 pub(super) const STEER_RIGHT: &str = "KARTCRAFT_STEERRIGHT";
+/// CTR's down: reverse, full speed alone and three quarters with the brake (the keyboard's brake
+/// is both).
+pub(super) const REVERSE: &str = "KARTCRAFT_REVERSE";
 pub(super) const HOP: &str = "KARTCRAFT_HOP";
 pub(super) const BOOST: &str = "KARTCRAFT_BOOST";
 pub(super) const FIRE: &str = "KARTCRAFT_FIRE";
@@ -39,6 +43,7 @@ const DRIVING: &[&str] = &[
     BRAKE,
     STEER_LEFT,
     STEER_RIGHT,
+    REVERSE,
     HOP,
     BOOST,
     FIRE,
@@ -73,18 +78,21 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("4", ABILITIES[3]),
     ("J", SUMMON),
     ("I", "KARTCRAFT_RACEFINDER"),
-    // The controller's driving buttons, CTR's layout ([`kartcraft::input::PAD_LAYOUT`]).
+    // The controller's driving buttons, CTR's layout ([`kartcraft::input::PAD_LAYOUT`]): the D-pad
+    // drives, R2 with it uses the abilities.
     ("PAD1", ACCELERATE),
-    ("PADRTRIGGER", ACCELERATE),
     ("PAD3", BRAKE),
     ("PADLTRIGGER", BRAKE),
+    ("PADDLEFT", STEER_LEFT),
+    ("PADDRIGHT", STEER_RIGHT),
+    ("PADDDOWN", REVERSE),
     ("PADRSHOULDER", HOP),
     ("PADLSHOULDER", BOOST),
     ("PAD2", FIRE),
-    ("PADDUP", ABILITIES[0]),
-    ("PADDRIGHT", ABILITIES[1]),
-    ("PADDDOWN", ABILITIES[2]),
-    ("PADDLEFT", ABILITIES[3]),
+    ("SHIFT-PADDUP", ABILITIES[0]),
+    ("SHIFT-PADDRIGHT", ABILITIES[1]),
+    ("SHIFT-PADDDOWN", ABILITIES[2]),
+    ("SHIFT-PADDLEFT", ABILITIES[3]),
     ("PADBACK", CAMERA),
     ("PADRSTICK", LOOK_BACK),
     // And its free ones: △ or Y summons the kart, Options or Menu opens the Kartcraft menu.
@@ -99,6 +107,9 @@ fn command_of(control: kartcraft::input::PadControl) -> &'static str {
     match control {
         PadControl::Accelerate => ACCELERATE,
         PadControl::Brake => BRAKE,
+        PadControl::SteerLeft => STEER_LEFT,
+        PadControl::SteerRight => STEER_RIGHT,
+        PadControl::Reverse => REVERSE,
         PadControl::Hop => HOP,
         PadControl::Boost => BOOST,
         PadControl::Fire => FIRE,
@@ -125,6 +136,7 @@ pub(super) fn keys(overlay: &BindingOverlay) -> Keys {
         abilities: ABILITIES.map(|a| overlay.just_pressed(a)),
         camera: overlay.just_pressed(CAMERA),
         look_back: overlay.held(LOOK_BACK),
+        reverse: overlay.held(REVERSE),
     }
 }
 
@@ -141,6 +153,7 @@ pub(super) fn pad_keys(overlay: &BindingOverlay) -> Keys {
         abilities: ABILITIES.map(|a| overlay.pad_just_pressed(a)),
         camera: overlay.pad_just_pressed(CAMERA),
         look_back: overlay.pad_held(LOOK_BACK),
+        reverse: overlay.pad_held(REVERSE),
     }
 }
 
@@ -157,7 +170,7 @@ mod tests {
         let shipped: Vec<(&str, &str)> = DEFAULTS
             .iter()
             .copied()
-            .filter(|(k, c)| k.starts_with("PAD") && DRIVING.contains(c))
+            .filter(|(k, c)| crate::bindings::store::is_pad_key(k) && DRIVING.contains(c))
             .collect();
         let layout: Vec<(&str, &str)> = kartcraft::input::PAD_LAYOUT
             .iter()
@@ -187,17 +200,23 @@ mod tests {
                 .unwrap_or_default()
         };
         // Each driving control: its keys, then its controller buttons.
-        assert_eq!(keys(ACCELERATE), ["W", "UP", "PAD1", "PADRTRIGGER"]);
+        assert_eq!(keys(ACCELERATE), ["W", "UP", "PAD1"]);
         assert_eq!(keys(BRAKE), ["S", "DOWN", "PAD3", "PADLTRIGGER"]);
-        assert_eq!(keys(STEER_LEFT), ["A", "LEFT"]);
-        assert_eq!(keys(STEER_RIGHT), ["D", "RIGHT"]);
+        assert_eq!(keys(STEER_LEFT), ["A", "LEFT", "PADDLEFT"]);
+        assert_eq!(keys(STEER_RIGHT), ["D", "RIGHT", "PADDRIGHT"]);
+        assert_eq!(keys(REVERSE), ["PADDDOWN"]);
         assert_eq!(keys(HOP), ["SPACE", "PADRSHOULDER"]);
         assert_eq!(keys(BOOST), ["SHIFT-", "PADLSHOULDER"]);
         assert_eq!(keys(FIRE), ["E", "PAD2"]);
         assert_eq!(keys(CAMERA), ["C", "PADBACK"]);
         assert_eq!(keys(LOOK_BACK), ["X", "PADRSTICK"]);
         for (i, a) in ABILITIES.iter().enumerate() {
-            let dpad = ["PADDUP", "PADDRIGHT", "PADDDOWN", "PADDLEFT"][i];
+            let dpad = [
+                "SHIFT-PADDUP",
+                "SHIFT-PADDRIGHT",
+                "SHIFT-PADDDOWN",
+                "SHIFT-PADDLEFT",
+            ][i];
             assert_eq!(keys(a), [format!("{}", i + 1), dpad.to_string()]);
         }
         // WoW's keep theirs.

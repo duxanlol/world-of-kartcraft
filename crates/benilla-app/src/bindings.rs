@@ -44,7 +44,7 @@ use crate::ui_script::{PlayerUiHover, PointerOverUiPanel, UiKeyboardCapture};
 pub(crate) mod chord;
 mod layout;
 mod script_input;
-mod store;
+pub(crate) mod store;
 
 use chord::{BindKey, Chord};
 pub(crate) use layout::LayoutNames;
@@ -652,16 +652,21 @@ fn latch_and_dispatch(
     }
 
     // ── Controller buttons ── Kartcraft's deviation (`chord::PAD_BUTTONS`): a press is a key
-    // press by its `PAD` name, as a modifier-held one is its chord. Not while typing, not one the
-    // interface took first (`UiKeyboardCapture::pad_consumed`: a key-capture frame, the layer's
-    // menus and popups), and not one bound in the overlay's plane while its mode is on (the kart's
-    // driving buttons), as a key there is not.
+    // press by its `PAD` name, as a modifier-held one is its chord; R2 held is the pad's Shift
+    // (`kartcraft::input::PAD_MODIFIER`). Not while typing, not one the interface took first
+    // (`UiKeyboardCapture::pad_consumed`: a key-capture frame, the layer's menus and popups), and
+    // not one bound in the overlay's plane while its mode is on (the kart's driving buttons), as a
+    // key there is not.
+    let pad_shift = shift
+        || gamepads
+            .iter()
+            .any(|p| kartcraft::input::pad_down(p, kartcraft::input::PAD_MODIFIER));
     for pad in &gamepads {
         for &b in pad.get_just_pressed() {
             if typing
                 || sup
                 || capture.pad_consumed.contains(&b)
-                || (overlay.active && dispatch.overlay_takes(BindKey::Pad(b), alt, ctrl, shift))
+                || (overlay.active && dispatch.overlay_takes(BindKey::Pad(b), alt, ctrl, pad_shift))
                 || state.latched.iter().any(|(k, _)| *k == Held::Pad(b))
             {
                 continue;
@@ -669,7 +674,7 @@ fn latch_and_dispatch(
             let chord = Chord {
                 alt,
                 ctrl,
-                shift,
+                shift: pad_shift,
                 key: BindKey::Pad(b),
             };
             if let Some(command) = dispatch.resolve(chord, false) {
@@ -811,11 +816,31 @@ fn poll_overlay(
     // frame when it was not down the last.
     let pad_down = |b| gamepads.iter().any(|p| kartcraft::input::pad_down(p, b)) && pad_free(&b);
     let mut pad_was = Vec::new();
+    // R2 held is the pad's Shift; with it, a button bound both ways is its `SHIFT-` binding
+    // alone (R2 and Left is the ability, not the steer).
+    let pad_shift = shift
+        || gamepads
+            .iter()
+            .any(|p| kartcraft::input::pad_down(p, kartcraft::input::PAD_MODIFIER));
+    let shifted: Vec<bevy::input::gamepad::GamepadButton> = dispatch
+        .overlay
+        .iter()
+        .filter_map(|(k, _)| match k.key {
+            Some(BindKey::Pad(b)) if k.shift => Some(b),
+            _ => None,
+        })
+        .collect();
     for (k, command) in &dispatch.overlay {
-        if !k.modifiers_held(alt, ctrl, shift) {
+        let pad = matches!(k.key, Some(BindKey::Pad(_)));
+        let held_shift = if pad { pad_shift } else { shift };
+        if !k.modifiers_held(alt, ctrl, held_shift) {
             continue;
         }
-        let pad = matches!(k.key, Some(BindKey::Pad(_)));
+        if let Some(BindKey::Pad(b)) = k.key {
+            if pad_shift && !k.shift && shifted.contains(&b) {
+                continue;
+            }
+        }
         let (held, just) = match k.key {
             Some(BindKey::Key(n)) => (down.contains(&n), pressed_now.contains(&n)),
             Some(BindKey::Mouse(b)) => (buttons.pressed(b), buttons.just_pressed(b)),

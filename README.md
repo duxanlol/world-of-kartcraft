@@ -89,11 +89,12 @@ Northshire straight from your WoW install, no server, login or character, to fee
 | | PlayStation | Xbox | Keyboard |
 |---|---|---|---|
 | Gas | ✕ | A | W / ↑ |
-| Brake; hold to reverse | □ | X | S / ↓ |
-| Steer | left stick | left stick | A / D |
+| Brake | □ (or L2) | X (or LT) | S / ↓ (also reverses) |
+| Steer | left stick or D-pad | left stick or D-pad | A / D |
 | Hop; hold through a turn to **powerslide** | R1 | RB | Space |
 | **Boost** while sliding, when the meter goes red | L1 | LB | Shift |
-| Abilities: Wumpa Juice, Turbo Boost, Super Engine, Aku Aku | D-pad ↑ → ↓ ← | D-pad | 1–4 |
+| Reverse | down (stick or D-pad), with □ for ¾ speed | down, with X | S / ↓ |
+| Abilities: Wumpa Juice, Turbo Boost, Super Engine, Aku Aku | hold R2 + D-pad ↑ → ↓ ← | hold RT + D-pad | 1–4 |
 | Climb in / out | | | **J** (or Summon Kart in your spellbook) |
 
 The keyboard's keys are key bindings: change them in the options window's **Key Bindings**, under

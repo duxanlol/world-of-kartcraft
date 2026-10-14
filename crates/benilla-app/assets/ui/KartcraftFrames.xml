@@ -51,6 +51,7 @@
         BINDING_NAME_KARTCRAFT_BRAKE = "Brake / Reverse"
         BINDING_NAME_KARTCRAFT_STEERLEFT = "Steer Left"
         BINDING_NAME_KARTCRAFT_STEERRIGHT = "Steer Right"
+        BINDING_NAME_KARTCRAFT_REVERSE = "Reverse"
         BINDING_NAME_KARTCRAFT_HOP = "Hop / Powerslide"
         BINDING_NAME_KARTCRAFT_BOOST = "Boost (Second Shoulder)"
         BINDING_NAME_KARTCRAFT_FIRE = "Fire Item"
@@ -1012,17 +1013,17 @@
         -- names, and what it does in the kart (kartcraft's input.rs).
         BENILLA_KART_PAD_ROWS = {
             { "South", "Cross / A", "Gas" },
-            { "West", "Square / X", "Brake, reverse" },
+            { "West", "Square / X", "Brake (with down, reverse)" },
             { "East", "Circle / B", "Fire your weapon" },
             { "North", "Triangle / Y", "" },
             { "RightTrigger", "R1 / RB", "Hop and powerslide" },
             { "LeftTrigger", "L1 / LB", "Boost" },
-            { "RightTrigger2", "R2 / RT", "Gas" },
+            { "RightTrigger2", "R2 / RT", "Hold with the D-pad: abilities" },
             { "LeftTrigger2", "L2 / LT", "Brake" },
-            { "DPadUp", "D-pad up", "Kart ability 1" },
-            { "DPadRight", "D-pad right", "Kart ability 2" },
-            { "DPadDown", "D-pad down", "Kart ability 3" },
-            { "DPadLeft", "D-pad left", "Kart ability 4" },
+            { "DPadUp", "D-pad up", "R2 + up: ability 1" },
+            { "DPadRight", "D-pad right", "Steer; R2 + right: ability 2" },
+            { "DPadDown", "D-pad down", "Reverse; R2 + down: ability 3" },
+            { "DPadLeft", "D-pad left", "Steer; R2 + left: ability 4" },
             { "Select", "Create / View", "Switch camera" },
             { "Start", "Options / Menu", "" },
             { "LeftThumb", "L3", "" },

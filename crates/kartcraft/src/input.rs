@@ -1,11 +1,12 @@
 //! The kart's controls, through [`Keys`] twice over: the keyboard's and the controller's buttons,
 //! each the host's rebindable bindings or a fixed layout ([`Keys::from_keyboard`],
 //! [`Keys::from_pad`]), and the controller's left stick, which steers and, held down, reverses.
-//! The pad's default layout is CTR's on a PlayStation pad (✕ or R2 accelerates, □ or L2 brakes,
-//! R1 and L1 hop, powerslide and boost, ○ fires the held item, the D-pad's abilities), an Xbox pad
-//! by position; Select swaps the camera's distance and the right stick's click looks back, CTR's L2
-//! and R2. A pad's brake is CTR's □: it reverses with the stick held down, where the keyboard's
-//! brake reverses alone.
+//! The pad's default layout is CTR's on a PlayStation pad (✕ accelerates, □ or L2 brakes, R1 and L1
+//! hop, powerslide and boost, ○ fires the held item, the D-pad steers and its down reverses as the
+//! stick does), an Xbox pad by position. R2 is the pad's modifier, as Shift is the keyboard's
+//! ([`PAD_MODIFIER`]): R2 with the D-pad uses the abilities. Select swaps the camera's distance and
+//! the right stick's click looks back, CTR's L2 and R2. A pad's brake is CTR's □: it reverses with
+//! down held (stick or D-pad), where the keyboard's brake reverses alone.
 
 use bevy::input::gamepad::{Gamepad, GamepadAxis, GamepadButton};
 use bevy::prelude::*;
@@ -56,29 +57,34 @@ pub struct Keys {
     pub camera: bool,
     /// Held: the camera looks back.
     pub look_back: bool,
+    /// Held: CTR's down, reverse (full speed alone, three quarters with the brake).
+    pub reverse: bool,
 }
 
 impl Keys {
-    /// The controller's fixed layout ([`PAD_LAYOUT`]), for a host with no bindings.
+    /// The controller's fixed layout ([`PAD_LAYOUT`]), for a host with no bindings: the D-pad
+    /// drives, and with R2 held uses the abilities instead.
     pub fn from_pad(pad: &Gamepad) -> Keys {
         let pressed = |b| pad_down(pad, b);
         let just = |b| pad.just_pressed(b);
+        let modifier = pressed(PAD_MODIFIER);
         Keys {
-            accelerate: pressed(GamepadButton::South) || pressed(GamepadButton::RightTrigger2),
+            accelerate: pressed(GamepadButton::South),
             brake: pressed(GamepadButton::West) || pressed(GamepadButton::LeftTrigger2),
-            left: false,
-            right: false,
+            left: !modifier && pressed(GamepadButton::DPadLeft),
+            right: !modifier && pressed(GamepadButton::DPadRight),
             hop: pressed(GamepadButton::RightTrigger),
             boost: pressed(GamepadButton::LeftTrigger),
             fire: just(GamepadButton::East),
             abilities: [
-                just(GamepadButton::DPadUp),
-                just(GamepadButton::DPadRight),
-                just(GamepadButton::DPadDown),
-                just(GamepadButton::DPadLeft),
+                modifier && just(GamepadButton::DPadUp),
+                modifier && just(GamepadButton::DPadRight),
+                modifier && just(GamepadButton::DPadDown),
+                modifier && just(GamepadButton::DPadLeft),
             ],
             camera: just(GamepadButton::Select),
             look_back: pressed(GamepadButton::RightThumb),
+            reverse: !modifier && pressed(GamepadButton::DPadDown),
         }
     }
 
@@ -102,6 +108,8 @@ impl Keys {
             ],
             camera: keys.just_pressed(KeyCode::KeyC),
             look_back: keys.pressed(KeyCode::KeyX),
+            // The brake is down too ([`from_keys`]).
+            reverse: false,
         }
     }
 }
@@ -154,6 +162,10 @@ fn lean(sticks: impl Iterator<Item = Vec2>) -> Vec2 {
     })
 }
 
+/// The pad's modifier, held as the keyboard's Shift is: a button pressed with it is its
+/// `SHIFT-` binding (R2 with the D-pad, the abilities).
+pub const PAD_MODIFIER: GamepadButton = GamepadButton::RightTrigger2;
+
 /// How far a trigger (or any button with an analog travel) must go to count as pressed, as the
 /// kart's triggers always took a light squeeze.
 pub const ANALOG_PRESS: f32 = 0.4;
@@ -168,16 +180,18 @@ pub fn pad_down(pad: &Gamepad, b: GamepadButton) -> bool {
 /// click), as the host ships it beside the keyboard's: what [`Keys::from_pad`] reads.
 pub const PAD_LAYOUT: &[(&str, PadControl)] = &[
     ("PAD1", PadControl::Accelerate),
-    ("PADRTRIGGER", PadControl::Accelerate),
     ("PAD3", PadControl::Brake),
     ("PADLTRIGGER", PadControl::Brake),
+    ("PADDLEFT", PadControl::SteerLeft),
+    ("PADDRIGHT", PadControl::SteerRight),
+    ("PADDDOWN", PadControl::Reverse),
     ("PADRSHOULDER", PadControl::Hop),
     ("PADLSHOULDER", PadControl::Boost),
     ("PAD2", PadControl::Fire),
-    ("PADDUP", PadControl::Ability(0)),
-    ("PADDRIGHT", PadControl::Ability(1)),
-    ("PADDDOWN", PadControl::Ability(2)),
-    ("PADDLEFT", PadControl::Ability(3)),
+    ("SHIFT-PADDUP", PadControl::Ability(0)),
+    ("SHIFT-PADDRIGHT", PadControl::Ability(1)),
+    ("SHIFT-PADDDOWN", PadControl::Ability(2)),
+    ("SHIFT-PADDLEFT", PadControl::Ability(3)),
     ("PADBACK", PadControl::Camera),
     ("PADRSTICK", PadControl::LookBack),
 ];
@@ -187,6 +201,9 @@ pub const PAD_LAYOUT: &[(&str, PadControl)] = &[
 pub enum PadControl {
     Accelerate,
     Brake,
+    SteerLeft,
+    SteerRight,
+    Reverse,
     Hop,
     Boost,
     Fire,
@@ -231,7 +248,7 @@ fn from_pad(stick_at: Vec2, keys: &Keys) -> Controls {
         },
         accelerate: keys.accelerate,
         brake: keys.brake,
-        reverse: stick_at.y < -0.6,
+        reverse: stick_at.y < -0.6 || keys.reverse,
         hop: keys.hop,
         hop_alt: keys.boost,
         fire: keys.fire,
@@ -248,7 +265,7 @@ fn from_keys(keys: &Keys) -> Controls {
         steer: f32::from(i8::from(keys.right)) - f32::from(i8::from(keys.left)),
         accelerate: keys.accelerate,
         brake: keys.brake,
-        reverse: keys.brake,
+        reverse: keys.brake || keys.reverse,
         hop: keys.hop,
         hop_alt: keys.boost,
         fire: keys.fire,
@@ -338,6 +355,29 @@ mod tests {
                 ..Default::default()
             })
             .reverse
+        );
+    }
+
+    #[test]
+    fn the_d_pad_drives_and_with_r2_held_uses_the_abilities() {
+        let mut pad = Gamepad::default();
+        pad.digital_mut().press(GamepadButton::DPadLeft);
+        pad.digital_mut().press(GamepadButton::DPadDown);
+        let k = Keys::from_pad(&pad);
+        assert!(k.left && k.reverse && !k.right);
+        assert_eq!(k.abilities, [false; 4], "no ability without R2");
+        let c = from_pad(Vec2::ZERO, &k);
+        assert_eq!(c.steer, -1.0);
+        assert!(c.reverse, "D-pad down is CTR's down");
+        // R2 held: the same presses are the abilities, and do not drive.
+        let mut pad = Gamepad::default();
+        pad.digital_mut().press(PAD_MODIFIER);
+        pad.digital_mut().press(GamepadButton::DPadLeft);
+        let k = Keys::from_pad(&pad);
+        assert_eq!(k.abilities, [false, false, false, true]);
+        assert!(
+            !k.left && !k.reverse && !k.accelerate,
+            "R2 is no longer the gas"
         );
     }
 
