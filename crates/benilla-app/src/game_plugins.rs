@@ -696,6 +696,11 @@ pub(crate) mod schedule_tests {
     ///   ghost kart (`kart::ghost::update`, in the kart chain) against the same writers of
     ///   `Transform`, `Visibility`, `KartWheels` and the mesh, material and image assets: it
     ///   spawns, moves and despawns only its own `GhostKart` and its translucent handles. The
+    ///   replays (`kart::replay::update`, after the ghost in the kart chain) have the same pairs
+    ///   over their own replay karts and handles, and more against the other writers of `Cvars`
+    ///   (it sets only `KartReplays` and `KartReplay`, which no screen touches) and the readers
+    ///   of `KartDrive` (it writes only the camera, which the controller reads after the kart's
+    ///   set). The
     ///   guide arrow (`kart::race::guide`, a child of the world camera, reading its `Projection`)
     ///   and the checkpoint arrows (in `kart::race::beams`, read through the camera's
     ///   `GlobalTransform`), the seat placement and the race map's feed add more pairs of the same
@@ -707,7 +712,7 @@ pub(crate) mod schedule_tests {
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_028;
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_075;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

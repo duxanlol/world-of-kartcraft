@@ -1967,8 +1967,8 @@ mod tests {
     }
 
     /// The string-valued rows, a closed list, each default checked on its own terms: `realmName`
-    /// (the reference's registered `""`, `0x882748`) and `gxApi` are empty until the session writes
-    /// them; `gxResolution`, `realmList` and the kart garage's `KartClass` and `KartRacer` pass
+    /// (the reference's registered `""`, `0x882748`), `gxApi` and the kart's `KartReplays` (the
+    /// replays on disk, `kart::replay`) are empty until the session writes them; `gxResolution`, `realmList` and the kart garage's `KartClass` and `KartRacer` pass
     /// their observers' parsers ([`crate::video::parse_resolution`],
     /// [`crate::realmlist::normalize`], [`kartcraft::class_named`], `ctr-extract`'s racers).
     #[test]
@@ -1985,6 +1985,7 @@ mod tests {
                 "KartClass",
                 "KartFreeCam",
                 "KartRacer",
+                "KartReplays",
                 "gxApi",
                 "gxResolution",
                 "realmList",
@@ -2000,6 +2001,7 @@ mod tests {
         };
         assert_eq!(default_of("realmName"), "");
         assert_eq!(default_of("gxApi"), "");
+        assert_eq!(default_of("KartReplays"), "");
         assert_eq!(
             crate::video::parse_resolution(default_of("gxResolution")),
             Some(crate::video::DEFAULT_WINDOWED)
