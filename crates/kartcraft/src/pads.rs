@@ -61,7 +61,7 @@ impl Pad {
 }
 
 /// The pad's mesh, Bevy world, each vertex dropped onto the ground `height` finds under it: a
-/// dim plate and three bright chevrons pointing forward; colours in the vertices.
+/// dim green plate and three bright green chevrons pointing forward; colours in the vertices.
 pub fn pad_mesh(pad: &Pad, mut height: impl FnMut(Vec3) -> Option<f32>) -> Option<Mesh> {
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut colors: Vec<[f32; 4]> = Vec::new();
@@ -85,7 +85,7 @@ pub fn pad_mesh(pad: &Pad, mut height: impl FnMut(Vec3) -> Option<f32>) -> Optio
         let z1 = -hl + PAD_LENGTH * (i + 1) as f32 / STRIPS as f32;
         quad(
             [(-hw, z0), (hw, z0), (hw, z1), (-hw, z1)],
-            [0.9, 0.35, 0.05, 0.45],
+            [0.05, 0.55, 0.12, 0.45],
         )?;
     }
     // Three chevrons, each two arms meeting at a tip ahead.
@@ -94,7 +94,7 @@ pub fn pad_mesh(pad: &Pad, mut height: impl FnMut(Vec3) -> Option<f32>) -> Optio
     for k in 0..3 {
         let tip = -hl + PAD_LENGTH * (0.36 + 0.29 * k as f32);
         let tail = tip - depth;
-        let color = [1.0, 0.85, 0.2, 0.95];
+        let color = [0.35, 1.0, 0.3, 0.95];
         // Left arm: from the left tail to the tip, `arm` thick along the course.
         quad(
             [
