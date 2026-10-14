@@ -1,35 +1,36 @@
 //! Looking for the player's games where people keep them, so most never have to browse: the
 //! launcher's own folder and its neighbours, the usual game folders, Desktop, Downloads and
-//! Documents, and two levels down every drive's root.
+//! Documents, and the system's own places (two levels down every drive's root on Windows; the
+//! Applications folders, `/Users/Shared` and the mounted volumes on macOS).
 
 use std::path::{Path, PathBuf};
 
 /// A CTR image is a whole disc: the US one is about 500 MB, so a smaller `.bin` is something else.
 const DISC_MIN_BYTES: u64 = 300_000_000;
 
-fn user_dirs() -> Vec<PathBuf> {
-    let home = std::env::var_os("USERPROFILE").map(PathBuf::from);
-    let mut dirs = Vec::new();
-    if let Some(h) = &home {
-        for d in [
-            "Desktop",
-            "Downloads",
-            "Documents",
-            "Games",
-            "OneDrive\\Desktop",
-            "OneDrive\\Documents",
-        ] {
-            dirs.push(h.join(d));
-        }
-    }
-    dirs
+fn home() -> Option<PathBuf> {
+    #[cfg(windows)]
+    let var = "USERPROFILE";
+    #[cfg(not(windows))]
+    let var = "HOME";
+    std::env::var_os(var).map(PathBuf::from)
 }
 
-fn drives() -> Vec<PathBuf> {
-    (b'C'..=b'Z')
-        .map(|d| PathBuf::from(format!("{}:\\", d as char)))
-        .filter(|p| p.is_dir())
-        .collect()
+fn user_dirs() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    const DIRS: &[&str] = &[
+        "Desktop",
+        "Downloads",
+        "Documents",
+        "Games",
+        "OneDrive\\Desktop",
+        "OneDrive\\Documents",
+    ];
+    #[cfg(not(windows))]
+    const DIRS: &[&str] = &["Desktop", "Downloads", "Documents", "Games", "Applications"];
+    home()
+        .map(|h| DIRS.iter().map(|d| h.join(d)).collect())
+        .unwrap_or_default()
 }
 
 fn children(dir: &Path) -> Vec<PathBuf> {
@@ -43,19 +44,14 @@ fn children(dir: &Path) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// The places worth a look, nearest first: `root` and its neighbours, the user's folders, each
-/// drive's root and the folders one and two levels under it.
-fn places(root: &Path) -> Vec<PathBuf> {
-    let mut out = vec![root.to_path_buf()];
-    if let Some(p) = root.parent() {
-        out.push(p.to_path_buf());
-    }
-    out.extend(children(root));
-    for d in user_dirs() {
-        out.extend(children(&d));
-        out.push(d);
-    }
-    for drive in drives() {
+/// The system's places: each drive's root and the folders one and two levels under it.
+#[cfg(windows)]
+fn system_places() -> Vec<PathBuf> {
+    let drives = (b'C'..=b'Z')
+        .map(|d| PathBuf::from(format!("{}:\\", d as char)))
+        .filter(|p| p.is_dir());
+    let mut out = Vec::new();
+    for drive in drives {
         for program in ["Program Files", "Program Files (x86)"] {
             out.extend(children(&drive.join(program)));
         }
@@ -71,6 +67,46 @@ fn places(root: &Path) -> Vec<PathBuf> {
             out.push(child);
         }
     }
+    out
+}
+
+/// The system's places: the Applications folders, `/Users/Shared`, and each mounted volume's
+/// root with the folders one level under it (an external drive with the games on it).
+#[cfg(not(windows))]
+fn system_places() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for dir in [
+        PathBuf::from("/Applications"),
+        PathBuf::from("/Users/Shared"),
+        PathBuf::from("/Users/Shared/Games"),
+    ] {
+        out.extend(children(&dir));
+        out.push(dir);
+    }
+    for volume in children(Path::new("/Volumes")) {
+        // The boot volume is a link to `/`, already covered.
+        if volume.read_link().is_ok() {
+            continue;
+        }
+        out.extend(children(&volume));
+        out.push(volume);
+    }
+    out
+}
+
+/// The places worth a look, nearest first: `root` and its neighbours, the user's folders, then
+/// the system's.
+fn places(root: &Path) -> Vec<PathBuf> {
+    let mut out = vec![root.to_path_buf()];
+    if let Some(p) = root.parent() {
+        out.push(p.to_path_buf());
+    }
+    out.extend(children(root));
+    for d in user_dirs() {
+        out.extend(children(&d));
+        out.push(d);
+    }
+    out.extend(system_places());
     out
 }
 

@@ -1,22 +1,25 @@
-//! World of Kartcraft's launcher: the one file a player downloads. The first run installs it under
-//! the user's AppData with a Desktop and a Start menu shortcut; every run updates the game (and
-//! the launcher itself) from the update host, finds or asks for the player's WoW 1.12.1 folder and
-//! Crash Team Racing disc image, converts the disc, and starts the game. A folder that already
-//! holds the game (the zip's, with its `kartcraft.cfg`) is used where it is.
+//! World of Kartcraft's launcher: the one file a player downloads. Every run updates the game
+//! (and the launcher itself) from the update host, finds or asks for the player's WoW 1.12.1
+//! folder and Crash Team Racing disc image, converts the disc, and starts the game. On Windows it
+//! keeps the game beside itself; on macOS it is the `World of Kartcraft.app` bundle's own
+//! program, which moves the bundle into `~/Applications` on its first run and keeps the player's
+//! settings and kart data under `~/Library/Application Support`. The platform seams are in
+//! `install` (where things live, the program names) and `find` (where to look for the games);
+//! the window, the settings, the update and the search are shared.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod app;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod config;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod find;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod install;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod update;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn main() {
     if let Some(code) = install::first_steps() {
         std::process::exit(code);
@@ -26,7 +29,9 @@ fn main() {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn main() {
-    eprintln!("The World of Kartcraft launcher is for Windows; on Linux use play-proton.sh.");
+    eprintln!(
+        "The World of Kartcraft launcher is for Windows and macOS; on Linux use play-proton.sh."
+    );
 }

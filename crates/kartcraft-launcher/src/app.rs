@@ -2,19 +2,14 @@
 //! system's own pickers), the disc's conversion, and Play. The slow work (the update, the search,
 //! the conversion) runs on threads that write into [`Shared`]; the window reads it every frame.
 
-use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use eframe::egui;
 
 use crate::config::{self, Config};
-use crate::install::NO_WINDOW;
-use crate::update::{self, LAUNCHER};
-
-/// The game and the converter, as the update host ships them.
-const GAME: &str = "WorldOfKartcraft.exe";
-const CONVERTER: &str = "ctr-extract.exe";
+use crate::install::{CONVERTER, GAME, LAUNCHER};
+use crate::update;
 
 const ORANGE: egui::Color32 = egui::Color32::from_rgb(0xff, 0x8a, 0x1f);
 const GOOD: egui::Color32 = egui::Color32::from_rgb(0x63, 0xd5, 0x8a);
@@ -45,7 +40,9 @@ struct Shared {
 }
 
 struct App {
+    /// The game's files (`install::root`) and the player's own (`install::state`).
     root: PathBuf,
+    state: PathBuf,
     config: Config,
     shared: Arc<Mutex<Shared>>,
     started: bool,
@@ -53,7 +50,8 @@ struct App {
 
 pub fn run() -> eframe::Result<()> {
     let root = crate::install::root();
-    let config = Config::load(&root);
+    let state = crate::install::state();
+    let config = Config::load(&root, &state);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("World of Kartcraft")
@@ -65,17 +63,18 @@ pub fn run() -> eframe::Result<()> {
         "World of Kartcraft",
         options,
         Box::new(move |cc| {
-            // Dark whatever Windows is set to: the game and the website are.
+            // Dark whatever the system is set to: the game and the website are.
             cc.egui_ctx.set_theme(egui::Theme::Dark);
-            Ok(Box::new(App::new(root, config)))
+            Ok(Box::new(App::new(root, state, config)))
         }),
     )
 }
 
 impl App {
-    fn new(root: PathBuf, config: Config) -> App {
+    fn new(root: PathBuf, state: PathBuf, config: Config) -> App {
         let app = App {
             root,
+            state,
             config,
             shared: Arc::new(Mutex::new(Shared {
                 status: "Checking for updates…".into(),
@@ -97,6 +96,7 @@ impl App {
     fn start_update(&self) {
         let shared = self.shared.clone();
         let root = self.root.clone();
+        let state = self.state.clone();
         let Some(base) = self.config.updates() else {
             let mut s = self.shared();
             s.updated = true;
@@ -155,15 +155,15 @@ impl App {
                     return;
                 }
             }
-            update::write_version(&root, &manifest);
+            update::write_version(&state, &manifest);
             // Kart data from before the launcher kept the stamp is taken as current.
-            let stamp = root.join("kart-data").join(".converter");
-            if !stamp.is_file() && root.join("kart-data").join("kart.json").is_file() {
+            let stamp = state.join("kart-data").join(".converter");
+            if !stamp.is_file() && state.join("kart-data").join("kart.json").is_file() {
                 if let Some(c) = &manifest.converter {
                     let _ = std::fs::write(&stamp, c);
                 }
             }
-            let reconvert = update::converter_changed(&root, &manifest);
+            let reconvert = update::converter_changed(&state, &manifest);
             set(&|s| {
                 s.updated = true;
                 s.progress = None;
@@ -202,13 +202,14 @@ impl App {
     }
 
     fn converted(&self) -> bool {
-        self.root.join("kart-data").join("kart.json").is_file()
+        self.state.join("kart-data").join("kart.json").is_file()
     }
 
     /// The disc into `kart-data`, on a thread, by the converter the update brought.
     fn convert(&self, disc: PathBuf) {
         let shared = self.shared.clone();
         let root = self.root.clone();
+        let state = self.state.clone();
         {
             let mut s = self.shared();
             s.converting = true;
@@ -216,20 +217,19 @@ impl App {
             s.reconvert = false;
         }
         std::thread::spawn(move || {
-            let out = std::process::Command::new(root.join(CONVERTER))
-                .arg(&disc)
-                .arg(root.join("kart-data"))
+            let mut cmd = std::process::Command::new(root.join(CONVERTER));
+            cmd.arg(&disc)
+                .arg(state.join("kart-data"))
                 .arg("--all")
-                .current_dir(&root)
-                .creation_flags(NO_WINDOW)
-                .output();
+                .current_dir(&state);
+            let out = crate::install::quiet(&mut cmd).output();
             let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
             s.converting = false;
             match out {
                 Ok(o) if o.status.success() => {
                     let stamp = update::sha256(&root.join(CONVERTER));
                     if let Some(stamp) = stamp {
-                        let _ = std::fs::write(root.join("kart-data").join(".converter"), stamp);
+                        let _ = std::fs::write(state.join("kart-data").join(".converter"), stamp);
                     }
                 }
                 Ok(o) => {
@@ -263,11 +263,14 @@ impl App {
     fn play(&mut self, ctx: &egui::Context) {
         let Some(wow) = self.wow() else { return };
         self.config.account_seen = true;
-        self.config.save(&self.root);
+        self.config.save(&self.state);
         let mut cmd = std::process::Command::new(self.root.join(GAME));
-        cmd.current_dir(&self.root)
+        // The game's own state folder goes with the kart data, not beside the binary: on macOS
+        // that would be inside the bundle.
+        cmd.current_dir(&self.state)
             .env("WOW_DATA", wow.join("Data"))
-            .env("WOW_KART_DATA", self.root.join("kart-data"));
+            .env("WOW_KART_DATA", self.state.join("kart-data"))
+            .env("BENILLA_HOME", self.state.join("benilla-config"));
         if let Some(server) = &self.config.server {
             cmd.env("WOW_HOST", server);
         }
@@ -306,7 +309,7 @@ impl eframe::App for App {
             }
         }
         if changed {
-            self.config.save(&self.root);
+            self.config.save(&self.state);
         }
         // The disc converts once the converter is here: the first time, or when it changed.
         let (updated, converting, reconvert) = {
@@ -367,10 +370,13 @@ impl eframe::App for App {
                 |picked| match config::wow_folder(&picked) {
                     Some(dir) => {
                         self.config.wow_dir = Some(dir);
-                        self.config.save(&self.root);
+                        self.config.save(&self.state);
                         None
                     }
-                    None => Some("That folder has no Data\\dbc.MPQ: it needs to be an English 1.12.1 client.".into()),
+                    None => Some(format!(
+                        "That folder has no Data{sep}dbc.MPQ: it needs to be an English 1.12.1 client.",
+                        sep = std::path::MAIN_SEPARATOR
+                    )),
                 },
             );
             ui.add_space(6.0);
@@ -384,7 +390,7 @@ impl eframe::App for App {
             } else {
                 None
             };
-            let root = self.root.clone();
+            let state = self.state.clone();
             let shared = self.shared.clone();
             game_row(
                 ui,
@@ -406,9 +412,9 @@ impl eframe::App for App {
                 |picked| match config::disc_image(&picked) {
                     Some(disc) => {
                         self.config.ctr_disc = Some(disc);
-                        self.config.save(&root);
+                        self.config.save(&state);
                         // A new disc converts afresh.
-                        let _ = std::fs::remove_file(root.join("kart-data").join("kart.json"));
+                        let _ = std::fs::remove_file(state.join("kart-data").join("kart.json"));
                         shared.lock().unwrap_or_else(|e| e.into_inner()).convert_error = None;
                         None
                     }

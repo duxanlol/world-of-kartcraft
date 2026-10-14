@@ -1,6 +1,7 @@
-//! The launcher's settings, in the zip launcher's files so a zip install carries on: the player's
-//! answers in `kartcraft.cfg` (`WOW_DIR`, `CTR_DISC`, `SERVER`, `UPDATE_URL`, `ACCOUNT_SEEN`), the
-//! published presets in `defaults.cfg`, and the presets built into the launcher, last.
+//! The launcher's settings: the player's answers in `kartcraft.cfg` (`WOW_DIR`, `CTR_DISC`,
+//! `SERVER`, `UPDATE_URL`, `ACCOUNT_SEEN`) in the state folder (`install::state`), the published
+//! presets in `defaults.cfg` (`install::defaults_file`), and the presets built into the launcher,
+//! last. On Windows both files sit beside the launcher, so a zip install carries on.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -10,6 +11,19 @@ use std::path::{Path, PathBuf};
 pub const BUILT_SERVER: Option<&str> = option_env!("KARTCRAFT_SERVER");
 pub const BUILT_UPDATE_URL: Option<&str> = option_env!("KARTCRAFT_UPDATE_URL");
 pub const BUILT_REGISTER_URL: Option<&str> = option_env!("KARTCRAFT_REGISTER_URL");
+
+/// Mac builds have a manifest and files of their own, in `macos/` beside the Windows ones, so a
+/// Mac launcher never fetches a Windows file.
+#[cfg(target_os = "macos")]
+const PLATFORM_DIR: &str = "/macos";
+#[cfg(windows)]
+const PLATFORM_DIR: &str = "";
+
+/// The settings file's line ending: Notepad's on Windows.
+#[cfg(windows)]
+const EOL: &str = "\r\n";
+#[cfg(not(windows))]
+const EOL: &str = "\n";
 
 #[derive(Clone, Debug, Default)]
 pub struct Config {
@@ -36,9 +50,10 @@ fn read(path: &Path) -> BTreeMap<String, String> {
 }
 
 impl Config {
-    pub fn load(root: &Path) -> Config {
-        let defaults = read(&root.join("defaults.cfg"));
-        let own = read(&root.join("kartcraft.cfg"));
+    /// `root` holds the published presets, `state` the player's own file.
+    pub fn load(root: &Path, state: &Path) -> Config {
+        let defaults = read(&crate::install::defaults_file(root));
+        let own = read(&state.join("kartcraft.cfg"));
         let get = |key: &str, built: Option<&str>| {
             own.get(key)
                 .or_else(|| defaults.get(key))
@@ -64,37 +79,38 @@ impl Config {
         }
     }
 
-    /// Where updates come from: the setting, else the zip launcher's default, the server's port
-    /// 8080.
+    /// Where this platform's updates come from: the setting, else the zip launcher's default,
+    /// the server's port 8080; plus the platform's folder.
     pub fn updates(&self) -> Option<String> {
         self.update_url
             .clone()
             .or_else(|| self.server.as_ref().map(|s| format!("http://{s}:8080")))
-            .map(|u| u.trim_end_matches('/').to_string())
+            .map(|u| format!("{}{PLATFORM_DIR}", u.trim_end_matches('/')))
     }
 
-    pub fn save(&self, root: &Path) {
+    pub fn save(&self, state: &Path) {
         let mut out = String::new();
         if let Some(w) = &self.wow_dir {
-            out += &format!("WOW_DIR={}\r\n", w.display());
+            out += &format!("WOW_DIR={}{EOL}", w.display());
         }
         if let Some(s) = &self.own_server {
-            out += &format!("SERVER={s}\r\n");
+            out += &format!("SERVER={s}{EOL}");
         }
         if let Some(c) = &self.ctr_disc {
-            out += &format!("CTR_DISC={}\r\n", c.display());
+            out += &format!("CTR_DISC={}{EOL}", c.display());
         }
         if let Some(u) = &self.own_update_url {
-            out += &format!("UPDATE_URL={u}\r\n");
+            out += &format!("UPDATE_URL={u}{EOL}");
         }
         if self.account_seen {
-            out += "ACCOUNT_SEEN=1\r\n";
+            out += &format!("ACCOUNT_SEEN=1{EOL}");
         }
-        let _ = std::fs::write(root.join("kartcraft.cfg"), out);
+        let _ = std::fs::create_dir_all(state);
+        let _ = std::fs::write(state.join("kartcraft.cfg"), out);
     }
 }
 
-/// A WoW 1.12.1 folder: the one with `Data\dbc.MPQ` (a `Data` folder picked by mistake counts as
+/// A WoW 1.12.1 folder: the one with `Data/dbc.MPQ` (a `Data` folder picked by mistake counts as
 /// its parent).
 pub fn wow_folder(picked: &Path) -> Option<PathBuf> {
     let dir = if picked

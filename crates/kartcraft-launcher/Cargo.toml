@@ -3,7 +3,7 @@ name = "kartcraft-launcher"
 version.workspace = true
 edition.workspace = true
 license = "MIT OR Apache-2.0"
-description = "World of Kartcraft's launcher for Windows: one file that installs, updates and starts the game"
+description = "World of Kartcraft's launcher for Windows and macOS: one program that installs, updates and starts the game"
 
 [lints]
 workspace = true
@@ -12,8 +12,8 @@ workspace = true
 name = "kartcraft-launcher"
 path = "src/main.rs"
 
-# Windows only: on Linux and the Steam Deck the game runs through Proton with play-proton.sh.
-[target.'cfg(windows)'.dependencies]
+# Windows and macOS: on Linux and the Steam Deck the game runs through Proton with play-proton.sh.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 eframe = { version = "=0.33.3", default-features = false, features = ["glow", "default_fonts"] }
 rfd = "0.15"
 ureq = "2"

@@ -2,14 +2,15 @@
 //! file of the current client with its SHA-256, and only the files that differ here are
 //! downloaded (gzip-compressed, by hash) and checked before they replace the old. The launcher
 //! itself is one of them: a new one goes in beside the running one, which then gives way to it.
+//! The files' paths are relative to `install::root`: a flat folder on Windows, the `.app` bundle
+//! on macOS, whose programs the Mac package ships signed, so what lands here runs as it is.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-/// The launcher's name in the manifest; here it is whatever file the player runs.
-pub const LAUNCHER: &str = "Kartcraft Launcher.exe";
+use crate::install::LAUNCHER;
 
 /// Where a file of the manifest lives: the launcher is the running file, the rest are in `root`.
 fn local(root: &Path, path: &str) -> PathBuf {
@@ -95,6 +96,17 @@ pub fn stale(root: &Path, m: &Manifest) -> Vec<Entry> {
         .collect()
 }
 
+/// A program of the bundle: a download is a plain file until it is made executable again.
+#[cfg(unix)]
+fn make_executable(path: &Path, manifest_path: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    if manifest_path.starts_with("Contents/MacOS/") {
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
+    }
+}
+#[cfg(not(unix))]
+fn make_executable(_path: &Path, _manifest_path: &str) {}
+
 /// Downloads `files`, each checked against its hash before it replaces the old, reporting the
 /// compressed bytes done. The launcher is written as `<launcher>.new`, for [`swap_in`].
 pub fn download(
@@ -130,6 +142,7 @@ pub fn download(
             let _ = std::fs::remove_file(&part);
             return Err(format!("the download of {} is damaged; try again", f.path));
         }
+        make_executable(&part, &f.path);
         let dest = if f.path == LAUNCHER {
             PathBuf::from(format!("{}.new", target.display()))
         } else {
@@ -159,7 +172,8 @@ impl<R: Read, F: FnMut(u64, &str)> Read for Counting<'_, R, F> {
 }
 
 /// A new launcher downloaded beside this one: the running one steps aside (Windows lets a running
-/// file be renamed, not replaced), the new one takes its name and is started. `true` when it was.
+/// file be renamed, not replaced; macOS either, and the same steps keep a failed swap undoable),
+/// the new one takes its name and is started. `true` when it was.
 pub fn swap_in() -> bool {
     let Some(me) = crate::install::me() else {
         return false;
@@ -174,18 +188,18 @@ pub fn swap_in() -> bool {
         let _ = std::fs::rename(&old, &me);
         return false;
     }
-    std::process::Command::new(&me).spawn().is_ok()
+    crate::install::restart()
 }
 
 /// The kart data was made by another converter than the manifest's.
-pub fn converter_changed(root: &Path, m: &Manifest) -> bool {
+pub fn converter_changed(state: &Path, m: &Manifest) -> bool {
     let stamp =
-        std::fs::read_to_string(root.join("kart-data").join(".converter")).unwrap_or_default();
+        std::fs::read_to_string(state.join("kart-data").join(".converter")).unwrap_or_default();
     m.converter
         .as_deref()
-        .is_some_and(|c| root.join("kart-data").join("kart.json").is_file() && stamp.trim() != c)
+        .is_some_and(|c| state.join("kart-data").join("kart.json").is_file() && stamp.trim() != c)
 }
 
-pub fn write_version(root: &Path, m: &Manifest) {
-    let _ = std::fs::write(root.join("version.txt"), &m.version);
+pub fn write_version(state: &Path, m: &Manifest) {
+    let _ = std::fs::write(state.join("version.txt"), &m.version);
 }
