@@ -1158,3 +1158,63 @@ fn super_engine_tops_up_only_moving_on_the_gas_without_the_brake() {
     kart.tick(&w, &Input { brake: true, ..GAS }, &engine);
     assert_eq!(kart.reserves(), 0);
 }
+
+/// A step across +Z at `z`, `h` tall: its riser facing −Z and its top running on.
+fn step(z: f32, h: f32) -> Vec<[[f32; 3]; 3]> {
+    let w = 4000.0;
+    let mut tris = vec![
+        [[-w, 0.0, z], [w, h, z], [w, 0.0, z]],
+        [[-w, 0.0, z], [-w, h, z], [w, h, z]],
+    ];
+    // The top in 2000-lu tiles, as the floor's: the grid leaves out faces too large to drive on.
+    let tile = 2000.0;
+    for i in 0..4 {
+        for j in 0..10 {
+            let (x0, z0) = (-w + i as f32 * tile, z + j as f32 * tile);
+            let (x1, z1) = (x0 + tile, z0 + tile);
+            tris.push([[x0, h, z0], [x0, h, z1], [x1, h, z1]]);
+            tris.push([[x0, h, z0], [x1, h, z1], [x1, h, z0]]);
+        }
+    }
+    tris
+}
+
+#[test]
+fn a_kerb_or_a_stair_is_stepped_onto_with_the_boost_and_a_wall_still_stops() {
+    for h in [11.0, 20.0] {
+        let mut tris = floor(40000.0);
+        tris.extend(step(6000.0, h));
+        let w = world(tris);
+        let mut kart = cruising(&w);
+        kart.fire_turbo(false);
+        let mut rubbed = false;
+        for _ in 0..40 {
+            kart.tick(&w, &GAS, &NONE);
+            rubbed |= kart.events.contains(&Event::WallRub);
+            kart.events.clear();
+        }
+        let at = kart.pose().position;
+        assert!(
+            at.z > 6100.0 && at.y >= h - 1.0,
+            "{h} lu: up and over, at {at:?}"
+        );
+        assert!(!rubbed, "{h} lu: no wall rub");
+        // The turbo item's 2400 ms drained 40 frames' worth, not wiped.
+        assert_eq!(kart.reserves(), 2400 - 40 * MS, "{h} lu: the boost kept");
+    }
+    // A 40 lu ledge, taller than the kart's sphere reaches up, is still a wall.
+    let mut tris = floor(40000.0);
+    tris.extend(step(6000.0, 40.0));
+    let w = world(tris);
+    let mut kart = cruising(&w);
+    kart.fire_turbo(false);
+    for _ in 0..40 {
+        kart.tick(&w, &GAS, &NONE);
+    }
+    assert!(
+        kart.pose().position.z < 6000.0,
+        "{:?}",
+        kart.pose().position
+    );
+    assert_eq!(kart.reserves(), 0, "the wall ended the boost");
+}
