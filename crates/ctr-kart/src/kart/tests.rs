@@ -1222,3 +1222,36 @@ fn every_wheelie_code_names_one_frame() {
     let pitch = |c| wheelie_frame(c).unwrap().0.z_axis.y;
     assert!((1..=21).all(|c| pitch(c) <= pitch(12) + 1e-6));
 }
+
+/// Reversing at full lock keeps half the reverse speed in every class (the turn's decrease is
+/// capped there; CTR's would leave an Accel kart a tenth), and driving forward is untouched.
+#[test]
+fn a_full_lock_reverse_keeps_half_its_speed() {
+    let w = world(floor(80000.0));
+    let back = Input {
+        steer: 1.0,
+        gas: false,
+        brake: false,
+        down: true,
+        r1: false,
+        l1: false,
+    };
+    for class in [Class::Balanced, Class::Accel, Class::Speed, Class::Turn] {
+        let mut kart = Kart::new(class, Vec3::new(0.0, 1.0, 0.0), 0);
+        run(&mut kart, &w, back, 150);
+        assert!(
+            kart.speed() >= BACKWARD_SPEED / 2 - 64,
+            "{class:?} reverses at {} turning",
+            kart.speed()
+        );
+        // Forward at full lock still pays the whole decrease.
+        let mut kart = Kart::new(class, Vec3::new(0.0, 1.0, 0.0), 0);
+        run(&mut kart, &w, Input { steer: 1.0, ..GAS }, 150);
+        let t = BACKWARD_TURN_RATE.min((kart.amp_turn >> 8).abs());
+        let full = map(t, 0, BACKWARD_TURN_RATE, 0, class.stats().turn_decrease);
+        assert!(
+            kart.speed() <= class.stats().speed - full + 64,
+            "{class:?} forward"
+        );
+    }
+}

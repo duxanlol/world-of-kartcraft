@@ -2692,8 +2692,14 @@ impl Kart {
     fn jump_and_friction(&mut self, mods: &Modifiers) {
         if self.state != State::Drifting && !mods.mask && self.reserves == 0 {
             let t = (self.amp_turn >> 8).abs();
-            let dec = map(t, 0, BACKWARD_TURN_RATE, 0, self.stats.turn_decrease)
+            let mut dec = map(t, 0, BACKWARD_TURN_RATE, 0, self.stats.turn_decrease)
                 .min(self.base_speed.abs());
+            // Deviates (the owner's call): CTR takes the turn's whole decrease off a reverse too
+            // (`VehPhysGeneral_4_JumpAndFriction.c`), which at full lock leaves an Accel or Turn
+            // kart a tenth of its reverse speed; here a turn takes at most half of it.
+            if self.base_speed < 0 {
+                dec = dec.min(self.base_speed.abs() / 2);
+            }
             self.base_speed -= self.base_speed.signum() * dec;
         }
         if self.wall_rub != 0 {
