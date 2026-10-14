@@ -1,6 +1,6 @@
-# Builds the clients, Windows, Mac and Linux, from the branch it is started on (the staging branch, by
-# deploy-staging.sh or Actions → "Release" → Run workflow) and publishes them to the testers. It
-# runs only when started by hand.
+# Builds the game server's image and the clients (Windows, Mac and Linux) from the branch it is
+# started on (the staging branch, by deploy-staging.sh or Actions → "Release" → Run workflow) and
+# publishes the clients to the testers. It runs only when started by hand.
 #
 # Each platform is built once and packaged twice, with the same version: for staging (its launcher
 # and presets name the staging server; uploaded to the website's staging/ folder, live at once) and
@@ -36,6 +36,51 @@ jobs:
     steps:
       - id: stamp
         run: echo "version=$(TZ=Europe/Vienna date +%Y.%m.%d-%H%M)" >> "$GITHUB_OUTPUT"
+
+  # The game server's image, built from kartcraft.patch (setup/vmangos/build-image.sh) and kept in
+  # GitHub's registry, public: the staging VM pulls it, and promote.sh has production pull the very
+  # same tag. Its tag is the patch's hash, so a release that leaves the server alone builds nothing.
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: write
+    env:
+      NAME: ghcr.io/duxanlol/world-of-kartcraft-server
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Already built?
+        id: have
+        run: |
+          image="$NAME:5875-$(sha256sum setup/vmangos/kartcraft.patch | cut -c1-12)"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          if docker manifest inspect "$image" >/dev/null 2>&1; then
+            echo "built=1" >> "$GITHUB_OUTPUT"
+            echo "$image is in the registry already"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.have.outputs.built != '1'
+        with:
+          repository: mserajnik/vmangos-deploy
+          ref: f0692574b7955e78d68fea39372e0045360ce5ee
+          path: vmangos-deploy
+          persist-credentials: false
+      - name: Build
+        if: steps.have.outputs.built != '1'
+        run: |
+          image="$(setup/vmangos/build-image.sh vmangos-deploy "$NAME" | tail -1)"
+          [ "$image" = "${{ steps.have.outputs.image }}" ]
+      - name: Push
+        if: steps.have.outputs.built != '1'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker push "${{ steps.have.outputs.image }}"
+          docker logout ghcr.io
 
   windows:
     needs: version
