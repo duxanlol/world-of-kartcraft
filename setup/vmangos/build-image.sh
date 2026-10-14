@@ -25,10 +25,13 @@ tag="$(sha256sum "$patch" | cut -c1-12)"
 image="$name:5875-$tag"
 # The patch with Unix line endings, which `git apply` in the build needs.
 tr -d '\r' <"$patch" >"$deploy/docker/patches/zz-kartcraft.patch"
-docker build --progress=plain -t "$image" -f "$deploy/docker/server/Dockerfile" \
+# The Dockerfile's `COPY --exclude` is BuildKit's labs syntax, which its first line has to name.
+dockerfile="$deploy/Dockerfile.kartcraft"
+{ echo '# syntax=docker/dockerfile:1.7-labs'; cat "$deploy/docker/server/Dockerfile"; } >"$dockerfile"
+docker build --progress=plain -t "$image" -f "$dockerfile" \
     --label org.opencontainers.image.source=https://github.com/duxanlol/world-of-kartcraft \
     --label "org.opencontainers.image.revision=$(git -C "$here" rev-parse HEAD)" \
     --build-arg VMANGOS_REVISION=$VMANGOS_REVISION --build-arg VMANGOS_CLIENT_VERSION=5875 \
     --build-arg VMANGOS_FAIL_ON_PATCH_ERROR=1 "$deploy" >&2
-rm -f "$deploy/docker/patches/zz-kartcraft.patch"
+rm -f "$deploy/docker/patches/zz-kartcraft.patch" "$dockerfile"
 echo "$image"
