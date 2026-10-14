@@ -152,8 +152,8 @@ $entries = foreach ($name in $names) {
     $gz = Join-Path $objects "$sha.gz"
     if (-not (Test-Path $gz)) {
         $in = [IO.File]::OpenRead($path)
-        $out = New-Object IO.Compression.GZipStream([IO.File]::Create($gz), [IO.Compression.CompressionLevel]::Optimal)
-        try { $in.CopyTo($out) } finally { $out.Close(); $in.Close() }
+        $gzOut = New-Object IO.Compression.GZipStream([IO.File]::Create($gz), [IO.Compression.CompressionLevel]::Optimal)
+        try { $in.CopyTo($gzOut) } finally { $gzOut.Close(); $in.Close() }
     }
     [ordered]@{ path = $name; sha256 = $sha; size = (Get-Item $path).Length; gz = "files/$sha.gz"; gz_size = (Get-Item $gz).Length }
 }
