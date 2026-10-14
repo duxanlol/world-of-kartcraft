@@ -1218,3 +1218,53 @@ fn a_kerb_or_a_stair_is_stepped_onto_with_the_boost_and_a_wall_still_stops() {
     );
     assert_eq!(kart.reserves(), 0, "the wall ended the boost");
 }
+
+#[test]
+fn the_turbo_item_pops_the_nose_up_and_it_comes_down_after() {
+    let w = world(floor(40000.0));
+    let mut kart = cruising(&w);
+    kart.fire_turbo(false);
+    kart.tick(&w, &GAS, &NONE);
+    assert_eq!(kart.wheelie(), Some((Wheelie::Start, 0)));
+    // The nose is up in the drawn pose: the kart's forward axis points above level.
+    run(&mut kart, &w, GAS, 12);
+    assert_eq!(kart.wheelie(), Some((Wheelie::Hold, 0)));
+    let forward = kart.pose().basis * Vec3::Z;
+    assert!(forward.y > 0.3, "nose up: {forward:?}");
+    // The boost over, it settles over the recovery's frames and is gone.
+    while kart.reserves() > 0 {
+        kart.tick(&w, &GAS, &NONE);
+    }
+    kart.tick(&w, &GAS, &NONE);
+    assert!(matches!(kart.wheelie(), Some((Wheelie::Recover, _))));
+    run(&mut kart, &w, GAS, 10);
+    assert_eq!(kart.wheelie(), None);
+}
+
+#[test]
+fn the_first_two_powerslide_boosts_give_no_wheelie() {
+    let w = world(floor(200000.0));
+    let mut kart = drifting(&w);
+    kart.turbo_meter = 1;
+    kart.tick(
+        &w,
+        &Input {
+            steer: -1.0,
+            r1: true,
+            l1: true,
+            ..GAS
+        },
+        &NONE,
+    );
+    assert!(kart.reserves() > 0, "a boost");
+    assert_eq!(kart.wheelie(), None);
+}
+
+#[test]
+fn a_cut_short_rise_comes_down_from_as_high_as_it_got() {
+    // Halfway up the rise (5 of 0..10) is halfway down the recovery (4 of 0..8), and the top of
+    // the rise is the recovery's first frame.
+    assert_eq!(super::wheelie_remap(5, 11, 9), 4);
+    assert_eq!(super::wheelie_remap(10, 11, 9), 0);
+    assert_eq!(super::wheelie_remap(0, 11, 9), 8);
+}

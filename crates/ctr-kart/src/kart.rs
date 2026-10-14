@@ -306,8 +306,10 @@ const FRONT_SKID: u32 = 0x1000;
 const DRIVING_AGAINST_WALL: u32 = 0x2000;
 const REVERSING: u32 = 0x20000;
 const AIRBORNE: u32 = 0x80000;
+/// `ACTION_TURBO_INPUT_LATCH`: no boost wheelie until the next boost (`VehFire.c:158` clears it).
+const TURBO_LATCH: u32 = 0x400;
 /// What survives from one frame to the next; the rest is rebuilt each frame.
-const CARRY: u32 = TOUCH_GROUND | STEER_LEFT | REVERSING | AIRBORNE;
+const CARRY: u32 = TOUCH_GROUND | STEER_LEFT | REVERSING | AIRBORNE | TURBO_LATCH;
 
 /// `VehCalc_MapToRange`: clamps test the old bounds literally, so a reversed range saturates.
 pub(crate) fn map(v: i32, omin: i32, omax: i32, nmin: i32, nmax: i32) -> i32 {
@@ -359,6 +361,23 @@ fn wrap_signed(angle: i32) -> i32 {
 /// (`VehPhysGeneral.c:2098-2105`), 5120 for the leader down to 3328 for eighth.
 pub fn clock_slowdown(rank: u8) -> i32 {
     (DAMAGED_SPEED * (20 - i32::from(rank.min(19)))) >> 4
+}
+
+/// Which of the boost wheelie's baked tables plays ([`Kart::wheelie`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wheelie {
+    Start,
+    Hold,
+    Recover,
+}
+
+/// `VehPhysForce_TranslateMatrix_RemapIndex` (`VehPhysForce.c:1205-1232`): a cut-short rise's
+/// frame as the matching frame of the way down, or back: the share of the way through the one
+/// table, reversed, into the other's frames.
+fn wheelie_remap(index: usize, from: usize, to: usize) -> usize {
+    let q = ((index as i32) << 8) / (from as i32 - 1).max(1);
+    let blend = (256 - q).clamp(0, 256);
+    ((blend * (to as i32 - 1)) >> 8) as usize
 }
 
 /// Tumble frame `i` of `bakedGteMath[BLASTED]` as `Vector_BakeMatrixTable` builds it
@@ -656,6 +675,8 @@ pub struct Kart {
     model_scale: [i32; 3],
     /// `matrixIndex` into [`SQUISH_RECOVER`] while the squish's recovery bounce plays.
     squish_recover: Option<usize>,
+    /// The boost wheelie (`matrixArray` WHEELIE_START, HOLD or RECOVER, and `matrixIndex`).
+    wheelie: Option<(Wheelie, usize)>,
     /// `gGT->timer`: frames ticked, for the invincibility flicker.
     frame: u32,
 
@@ -763,6 +784,7 @@ impl Kart {
             squash_lag: 0,
             model_scale: [SCALE_BASE; 3],
             squish_recover: None,
+            wheelie: None,
             frame: 0,
             events: Vec::new(),
         }
@@ -1212,6 +1234,16 @@ impl Kart {
             let [lift, x, y, z] = SQUISH_RECOVER[i];
             scale *= Vec3::new(x as f32, y as f32, z as f32) / 4096.0;
             offset = self.facing * (Vec3::Y * (lift as f32 / 256.0));
+        } else if let Some((which, i)) = self.wheelie {
+            // The same baked entry's turn, lift and scale, from the wheelie's tables.
+            let [lift, forward, pitch, x, y, z] = match which {
+                Wheelie::Start => WHEELIE_START[i.min(WHEELIE_START.len() - 1)],
+                Wheelie::Hold => WHEELIE_HOLD[0],
+                Wheelie::Recover => WHEELIE_RECOVER[i.min(WHEELIE_RECOVER.len() - 1)],
+            };
+            basis = self.facing * Mat3::from_rotation_x(rad(pitch));
+            scale *= Vec3::new(x as f32, y as f32, z as f32) / 4096.0;
+            offset = self.facing * (Vec3::new(0.0, lift as f32, forward as f32) / 256.0);
         }
         if self.squish != 0 {
             // `VehPhysForce.c:1737-1740`, `1453-1458`: scale.y = 0, lifted up the drawn normal.
@@ -1542,6 +1574,7 @@ impl Kart {
         if self.blasted || self.grab.is_some() || matches!(self.state, State::Spinning(_)) {
             return false;
         }
+        self.flags &= !TURBO_LATCH;
         let cap = SINGLE_TURBO_SPEED + ((fire * (SACRED_FIRE_SPEED - SINGLE_TURBO_SPEED)) >> 8);
         if self.reserves == 0 || cap > self.fire_speed_cap || self.fire_speed_cap > 4096 {
             self.fire_speed_cap = cap;
@@ -1649,7 +1682,45 @@ impl Kart {
         self.mask_tick();
         self.shield_tick();
         self.tnt_tick();
+        self.wheelie_tick();
         self.pad_prev = std::mem::take(&mut self.on_pad);
+    }
+
+    /// The boost wheelie's frame (`VehPhysForce_TranslateMatrix_UpdateMatrixAnimation`,
+    /// `VehPhysForce.c:1234-1340`): while reserves burn at the class's top speed or over and no
+    /// latch holds it, the nose rises over WHEELIE_START and stays at WHEELIE_HOLD; then it
+    /// comes down over WHEELIE_RECOVER. A rise cut short comes down from as high as it got.
+    fn wheelie_tick(&mut self) {
+        let on = self.reserves != 0
+            && self.fire_speed >= self.stats.speed
+            && self.flags & TURBO_LATCH == 0
+            && self.squish_recover.is_none()
+            && !self.blasted;
+        self.wheelie = match (on, self.wheelie) {
+            (true, None) => Some((Wheelie::Start, 0)),
+            (true, Some((Wheelie::Start, i))) if i + 1 >= WHEELIE_START.len() => {
+                Some((Wheelie::Hold, 0))
+            }
+            (true, Some((Wheelie::Start, i))) => Some((Wheelie::Start, i + 1)),
+            (true, Some((Wheelie::Hold, i))) => Some((Wheelie::Hold, i)),
+            (true, Some((Wheelie::Recover, i))) => Some((
+                Wheelie::Start,
+                wheelie_remap(i, WHEELIE_RECOVER.len(), WHEELIE_START.len()),
+            )),
+            (false, None) => None,
+            (false, Some((Wheelie::Hold, _))) => Some((Wheelie::Recover, 0)),
+            (false, Some((Wheelie::Start, i))) => Some((
+                Wheelie::Recover,
+                wheelie_remap(i, WHEELIE_START.len(), WHEELIE_RECOVER.len()),
+            )),
+            (false, Some((Wheelie::Recover, i))) if i + 1 >= WHEELIE_RECOVER.len() => None,
+            (false, Some((Wheelie::Recover, i))) => Some((Wheelie::Recover, i + 1)),
+        };
+    }
+
+    /// The boost wheelie's frame, if one plays.
+    pub fn wheelie(&self) -> Option<(Wheelie, usize)> {
+        self.wheelie
     }
 
     /// `RB_MaskWeapon_ThTick` and `_FadeAway`: the time runs out, then 16 frames of fade.
@@ -1861,6 +1932,10 @@ impl Kart {
                     let fire = self.boosts_success << 6;
                     self.fire_increment(gain, FireKind::Stack, fire);
                     self.boosts_success += 1;
+                    // The first two give no wheelie (`VehPhysProc.c:2496-2499`).
+                    if self.boosts_success < 3 {
+                        self.flags |= TURBO_LATCH;
+                    }
                     self.drift_boost_ms = DRIFT_BOOST_MS;
                     self.events.push(Event::Boost {
                         stage: self.boosts_success as u8,
@@ -2498,6 +2573,9 @@ impl Kart {
                 }
                 let ground = contact.normal.y >= GROUND_NORMAL_Y;
                 let dot = self.vel.dot(contact.normal);
+                if dot < -2560.0 {
+                    self.flags |= TURBO_LATCH;
+                }
                 if ground {
                     self.n1 = contact.normal;
                     self.flags |= TOUCH_GROUND;
@@ -2579,7 +2657,7 @@ impl Kart {
             self.terrain = under;
             self.speed_terrain = under;
             if !was {
-                self.flags |= STARTED_TOUCH_GROUND;
+                self.flags |= STARTED_TOUCH_GROUND | TURBO_LATCH;
                 self.grip_timer = LANDING_GRIP_MS;
                 self.events.push(Event::Land {
                     air_ms: self.airtime,

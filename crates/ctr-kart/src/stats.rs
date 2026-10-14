@@ -237,6 +237,36 @@ pub const SQUISH_RECOVER: [[i32; 4]; 15] = [
     [0, 3620, 4367, 3620],
     [0, 3947, 4191, 3947],
 ];
+/// The boost wheelie's frames, `bakedGteMath[WHEELIE_START]`, `[WHEELIE_HOLD]` and
+/// `[WHEELIE_RECOVER]` (`zGlobal_DATA.c:5361-5560`, `matArr01`-`03`), read as `MatrixNDAuthored`
+/// overlays them (`regionsEXE.h:19-25`), as [`SQUISH_RECOVER`] is: the lift and the forward
+/// shift (1/256 lu), the pitch (4096ths of a turn, negative nose up) and the X, Y, Z scale
+/// (4096ths).
+pub const WHEELIE_START: [[i32; 6]; 11] = [
+    [-19, -537, -26, 4096, 4262, 3686],
+    [45, -789, -53, 4096, 4429, 3276],
+    [359, -162, -82, 4096, 4096, 3596],
+    [779, 720, -112, 4096, 4420, 4300],
+    [1234, 1471, -142, 4096, 4217, 5004],
+    [1685, 1994, -171, 4096, 3974, 5324],
+    [2093, 1958, -198, 4096, 3771, 5233],
+    [2385, 1690, -222, 4096, 3686, 5006],
+    [2431, 1398, -243, 4096, 3750, 4710],
+    [2361, 1115, -259, 4096, 3891, 4414],
+    [2232, 946, -269, 4096, 4032, 4186],
+];
+pub const WHEELIE_HOLD: [[i32; 6]; 1] = [[2132, 879, -273, 4096, 4096, 4096]];
+pub const WHEELIE_RECOVER: [[i32; 6]; 9] = [
+    [1896, 865, -243, 4096, 4057, 4171],
+    [1502, 844, -171, 4096, 3974, 4338],
+    [716, 792, -82, 4096, 3891, 4505],
+    [481, 1014, -2, 4915, 3276, 4915],
+    [297, 541, -2, 4596, 3595, 4596],
+    [-22, -203, -2, 4005, 4186, 4005],
+    [-224, -389, -2, 3686, 4505, 3686],
+    [-287, -439, -2, 3792, 4399, 3792],
+    [-142, -220, -2, 3989, 4202, 3989],
+];
 /// `RB_Player_ToggleFlicker` (`231/RB_Player.c:231-257`): with more `invincibleTimer` than this
 /// left (CTR-ms), the kart is not drawn on odd frames.
 pub const FLICKER_INVINCIBLE_MS: i32 = 0x2A0;
