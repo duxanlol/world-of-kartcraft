@@ -2202,6 +2202,54 @@ fn the_settings_pick_the_controller_among_those_connected() {
 }
 
 #[test]
+fn a_track_is_rated_after_a_race_and_a_closed_one_leaves_the_browser() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let shown = |s: &mut UiScript, frame: &str| {
+        s.eval::<bool>(&format!("return {frame}:IsVisible() == 1"))
+            .unwrap()
+    };
+    s.fire_event(
+        "BENILLA_KART_TRACKS",
+        vec![ScriptValue::Str(
+            "t1\tGoldshire Loop\tElwynn Forest\t0\t3\tA loop.\t0.0,0.0;10.0,10.0\nt2\tCrystal Lake\tElwynn Forest\t0\t0\tA sprint.\t0.0,0.0;10.0,10.0"
+                .into(),
+        )],
+    );
+    sent(&mut s);
+    // The server asks after a race: a good vote goes back at once.
+    from_server(&mut s, "R\tRateAsk\tt1");
+    assert!(shown(&mut s, "BenillaKartRateFrame"));
+    s.run("BenillaKartRateFrameGood:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tRate\tt1\t1\t"]);
+    assert!(!shown(&mut s, "BenillaKartRateFrame"));
+    // A bad one asks why, then sends it.
+    from_server(&mut s, "R\tRateAsk\tt2");
+    s.run("BenillaKartRateFrameBad:Click()").unwrap();
+    assert!(sent(&mut s).is_empty(), "nothing until the reason");
+    assert!(shown(&mut s, "BenillaKartRateFrameReason1"));
+    assert!(!shown(&mut s, "BenillaKartRateFrameGood"));
+    s.run("BenillaKartRateFrameReason1:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tRate\tt2\t-1\tstuck"]);
+    // Not now sends nothing.
+    from_server(&mut s, "R\tRateAsk\tt1");
+    s.run("BenillaKartRateFrameSkip:Click()").unwrap();
+    assert!(sent(&mut s).is_empty());
+    // The browser asks which tracks are closed, and hides them.
+    s.run("BenillaKartTrackBrowser_Open()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tOff"]);
+    from_server(&mut s, "R\tOff\tt2");
+    let keys: String = s
+        .eval("local out = {} for _, t in ipairs(BenillaKartTrackBrowser_Shown()) do table.insert(out, t.key) end return table.concat(out, ',')")
+        .unwrap();
+    assert_eq!(keys, "t1");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+#[test]
 fn the_replays_window_lists_the_kept_races_and_plays_one() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK

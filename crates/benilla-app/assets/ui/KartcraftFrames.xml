@@ -436,14 +436,16 @@
             end
         end
 
-        -- The list: every track whose name or zone holds the search, any case.
+        -- The list: every open track (BenillaKartOff, the server's "Off") whose name or zone holds
+        -- the search, any case.
+        BenillaKartOff = {}
         function BenillaKartTrackBrowser_Shown()
             local search = string.lower(BenillaKartTrackBrowser.search or "")
-            if search == "" then return BenillaKartTracks end
             local shown = {}
             for i = 1, table.getn(BenillaKartTracks) do
                 local t = BenillaKartTracks[i]
-                if string.find(string.lower(t.name .. " " .. t.zone), search, 1, 1) then
+                if not BenillaKartOff[t.key] and (search == ""
+                    or string.find(string.lower(t.name .. " " .. t.zone), search, 1, 1)) then
                     table.insert(shown, t)
                 end
             end
@@ -521,12 +523,14 @@
                 BenillaKartTracksFrameTitle:SetText(track.name)
                 BenillaKartTracksFrameText:SetText(track.text)
                 BenillaKartTracksFrameShow:Enable()
+                BenillaKartTracksFrameRate:Enable()
                 if track.map > 1 then BenillaKartTracksFrameTrial:Disable() else BenillaKartTracksFrameTrial:Enable() end
             else
                 BenillaKartTracksFrameTitle:SetText("")
                 BenillaKartTracksFrameText:SetText("Pick a track to read about it and see it on the map.")
                 BenillaKartTracksFrameShow:Disable()
                 BenillaKartTracksFrameTrial:Disable()
+                BenillaKartTracksFrameRate:Disable()
             end
             if BenillaKartRoute.key and BenillaKartRoute.key == selected then
                 BenillaKartTracksFrameShow:SetText("Shown on the map")
@@ -873,6 +877,14 @@
                     BenillaKartRaceMode = nil
                     BenillaKart_Say("Race mode off.")
                 end
+            elseif verb == "RateAsk" then
+                -- After a race: how was the track?
+                BenillaKartRate_Ask(line[3])
+            elseif verb == "Off" then
+                -- The tracks the owner has taken out: the browser hides them.
+                BenillaKartOff = {}
+                for key in string.gfind(line[3] or "", "[^,]+") do BenillaKartOff[key] = 1 end
+                if BenillaKartTracksFrame:IsVisible() then BenillaKartTrackBrowser_Refresh() end
             elseif verb == "CC" then
                 -- A cosmetics catalogue: "P" the paints, "T" the trails, each name:stat:need.
                 local list = {}
@@ -1117,6 +1129,7 @@
             { name = "BenillaKartGuideFrame", page = "BenillaKartGuide_Turn" },
             { name = "BenillaKartPadFrame" },
             { name = "BenillaKartReplaysFrame" },
+            { name = "BenillaKartRateFrame" },
         }
         -- The popups the controller answers: Cross is the first button, Circle the second.
         BENILLA_PAD_POPUPS = { "BENILLA_KART_READY", "BENILLA_KART_RETURN" }
@@ -1410,6 +1423,61 @@
             SetCVar("KartReplay", r.token)
             BenillaKart_Say("Replay: " .. r.label .. ". It plays while you sit in your kart: steer to watch another racer, "
                 .. BenillaKartGuide_Key("KARTCRAFT_CAMERA", "L2") .. " to change the view, Stop replay in the Kartcraft menu to end it.")
+        end
+
+        -- ── Track ratings ── the server asks after a race ("RateAsk"), the browser on demand:
+        -- Good or Bad, and for a bad one why. "Rate\t<key>\t1|-1\t<reason>" answers.
+        BENILLA_KART_RATE_REASONS = {
+            { key = "stuck", text = "I got stuck" },
+            { key = "route", text = "Confusing route" },
+            { key = "long", text = "Too long" },
+            { key = "bumpy", text = "Too bumpy, too many walls" },
+            { key = "boring", text = "Boring" },
+        }
+        BenillaKartRate = {}
+
+        function BenillaKartRate_Ask(key)
+            if not key or key == "" then return end
+            BenillaKartRate.key = key
+            BenillaKartRateFrameTitle:SetText("How was " .. BenillaKart_CourseName(key) .. "?")
+            BenillaKartRate_Stage(1)
+            BenillaKartRateFrame:Show()
+        end
+
+        -- Stage 1: Good, Bad, Skip; stage 2: why it was bad.
+        function BenillaKartRate_Stage(stage)
+            local first = stage == 1
+            for _, n in ipairs({ "Good", "Bad", "Skip" }) do
+                if first then getglobal("BenillaKartRateFrame" .. n):Show() else getglobal("BenillaKartRateFrame" .. n):Hide() end
+            end
+            for i = 1, table.getn(BENILLA_KART_RATE_REASONS) + 1 do
+                local b = getglobal("BenillaKartRateFrameReason" .. i)
+                if first then b:Hide() else b:Show() end
+            end
+            if first then
+                BenillaKartRateFrameAsk:SetText("Your vote helps pick the tracks we keep.")
+            else
+                BenillaKartRateFrameAsk:SetText("What was wrong with it?")
+            end
+        end
+
+        function BenillaKartRate_Vote(vote)
+            if vote == 1 then
+                BenillaKartRate_Send(1, "")
+            else
+                BenillaKartRate_Stage(2)
+            end
+        end
+
+        function BenillaKartRate_Reason(i)
+            local r = BENILLA_KART_RATE_REASONS[i]
+            BenillaKartRate_Send(-1, r and r.key or "")
+        end
+
+        function BenillaKartRate_Send(vote, reason)
+            BenillaKart_Send("Rate\t" .. BenillaKartRate.key .. "\t" .. vote .. "\t" .. reason)
+            BenillaKartRateFrame:Hide()
+            BenillaKart_Say("Thanks for rating " .. BenillaKart_CourseName(BenillaKartRate.key) .. ".")
         end
 
         -- ── The Kartcraft Guide ──
@@ -3465,6 +3533,12 @@
                 <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="18"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartRoute_Show(BenillaKartTrackBrowser.selected)</OnClick></Scripts>
             </Button>
+            <!-- Rate the track shown, or change a rating (the server takes one from a racer of it). -->
+            <Button name="$parentRate" inherits="UIPanelButtonTemplate" text="Rate track">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-24" y="46"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartRate_Ask(BenillaKartTrackBrowser.selected)</OnClick></Scripts>
+            </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>
                 <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-24" y="18"/></Offset></Anchor></Anchors>
@@ -3478,6 +3552,7 @@
                 this:EnableMouseWheel(1)
             </OnLoad>
             <OnShow>
+                BenillaKart_Send("Off")
                 PlaySound("igMainMenuOpen")
                 BenillaKartTrackBrowser_Refresh()
             </OnShow>
@@ -3729,6 +3804,87 @@
                 PlaySound("igMainMenuOpen")
             </OnShow>
             <OnHide>PlaySound("igMainMenuClose")</OnHide>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+    <!-- After a race (the server's RateAsk) or from the track browser: how was the track. -->
+    <Frame name="BenillaKartRateFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
+        <Size><AbsDimension x="300" y="260"/></Size>
+        <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="170"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
+            <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
+            <TileSize><AbsValue val="32"/></TileSize>
+            <EdgeSize><AbsValue val="32"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentTitle" inherits="GameFontNormal">
+                    <Size><AbsDimension x="260" y="16"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-20"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentAsk" inherits="GameFontHighlightSmall">
+                    <Size><AbsDimension x="260" y="14"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-40"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <Button name="$parentGood" inherits="UIPanelButtonTemplate" text="Good track">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-64"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartRate_Vote(1)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentBad" inherits="UIPanelButtonTemplate" text="Bad track">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-90"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartRate_Vote(-1)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentSkip" inherits="UIPanelButtonTemplate" text="Not now">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-124"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartRateFrame:Hide()</OnClick></Scripts>
+            </Button>
+            <Button name="$parentReason1" inherits="UIPanelButtonTemplate" text="" hidden="true">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-64"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartRate_Reason(1)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentReason2" inherits="UIPanelButtonTemplate" text="" hidden="true">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-90"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartRate_Reason(2)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentReason3" inherits="UIPanelButtonTemplate" text="" hidden="true">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-116"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartRate_Reason(3)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentReason4" inherits="UIPanelButtonTemplate" text="" hidden="true">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-142"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartRate_Reason(4)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentReason5" inherits="UIPanelButtonTemplate" text="" hidden="true">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-168"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartRate_Reason(5)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentReason6" inherits="UIPanelButtonTemplate" text="No reason, just bad" hidden="true">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-194"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartRate_Reason(6)</OnClick></Scripts>
+            </Button>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
+                BenillaKart_Movable(this)
+                for i = 1, table.getn(BENILLA_KART_RATE_REASONS) do
+                    getglobal(this:GetName() .. "Reason" .. i):SetText(BENILLA_KART_RATE_REASONS[i].text)
+                end
+            </OnLoad>
+            <OnShow>PlaySound("igMainMenuOpen")</OnShow>
             <OnDragStart>this:StartMoving()</OnDragStart>
             <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
         </Scripts>
