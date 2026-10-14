@@ -2073,7 +2073,8 @@ fn the_controller_drives_the_kartcraft_menu_and_answers_its_popups() {
     assert!(press(&mut s, "PAD3"));
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tStay"]);
     // The race-ready popup keeps Cross and Circle.
-    s.run("StaticPopup_Show('BENILLA_KART_READY', 'Elwynn Loop', 2)").unwrap();
+    s.run("StaticPopup_Show('BENILLA_KART_READY', 'Elwynn Loop', 2)")
+        .unwrap();
     assert_eq!(owns(&mut s), "PAD1 PAD2");
     s.run("StaticPopup_Hide('BENILLA_KART_READY')").unwrap();
     assert!(s.errors().is_empty(), "{:?}", s.errors());
@@ -2821,6 +2822,75 @@ fn the_kart_s_shortcuts_show_in_the_kart_out_of_a_race_and_open_their_windows() 
     // Out of the kart: gone.
     seated(&mut s, false);
     assert!(!shown(&s, "BenillaKartShortcutsFrame"));
+}
+
+#[test]
+fn the_controller_picks_a_track_with_the_d_pad_and_acts_with_a_face_button() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    tracks(&mut s);
+    let press = |s: &mut UiScript, key: &str| -> bool {
+        s.eval(&format!("return BenillaPad_OnButton('{key}') == true"))
+            .unwrap()
+    };
+    let selected = |s: &UiScript| -> String {
+        s.eval("return BenillaKartTrackBrowser.selected or ''")
+            .unwrap()
+    };
+    let shown = |s: &UiScript| -> bool {
+        s.eval("return BenillaKartTracksFrame:IsVisible() == 1")
+            .unwrap()
+    };
+    s.run("BenillaKartTrackBrowser.selected = nil BenillaKartTrackBrowser_Open()")
+        .unwrap();
+    s.tick(0.0);
+    assert_eq!(s.eval::<String>("return BenillaPad_Owns()").unwrap(), "ALL");
+
+    // The D-pad picks the track itself, from the top, and stops at the list's ends.
+    assert!(press(&mut s, "PADDDOWN"));
+    assert_eq!(selected(&s), "t1", "the first press picks the first track");
+    press(&mut s, "PADDDOWN");
+    assert_eq!(selected(&s), "t2");
+    press(&mut s, "PADDDOWN");
+    assert_eq!(selected(&s), "t2", "the last stays picked");
+    press(&mut s, "PADLSHOULDER");
+    assert_eq!(selected(&s), "t1", "L1 a page up, to the top");
+    assert!(shown(&s), "picking is not choosing");
+    assert_eq!(
+        s.eval::<String>("return BenillaKartTracksFrameTitle:GetText()")
+            .unwrap(),
+        "Crystal Lake Loop"
+    );
+
+    // Each action is a face button, from wherever the pick is.
+    sent(&mut s);
+    press(&mut s, "PAD3");
+    assert_eq!(
+        sent(&mut s),
+        ["KARTCRAFT\tR\tMT\tt1"],
+        "Square: the marshal"
+    );
+    assert!(!shown(&s));
+    // Opening asks the server which tracks are closed.
+    s.run("BenillaKartTrackBrowser_Open()").unwrap();
+    sent(&mut s);
+    press(&mut s, "PADDDOWN");
+    press(&mut s, "PAD1");
+    assert_eq!(
+        sent(&mut s),
+        ["KARTCRAFT\tR\tTB\tt2"],
+        "Cross: the time trial"
+    );
+    assert!(!shown(&s));
+    s.run("BenillaKartTrackBrowser_Open()").unwrap();
+    sent(&mut s);
+    press(&mut s, "PAD2");
+    assert!(!shown(&s), "Circle closes");
+    assert!(sent(&mut s).is_empty());
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
 #[test]
