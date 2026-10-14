@@ -48,6 +48,23 @@ struct App {
     started: bool,
 }
 
+/// The window's icon: the WoK badge (`dist/icon.png`), as the Windows binary's resource icon.
+fn icon() -> egui::IconData {
+    let decoded = image::load_from_memory_with_format(
+        include_bytes!("../../../dist/icon.png"),
+        image::ImageFormat::Png,
+    )
+    .map(|i| i.into_rgba8());
+    match decoded {
+        Ok(rgba) => egui::IconData {
+            width: rgba.width(),
+            height: rgba.height(),
+            rgba: rgba.into_raw(),
+        },
+        Err(_) => egui::IconData::default(),
+    }
+}
+
 pub fn run() -> eframe::Result<()> {
     let root = crate::install::root();
     let state = crate::install::state();
@@ -56,7 +73,8 @@ pub fn run() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("World of Kartcraft")
             .with_inner_size([560.0, 420.0])
-            .with_resizable(false),
+            .with_resizable(false)
+            .with_icon(icon()),
         ..Default::default()
     };
     eframe::run_native(

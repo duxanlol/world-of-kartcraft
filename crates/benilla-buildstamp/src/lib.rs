@@ -3,8 +3,32 @@
 //! package that owns a `rerun-if-changed` path whenever that path's mtime moves, and these paths
 //! move on every commit, rebase and checkout.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// World of Kartcraft's icon (`dist/icon.ico`, the WoK badge) into the calling package's Windows
+/// binaries, as their first icon resource, the one Explorer, the taskbar and a shortcut show.
+/// Other targets get nothing: a Mac bundle carries its own `.icns` (`dist/macos/package.sh`).
+pub fn windows_icon() {
+    let dir =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
+    let ico = workspace_root(&dir).join("dist").join("icon.ico");
+    println!("cargo:rerun-if-changed={}", ico.display());
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") || !ico.is_file() {
+        return;
+    }
+    let out = PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR")).join("icon.rc");
+    // The resource compiler wants a plain path with its backslashes doubled.
+    let path = ico.display().to_string();
+    let path = path
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&path)
+        .replace('\\', "\\\\");
+    std::fs::write(&out, format!("1 ICON \"{path}\"\n")).expect("OUT_DIR is writable");
+    embed_resource::compile(&out, embed_resource::NONE)
+        .manifest_optional()
+        .expect("the Windows SDK's resource compiler embeds the icon");
+}
 
 /// Stamp the commit this binary was built from into the calling package as six `rustc-env`
 /// vars, which its `main.rs` reads back with `env!` into a `BuildId`, beside its own

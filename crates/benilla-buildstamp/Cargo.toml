@@ -3,7 +3,7 @@ name = "benilla-buildstamp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "The git build-id stamp shared by the launchers' build scripts"
+description = "The git build-id stamp and the Windows icon shared by the launchers' build scripts"
 
 [lints]
 workspace = true
@@ -11,3 +11,7 @@ workspace = true
 [lib]
 # A build-dependency only: it runs in cargo's build-script pass, so it must stay cheap to compile.
 path = "src/lib.rs"
+
+[dependencies]
+# The icon into a Windows binary through the Windows SDK's resource compiler; a no-op elsewhere.
+embed-resource = "=3.0.2"

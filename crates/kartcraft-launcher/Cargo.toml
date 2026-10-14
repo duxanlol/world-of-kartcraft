@@ -8,6 +8,10 @@ description = "World of Kartcraft's launcher for Windows and macOS: one program 
 [lints]
 workspace = true
 
+[build-dependencies]
+# World of Kartcraft's icon into the Windows launcher (`benilla_buildstamp::windows_icon`).
+benilla-buildstamp = { path = "../benilla-buildstamp" }
+
 [[bin]]
 name = "kartcraft-launcher"
 path = "src/main.rs"
@@ -20,3 +24,5 @@ ureq = "2"
 sha2 = "0.10"
 flate2 = "1"
 serde_json = "1"
+# The window's icon, the WoK badge (`dist/icon.png`).
+image = { version = "0.25", default-features = false, features = ["png"] }

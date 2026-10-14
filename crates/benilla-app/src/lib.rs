@@ -186,6 +186,7 @@ mod ui_world_map;
 mod video;
 mod vplates;
 mod weapon_trail;
+mod window_icon;
 mod world_backdrop;
 mod world_state;
 mod world_state_ui;

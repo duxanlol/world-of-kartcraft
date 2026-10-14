@@ -333,6 +333,7 @@ impl Plugin for VideoPlugin {
     fn build(&self, app: &mut App) {
         use crate::console::ConsoleCommandApp;
         app.init_resource::<SpellEffectLevel>();
+        crate::window_icon::plugin(app);
         app.add_observer(on_cvar);
         app.console_command(
             "detailDoodadAlpha",

@@ -701,7 +701,10 @@ pub(crate) mod schedule_tests {
     ///   (it sets only `KartReplays` and `KartReplay`, which no screen touches) and the readers
     ///   of `KartDrive` (it writes only the camera, which the controller reads after the kart's
     ///   set). The controller chooser (`kart::pad_choice::update`) against the other writers of
-    ///   `Cvars`: it sets only `KartPads`, which nothing else writes. The
+    ///   `Cvars`: it sets only `KartPads`, which nothing else writes. The window icon
+    ///   (`window_icon::apply`, not on macOS) against the other main-thread systems
+    ///   (`net::apply::apply_net_updates`, the terrain colliders' finish): it holds the main thread
+    ///   only for winit's window, sets the icon once and touches nothing they do. The
     ///   guide arrow (`kart::race::guide`, a child of the world camera, reading its `Projection`)
     ///   and the checkpoint arrows (in `kart::race::beams`, read through the camera's
     ///   `GlobalTransform`), the seat placement and the race map's feed add more pairs of the same
@@ -714,7 +717,7 @@ pub(crate) mod schedule_tests {
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
     #[cfg(not(target_os = "macos"))]
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_084;
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_086;
     /// macOS: eight more, all the native cursor's (`cursor::macos::drive`, eleven pairs in the
     /// dump). Unlike `cursor::other::drive`, it reads `CameraControl`, `Cinematic` and the window
     /// focus to hide the arrow while the camera is dragged or a cinematic plays, against their
