@@ -69,6 +69,8 @@ pub struct KartView {
     pub fire: u8,
     /// A boost pressed too early is puffing exhaust.
     pub failed_boost: bool,
+    /// The boost wheelie's frame ([`ctr_kart::Kart::wheelie_code`]), relayed for others to draw.
+    pub wheelie: u8,
     /// The engine's distortion and volume, as CTR mixes it.
     pub engine: (u8, u8),
     /// Not drawn this frame: the invincibility flicker ([`ctr_kart::Kart::flicker_hidden`]).
@@ -589,6 +591,7 @@ impl Session {
             class_speed: kart.stats().accel_speed,
             fire: kart.fire_size(),
             failed_boost: kart.failed_boost(),
+            wheelie: kart.wheelie_code(),
             engine: kart.engine_sound(),
             hidden: kart.flicker_hidden(),
             skids: kart.skids(),

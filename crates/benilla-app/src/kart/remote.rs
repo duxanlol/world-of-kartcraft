@@ -41,24 +41,29 @@ pub(crate) struct Relayed {
     pub(crate) failed_boost: bool,
     /// Whose kart it is (`crash`, `coco`, ...), for its colours.
     pub(crate) racer: String,
+    /// The boost wheelie's frame ([`kartcraft::wheelie_frame`]), 0 none; absent from an older
+    /// client's line.
+    pub(crate) wheelie: u8,
 }
 
 /// The line our kart relays:
-/// `S\t<steer>,<drift>,<fire>,<distortion>,<volume>,<flags>,<racer>`.
+/// `S\t<steer>,<drift>,<fire>,<distortion>,<volume>,<flags>,<racer>,<wheelie>`; an older client
+/// reads the first seven and ignores the rest.
 pub(crate) fn state_line(view: &KartView) -> String {
     let flags = u8::from(view.grounded)
         | (u8::from(view.state == kartcraft::State::Drifting) << 1)
         | (u8::from(kartcraft::model::boost_window(view.meter)) << 2)
         | (u8::from(view.failed_boost) << 3);
     format!(
-        "KARTCRAFT\tS\t{},{},{},{},{},{},{}",
+        "KARTCRAFT\tS\t{},{},{},{},{},{},{},{}",
         (view.steer * 100.0).round() as i32,
         (view.drift_yaw * 1000.0).round() as i32,
         view.fire,
         view.engine.0,
         view.engine.1,
         flags,
-        kartcraft::model::our_kart()
+        kartcraft::model::our_kart(),
+        view.wheelie
     )
 }
 
@@ -92,6 +97,12 @@ pub(crate) fn parse_state(body: &str) -> Option<Relayed> {
         boost_window: flags & 4 != 0,
         failed_boost: flags & 8 != 0,
         racer,
+        wheelie: body
+            .split(',')
+            .nth(7)
+            .and_then(|w| w.trim().parse::<u8>().ok())
+            .filter(|&w| w <= 21)
+            .unwrap_or(0),
     })
 }
 
@@ -326,6 +337,11 @@ pub(crate) fn update(
             kart.translation += rotation * r.offset;
             kart.rotation = rotation * r.rotation;
             kart.scale *= r.scale.max(Vec3::splat(0.01));
+        } else if let Some((turn, s, lift)) = kartcraft::wheelie_frame(state.wheelie) {
+            // Their boost's wheelie, as ours is drawn (`ctr_kart::Kart::pose`).
+            kart.translation += rotation * (lift / kartcraft::lu_per_yard());
+            kart.rotation = rotation * Quat::from_mat3(&turn);
+            kart.scale *= s;
         }
         let speed = Vec3::new(velocity.x, 0.0, velocity.z).length();
         let forward_speed = velocity.dot(heading);
@@ -393,6 +409,7 @@ mod tests {
             engine: (141, 200),
             grounded: true,
             state: kartcraft::State::Drifting,
+            wheelie: 12,
             ..Default::default()
         };
         let line = state_line(&view);
@@ -405,6 +422,11 @@ mod tests {
             (s.fire, s.engine, s.grounded, s.drifting),
             (2, (141, 200), true, true)
         );
+        assert_eq!(s.wheelie, 12);
+        // An older client's line, without the wheelie, still reads; a nonsense one is none.
+        let old = body.rsplit_once(',').unwrap().0;
+        assert_eq!(parse_state(old).unwrap().wheelie, 0);
+        assert_eq!(parse_state(&format!("{old},99")).unwrap().wheelie, 0);
         assert!(parse_state("1,2,3").is_none());
         assert!(parse_state("x,2,3,4,5,6").is_none());
     }

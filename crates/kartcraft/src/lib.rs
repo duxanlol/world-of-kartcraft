@@ -17,7 +17,7 @@ pub mod voice;
 pub mod weapons;
 
 use bevy::prelude::*;
-pub use ctr_kart::{Class, Event, Ground, Input, Kart, Modifiers, State};
+pub use ctr_kart::{wheelie_frame, Class, Event, Ground, Input, Kart, Modifiers, State};
 pub use session::{KartView, NearbyKart, Session};
 
 pub const METERS_PER_YARD: f32 = 0.9144;

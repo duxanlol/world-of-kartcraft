@@ -13,8 +13,8 @@ pub mod terrain;
 pub use collision::Collision;
 pub use grab::GrabMask;
 pub use kart::{
-    clock_slowdown, CameraInput, CloudEffect, Event, HitKind, Input, Kart, Modifiers, OtherKart,
-    Pose, Ram, Shield, State, Terrain, MS, RAM_TURBO_IMPACT, TICK,
+    clock_slowdown, wheelie_frame, CameraInput, CloudEffect, Event, HitKind, Input, Kart,
+    Modifiers, OtherKart, Pose, Ram, Shield, State, Terrain, Wheelie, MS, RAM_TURBO_IMPACT, TICK,
 };
 pub use rev::{RevEngine, RevState, StartBoost};
 pub use stats::Class;

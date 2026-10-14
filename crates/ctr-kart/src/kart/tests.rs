@@ -1268,3 +1268,18 @@ fn a_cut_short_rise_comes_down_from_as_high_as_it_got() {
     assert_eq!(super::wheelie_remap(10, 11, 9), 0);
     assert_eq!(super::wheelie_remap(0, 11, 9), 8);
 }
+
+#[test]
+fn every_wheelie_code_names_one_frame() {
+    assert!(wheelie_frame(0).is_none() && wheelie_frame(22).is_none());
+    for code in 1..=21u8 {
+        let (turn, scale, _) = wheelie_frame(code).unwrap();
+        assert!(
+            turn.determinant() > 0.99 && scale.min_element() > 0.7,
+            "{code}"
+        );
+    }
+    // The hold is the nose highest up: its pitch is the table's largest.
+    let pitch = |c| wheelie_frame(c).unwrap().0.z_axis.y;
+    assert!((1..=21).all(|c| pitch(c) <= pitch(12) + 1e-6));
+}

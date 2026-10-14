@@ -371,6 +371,23 @@ pub enum Wheelie {
     Recover,
 }
 
+/// A wheelie frame by its [`Kart::wheelie_code`]: the turn in the kart's own frame (Z ahead,
+/// Y up), the scale, and the lift and forward shift (lu, in the kart's frame). `None` for 0.
+pub fn wheelie_frame(code: u8) -> Option<(Mat3, Vec3, Vec3)> {
+    let i = usize::from(code);
+    let [lift, forward, pitch, x, y, z] = match i {
+        1..=11 => WHEELIE_START[i - 1],
+        12 => WHEELIE_HOLD[0],
+        13..=21 => WHEELIE_RECOVER[i - 13],
+        _ => return None,
+    };
+    Some((
+        Mat3::from_rotation_x(rad(pitch)),
+        Vec3::new(x as f32, y as f32, z as f32) / 4096.0,
+        Vec3::new(0.0, lift as f32, forward as f32) / 256.0,
+    ))
+}
+
 /// `VehPhysForce_TranslateMatrix_RemapIndex` (`VehPhysForce.c:1205-1232`): a cut-short rise's
 /// frame as the matching frame of the way down, or back: the share of the way through the one
 /// table, reversed, into the other's frames.
@@ -1234,16 +1251,11 @@ impl Kart {
             let [lift, x, y, z] = SQUISH_RECOVER[i];
             scale *= Vec3::new(x as f32, y as f32, z as f32) / 4096.0;
             offset = self.facing * (Vec3::Y * (lift as f32 / 256.0));
-        } else if let Some((which, i)) = self.wheelie {
+        } else if let Some((turn, s, lift)) = wheelie_frame(self.wheelie_code()) {
             // The same baked entry's turn, lift and scale, from the wheelie's tables.
-            let [lift, forward, pitch, x, y, z] = match which {
-                Wheelie::Start => WHEELIE_START[i.min(WHEELIE_START.len() - 1)],
-                Wheelie::Hold => WHEELIE_HOLD[0],
-                Wheelie::Recover => WHEELIE_RECOVER[i.min(WHEELIE_RECOVER.len() - 1)],
-            };
-            basis = self.facing * Mat3::from_rotation_x(rad(pitch));
-            scale *= Vec3::new(x as f32, y as f32, z as f32) / 4096.0;
-            offset = self.facing * (Vec3::new(0.0, lift as f32, forward as f32) / 256.0);
+            basis = self.facing * turn;
+            scale *= s;
+            offset = self.facing * lift;
         }
         if self.squish != 0 {
             // `VehPhysForce.c:1737-1740`, `1453-1458`: scale.y = 0, lifted up the drawn normal.
@@ -1721,6 +1733,17 @@ impl Kart {
     /// The boost wheelie's frame, if one plays.
     pub fn wheelie(&self) -> Option<(Wheelie, usize)> {
         self.wheelie
+    }
+
+    /// The wheelie's frame as one number for the wire ([`wheelie_frame`]): 0 none, 1-11 the
+    /// rise, 12 the hold, 13-21 the way down.
+    pub fn wheelie_code(&self) -> u8 {
+        match self.wheelie {
+            None => 0,
+            Some((Wheelie::Start, i)) => 1 + i.min(WHEELIE_START.len() - 1) as u8,
+            Some((Wheelie::Hold, _)) => 12,
+            Some((Wheelie::Recover, i)) => 13 + i.min(WHEELIE_RECOVER.len() - 1) as u8,
+        }
     }
 
     /// `RB_MaskWeapon_ThTick` and `_FadeAway`: the time runs out, then 16 frames of fade.
