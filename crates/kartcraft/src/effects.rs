@@ -21,6 +21,10 @@
 //!
 //! Every [`KartRoot`] gets them, ours and other drivers', from its [`KartStatus`]; a ghost
 //! ([`GhostKart`]) has none.
+//!
+//! Kartcraft's own, not CTR's: a **boost trail** ([`crate::cosmetic`]), a ribbon of light out of
+//! the kart's tail while it goes faster than [`TRAIL_SPEED`], narrowing and fading over
+//! [`TRAIL_LIFE`], for a kart whose status wears one.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::OnceLock;
@@ -57,6 +61,15 @@ const TYRES: [[f32; 3]; 4] = [
 ];
 const SKID_WIDTH: f32 = 0.39;
 const SKID_FRAMES: usize = 8;
+/// A boost trail: from the kart's tail (m), while faster than this (yd/s), a point every this far
+/// (m), each lasting this long (s), the ribbon this wide (m) where it starts.
+const TRAIL_FROM: [f32; 3] = [0.0, 0.45, -0.95];
+pub const TRAIL_SPEED: f32 = 12.0;
+const TRAIL_STEP: f32 = 0.35;
+pub const TRAIL_LIFE: f32 = 0.3;
+const TRAIL_WIDTH: f32 = 0.35;
+/// Its brightness where it starts (additive: 1 is full).
+const TRAIL_GLOW: f32 = 0.7;
 
 #[derive(serde::Deserialize)]
 pub(crate) struct Texture {
@@ -237,6 +250,16 @@ pub struct KartEffects {
     puffs: Vec<Puff>,
     /// Each kart's tyres' last cross-sections (two ground points), newest last.
     marks: HashMap<(Entity, usize), VecDeque<Option<Section>>>,
+    /// Each kart's boost trail, oldest first.
+    trails: HashMap<Entity, VecDeque<TrailPoint>>,
+}
+
+/// A point of a boost trail: where, how old, its width (yd) and which trail.
+struct TrailPoint {
+    at: Vec3,
+    age: f32,
+    width: f32,
+    trail: crate::cosmetic::Trail,
 }
 
 /// A skid mark's cross-section: its two ground points.
@@ -471,8 +494,26 @@ pub fn tick(
                 }
             }
         }
-        // Puffs and marks, once per game frame elapsed.
+        // The boost trail: a point where the tail has moved on far enough.
         let to_yards = t.scale.x;
+        if let Some(trail) =
+            crate::cosmetic::trail(status.trail).filter(|_| status.speed > TRAIL_SPEED)
+        {
+            let at = t.transform_point(Vec3::from_array(TRAIL_FROM));
+            let points = state.trails.entry(kart).or_default();
+            if points
+                .back()
+                .is_none_or(|p| p.at.distance(at) > TRAIL_STEP * to_yards)
+            {
+                points.push_back(TrailPoint {
+                    at,
+                    age: 0.0,
+                    width: TRAIL_WIDTH * to_yards,
+                    trail,
+                });
+            }
+        }
+        // Puffs and marks, once per game frame elapsed.
         for _ in 0..frames {
             let smoking = !lit || status.boost_window || status.failed_boost;
             if smoking {
@@ -509,6 +550,15 @@ pub fn tick(
         state.landing_sparks(t, status, to_yards);
     }
     state.marks.retain(|(kart, _), _| live.contains(kart));
+    state.trails.retain(|kart, points| {
+        for p in points.iter_mut() {
+            p.age += dt;
+        }
+        while points.front().is_some_and(|p| p.age >= TRAIL_LIFE) {
+            points.pop_front();
+        }
+        live.contains(kart) && !points.is_empty()
+    });
     state.puffs.retain(|p| live.contains(&p.kart));
     for p in &mut state.puffs {
         p.age += dt;
@@ -741,6 +791,22 @@ impl Streams {
             .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     }
 
+    /// A quad with a colour at each corner.
+    fn shaded(&mut self, corners: [Vec3; 4], colors: [[f32; 4]; 4]) {
+        let base = self.positions.len() as u32;
+        for ((c, uv), col) in corners
+            .iter()
+            .zip([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+            .zip(colors)
+        {
+            self.positions.push(c.to_array());
+            self.uvs.push(uv);
+            self.colors.push(col);
+        }
+        self.indices
+            .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+
     /// A line's quad, `[tail, head, head, tail]`: black at the tail, `color` at the head.
     fn line(&mut self, corners: [Vec3; 4], color: [f32; 4]) {
         let base = self.positions.len() as u32;
@@ -821,6 +887,28 @@ pub fn draw(
             [tail - side, s.at - side, s.at + side, tail + side],
             [r, g, b, 1.0],
         );
+    }
+    // The boost trails: each leg a quad facing the eye, narrowing and darkening (additive: fading)
+    // with its points' age.
+    for points in state.trails.values() {
+        let pts: Vec<&TrailPoint> = points.iter().collect();
+        for (i, pair) in pts.windows(2).enumerate() {
+            let (a, b) = (pair[0], pair[1]);
+            let edge = |p: &TrailPoint, along: Vec3| {
+                let left = 1.0 - p.age / TRAIL_LIFE;
+                let side = along.cross(eye_at - p.at).normalize_or_zero() * (p.width * 0.5 * left);
+                let [r, g, b] = crate::cosmetic::trail_colour(p.trail, p.age + i as f32 * 0.04);
+                let glow = TRAIL_GLOW * left * left;
+                (side, [r * glow, g * glow, b * glow, 1.0])
+            };
+            let along = b.at - a.at;
+            let (sa, ca) = edge(a, along);
+            let (sb, cb) = edge(b, along);
+            lines.shaded(
+                [a.at - sa, b.at - sb, b.at + sb, a.at + sa],
+                [ca, cb, cb, ca],
+            );
+        }
     }
     for (handle, streams) in [
         (&built.light, light),

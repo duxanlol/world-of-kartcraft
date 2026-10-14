@@ -230,6 +230,15 @@ pub(crate) fn on_cvar(
         "kartclass" => {
             settings.class = kartcraft::class_named(&ev.new).unwrap_or(super::garage::TIERS[0].0)
         }
+        "kartpaint" | "karttrail" => {
+            let n = ev.num().clamp(0.0, 255.0) as u8;
+            let (paint, trail) = kartcraft::cosmetic::ours();
+            if ev.key() == "kartpaint" {
+                kartcraft::cosmetic::set_ours(n, trail);
+            } else {
+                kartcraft::cosmetic::set_ours(paint, n);
+            }
+        }
         "kartracer" if !kartcraft::model::set_our_kart(ev.new.trim()) => {
             warn!("kart: no kart for racer {:?} in the kart data", ev.new);
         }

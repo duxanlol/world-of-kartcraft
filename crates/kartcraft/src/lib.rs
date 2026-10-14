@@ -5,6 +5,7 @@
 
 pub mod camera;
 pub mod chain;
+pub mod cosmetic;
 pub mod effects;
 pub mod hud;
 pub mod input;

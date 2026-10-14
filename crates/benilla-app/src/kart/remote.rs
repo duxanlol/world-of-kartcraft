@@ -44,18 +44,21 @@ pub(crate) struct Relayed {
     /// The boost wheelie's frame ([`kartcraft::wheelie_frame`]), 0 none; absent from an older
     /// client's line.
     pub(crate) wheelie: u8,
+    /// The paint and boost trail they wear ([`kartcraft::cosmetic`]), 0 none.
+    pub(crate) paint: u8,
+    pub(crate) trail: u8,
 }
 
 /// The line our kart relays:
-/// `S\t<steer>,<drift>,<fire>,<distortion>,<volume>,<flags>,<racer>,<wheelie>`; an older client
-/// reads the first seven and ignores the rest.
+/// `S\t<steer>,<drift>,<fire>,<distortion>,<volume>,<flags>,<racer>,<wheelie>,<paint>,<trail>`; an
+/// older client reads the first seven and ignores the rest.
 pub(crate) fn state_line(view: &KartView) -> String {
     let flags = u8::from(view.grounded)
         | (u8::from(view.state == kartcraft::State::Drifting) << 1)
         | (u8::from(kartcraft::model::boost_window(view.meter)) << 2)
         | (u8::from(view.failed_boost) << 3);
     format!(
-        "KARTCRAFT\tS\t{},{},{},{},{},{},{},{}",
+        "KARTCRAFT\tS\t{},{},{},{},{},{},{},{},{},{}",
         (view.steer * 100.0).round() as i32,
         (view.drift_yaw * 1000.0).round() as i32,
         view.fire,
@@ -63,7 +66,9 @@ pub(crate) fn state_line(view: &KartView) -> String {
         view.engine.1,
         flags,
         kartcraft::model::our_kart(),
-        view.wheelie
+        view.wheelie,
+        kartcraft::cosmetic::ours().0,
+        kartcraft::cosmetic::ours().1
     )
 }
 
@@ -97,13 +102,19 @@ pub(crate) fn parse_state(body: &str) -> Option<Relayed> {
         boost_window: flags & 4 != 0,
         failed_boost: flags & 8 != 0,
         racer,
-        wheelie: body
-            .split(',')
-            .nth(7)
-            .and_then(|w| w.trim().parse::<u8>().ok())
-            .filter(|&w| w <= 21)
+        wheelie: field(body, 7).filter(|&w| w <= 21).unwrap_or(0),
+        paint: field(body, 8)
+            .filter(|&p| kartcraft::cosmetic::paint(p).is_some())
+            .unwrap_or(0),
+        trail: field(body, 9)
+            .filter(|&t| kartcraft::cosmetic::trail(t).is_some())
             .unwrap_or(0),
     })
+}
+
+/// The state line's `n`th field as a small number, if there and one.
+fn field(body: &str, n: usize) -> Option<u8> {
+    body.split(',').nth(n).and_then(|w| w.trim().parse().ok())
 }
 
 /// One remote kart.
@@ -117,8 +128,9 @@ pub(crate) struct Remote {
     pub(crate) velocity: Vec3,
     pub(crate) yaw: f32,
     spin: f32,
-    /// Whose kart is drawn ("" until the driver's first state names it).
+    /// Whose kart is drawn ("" until the driver's first state names it), in which paint.
     racer: String,
+    paint: u8,
 }
 
 #[derive(Resource, Default)]
@@ -266,12 +278,12 @@ pub(crate) fn update(
         let remote = match karts.karts.get_mut(&entity) {
             Some(r) => r,
             None => {
-                let racer = karts
+                let (racer, paint) = karts
                     .states
                     .get(&guid.0)
-                    .map(|(s, _)| s.racer.clone())
+                    .map(|(s, _)| (s.racer.clone(), s.paint))
                     .unwrap_or_default();
-                let Some(kart) = spawner.spawn(&racer) else {
+                let Some(kart) = spawner.spawn_painted(&racer, paint) else {
                     continue;
                 };
                 karts.karts.insert(
@@ -286,6 +298,7 @@ pub(crate) fn update(
                         yaw: motion.orientation,
                         spin: 0.0,
                         racer,
+                        paint,
                     },
                 );
                 karts.karts.get_mut(&entity).unwrap()
@@ -311,12 +324,13 @@ pub(crate) fn update(
             .get(&remote.guid)
             .filter(|(_, t)| now - t < STATE_TTL);
         let state = state.map(|(s, _)| s.clone()).unwrap_or_default();
-        // The driver named their kart: redraw it in its colours.
-        if !state.racer.is_empty() && state.racer != remote.racer {
-            if let Some(kart) = spawner.spawn(&state.racer) {
+        // The driver named their kart, or painted it: redraw it so.
+        if !state.racer.is_empty() && (state.racer != remote.racer || state.paint != remote.paint) {
+            if let Some(kart) = spawner.spawn_painted(&state.racer, state.paint) {
                 spawner.despawn(remote.kart);
                 remote.kart = kart;
                 remote.racer = state.racer.clone();
+                remote.paint = state.paint;
             }
         }
 
@@ -365,6 +379,7 @@ pub(crate) fn update(
                 // The wire carries the powerslide, not the skid flags: a remote kart marks the
                 // ground through its drifts only.
                 skids: (state.drifting, state.drifting),
+                trail: state.trail,
                 ..Default::default()
             };
         }
@@ -423,10 +438,17 @@ mod tests {
             (2, (141, 200), true, true)
         );
         assert_eq!(s.wheelie, 12);
-        // An older client's line, without the wheelie, still reads; a nonsense one is none.
-        let old = body.rsplit_once(',').unwrap().0;
-        assert_eq!(parse_state(old).unwrap().wheelie, 0);
-        assert_eq!(parse_state(&format!("{old},99")).unwrap().wheelie, 0);
+        assert_eq!((s.paint, s.trail), kartcraft::cosmetic::ours());
+        // An older client's line, without the wheelie and the cosmetics, still reads; a nonsense
+        // one is none.
+        let old: Vec<&str> = body.split(',').take(7).collect();
+        let old = old.join(",");
+        let s = parse_state(&old).unwrap();
+        assert_eq!((s.wheelie, s.paint, s.trail), (0, 0, 0));
+        let s = parse_state(&format!("{old},99,200,7")).unwrap();
+        assert_eq!((s.wheelie, s.paint, s.trail), (0, 0, 0));
+        let s = parse_state(&format!("{old},0,3,4")).unwrap();
+        assert_eq!((s.paint, s.trail), (3, 4));
         assert!(parse_state("1,2,3").is_none());
         assert!(parse_state("x,2,3,4,5,6").is_none());
     }

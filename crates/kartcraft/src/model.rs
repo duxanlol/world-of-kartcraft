@@ -18,6 +18,7 @@ use bevy::render::render_resource::{Extent3d, Face, TextureDimension, TextureFor
 
 pub use ctr_assets::kart::KARTS;
 
+use crate::cosmetic::{repaint, Paint};
 use crate::session::KartView;
 
 /// The tread band's width, meters (the game's sprite has no depth).
@@ -212,7 +213,16 @@ fn linear(c: [f32; 4]) -> [f32; 4] {
     [c[0].powf(2.2), c[1].powf(2.2), c[2].powf(2.2), c[3]]
 }
 
-fn image(t: &Texture) -> Image {
+fn image(t: &Texture, paint: Option<Paint>) -> Image {
+    let mut rgba = t.rgba.clone();
+    if let Some(paint) = paint {
+        for px in rgba.as_chunks_mut::<4>().0 {
+            let c = repaint([px[0], px[1], px[2]].map(|v| f32::from(v) / 255.0), paint);
+            for (v, c) in px.iter_mut().zip(c) {
+                *v = (c * 255.0).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
     let mut image = Image::new(
         Extent3d {
             width: t.width,
@@ -220,7 +230,7 @@ fn image(t: &Texture) -> Image {
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        t.rgba.clone(),
+        rgba,
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
     );
@@ -228,7 +238,7 @@ fn image(t: &Texture) -> Image {
     image
 }
 
-fn surface_mesh(s: &Surface) -> Mesh {
+fn surface_mesh(s: &Surface, paint: Option<Paint>) -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::RENDER_WORLD,
@@ -248,7 +258,13 @@ fn surface_mesh(s: &Surface) -> Mesh {
     );
     mesh.insert_attribute(
         Mesh::ATTRIBUTE_COLOR,
-        v.iter().map(|v| linear(v.color)).collect::<Vec<_>>(),
+        v.iter()
+            .map(|v| {
+                let [r, g, b, a] = v.color;
+                let [r, g, b] = paint.map_or([r, g, b], |p| repaint([r, g, b], p));
+                linear([r, g, b, a])
+            })
+            .collect::<Vec<_>>(),
     );
     mesh.insert_indices(Indices::U32(s.indices.clone()));
     mesh
@@ -368,6 +384,8 @@ pub struct KartStatus {
     /// This frame's scrapes and landing ([`crate::session::Feedback`]); other drivers' karts
     /// relay none.
     pub feedback: crate::session::Feedback,
+    /// The boost trail it wears ([`crate::cosmetic::TRAILS`]), 0 none.
+    pub trail: u8,
 }
 
 /// A wheel's steering pivot and its rolling hub, each knowing its kart.
@@ -393,15 +411,17 @@ struct KartAssets {
 
 #[derive(Resource, Default)]
 pub struct KartModel {
-    /// By racer, and whether translucent for a ghost.
-    assets: std::collections::HashMap<(String, bool), KartAssets>,
+    /// By racer, whether translucent for a ghost, and its paint ([`crate::cosmetic`]).
+    assets: std::collections::HashMap<(String, bool, u8), KartAssets>,
     local: Option<Entity>,
-    /// Whose kart `local` is.
+    /// Whose kart `local` is, and in which paint.
     local_racer: &'static str,
+    local_paint: u8,
 }
 
 fn build_assets(
     model: &Model,
+    paint: Option<Paint>,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     images: &mut Assets<Image>,
@@ -409,7 +429,7 @@ fn build_assets(
     let textures: Vec<Handle<Image>> = model
         .textures
         .iter()
-        .map(|t| images.add(image(t)))
+        .map(|t| images.add(image(t, paint)))
         .collect();
     let parts = model
         .surfaces
@@ -431,7 +451,7 @@ fn build_assets(
                 double_sided: s.double_sided,
                 ..default()
             });
-            (meshes.add(surface_mesh(s)), material)
+            (meshes.add(surface_mesh(s, paint)), material)
         })
         .collect();
     let sprites = model.wheel_sprites.as_ref().map(|w| w.textures.as_slice());
@@ -480,25 +500,37 @@ impl KartSpawner<'_, '_> {
     /// A new kart in `racer`'s colours (ours if unknown), hidden at the origin; `None` without
     /// any `kart.json`.
     pub fn spawn(&mut self, racer: &str) -> Option<Entity> {
-        self.spawn_as(racer, false)
+        self.spawn_as(racer, false, 0)
+    }
+
+    /// [`KartSpawner::spawn`]'s kart in a paint ([`crate::cosmetic::PAINTS`]); 0 or an unknown
+    /// one is stock.
+    pub fn spawn_painted(&mut self, racer: &str, paint: u8) -> Option<Entity> {
+        self.spawn_as(racer, false, paint)
     }
 
     /// A ghost kart in `racer`'s colours: [`KartSpawner::spawn`]'s kart, translucent and marked
     /// [`GhostKart`].
     pub fn spawn_ghost(&mut self, racer: &str) -> Option<Entity> {
-        let kart = self.spawn_as(racer, true)?;
+        let kart = self.spawn_as(racer, true, 0)?;
         self.commands
             .entity(kart)
             .insert((GhostKart, Name::new("ghost kart")));
         Some(kart)
     }
 
-    fn spawn_as(&mut self, racer: &str, ghost: bool) -> Option<Entity> {
+    fn spawn_as(&mut self, racer: &str, ghost: bool, paint: u8) -> Option<Entity> {
         let model = model_named(racer).or_else(model)?;
-        let key = (model.kart.clone(), ghost);
+        let painted = crate::cosmetic::paint(paint);
+        let key = (
+            model.kart.clone(),
+            ghost,
+            if painted.is_some() { paint } else { 0 },
+        );
         if !self.model.assets.contains_key(&key) {
             let built = build_assets(
                 model,
+                painted,
                 &mut self.meshes,
                 &mut self.materials,
                 &mut self.images,
@@ -591,17 +623,19 @@ impl KartSpawner<'_, '_> {
     /// picked.
     fn local(&mut self) -> Option<Entity> {
         let racer = our_kart();
+        let paint = crate::cosmetic::ours().0;
         if let Some(e) = self.model.local {
-            if self.model.local_racer == racer {
+            if self.model.local_racer == racer && self.model.local_paint == paint {
                 return Some(e);
             }
             self.despawn(e);
             self.model.local = None;
         }
-        let e = self.spawn(racer)?;
+        let e = self.spawn_painted(racer, paint)?;
         self.commands.entity(e).insert(LocalKart);
         self.model.local = Some(e);
         self.model.local_racer = racer;
+        self.model.local_paint = paint;
         Some(e)
     }
 }
@@ -654,6 +688,7 @@ pub fn update(
         skids: view.skids,
         ground: view.ground,
         feedback: view.feedback,
+        trail: crate::cosmetic::ours().1,
     };
 }
 

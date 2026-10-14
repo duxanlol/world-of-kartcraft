@@ -872,6 +872,26 @@
                     BenillaKartRaceMode = nil
                     BenillaKart_Say("Race mode off.")
                 end
+            elseif verb == "CC" then
+                -- A cosmetics catalogue: "P" the paints, "T" the trails, each name:stat:need.
+                local list = {}
+                for entry in string.gfind(line[4] or "", "[^;]+") do
+                    local _, _, name, stat, need = string.find(entry, "^(.*):(%d+):(%d+)$")
+                    if name then table.insert(list, { name = name, stat = tonumber(stat), need = tonumber(need) }) end
+                end
+                BenillaKartLook.lists[line[3] or ""] = list
+            elseif verb == "CO" then
+                -- Our numbers and what we wear: the garage's Look rows, and the kart's (KartPaint,
+                -- KartTrail).
+                local look = BenillaKartLook
+                look.stats = {}
+                for n in string.gfind(line[3] or "", "%d+") do table.insert(look.stats, tonumber(n)) end
+                look.worn.P = tonumber(line[4]) or 0
+                look.worn.T = tonumber(line[5]) or 0
+                look.view.P, look.view.T = look.worn.P, look.worn.T
+                SetCVar("KartPaint", look.worn.P)
+                SetCVar("KartTrail", look.worn.T)
+                if BenillaKartGarageFrame:IsVisible() then BenillaKartGarage_Refresh() end
             elseif verb == "CH" then
                 -- The day's and the week's challenge courses, and their boards.
                 BenillaKartChallenge = {
@@ -1574,7 +1594,10 @@
                 BenillaKartSeated_Set(arg1 == 1)
             elseif event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_REGEN_ENABLED" then
                 BenillaKart_RaceModeRestore()
-                if event == "PLAYER_ENTERING_WORLD" then BenillaKart_WorldChatJoin() end
+                if event == "PLAYER_ENTERING_WORLD" then
+                    BenillaKart_WorldChatJoin()
+                    BenillaKart_Send("CO")
+                end
             elseif event == "CHAT_MSG_CHANNEL_NOTICE" then
                 BenillaKart_WorldChatNotice()
             elseif event == "BENILLA_KART_PAD" then
@@ -2224,6 +2247,8 @@
             else
                 BenillaKartGarageFrameNoKarts:Hide()
             end
+            BenillaKartLook_Row("P", "Paint")
+            BenillaKartLook_Row("T", "Trail")
         end
 
         -- A class row clicked: picked if the skill has opened it.
@@ -2308,6 +2333,56 @@
             local r = BenillaKartGarage.racers[i]
             if r then
                 SetCVar("KartRacer", r.key)
+                PlaySound("igMainMenuOptionCheckBoxOn")
+            end
+            BenillaKartGarage_Refresh()
+        end
+
+        -- ── The garage's Look: a paint and a boost trail, earned on the server ──
+
+        BenillaKartLook = { lists = { P = {}, T = {} }, stats = {}, worn = { P = 0, T = 0 }, view = { P = 0, T = 0 } }
+        BENILLA_KART_LOOK_STATS = { "races", "wins", "course records", "challenge times", "ladder top-3 seasons", "ladder seasons won" }
+
+        -- Whether a catalogue's entry (0-based) is earned, and the line saying what it needs.
+        function BenillaKartLook_Earned(kind, i)
+            local look = BenillaKartLook
+            local c = look.lists[kind][i + 1]
+            if not c then return false, "" end
+            local have = look.stats[c.stat + 1] or 0
+            if have >= c.need then return true, "" end
+            return false, format("Needs %d %s (%d so far)", c.need, BENILLA_KART_LOOK_STATS[c.stat + 1] or "", have)
+        end
+
+        function BenillaKartLook_Row(kind, row)
+            local look = BenillaKartLook
+            local i = look.view[kind]
+            local c = look.lists[kind][i + 1]
+            local name = getglobal("BenillaKartGarageFrame" .. row .. "Name")
+            local need = getglobal("BenillaKartGarageFrame" .. row .. "Need")
+            if not c then
+                name:SetText("...")
+                need:SetText("")
+                return
+            end
+            local earned, why = BenillaKartLook_Earned(kind, i)
+            name:SetText(c.name .. ((i == look.worn[kind]) and " (worn)" or ""))
+            if earned then
+                name:SetTextColor(NORMAL_FONT_COLOR.r, NORMAL_FONT_COLOR.g, NORMAL_FONT_COLOR.b)
+            else
+                name:SetTextColor(BENILLA_KART_LOCKED_COLOR.r, BENILLA_KART_LOCKED_COLOR.g, BENILLA_KART_LOCKED_COLOR.b)
+            end
+            need:SetText(why)
+            need:SetTextColor(RED_FONT_COLOR.r, RED_FONT_COLOR.g, RED_FONT_COLOR.b)
+        end
+
+        -- An arrow clicked: the next or the previous one shown, and worn if earned.
+        function BenillaKartLook_Step(kind, dir)
+            local look = BenillaKartLook
+            local n = table.getn(look.lists[kind])
+            if n == 0 then return end
+            look.view[kind] = mod(look.view[kind] + dir + n, n)
+            if BenillaKartLook_Earned(kind, look.view[kind]) and look.view[kind] ~= look.worn[kind] then
+                BenillaKart_Send("CE" .. "\t" .. kind .. "\t" .. look.view[kind])
                 PlaySound("igMainMenuOptionCheckBoxOn")
             end
             BenillaKartGarage_Refresh()
@@ -2987,7 +3062,7 @@
     <!-- The kart garage: the engine class, as the Karting skill opens them, and whose kart we
          drive, each a CVar set as it is clicked. -->
     <Frame name="BenillaKartGarageFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="340" y="440"/></Size>
+        <Size><AbsDimension x="340" y="540"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -3026,6 +3101,32 @@
                 </FontString>
                 <FontString name="$parentNoKarts" inherits="GameFontHighlightSmall" justifyH="LEFT" hidden="true" text="No karts: convert them from your CTR disc with the setup.">
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-244"/></Offset></Anchor></Anchors>
+                </FontString>
+                <!-- The Look: a paint and a boost trail, earned by racing (the server's catalogues). -->
+                <FontString name="$parentLookTitle" inherits="GameFontNormal" text="Look">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-390"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentPaintLabel" inherits="GameFontHighlight" text="Paint">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-414"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentPaintName" inherits="GameFontNormal" justifyH="CENTER">
+                    <Size><AbsDimension x="160" y="14"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="118" y="-414"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentPaintNeed" inherits="GameFontHighlightSmall" justifyH="CENTER">
+                    <Size><AbsDimension x="260" y="12"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="40" y="-432"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentTrailLabel" inherits="GameFontHighlight" text="Trail">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-456"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentTrailName" inherits="GameFontNormal" justifyH="CENTER">
+                    <Size><AbsDimension x="160" y="14"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="118" y="-456"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentTrailNeed" inherits="GameFontHighlightSmall" justifyH="CENTER">
+                    <Size><AbsDimension x="260" y="12"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="40" y="-474"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
@@ -3079,6 +3180,26 @@
             <CheckButton name="$parentRacer12" inherits="BenillaKartGarageRacerTemplate" id="12">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="176" y="-358"/></Offset></Anchor></Anchors>
             </CheckButton>
+            <Button name="$parentPaintPrev" inherits="UIPanelButtonTemplate" text="&lt;">
+                <Size><AbsDimension x="26" y="20"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="88" y="-410"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartLook_Step("P", -1)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentPaintNext" inherits="UIPanelButtonTemplate" text="&gt;">
+                <Size><AbsDimension x="26" y="20"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="282" y="-410"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartLook_Step("P", 1)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentTrailPrev" inherits="UIPanelButtonTemplate" text="&lt;">
+                <Size><AbsDimension x="26" y="20"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="88" y="-452"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartLook_Step("T", -1)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentTrailNext" inherits="UIPanelButtonTemplate" text="&gt;">
+                <Size><AbsDimension x="26" y="20"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="282" y="-452"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartLook_Step("T", 1)</OnClick></Scripts>
+            </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>
                 <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
@@ -3092,6 +3213,7 @@
             </OnLoad>
             <OnShow>
                 PlaySound("igMainMenuOpen")
+                BenillaKart_Send("CO")
                 BenillaKartGarage_Refresh()
             </OnShow>
             <OnHide>PlaySound("igMainMenuClose")</OnHide>

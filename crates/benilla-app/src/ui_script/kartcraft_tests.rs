@@ -2105,6 +2105,64 @@ fn the_menu_names_the_challenges_and_opens_their_course() {
 }
 
 #[test]
+fn the_garage_shows_the_look_and_wears_only_what_is_earned() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let text = |s: &mut UiScript, name: &str| -> String {
+        s.eval(&format!("return {name}:GetText() or ''")).unwrap()
+    };
+    sent(&mut s);
+    s.run("BenillaKartGarage_Toggle()").unwrap();
+    // Opening the garage asks for our numbers.
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tCO"]);
+    from_server(&mut s, "R\tCC\tP\tStock:0:0;Copper:0:10;Gold:1:25");
+    from_server(&mut s, "R\tCC\tT\tNone:0:0;Sparks:0:25");
+    from_server(&mut s, "R\tCO\t12,3,0,0,0,0\t0\t0");
+    assert_eq!(
+        text(&mut s, "BenillaKartGarageFramePaintName"),
+        "Stock (worn)"
+    );
+    assert_eq!(text(&mut s, "BenillaKartGarageFramePaintNeed"), "");
+    // Copper is earned (12 races of 10): stepping onto it wears it.
+    s.run("BenillaKartGarageFramePaintNext:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tCE\tP\t1"]);
+    assert_eq!(text(&mut s, "BenillaKartGarageFramePaintName"), "Copper");
+    // Gold is not (3 wins of 25): shown with what it needs, and not asked for.
+    s.run("BenillaKartGarageFramePaintNext:Click()").unwrap();
+    assert!(sent(&mut s).is_empty());
+    assert_eq!(text(&mut s, "BenillaKartGarageFramePaintName"), "Gold");
+    assert_eq!(
+        text(&mut s, "BenillaKartGarageFramePaintNeed"),
+        "Needs 25 wins (3 so far)"
+    );
+    // Round past the end to Stock; the trail row reads its own list.
+    s.run("BenillaKartGarageFrameTrailPrev:Click()").unwrap();
+    assert_eq!(text(&mut s, "BenillaKartGarageFrameTrailName"), "Sparks");
+    assert_eq!(
+        text(&mut s, "BenillaKartGarageFrameTrailNeed"),
+        "Needs 25 races (12 so far)"
+    );
+    // The server's answer is what we wear, and the kart's CVars follow it.
+    from_server(&mut s, "R\tCO\t12,3,0,0,0,0\t1\t0");
+    assert_eq!(
+        text(&mut s, "BenillaKartGarageFramePaintName"),
+        "Copper (worn)"
+    );
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartPaint')").unwrap(),
+        "1"
+    );
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartTrail')").unwrap(),
+        "0"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+#[test]
 fn the_replays_window_lists_the_kept_races_and_plays_one() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK
@@ -2176,7 +2234,8 @@ fn race_mode_is_asked_again_until_the_server_says_it_is_on() {
         .unwrap();
     sent(&mut s);
     s.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
-    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tM\t1"]);
+    // Race mode, and (every login) what we wear on the kart.
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tM\t1", "KARTCRAFT\tR\tCO"]);
     // No answer: not again at once, again 5 s on.
     s.tick(1.0);
     assert!(sent(&mut s).is_empty());
@@ -2195,9 +2254,13 @@ fn race_mode_is_asked_for_at_every_login_until_turned_off() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut s = loaded();
+    // Race mode's asks at a login; the cosmetics' (every login) aside.
     let login = |s: &mut UiScript| {
         s.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
         sent(s)
+            .into_iter()
+            .filter(|l| l != "KARTCRAFT\tR\tCO")
+            .collect::<Vec<_>>()
     };
     s.run("SetCVar('KartRaceMode', '1') BenillaKartRaceMode = nil")
         .unwrap();

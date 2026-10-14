@@ -790,6 +790,18 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "1",
         "Kartcraft's own — CTR's race music; 1.12 has no kart",
     ),
+    // What we wear on the kart, as the server last said (`kartcraft::cosmetic`): set by the layer
+    // from the server's answer, so for the session only.
+    ours(
+        "KartPaint",
+        "0",
+        "Kartcraft's own — the kart's paint; 1.12 has no kart",
+    ),
+    ours(
+        "KartTrail",
+        "0",
+        "Kartcraft's own — the kart's boost trail; 1.12 has no kart",
+    ),
     // The races we were in, to rewatch (`kart::replay`): the replay playing (`0` none), and the
     // replays on disk for the Kartcraft menu's window; both for the session only.
     ours(

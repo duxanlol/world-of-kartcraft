@@ -642,6 +642,9 @@ fn load_config(world: &mut World) {
         // A replay plays, and the list of them is made, in this run only.
         cvars.own_for_session("KartReplay", None);
         cvars.own_for_session("KartReplays", None);
+        // The paint and trail come from the server at each login.
+        cvars.own_for_session("KartPaint", None);
+        cvars.own_for_session("KartTrail", None);
         match stored {
             StoredConfig::Absent => {} // no file, hermetic capture, or no install
             StoredConfig::Bad(msg) => {
