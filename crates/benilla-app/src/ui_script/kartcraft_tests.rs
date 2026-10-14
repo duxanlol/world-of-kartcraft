@@ -2747,3 +2747,70 @@ fn the_kartcraft_menu_widens_to_a_challenge_s_long_course_name() {
     );
     assert_eq!(width(&s, "BenillaKartMenuFrame"), entry + 60.0);
 }
+
+#[test]
+fn the_kart_s_shortcuts_show_in_the_kart_out_of_a_race_and_open_their_windows() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 3);
+    tracks(&mut s);
+    let shown = |s: &UiScript, frame: &str| -> bool {
+        s.eval(&format!("return {frame}:IsVisible() == 1")).unwrap()
+    };
+    let seated = |s: &mut UiScript, on: bool| {
+        s.fire_event(
+            "BENILLA_KART_SEATED",
+            vec![ScriptValue::Number(if on { 1.0 } else { 0.0 })],
+        );
+        s.tick(0.0);
+    };
+    let track = |s: &mut UiScript, name: &str| {
+        s.fire_event(
+            "BENILLA_KART_TRACKMAP",
+            vec![
+                ScriptValue::Str(name.into()),
+                ScriptValue::Number(3.0),
+                ScriptValue::Str("0,0;100,0;100,100".into()),
+            ],
+        );
+        s.tick(0.0);
+    };
+
+    // On foot: none.
+    assert!(!shown(&s, "BenillaKartShortcutsFrame"));
+    // In the kart: both, at the screen's bottom, saying they move.
+    seated(&mut s, true);
+    assert!(shown(&s, "BenillaKartShortcutsFrame"));
+    assert!(s
+        .eval::<bool>("return BenillaKartShortcutsFrame:IsMovable() == 1")
+        .unwrap());
+    assert_eq!(
+        s.eval::<String>("return BenillaKartShortcutsFrameHint:GetText()")
+            .unwrap(),
+        "Drag to move"
+    );
+    assert_eq!(
+        s.eval::<String>("local p = BenillaKartShortcutsFrame:GetPoint(1) return p")
+            .unwrap(),
+        "BOTTOM"
+    );
+    // A race under way puts them away; its end brings them back.
+    track(&mut s, "Elwynn Loop");
+    assert!(!shown(&s, "BenillaKartShortcutsFrame"));
+    track(&mut s, "");
+    assert!(shown(&s, "BenillaKartShortcutsFrame"));
+
+    // Time trial opens the track browser, Race Finder the finder.
+    s.run("BenillaKartShortcutsFrameTrial:Click()").unwrap();
+    assert!(shown(&s, "BenillaKartTracksFrame"));
+    s.run("BenillaKartTracksFrame:Hide() BenillaKartShortcutsFrameFinder:Click()")
+        .unwrap();
+    assert!(shown(&s, "BenillaKartFinderFrame"));
+
+    // Out of the kart: gone.
+    seated(&mut s, false);
+    assert!(!shown(&s, "BenillaKartShortcutsFrame"));
+}
