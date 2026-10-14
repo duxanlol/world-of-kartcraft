@@ -149,6 +149,8 @@ pub(crate) struct BindingOverlay {
     just: Vec<&'static str>,
     pad_held: Vec<&'static str>,
     pad_just: Vec<&'static str>,
+    /// The bound controller buttons down last frame, for a trigger's squeeze to press once.
+    pad_was: Vec<bevy::input::gamepad::GamepadButton>,
 }
 
 impl BindingOverlay {
@@ -782,6 +784,7 @@ fn poll_overlay(
     overlay.pad_held.clear();
     overlay.pad_just.clear();
     let sup = keys.any_pressed([KeyCode::SuperLeft, KeyCode::SuperRight]);
+    let was = std::mem::take(&mut overlay.pad_was);
     if !overlay.active || capture.typing || sup {
         return;
     }
@@ -801,8 +804,10 @@ fn poll_overlay(
     let pad_free = |b: &bevy::input::gamepad::GamepadButton| {
         !capture.pad_all && !capture.pad_owned.contains(b) && !capture.pad_consumed.contains(b)
     };
-    let pad_down = |b| gamepads.iter().any(|p| p.pressed(b)) && pad_free(&b);
-    let pad_now = |b| gamepads.iter().any(|p| p.just_pressed(b)) && pad_free(&b);
+    // Down on any controller, a trigger once squeezed past its analog threshold; pressed this
+    // frame when it was not down the last.
+    let pad_down = |b| gamepads.iter().any(|p| kartcraft::input::pad_down(p, b)) && pad_free(&b);
+    let mut pad_was = Vec::new();
     for (k, command) in &dispatch.overlay {
         if !k.modifiers_held(alt, ctrl, shift) {
             continue;
@@ -812,7 +817,13 @@ fn poll_overlay(
             Some(BindKey::Key(n)) => (down.contains(&n), pressed_now.contains(&n)),
             Some(BindKey::Mouse(b)) => (buttons.pressed(b), buttons.just_pressed(b)),
             Some(BindKey::WheelUp | BindKey::WheelDown) => (false, false),
-            Some(BindKey::Pad(b)) => (pad_down(b), pad_now(b)),
+            Some(BindKey::Pad(b)) => {
+                let down = pad_down(b);
+                if down && !pad_was.contains(&b) {
+                    pad_was.push(b);
+                }
+                (down, down && !was.contains(&b))
+            }
             // A lone modifier, held as `modifiers_held` found it.
             None => {
                 let mods = [
@@ -845,6 +856,7 @@ fn poll_overlay(
             just_list.push(name);
         }
     }
+    overlay.pad_was = pad_was;
 }
 
 /// A base key's release: drop its latch and run the command's `runOnUp` up-half, even while

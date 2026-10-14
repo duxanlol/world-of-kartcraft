@@ -24,6 +24,7 @@
     <Binding name="KARTCRAFT_SUMMON">-- the kart reads the press: Summon Kart, or in and out</Binding>
     <Binding name="KARTCRAFT_RACEFINDER">BenillaKartFinder_Toggle()</Binding>
     <Binding name="KARTCRAFT_LEAVERACE">BenillaKart_LeaveRace()</Binding>
+    <Binding name="KARTCRAFT_UNSTUCK">BenillaKart_Unstuck()</Binding>
     <Binding name="KARTCRAFT_SETTINGS">BenillaKartSettings_Toggle()</Binding>
     <Binding name="KARTCRAFT_GARAGE">BenillaKartGarage_Toggle()</Binding>
     <Binding name="KARTCRAFT_CLEANSCREEN">BenillaKart_CleanScreen()</Binding>

@@ -63,6 +63,7 @@
         BINDING_NAME_KARTCRAFT_SUMMON = "Summon / Dismiss Kart"
         BINDING_NAME_KARTCRAFT_RACEFINDER = "Race Finder"
         BINDING_NAME_KARTCRAFT_LEAVERACE = "Leave Race"
+        BINDING_NAME_KARTCRAFT_UNSTUCK = "Unstuck"
         BINDING_NAME_KARTCRAFT_SETTINGS = "Kartcraft Settings"
         BINDING_NAME_KARTCRAFT_GARAGE = "Kart Garage"
         BINDING_NAME_KARTCRAFT_CLEANSCREEN = "Clean Screen (hide all interface)"

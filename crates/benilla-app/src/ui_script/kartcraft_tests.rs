@@ -1328,7 +1328,7 @@ fn key_bindings_lists_the_kart_s_controls_and_they_run() {
     let _l = ENV_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let s = loaded();
+    let mut s = loaded();
     s.run("BenillaKeyBindings_BuildSections()").unwrap();
     let (label, names): (String, String) = s
         .eval(
@@ -1350,7 +1350,7 @@ fn key_bindings_lists_the_kart_s_controls_and_they_run() {
         names,
         "Accelerate,Brake / Reverse,Steer Left,Steer Right,Hop / Powerslide,\
          Boost (Second Shoulder),Fire Item,Toggle Camera Distance,Look Back,Wumpa Juice,Turbo Boost,Super Engine,Aku Aku,\
-         Summon / Dismiss Kart,Race Finder,Leave Race,Kartcraft Settings,Kart Garage,\
+         Summon / Dismiss Kart,Race Finder,Leave Race,Unstuck,Kartcraft Settings,Kart Garage,\
          Clean Screen (hide all interface),Free Camera (fly, park, off),Next Kart,\
          Kartcraft Guide,Kartcraft Menu"
     );
@@ -1362,6 +1362,10 @@ fn key_bindings_lists_the_kart_s_controls_and_they_run() {
     assert!(s
         .eval::<bool>("return BenillaKartFinderFrame:IsVisible() == 1")
         .unwrap());
+    // Unstuck asks the server as the menu's entry does.
+    sent(&mut s);
+    s.run("RunBinding('KARTCRAFT_UNSTUCK')").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT	R	U"]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 

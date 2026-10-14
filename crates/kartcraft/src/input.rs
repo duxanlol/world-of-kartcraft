@@ -61,7 +61,7 @@ pub struct Keys {
 impl Keys {
     /// The controller's fixed layout ([`PAD_LAYOUT`]), for a host with no bindings.
     pub fn from_pad(pad: &Gamepad) -> Keys {
-        let pressed = |b| pad.pressed(b);
+        let pressed = |b| pad_down(pad, b);
         let just = |b| pad.just_pressed(b);
         Keys {
             accelerate: pressed(GamepadButton::South) || pressed(GamepadButton::RightTrigger2),
@@ -111,10 +111,41 @@ impl Keys {
 /// interface holds); `all`: the interface holds the whole pad, its stick too.
 pub fn read(keys: &Keys, pad_keys: &Keys, pads: &Query<&Gamepad>, all: bool) -> Controls {
     let keyboard = from_keys(keys);
-    match pads.iter().next().filter(|_| !all) {
-        Some(pad) => merge(from_pad(pad, pad_keys), keyboard),
-        None => keyboard,
+    if all || pads.is_empty() {
+        return keyboard;
     }
+    merge(from_pad(stick(pads), pad_keys), keyboard)
+}
+
+/// The left stick of whichever controller leans furthest, and the furthest down any is held: a
+/// second device that reports as a pad (a mapping-less virtual one) never hides the real one's.
+pub fn stick(pads: &Query<&Gamepad>) -> Vec2 {
+    let axis = |p: &Gamepad, a| p.get(a).unwrap_or(0.0).clamp(-1.0, 1.0);
+    lean(pads.iter().map(|p| {
+        Vec2::new(
+            axis(p, GamepadAxis::LeftStickX),
+            axis(p, GamepadAxis::LeftStickY),
+        )
+    }))
+}
+
+/// [`stick`]'s choice among the pads' sticks: the widest lean across, the furthest down.
+fn lean(sticks: impl Iterator<Item = Vec2>) -> Vec2 {
+    sticks.fold(Vec2::ZERO, |acc, s| {
+        Vec2::new(
+            if s.x.abs() > acc.x.abs() { s.x } else { acc.x },
+            acc.y.min(s.y),
+        )
+    })
+}
+
+/// How far a trigger (or any button with an analog travel) must go to count as pressed, as the
+/// kart's triggers always took a light squeeze.
+pub const ANALOG_PRESS: f32 = 0.4;
+
+/// Whether `pad` holds `b`: pressed, or squeezed past [`ANALOG_PRESS`].
+pub fn pad_down(pad: &Gamepad, b: GamepadButton) -> bool {
+    pad.pressed(b) || pad.get(b).unwrap_or(0.0) > ANALOG_PRESS
 }
 
 /// The controller's default layout by binding name (`PAD1` ✕ or A, `PAD2` ○ or B, `PAD3` □ or
@@ -171,14 +202,11 @@ fn merge(pad: Controls, keys: Controls) -> Controls {
     }
 }
 
-/// The first pad's controls: its stick, and its buttons as `keys` resolves them. The stick steers
+/// The pads' controls: the stick ([`stick`]), and the buttons as `keys` resolves them. The stick steers
 /// once it leans (raw: the driving model applies CTR's own dead zone and response curve), else
 /// buttons bound to steering do; down on it reverses, with the brake (CTR's □).
-fn from_pad(pad: &Gamepad, keys: &Keys) -> Controls {
-    let stick = pad
-        .get(GamepadAxis::LeftStickX)
-        .unwrap_or(0.0)
-        .clamp(-1.0, 1.0);
+fn from_pad(stick_at: Vec2, keys: &Keys) -> Controls {
+    let stick = stick_at.x;
     let buttons = f32::from(i8::from(keys.right)) - f32::from(i8::from(keys.left));
     Controls {
         steer: if stick.abs() > STICK_OVER_KEYS {
@@ -188,7 +216,7 @@ fn from_pad(pad: &Gamepad, keys: &Keys) -> Controls {
         },
         accelerate: keys.accelerate,
         brake: keys.brake,
-        reverse: pad.get(GamepadAxis::LeftStickY).unwrap_or(0.0) < -0.6,
+        reverse: stick_at.y < -0.6,
         hop: keys.hop,
         hop_alt: keys.boost,
         fire: keys.fire,
@@ -270,9 +298,8 @@ mod tests {
 
     #[test]
     fn a_pad_s_buttons_drive_as_bound_and_its_brake_reverses_only_with_the_stick() {
-        let pad = Gamepad::default();
         let c = from_pad(
-            &pad,
+            Vec2::ZERO,
             &Keys {
                 brake: true,
                 left: true,
@@ -297,6 +324,17 @@ mod tests {
             })
             .reverse
         );
+    }
+
+    #[test]
+    fn a_resting_phantom_pad_does_not_hide_the_real_stick() {
+        // A mapping-less device that reports as a pad, idle, beside the real one steering left
+        // and held down; in either order.
+        let phantom = Vec2::ZERO;
+        let real = Vec2::new(-0.8, -0.7);
+        assert_eq!(lean([phantom, real].into_iter()), real);
+        assert_eq!(lean([real, phantom].into_iter()), real);
+        assert_eq!(lean(std::iter::empty()), Vec2::ZERO);
     }
 
     #[test]
