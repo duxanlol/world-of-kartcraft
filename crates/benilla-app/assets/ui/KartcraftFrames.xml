@@ -1041,7 +1041,7 @@
             { "RightTrigger", "R1 / RB", "Hop and powerslide" },
             { "LeftTrigger", "L1 / LB", "Boost" },
             { "RightTrigger2", "R2 / RT", "Hold with the D-pad: abilities" },
-            { "LeftTrigger2", "L2 / LT", "Brake" },
+            { "LeftTrigger2", "L2 / LT", "Hold with a button: its L2 binding" },
             { "DPadUp", "D-pad up", "R2 + up: ability 1" },
             { "DPadRight", "D-pad right", "Steer; R2 + right: ability 2" },
             { "DPadDown", "D-pad down", "Reverse; R2 + down: ability 3" },

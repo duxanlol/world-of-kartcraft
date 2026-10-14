@@ -385,6 +385,13 @@ fn the_controller_capsule_holds_the_pad_buttons_apart_from_the_keys() {
     assert!(press(&mut s, "SHIFT-PADDUP"));
     assert_eq!(holder(&s, "SHIFT-PADDUP"), "MOVEFORWARD");
     assert!(pad_text(&s).contains("R2 + "), "{}", pad_text(&s));
+    // L2 is the pad's other modifier: alone nothing, with a button its CTRL- chord, "L2 + ".
+    s.run(&format!("{ROW}3Key3Button:Click()")).unwrap();
+    assert!(press(&mut s, "PADLTRIGGER"));
+    assert!(armed(&s), "L2 alone is a modifier, not a key");
+    assert!(press(&mut s, "CTRL-PADDLEFT"));
+    assert_eq!(holder(&s, "CTRL-PADDLEFT"), "MOVEFORWARD");
+    assert!(pad_text(&s).contains("L2 + "), "{}", pad_text(&s));
     // Escape disarms the Controller capsule.
     s.run(&format!("{ROW}3Key3Button:Click()")).unwrap();
     press(&mut s, "ESCAPE");

@@ -86,6 +86,40 @@ impl BindingDispatch {
             .iter()
             .any(|(k, _)| k.key == Some(key) && k.modifiers_held(alt, ctrl, shift))
     }
+
+    /// Whether an overlay key is exactly this chord.
+    fn overlay_has(&self, chord: Chord) -> bool {
+        self.overlay.iter().any(|(k, _)| k.is(chord))
+    }
+
+    /// What a controller button pressed with these modifiers held means (Kartcraft's deviation,
+    /// `chord::PAD_BUTTONS`): its chord with them when anything, a plane key or a binding, is
+    /// bound to that, else the button alone. So R2 and up is R2 and up's binding and never up's
+    /// too, and a modifier held for nothing leaves the button its own.
+    fn pad_chord(
+        &self,
+        b: bevy::input::gamepad::GamepadButton,
+        alt: bool,
+        ctrl: bool,
+        shift: bool,
+    ) -> Chord {
+        let exact = Chord {
+            alt,
+            ctrl,
+            shift,
+            key: BindKey::Pad(b),
+        };
+        if self.map.contains_key(&exact) || self.overlay_has(exact) {
+            exact
+        } else {
+            Chord {
+                alt: false,
+                ctrl: false,
+                shift: false,
+                key: BindKey::Pad(b),
+            }
+        }
+    }
 }
 
 /// One overlay key: a chord, or a lone modifier (`SHIFT-`, a key string `SetBinding` accepts,
@@ -126,6 +160,12 @@ impl OverlayKey {
     /// stop the gas on `W`.
     fn modifiers_held(&self, alt: bool, ctrl: bool, shift: bool) -> bool {
         (!self.alt || alt) && (!self.ctrl || ctrl) && (!self.shift || shift)
+    }
+
+    /// Whether this key is exactly `chord`, its modifiers and its base input.
+    fn is(&self, chord: Chord) -> bool {
+        self.key == Some(chord.key)
+            && (self.alt, self.ctrl, self.shift) == (chord.alt, chord.ctrl, chord.shift)
     }
 }
 
@@ -652,32 +692,26 @@ fn latch_and_dispatch(
     }
 
     // ── Controller buttons ── Kartcraft's deviation (`chord::PAD_BUTTONS`): a press is a key
-    // press by its `PAD` name, as a modifier-held one is its chord; R2 held is the pad's Shift
-    // (`kartcraft::input::PAD_MODIFIER`). Not while typing, not one the interface took first
-    // (`UiKeyboardCapture::pad_consumed`: a key-capture frame, the layer's menus and popups), and
-    // not one bound in the overlay's plane while its mode is on (the kart's driving buttons), as a
-    // key there is not.
-    let pad_shift = shift
-        || gamepads
-            .iter()
-            .any(|p| kartcraft::input::pad_down(p, kartcraft::input::PAD_MODIFIER));
+    // press by its `PAD` name, as a modifier-held one is its chord ([`BindingDispatch::pad_chord`]);
+    // R2 held is the pad's Shift and L2 its Ctrl (`kartcraft::input::PAD_MODIFIER`, `PAD_CTRL`).
+    // Not while typing, not one the interface took first (`UiKeyboardCapture::pad_consumed`: a
+    // key-capture frame, the layer's menus and popups), and not one bound in the overlay's plane
+    // while its mode is on (the kart's driving buttons), as a key there is not.
+    let held_on_pad = |m| gamepads.iter().any(|p| kartcraft::input::pad_down(p, m));
+    let pad_shift = shift || held_on_pad(kartcraft::input::PAD_MODIFIER);
+    let pad_ctrl = ctrl || held_on_pad(kartcraft::input::PAD_CTRL);
     for pad in &gamepads {
         for &b in pad.get_just_pressed() {
+            let chord = dispatch.pad_chord(b, alt, pad_ctrl, pad_shift);
             if typing
                 || sup
                 || capture.pad_consumed.contains(&b)
-                || (overlay.active && dispatch.overlay_takes(BindKey::Pad(b), alt, ctrl, pad_shift))
+                || (overlay.active && dispatch.overlay_has(chord))
                 || state.latched.iter().any(|(k, _)| *k == Held::Pad(b))
             {
                 continue;
             }
-            let chord = Chord {
-                alt,
-                ctrl,
-                shift: pad_shift,
-                key: BindKey::Pad(b),
-            };
-            if let Some(command) = dispatch.resolve(chord, false) {
+            if let Some(command) = dispatch.map.get(&chord) {
                 press(&mut state, &mut script, command, Held::Pad(b));
             }
         }
@@ -816,29 +850,23 @@ fn poll_overlay(
     // frame when it was not down the last.
     let pad_down = |b| gamepads.iter().any(|p| kartcraft::input::pad_down(p, b)) && pad_free(&b);
     let mut pad_was = Vec::new();
-    // R2 held is the pad's Shift; with it, a button bound both ways is its `SHIFT-` binding
-    // alone (R2 and Left is the ability, not the steer).
-    let pad_shift = shift
-        || gamepads
-            .iter()
-            .any(|p| kartcraft::input::pad_down(p, kartcraft::input::PAD_MODIFIER));
-    let shifted: Vec<bevy::input::gamepad::GamepadButton> = dispatch
-        .overlay
-        .iter()
-        .filter_map(|(k, _)| match k.key {
-            Some(BindKey::Pad(b)) if k.shift => Some(b),
-            _ => None,
-        })
-        .collect();
+    // R2 held is the pad's Shift and L2 its Ctrl; a button is the one chord those make of it
+    // ([`BindingDispatch::pad_chord`]): R2 and Left is the ability, not the steer.
+    let held_on_pad = |m| gamepads.iter().any(|p| kartcraft::input::pad_down(p, m));
+    let pad_shift = shift || held_on_pad(kartcraft::input::PAD_MODIFIER);
+    let pad_ctrl = ctrl || held_on_pad(kartcraft::input::PAD_CTRL);
     for (k, command) in &dispatch.overlay {
         let pad = matches!(k.key, Some(BindKey::Pad(_)));
-        let held_shift = if pad { pad_shift } else { shift };
-        if !k.modifiers_held(alt, ctrl, held_shift) {
-            continue;
-        }
-        if let Some(BindKey::Pad(b)) = k.key {
-            if pad_shift && !k.shift && shifted.contains(&b) {
-                continue;
+        match k.key {
+            Some(BindKey::Pad(b)) => {
+                if !k.is(dispatch.pad_chord(b, alt, pad_ctrl, pad_shift)) {
+                    continue;
+                }
+            }
+            _ => {
+                if !k.modifiers_held(alt, ctrl, shift) {
+                    continue;
+                }
             }
         }
         let (held, just) = match k.key {
@@ -1182,6 +1210,99 @@ mod tests {
         app.update();
         assert!(!state(&app).ran("KARTSUMMON"));
         assert_eq!(lua_count(&app, "KART_RAN"), 0, "a plane body never runs");
+    }
+
+    /// A pad modifier held (R2 the pad's Shift, L2 its Ctrl), a button is the binding of that
+    /// chord alone when there is one, a driving control or any other: D-pad up is the gas, R2 and
+    /// up the ability or whatever else R2 and up runs, never the gas too. Held for a chord nothing
+    /// binds, the button stays its own.
+    #[test]
+    fn a_held_pad_modifier_takes_its_button_from_the_plain_binding() {
+        use bevy::input::gamepad::{
+            Gamepad, GamepadButton, GamepadSettings, RawGamepadButtonChangedEvent, RawGamepadEvent,
+        };
+        let mut app = plane_harness();
+        app.world_mut().resource_mut::<BindingOverlay>().active = true;
+        let bind = |app: &App, lua: &str| {
+            app.world()
+                .non_send_resource::<UiScript>()
+                .run(lua)
+                .unwrap();
+        };
+        bind(
+            &app,
+            "SetBinding('PADDUP', 'KARTGAS') SetBinding('SHIFT-PADDUP', 'KARTABILITY1')",
+        );
+        let pad = app
+            .world_mut()
+            .spawn((Gamepad::default(), GamepadSettings::default()))
+            .id();
+        // As a controller's driver sends it, so the frame's just-pressed edges are bevy's own.
+        let button = |app: &mut App, b: GamepadButton, down: bool| {
+            app.world_mut().write_message(RawGamepadEvent::Button(
+                RawGamepadButtonChangedEvent::new(pad, b, if down { 1.0 } else { 0.0 }),
+            ));
+            app.update();
+        };
+        let up = GamepadButton::DPadUp;
+
+        // Up alone: the gas.
+        button(&mut app, up, true);
+        assert!(overlay(&app).pad_held("KARTGAS"), "up drives");
+        assert!(!overlay(&app).pad_just_pressed("KARTABILITY1"));
+        button(&mut app, up, false);
+
+        // R2 held, then up: the ability, and not the gas.
+        button(&mut app, GamepadButton::RightTrigger2, true);
+        button(&mut app, up, true);
+        assert!(
+            overlay(&app).pad_just_pressed("KARTABILITY1"),
+            "R2 and up is the ability"
+        );
+        assert!(
+            !overlay(&app).pad_held("KARTGAS"),
+            "R2 and up does not drive"
+        );
+        button(&mut app, up, false);
+
+        // Down drives too, and R2 and down is an ordinary command's alone: that command runs, the
+        // gas does not.
+        bind(
+            &app,
+            "SetBinding('PADDDOWN', 'KARTGAS') SetBinding('SHIFT-PADDDOWN', 'KARTSUMMON')",
+        );
+        let down = GamepadButton::DPadDown;
+        button(&mut app, down, true);
+        assert_eq!(lua_count(&app, "SUMMONS"), 1, "R2 and down summons");
+        assert!(!overlay(&app).pad_held("KARTGAS"), "and does not drive");
+        button(&mut app, down, false);
+        button(&mut app, GamepadButton::RightTrigger2, false);
+        button(&mut app, down, true);
+        assert!(overlay(&app).pad_held("KARTGAS"), "down alone drives");
+        assert_eq!(lua_count(&app, "SUMMONS"), 1, "and summons nothing");
+        button(&mut app, down, false);
+
+        // L2 is the pad's Ctrl: L2 and up its own binding, not the gas either.
+        bind(&app, "SetBinding('CTRL-PADDUP', 'KARTFIRE')");
+        button(&mut app, GamepadButton::LeftTrigger2, true);
+        button(&mut app, up, true);
+        assert!(
+            overlay(&app).pad_just_pressed("KARTFIRE"),
+            "L2 and up fires"
+        );
+        assert!(
+            !overlay(&app).pad_held("KARTGAS"),
+            "L2 and up does not drive"
+        );
+        button(&mut app, up, false);
+
+        // A modifier held over a chord nothing binds leaves the button its own.
+        bind(&app, "SetBinding('CTRL-PADDUP')");
+        button(&mut app, up, true);
+        assert!(
+            overlay(&app).pad_held("KARTGAS"),
+            "L2 held for nothing still drives"
+        );
     }
 
     /// A rebind moves what the poll reads: Fire off E onto F.

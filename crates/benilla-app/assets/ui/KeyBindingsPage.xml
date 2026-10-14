@@ -118,12 +118,15 @@
                 return strsub(prefix, 1, -2)
             end
             -- Kartcraft's controller buttons, which 1.12 has no KEY_* name for; R2 is the pad's
-            -- Shift, so a pad button's SHIFT- reads "R2 + ".
+            -- Shift and L2 its Ctrl, so a pad button's SHIFT- reads "R2 + " and its CTRL- "L2 + ".
             local pad = BENILLA_KEY_PADS and BENILLA_KEY_PADS[rest]
             if not pad and string.sub(rest, 1, 3) == "PAD" then pad = rest end
             if pad then
                 if string.find(prefix, "SHIFT-", 1, 1) then
                     prefix = string.gsub(prefix, "SHIFT%-", "") .. "R2 + "
+                end
+                if string.find(prefix, "CTRL-", 1, 1) then
+                    prefix = string.gsub(prefix, "CTRL%-", "") .. "L2 + "
                 end
                 return prefix .. pad
             end
@@ -456,8 +459,8 @@
             else
                 chord = arg1
             end
-            -- A modifier alone is no key; R2 is the controller's (Kartcraft's).
-            if chord == "UNKNOWN" or chord == "SHIFT" or chord == "CTRL" or chord == "ALT" or chord == "PADRTRIGGER" then
+            -- A modifier alone is no key; R2 and L2 are the controller's (Kartcraft's).
+            if chord == "UNKNOWN" or chord == "SHIFT" or chord == "CTRL" or chord == "ALT" or chord == "PADRTRIGGER" or chord == "PADLTRIGGER" then
                 return
             end
             if IsShiftKeyDown() then chord = "SHIFT-" .. chord end

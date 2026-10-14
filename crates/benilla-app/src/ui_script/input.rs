@@ -132,16 +132,16 @@ pub(super) fn feed_pad(
                 capture.pad_consumed.push(b);
                 continue;
             }
-            // R2 held is the pad's Shift: a key-capture frame gets that press as its SHIFT- chord.
-            let modified = b != kartcraft::input::PAD_MODIFIER
-                && pads
-                    .iter()
-                    .any(|p| kartcraft::input::pad_down(p, kartcraft::input::PAD_MODIFIER));
-            let chord = if modified {
-                format!("SHIFT-{name}")
-            } else {
-                name.to_string()
-            };
+            // R2 held is the pad's Shift and L2 its Ctrl: a key-capture frame gets that press as
+            // its CTRL-SHIFT- chord, in the reference's modifier order.
+            let held = |m| b != m && pads.iter().any(|p| kartcraft::input::pad_down(p, m));
+            let mut chord = name.to_string();
+            if held(kartcraft::input::PAD_MODIFIER) {
+                chord = format!("SHIFT-{chord}");
+            }
+            if held(kartcraft::input::PAD_CTRL) {
+                chord = format!("CTRL-{chord}");
+            }
             let taken = script.frame_key_input(&chord)
                 || script
                     .eval::<bool>(&format!(

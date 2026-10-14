@@ -1,10 +1,11 @@
 //! The kart's controls, through [`Keys`] twice over: the keyboard's and the controller's buttons,
 //! each the host's rebindable bindings or a fixed layout ([`Keys::from_keyboard`],
 //! [`Keys::from_pad`]), and the controller's left stick, which steers and, held down, reverses.
-//! The pad's default layout is CTR's on a PlayStation pad (✕ accelerates, □ or L2 brakes, R1 and L1
+//! The pad's default layout is CTR's on a PlayStation pad (✕ accelerates, □ brakes, R1 and L1
 //! hop, powerslide and boost, ○ fires the held item, the D-pad steers and its down reverses as the
-//! stick does), an Xbox pad by position. R2 is the pad's modifier, as Shift is the keyboard's
-//! ([`PAD_MODIFIER`]): R2 with the D-pad uses the abilities. Select swaps the camera's distance and
+//! stick does), an Xbox pad by position. R2 and L2 are the pad's modifiers, as Shift and Ctrl are
+//! the keyboard's ([`PAD_MODIFIER`], [`PAD_CTRL`]): R2 with the D-pad uses the abilities, and L2
+//! with a button is a binding of its own. Select swaps the camera's distance and
 //! the right stick's click looks back, CTR's L2 and R2. A pad's brake is CTR's □: it reverses with
 //! down held (stick or D-pad), where the keyboard's brake reverses alone.
 
@@ -70,7 +71,7 @@ impl Keys {
         let modifier = pressed(PAD_MODIFIER);
         Keys {
             accelerate: pressed(GamepadButton::South),
-            brake: pressed(GamepadButton::West) || pressed(GamepadButton::LeftTrigger2),
+            brake: pressed(GamepadButton::West),
             left: !modifier && pressed(GamepadButton::DPadLeft),
             right: !modifier && pressed(GamepadButton::DPadRight),
             hop: pressed(GamepadButton::RightTrigger),
@@ -165,6 +166,9 @@ fn lean(sticks: impl Iterator<Item = Vec2>) -> Vec2 {
 /// The pad's modifier, held as the keyboard's Shift is: a button pressed with it is its
 /// `SHIFT-` binding (R2 with the D-pad, the abilities).
 pub const PAD_MODIFIER: GamepadButton = GamepadButton::RightTrigger2;
+/// The pad's second modifier, held as the keyboard's Ctrl is: a button pressed with it is its
+/// `CTRL-` binding (none by default, the player's to bind).
+pub const PAD_CTRL: GamepadButton = GamepadButton::LeftTrigger2;
 
 /// How far a trigger (or any button with an analog travel) must go to count as pressed, as the
 /// kart's triggers always took a light squeeze.
@@ -181,7 +185,6 @@ pub fn pad_down(pad: &Gamepad, b: GamepadButton) -> bool {
 pub const PAD_LAYOUT: &[(&str, PadControl)] = &[
     ("PAD1", PadControl::Accelerate),
     ("PAD3", PadControl::Brake),
-    ("PADLTRIGGER", PadControl::Brake),
     ("PADDLEFT", PadControl::SteerLeft),
     ("PADDRIGHT", PadControl::SteerRight),
     ("PADDDOWN", PadControl::Reverse),

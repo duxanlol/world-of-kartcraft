@@ -5,8 +5,8 @@
 //! and sit out of the kart; while we drive they are the kart's alone. The controller's buttons are
 //! bindings too, Kartcraft's deviation: each driving control ships with its pad button beside its
 //! keys ([`kartcraft::input::PAD_LAYOUT`]), rebindable on the Key Bindings page's Controller
-//! column: the D-pad steers and reverses as the left stick does, and R2 is the pad's Shift, so the
-//! abilities are R2 with the D-pad (`SHIFT-PADDUP`, ...). Summon Kart is an ordinary binding,
+//! column: the D-pad steers and reverses as the left stick does, and R2 is the pad's Shift and L2
+//! its Ctrl, so the abilities are R2 with the D-pad (`SHIFT-PADDUP`, ...). Summon Kart is an ordinary binding,
 //! read by its press.
 
 use kartcraft::input::Keys;
@@ -82,7 +82,6 @@ const DEFAULTS: &[(&str, &str)] = &[
     // drives, R2 with it uses the abilities.
     ("PAD1", ACCELERATE),
     ("PAD3", BRAKE),
-    ("PADLTRIGGER", BRAKE),
     ("PADDLEFT", STEER_LEFT),
     ("PADDRIGHT", STEER_RIGHT),
     ("PADDDOWN", REVERSE),
@@ -201,7 +200,7 @@ mod tests {
         };
         // Each driving control: its keys, then its controller buttons.
         assert_eq!(keys(ACCELERATE), ["W", "UP", "PAD1"]);
-        assert_eq!(keys(BRAKE), ["S", "DOWN", "PAD3", "PADLTRIGGER"]);
+        assert_eq!(keys(BRAKE), ["S", "DOWN", "PAD3"]);
         assert_eq!(keys(STEER_LEFT), ["A", "LEFT", "PADDLEFT"]);
         assert_eq!(keys(STEER_RIGHT), ["D", "RIGHT", "PADDRIGHT"]);
         assert_eq!(keys(REVERSE), ["PADDDOWN"]);

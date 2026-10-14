@@ -131,6 +131,11 @@ const VERDICTS: &[(&str, Verdict)] = &[
     ("RawHandleWrapper", Plumbing),
     // winit's own windows, borrowed only to give the window its icon (`window_icon.rs`).
     ("WINIT_WINDOWS", Plumbing),
+    // A bindings test drives a pad through bevy's own processing with these; the client reads a
+    // pad only as its processed `Gamepad`.
+    ("GamepadSettings", Plumbing),
+    ("RawGamepadButtonChangedEvent", Plumbing),
+    ("RawGamepadEvent", Plumbing),
     ("Window", Plumbing),
     ("WindowLevel", Plumbing),
     ("WindowMode", Plumbing),
