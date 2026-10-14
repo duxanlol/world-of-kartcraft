@@ -4,11 +4,12 @@
 #   powershell -ExecutionPolicy Bypass -File dist\publish.ps1 -NoBuild  reuse target-dist's game build
 #   powershell -ExecutionPolicy Bypass -File dist\publish.ps1 -Channel staging   to the testers
 #
-# Two channels: production (the players') and staging (the testers', on the staging server). A
-# release goes to staging first; once tested, `-Channel production -NoBuild` publishes the very
-# same game binaries to the players. Only the launcher is built for each channel, since it carries
-# the channel's server and update address in itself. Staging's package and updates are kept apart
-# in dist\staging\, and uploaded under `staging/` in the storage account's website.
+# Two channels: production (the players') and staging (the testers', on the staging server). Only
+# the launcher is built for each channel, since it carries the channel's server and update address
+# in itself; `-NoBuild` packages another channel from the same game binaries. Staging's package and
+# updates are kept apart in dist\staging\, and uploaded under `staging/` in the storage website.
+# Releases are GitHub's Release workflow (.github/workflows/release.yml), which runs this for both
+# channels, and dist/promote.sh; this by hand is for a local build or a release without GitHub.
 #
 # It leaves three things in dist\:
 #   WorldOfKartcraft\      the client folder (the binaries, launcher, updater, docs, source.zip)
@@ -25,7 +26,11 @@
 #   AZURE_STORAGE=name    also upload dist\updates to that storage account's static website
 # .setup\publish-staging.cfg, read over it for -Channel staging, names the staging server, its
 # update address (the website's `staging` folder) and its sign-up page.
-param([switch]$NoBuild, [ValidateSet('production', 'staging')][string]$Channel = 'production')
+#
+# -Version stamps the package (default: now); GitHub's Release workflow gives one build's two
+# channels the same.
+param([switch]$NoBuild, [ValidateSet('production', 'staging')][string]$Channel = 'production',
+    [string]$Version = (Get-Date -Format 'yyyy.MM.dd-HHmm'))
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
@@ -142,7 +147,7 @@ New-Zip $src $zip
 Remove-Item -Recurse -Force $src
 
 Write-Host '== dist\updates =='
-$version = Get-Date -Format 'yyyy.MM.dd-HHmm'
+$version = $Version
 $objects = Join-Path $updates 'files'
 New-Item -ItemType Directory -Force -Path $objects | Out-Null
 $names = @($shipped.Keys) + 'Play Kartcraft.bat', 'Demo.bat', 'play-proton.sh', 'README.txt', 'update.ps1', 'defaults.cfg', 'source.zip'
@@ -211,7 +216,7 @@ Remove-Item -Recurse -Force $stage
 $mb = [math]::Round((Get-Item $full).Length / 1MB, 1)
 Write-Host ''
 Write-Host "Published $version to $Channel."
-Write-Host "  New friends: send dist\WorldOfKartcraft\Kartcraft Launcher.exe, or the zip ($mb MB)."
+Write-Host "  New friends: send $client\Kartcraft Launcher.exe, or the zip ($mb MB)."
 if ($settings['AZURE_STORAGE']) {
     Write-Host "  Everyone else updates the next time they start the game, from Azure storage."
 } else {

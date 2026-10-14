@@ -793,11 +793,14 @@ impl Races {
         (r.go_at.is_some() && !r.done).then_some(r.ground_types && !r.time_trial)
     }
 
-    /// Whether the kart must hold on the line: a countdown is running.
+    /// Whether we must hold on the line, in the kart or on foot (out of it for the grid's
+    /// teleport until it comes back): a countdown is running, or a time trial waits for one,
+    /// which the track browser's starts only once we are on its grid in the kart.
     pub(crate) fn holding(&self, now: f32) -> bool {
-        self.race
-            .as_ref()
-            .is_some_and(|r| r.go_at.is_some_and(|go| now < go))
+        self.race.as_ref().is_some_and(|r| match r.go_at {
+            Some(go) => now < go,
+            None => r.time_trial,
+        })
     }
 }
 
@@ -2415,6 +2418,27 @@ mod tests {
         assert!(!races.time_trial());
         assert_eq!(races.weapons_race(), Some(8), "a race has its weapons");
         assert!(!races.run().unwrap().time_trial);
+    }
+
+    #[test]
+    fn the_start_holds_us_from_the_countdown_or_a_time_trial_s_wait_until_go() {
+        let mut races = racer();
+        hear(&mut races, "L\t5\tRacer,Goblin", 1.0);
+        assert!(!races.holding(1.0), "waiting at the start: free to move");
+        hear(&mut races, "G\t5\t8000\tRacer,Goblin", 2.0);
+        assert!(races.holding(9.9), "the countdown");
+        assert!(!races.holding(10.0), "GO");
+
+        // The track browser's time trial: held from its line, through its countdown, until GO.
+        let mut races = racer();
+        hear(&mut races, "L\t7\tRacer", 1.0);
+        hear(&mut races, "TT\t7", 1.0);
+        assert!(races.holding(30.0), "on the way to the grid");
+        hear(&mut races, "G\t7\t5000\tRacer", 30.0);
+        assert!(races.holding(34.9));
+        assert!(!races.holding(35.0));
+        hear(&mut races, "X", 40.0);
+        assert!(!races.holding(40.0), "left");
     }
 
     #[test]

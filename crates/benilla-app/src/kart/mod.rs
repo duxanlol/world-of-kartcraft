@@ -69,6 +69,9 @@ pub(crate) struct KartDrive {
     pub(crate) fov: f32,
     /// Drive with the chase camera rather than our follow camera (`KartChaseCamera`).
     pub(crate) engine_camera: bool,
+    /// A race's start holds us on the line ([`race::Races::holding`]): on foot too, out of the
+    /// kart for the grid's teleport, we may turn but not walk or jump.
+    pub(crate) held: bool,
 }
 
 /// The kart's drive for the frame, which writes [`KartDrive`].
@@ -205,6 +208,7 @@ fn update(
 ) {
     let now = time.elapsed_secs();
     let host = &mut *host;
+    drive.held = races.holding(now);
     show.hear(now);
     // On a Kartcraft server the Summon Kart aura is the ride.
     let server_kart = profession.server_kart();
