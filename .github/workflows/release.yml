@@ -1,0 +1,134 @@
+# Builds the clients, Windows and Mac, from the branch it is started on (the staging branch, by
+# deploy-staging.sh or Actions → "Release" → Run workflow) and publishes them to the testers. It
+# runs only when started by hand.
+#
+# Each platform is built once and packaged twice, with the same version: for staging (its launcher
+# and presets name the staging server; uploaded to the website's staging/ folder, live at once) and
+# for production (the players' launcher and presets; uploaded to candidate/, where nothing looks).
+# dist/promote.sh later copies candidate/ to the players' folders, so the players get the very
+# files the testers had and promotion builds nothing.
+#
+# Settings (Settings → Secrets and variables → Actions):
+#   variables  KARTCRAFT_SERVER, KARTCRAFT_UPDATE_URL, KARTCRAFT_REGISTER_URL — production's
+#              presets (.setup/publish.cfg on the maintainer's machine);
+#              KARTCRAFT_STAGING_SERVER, KARTCRAFT_STAGING_UPDATE_URL, KARTCRAFT_STAGING_REGISTER_URL
+#              — staging's (.setup/publish-staging.cfg);
+#              AZURE_STORAGE — the storage account whose $web container is the website.
+#   secret     AZURE_STORAGE_KEY — that account's key. Without AZURE_STORAGE nothing is uploaded and
+#              the packages are only the run's artifacts.
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.stamp.outputs.version }}
+    steps:
+      - id: stamp
+        run: echo "version=$(TZ=Europe/Vienna date +%Y.%m.%d-%H%M)" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: rustup toolchain install && rustc -V
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-windows
+          workspaces: ". -> target-dist"
+      - name: Presets
+        shell: bash
+        run: |
+          mkdir -p .setup
+          printf 'SERVER=%s\nUPDATE_URL=%s\nREGISTER_URL=%s\n' "${{ vars.KARTCRAFT_SERVER }}" "${{ vars.KARTCRAFT_UPDATE_URL }}" "${{ vars.KARTCRAFT_REGISTER_URL }}" > .setup/publish.cfg
+          printf 'SERVER=%s\nUPDATE_URL=%s\nREGISTER_URL=%s\n' "${{ vars.KARTCRAFT_STAGING_SERVER }}" "${{ vars.KARTCRAFT_STAGING_UPDATE_URL }}" "${{ vars.KARTCRAFT_STAGING_REGISTER_URL }}" > .setup/publish-staging.cfg
+      - name: Package for staging
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File dist\publish.ps1 -Channel staging -Version $env:VERSION
+      - name: Package for production
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File dist\publish.ps1 -Channel production -NoBuild -Version $env:VERSION
+      - name: Keep the packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: world-of-kartcraft-windows-${{ env.VERSION }}
+          path: |
+            dist/staging/WorldOfKartcraft.zip
+            dist/WorldOfKartcraft.zip
+          retention-days: 30
+          if-no-files-found: error
+      - name: Upload
+        if: vars.AZURE_STORAGE != ''
+        shell: bash
+        env:
+          ACCOUNT: ${{ vars.AZURE_STORAGE }}
+          KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+          WEB: ${{ vars.KARTCRAFT_UPDATE_URL }}
+        run: |
+          dist/upload.sh dist/updates candidate/ "dist/WorldOfKartcraft/Kartcraft Launcher.exe" candidate/KartcraftLauncher.exe
+          dist/upload.sh dist/staging/updates staging/ "dist/staging/WorldOfKartcraft/Kartcraft Launcher.exe" staging/KartcraftLauncher.exe
+
+  macos:
+    needs: version
+    runs-on: macos-14
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: rustup toolchain install && rustup target add x86_64-apple-darwin && rustc -V
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-macos
+          workspaces: ". -> target-dist"
+      - name: Presets
+        run: |
+          mkdir -p .setup
+          printf 'SERVER=%s\nUPDATE_URL=%s\nREGISTER_URL=%s\n' "${{ vars.KARTCRAFT_SERVER }}" "${{ vars.KARTCRAFT_UPDATE_URL }}" "${{ vars.KARTCRAFT_REGISTER_URL }}" > .setup/production.cfg
+          printf 'SERVER=%s\nUPDATE_URL=%s\nREGISTER_URL=%s\n' "${{ vars.KARTCRAFT_STAGING_SERVER }}" "${{ vars.KARTCRAFT_STAGING_UPDATE_URL }}" "${{ vars.KARTCRAFT_STAGING_REGISTER_URL }}" > .setup/staging.cfg
+      - name: Package for staging
+        run: PUBLISH_CFG=.setup/staging.cfg KARTCRAFT_OUT=dist/macos/out/staging dist/macos/package.sh
+      - name: Package for production
+        run: PUBLISH_CFG=.setup/production.cfg dist/macos/package.sh --launcher-only
+      - name: Keep the packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: world-of-kartcraft-macos-${{ env.VERSION }}
+          path: |
+            dist/macos/out/staging/World of Kartcraft.zip
+            dist/macos/out/World of Kartcraft.zip
+          retention-days: 30
+          if-no-files-found: error
+      - name: Upload
+        if: vars.AZURE_STORAGE != ''
+        env:
+          ACCOUNT: ${{ vars.AZURE_STORAGE }}
+          KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+          WEB: ${{ vars.KARTCRAFT_UPDATE_URL }}
+        run: |
+          dist/upload.sh dist/macos/out/updates candidate/macos/ "dist/macos/out/World of Kartcraft.zip" "candidate/macos/World of Kartcraft.zip"
+          dist/upload.sh dist/macos/out/staging/updates staging/macos/ "dist/macos/out/staging/World of Kartcraft.zip" "staging/macos/World of Kartcraft.zip"
