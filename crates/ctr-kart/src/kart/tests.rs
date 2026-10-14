@@ -1099,3 +1099,62 @@ fn the_camera_reads_the_blast_and_the_ground_under_the_kart() {
     assert!(c.blasted && !c.grounded, "{c:?}");
     assert!(c.ground.abs() < 1e-3, "the floor is in reach: {c:?}");
 }
+
+#[test]
+fn a_powerslide_spin_out_keeps_the_reserves_and_a_hit_clears_them() {
+    let w = world(floor(200000.0));
+    let mut kart = drifting(&w);
+    kart.reserves = 1500;
+    kart.drift_frames = DRIFT_FRAMES_TILL_SPINOUT + 1;
+    kart.tick(
+        &w,
+        &Input {
+            steer: -1.0,
+            r1: true,
+            ..GAS
+        },
+        &NONE,
+    );
+    assert!(matches!(kart.state, State::Spinning(_)));
+    // Drained a frame's worth, not wiped (`VehPhysProc.c:2859-2909` leaves them).
+    assert_eq!(kart.reserves(), 1500 - MS);
+    let mut hit = cruising(&w);
+    hit.reserves = 1500;
+    hit.hit(HitKind::SpinOut);
+    hit.tick(&w, &GAS, &NONE);
+    assert_eq!(hit.reserves(), 0);
+}
+
+#[test]
+fn braking_on_a_turbo_pad_keeps_its_boost_and_off_it_clears_it() {
+    let w = world(floor(40000.0));
+    let brake = Input { brake: true, ..GAS };
+    // On the pad, Square counts as let go while the boost lasts.
+    let mut kart = cruising(&w);
+    kart.turbo_pad();
+    kart.tick(&w, &GAS, &NONE);
+    let held = kart.reserves();
+    assert!(held > 0);
+    kart.turbo_pad();
+    kart.tick(&w, &brake, &NONE);
+    assert!(kart.reserves() > 0, "braking on the pad kept the boost");
+    assert_eq!(kart.flags & BRAKE_WITH_ACCEL, 0);
+    // Off it, the brake clears them.
+    kart.tick(&w, &brake, &NONE);
+    assert_eq!(kart.reserves(), 0);
+}
+
+#[test]
+fn super_engine_tops_up_only_moving_on_the_gas_without_the_brake() {
+    let w = world(floor(40000.0));
+    let engine = Modifiers {
+        super_engine: true,
+        ..NONE
+    };
+    let mut kart = cruising(&w);
+    kart.tick(&w, &GAS, &engine);
+    assert!(kart.reserves() > 0);
+    // A power brake (gas and brake) stops the top-up, and the brake clears what was there.
+    kart.tick(&w, &Input { brake: true, ..GAS }, &engine);
+    assert_eq!(kart.reserves(), 0);
+}

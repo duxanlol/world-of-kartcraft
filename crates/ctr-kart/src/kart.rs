@@ -1090,6 +1090,8 @@ impl Kart {
         self.speed = 0;
         self.speed_approx = 0;
         self.reserves = 0;
+        // `turbo_outsideTimer` goes with them (`VehStuckProc.c:639-640`, `:884-885`).
+        self.turbo_outside = 0;
         self.state = State::Normal;
         self.turbo_meter = 0;
         self.turn_angle = 0;
@@ -1534,9 +1536,10 @@ impl Kart {
         )
     }
 
-    /// `VehFire_Increment` (7.1); false when the state refuses it.
+    /// `VehFire_Increment` (7.1); false when the state refuses it: spinning, blasted or carried
+    /// by Aku Aku, and no other (`VehFire.c:142-155`).
     fn fire_increment(&mut self, reserves: i32, kind: FireKind, fire: i32) -> bool {
-        if self.blasted || matches!(self.state, State::Spinning(_) | State::Crashing(_)) {
+        if self.blasted || self.grab.is_some() || matches!(self.state, State::Spinning(_)) {
             return false;
         }
         let cap = SINGLE_TURBO_SPEED + ((fire * (SACRED_FIRE_SPEED - SINGLE_TURBO_SPEED)) >> 8);
@@ -1887,7 +1890,8 @@ impl Kart {
         let lim = DRIFT_FRAMES_TILL_SPINOUT;
         if self.drift_frames > lim {
             self.spin_out(SPIN_MS);
-        } else if self.speed_approx < 0 {
+        } else if self.speed_approx < 0 && !self.on_pad {
+            // Backwards off a turbo pad (`VehPhysProc.c:2547-2551`).
             self.spin_out(REVERSE_SPIN_MS);
         } else if self.drift_frames < -lim
             || self.speed < self.stats.speed / 2
@@ -1906,12 +1910,13 @@ impl Kart {
         self.events.push(Event::DriftEnd);
     }
 
-    /// A powerslide spun out (`VehPhysProc.c:2542-2552`): SpinFirst at once, `ms` locked out.
+    /// A powerslide spun out (`VehPhysProc.c:2542-2552`): SpinFirst at once, `ms` locked out. The
+    /// reserves stay and keep draining: neither the spin-out nor `VehPhysProc_SpinFirst_Init`
+    /// clears them (`:2859-2909`), only a hit does.
     fn spin_out(&mut self, ms: i32) {
         self.no_input = ms;
         self.spin_init();
         self.events.push(Event::DriftSpinOut);
-        self.reserves = 0;
     }
 
     /// PHYS_LINEAR (3.1, 3.2, 4.1): timers, the jump button, throttle, the steer command.
@@ -1955,16 +1960,15 @@ impl Kart {
             self.flags |= JUMP_BUTTON_HELD;
         }
 
-        if input.brake {
+        // Square clears the reserves only off a turbo pad, and on one with reserves it counts as
+        // let go until the boost is over (`VehPhysProc.c:953-963`, `:1015-1022`).
+        if input.brake && !self.on_pad {
             self.reserves = 0;
         }
-        if mods.super_engine && input.gas {
-            let fire = if mods.wumpa >= 10 { 256 } else { 128 };
-            self.fire_increment(SUPER_ENGINE_RESERVES, FireKind::SuperEngine, fire);
-        }
+        let brake = input.brake && !(self.on_pad && self.reserves != 0);
         let cross = input.gas || self.reserves != 0;
         let b = self.target_speed(mods);
-        let (gas, flags) = match (input.brake, cross, input.down) {
+        let (gas, flags) = match (brake, cross, input.down) {
             (false, true, _) => (b, 0),
             (false, false, false) => (0, 0),
             (false, false, true) => (-BACKWARD_SPEED, REVERSING),
@@ -1974,6 +1978,17 @@ impl Kart {
         };
         self.flags = (self.flags & !REVERSING) | flags;
         self.fire_speed = gas;
+        // Super Engine's top-up, once the gas is known (`VehPhysProc.c:1281-1308`): moving
+        // forward and not reversing, not braking with the gas, and refused under accel prevention
+        // as a turbo pad's is (`VehFire.c:118-127`).
+        if mods.super_engine
+            && input.gas
+            && gas > 0
+            && self.flags & (REVERSING | BRAKE_WITH_ACCEL | ACCEL_PREVENTION) == 0
+        {
+            let fire = if mods.wumpa >= 10 { 256 } else { 128 };
+            self.fire_increment(SUPER_ENGINE_RESERVES, FireKind::SuperEngine, fire);
+        }
         // A power brake at speed leaves the back tyres' marks (`VehPhysGeneral.c:435-450`).
         if self.flags & BRAKE_WITH_ACCEL != 0 && self.speed_approx > 0x300 {
             self.flags |= BACK_SKID;
