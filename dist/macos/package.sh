@@ -4,6 +4,12 @@
 #
 #   dist/macos/package.sh            build both architectures, bundle, sign, zip, publish folder
 #   dist/macos/package.sh --no-build  reuse target-dist's binaries
+#   dist/macos/package.sh --launcher-only  reuse target-dist's game binaries, build the launcher
+#                                     (another channel's package from the same build)
+#
+# PUBLISH_CFG names the presets file (default .setup/publish.cfg), KARTCRAFT_OUT the folder it
+# leaves its three things in (default dist/macos/out), VERSION the stamp (default now): GitHub's
+# Release workflow packages one build for both channels with them.
 #
 # It leaves three things in dist/macos/out/:
 #   World of Kartcraft.app   the bundle: a universal (Apple Silicon + Intel) client, the launcher,
@@ -28,7 +34,8 @@ set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 dist="$repo/dist/macos"
-out="$dist/out"
+out="${KARTCRAFT_OUT:-$dist/out}"
+mkdir -p "$out" && out="$(cd "$out" && pwd)"
 app="$out/World of Kartcraft.app"
 updates="$out/updates"
 target_dir="$repo/target-dist"
@@ -38,27 +45,32 @@ export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-11.0}"
 
 build=1
 [ "${1:-}" = "--no-build" ] && build=0
+[ "${1:-}" = "--launcher-only" ] && build=launcher
+cfg="${PUBLISH_CFG:-$repo/.setup/publish.cfg}"
 
 # ── Presets ──────────────────────────────────────────────────────────────────────────────────────
 SERVER="" UPDATE_URL="" REGISTER_URL="" DEVELOPER_ID=""
-if [ -f "$repo/.setup/publish.cfg" ]; then
+if [ -f "$cfg" ]; then
     while IFS='=' read -r key value; do
         value="${value%$'\r'}"
         case "$key" in
         SERVER | UPDATE_URL | REGISTER_URL | DEVELOPER_ID) printf -v "$key" '%s' "$value" ;;
         esac
-    done <"$repo/.setup/publish.cfg"
+    done <"$cfg"
 fi
 
 # ── Build ────────────────────────────────────────────────────────────────────────────────────────
-if [ "$build" = 1 ]; then
+if [ "$build" != 0 ]; then
     cd "$repo"
     export CARGO_TARGET_DIR="$target_dir"
     for t in "${targets[@]}"; do
         rustup target add "$t" >/dev/null 2>&1 || true
-        echo "== Building for $t (player build) =="
-        cargo build --release --target "$t" -p benilla --no-default-features
-        cargo build --release --target "$t" -p kart-demo -p ctr-assets
+        if [ "$build" = 1 ]; then
+            echo "== Building for $t (player build) =="
+            cargo build --release --target "$t" -p benilla --no-default-features
+            cargo build --release --target "$t" -p kart-demo -p ctr-assets
+        fi
+        echo "== Building the launcher for $t (server ${SERVER:-none}) =="
         # The launcher carries the presets in itself: it is one file, with no defaults.cfg beside it.
         KARTCRAFT_SERVER="$SERVER" KARTCRAFT_UPDATE_URL="$UPDATE_URL" KARTCRAFT_REGISTER_URL="$REGISTER_URL" \
             cargo build --release --target "$t" -p kartcraft-launcher
@@ -86,7 +98,7 @@ join kartcraft-demo kartcraft-demo
 join ctr-extract ctr-extract
 join kartcraft-launcher "Kartcraft Launcher"
 
-version="$(date +%Y.%m.%d-%H%M)"
+version="${VERSION:-$(date +%Y.%m.%d-%H%M)}"
 # The launcher is the bundle's executable: a double-click opens it, and it starts the game.
 cat >"$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
