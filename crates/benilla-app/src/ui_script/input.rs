@@ -86,7 +86,7 @@ fn feed_wheel(
 /// load is not the interface's until let go.
 pub(super) fn feed_pad(
     script: Option<NonSendMut<UiScript>>,
-    pads: Query<&bevy::input::gamepad::Gamepad>,
+    pads: Query<&bevy::input::gamepad::Gamepad, Without<kartcraft::input::PadIgnored>>,
     time: Res<Time>,
     cover: Option<Res<crate::loading_screen::LoadingScreen>>,
     mut capture: ResMut<UiKeyboardCapture>,

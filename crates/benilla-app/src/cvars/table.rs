@@ -790,6 +790,19 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "1",
         "Kartcraft's own — CTR's race music; 1.12 has no kart",
     ),
+    // The controller the kart, the bindings and the menus read when several are connected
+    // (`kart::settings::choose_pads`): its key (`kartcraft::input::pad_key`), empty for any; and
+    // the connected ones for the settings window's dropdown, `key|name` joined by `;`, this run's.
+    ours(
+        "KartPad",
+        "",
+        "Kartcraft's own — the controller to drive with; 1.12 has no kart",
+    ),
+    ours(
+        "KartPads",
+        "",
+        "Kartcraft's own — the controllers connected; 1.12 has no kart",
+    ),
     // What we wear on the kart, as the server last said (`kartcraft::cosmetic`): set by the layer
     // from the server's answer, so for the session only.
     ours(

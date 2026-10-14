@@ -91,7 +91,10 @@ const PAD_TOKENS: [(bevy::input::gamepad::GamepadButton, &str); 18] = {
 /// [`kartcraft::input::read`] would drive with.
 pub(super) fn pad_view(
     settings: Res<super::settings::KartSettings>,
-    pads: Query<(&bevy::input::gamepad::Gamepad, Option<&Name>)>,
+    pads: Query<
+        (&bevy::input::gamepad::Gamepad, Option<&Name>),
+        Without<kartcraft::input::PadIgnored>,
+    >,
     mut overlay: ResMut<KartOverlay>,
 ) {
     use bevy::input::gamepad::{GamepadAxis, GamepadButton};

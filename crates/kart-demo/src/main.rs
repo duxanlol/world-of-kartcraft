@@ -404,6 +404,7 @@ fn drive(
             .next()
             .map(input::Keys::from_pad)
             .unwrap_or_default();
+        let pads: Vec<&Gamepad> = pads.iter().collect();
         input::read(&input::Keys::from_keyboard(&keys), &pad_keys, &pads, false)
     };
     // The autopilot fires now and then while it holds an item (a shield or a bomb it keeps).

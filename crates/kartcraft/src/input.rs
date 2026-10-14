@@ -109,7 +109,7 @@ impl Keys {
 /// The keyboard's controls and the first connected pad's together: `keys` the keyboard's buttons,
 /// `pad_keys` the controller's (the host's bindings resolve both, leaving out a button the
 /// interface holds); `all`: the interface holds the whole pad, its stick too.
-pub fn read(keys: &Keys, pad_keys: &Keys, pads: &Query<&Gamepad>, all: bool) -> Controls {
+pub fn read(keys: &Keys, pad_keys: &Keys, pads: &[&Gamepad], all: bool) -> Controls {
     let keyboard = from_keys(keys);
     if all || pads.is_empty() {
         return keyboard;
@@ -117,9 +117,24 @@ pub fn read(keys: &Keys, pad_keys: &Keys, pads: &Query<&Gamepad>, all: bool) -> 
     merge(from_pad(stick(pads), pad_keys), keyboard)
 }
 
+/// A controller the player did not choose (the host's controller setting): nothing reads it.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct PadIgnored;
+
+/// A controller's identity across runs, as the controller setting names it: its USB vendor and
+/// product ids and the name the OS gives it (`054c:0ce6:PS5 Controller`).
+pub fn pad_key(name: &str, vendor: Option<u16>, product: Option<u16>) -> String {
+    format!(
+        "{:04x}:{:04x}:{}",
+        vendor.unwrap_or(0),
+        product.unwrap_or(0),
+        name.replace([';', '|'], " ").trim()
+    )
+}
+
 /// The left stick of whichever controller leans furthest, and the furthest down any is held: a
 /// second device that reports as a pad (a mapping-less virtual one) never hides the real one's.
-pub fn stick(pads: &Query<&Gamepad>) -> Vec2 {
+pub fn stick(pads: &[&Gamepad]) -> Vec2 {
     let axis = |p: &Gamepad, a| p.get(a).unwrap_or(0.0).clamp(-1.0, 1.0);
     lean(pads.iter().map(|p| {
         Vec2::new(

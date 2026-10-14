@@ -18,6 +18,7 @@ mod garage;
 mod ghost;
 mod ground;
 pub(crate) mod marshals;
+mod pad_choice;
 mod pads;
 mod profession;
 mod race;
@@ -165,7 +166,7 @@ fn update(
         Res<crate::bindings::BindingsState>,
         ResMut<crate::cvars::Cvars>,
     ),
-    pads: Query<&Gamepad>,
+    pads: Query<&Gamepad, Without<input::PadIgnored>>,
     ui: Res<crate::ui_script::UiKeyboardCapture>,
     player: Res<crate::player::Player>,
     collide: WorldCollision,
@@ -362,7 +363,7 @@ fn update(
         input::read(
             &bindings::keys(&overlay),
             &bindings::pad_keys(&overlay),
-            &pads,
+            &pads.iter().collect::<Vec<_>>(),
             ui.pad_all,
         )
     };
@@ -645,6 +646,8 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<race::GuideHud>()
         .init_resource::<settings::KartSettings>()
         .add_observer(settings::on_cvar)
+        .init_resource::<pad_choice::PadChoice>()
+        .add_observer(pad_choice::on_cvar)
         .add_systems(
             Startup,
             (kartcraft::hud::spawn, |_: Commands| {
@@ -655,7 +658,8 @@ pub(crate) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                input::log_pads,
+                // The controller chosen, before anything reads the pads.
+                (input::log_pads, pad_choice::update).chain(),
                 race_name,
                 pads::feed,
                 showcase::hook,

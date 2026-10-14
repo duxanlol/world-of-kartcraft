@@ -2167,6 +2167,41 @@ fn the_garage_shows_the_look_and_wears_only_what_is_earned() {
 }
 
 #[test]
+fn the_settings_pick_the_controller_among_those_connected() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    s.run("SetCVar('KartPads', '0000:0000:|Controller 0000:0000;054c:0ce6:PS5 Controller|PS5 Controller')")
+        .unwrap();
+    s.run("BenillaKartSettings_Toggle()").unwrap();
+    let label = |s: &mut UiScript| -> String {
+        s.eval("return UIDropDownMenu_GetText(BenillaKartSettingsFramePad) or ''")
+            .unwrap()
+    };
+    assert_eq!(label(&mut s), "Any controller");
+    s.run("BenillaKartSettingsFramePadButton:Click()").unwrap();
+    s.tick(0.0);
+    pick(&mut s, "PS5 Controller");
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartPad')").unwrap(),
+        "054c:0ce6:PS5 Controller"
+    );
+    assert_eq!(label(&mut s), "PS5 Controller");
+    // Chosen but unplugged: the window says every pad drives meanwhile.
+    s.run("SetCVar('KartPads', '0000:0000:|Controller 0000:0000') BenillaKartSettings_Refresh()")
+        .unwrap();
+    assert_eq!(label(&mut s), "Not connected (any used)");
+    // Back to any.
+    s.run("BenillaKartSettingsFramePadButton:Click()").unwrap();
+    s.tick(0.0);
+    pick(&mut s, "Any controller");
+    assert_eq!(s.eval::<String>("return GetCVar('KartPad')").unwrap(), "");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+#[test]
 fn the_replays_window_lists_the_kept_races_and_plays_one() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK

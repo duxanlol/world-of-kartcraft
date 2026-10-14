@@ -642,6 +642,8 @@ fn load_config(world: &mut World) {
         // A replay plays, and the list of them is made, in this run only.
         cvars.own_for_session("KartReplay", None);
         cvars.own_for_session("KartReplays", None);
+        // The connected controllers are this run's.
+        cvars.own_for_session("KartPads", None);
         // The paint and trail come from the server at each login.
         cvars.own_for_session("KartPaint", None);
         cvars.own_for_session("KartTrail", None);
@@ -1968,8 +1970,9 @@ mod tests {
 
     /// The string-valued rows, a closed list, each default checked on its own terms: `realmName`
     /// (the reference's registered `""`, `0x882748`), `gxApi` and the kart's `KartReplay` and
-    /// `KartReplays` (the replay playing and those on disk, `kart::replay`) are empty until the
-    /// session writes them; `gxResolution`, `realmList` and the kart garage's `KartClass` and `KartRacer` pass
+    /// `KartReplays` (the replay playing and those on disk, `kart::replay`) and `KartPads` (the
+    /// controllers connected) are empty until the session writes them, and `KartPad` (the
+    /// controller chosen) is empty for any; `gxResolution`, `realmList` and the kart garage's `KartClass` and `KartRacer` pass
     /// their observers' parsers ([`crate::video::parse_resolution`],
     /// [`crate::realmlist::normalize`], [`kartcraft::class_named`], `ctr-extract`'s racers).
     #[test]
@@ -1985,6 +1988,8 @@ mod tests {
             vec![
                 "KartClass",
                 "KartFreeCam",
+                "KartPad",
+                "KartPads",
                 "KartRacer",
                 "KartReplay",
                 "KartReplays",
@@ -2003,6 +2008,8 @@ mod tests {
         };
         assert_eq!(default_of("realmName"), "");
         assert_eq!(default_of("gxApi"), "");
+        assert_eq!(default_of("KartPad"), "");
+        assert_eq!(default_of("KartPads"), "");
         assert_eq!(default_of("KartReplay"), "");
         assert_eq!(default_of("KartReplays"), "");
         assert_eq!(

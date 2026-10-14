@@ -496,7 +496,10 @@ fn latch_and_dispatch(
     mut notches: Local<WheelNotches>,
     mut focus_lost: MessageReader<bevy::input::keyboard::KeyboardFocusLost>,
     cover: Option<Res<crate::loading_screen::LoadingScreen>>,
-    (overlay, gamepads): (Res<BindingOverlay>, Query<&bevy::input::gamepad::Gamepad>),
+    (overlay, gamepads): (
+        Res<BindingOverlay>,
+        Query<&bevy::input::gamepad::Gamepad, Without<kartcraft::input::PadIgnored>>,
+    ),
 ) {
     state.just.clear();
     state.fired.clear();
@@ -775,7 +778,7 @@ fn poll_overlay(
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
     capture: Res<UiKeyboardCapture>,
-    gamepads: Query<&bevy::input::gamepad::Gamepad>,
+    gamepads: Query<&bevy::input::gamepad::Gamepad, Without<kartcraft::input::PadIgnored>>,
     mut overlay: ResMut<BindingOverlay>,
 ) {
     let overlay = &mut *overlay;

@@ -74,11 +74,11 @@ impl Rumble {
     }
 }
 
-/// Hands this frame's pulses to every gamepad (where the app reads gamepads at all), unless
-/// the host turned the rumble off.
+/// Hands this frame's pulses to every gamepad the player drives with (none ignored,
+/// [`crate::input::PadIgnored`]), unless the host turned the rumble off.
 pub fn send(
     mut rumble: ResMut<Rumble>,
-    pads: Query<Entity, With<Gamepad>>,
+    pads: Query<Entity, (With<Gamepad>, Without<crate::input::PadIgnored>)>,
     requests: Option<ResMut<Messages<GamepadRumbleRequest>>>,
 ) {
     let pulses = std::mem::take(&mut rumble.pulses);

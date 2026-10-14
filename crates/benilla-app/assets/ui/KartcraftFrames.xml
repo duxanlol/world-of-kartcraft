@@ -1811,8 +1811,50 @@
         end
 
         -- The controls from the CVars; `refreshing` keeps a slider's echo from writing back.
+        -- ── The controller to drive with (KartPad, kart/pad_choice.rs) ──
+        -- The connected ones, from the engine's KartPads: "key|name" joined by ";".
+        function BenillaKartSettings_Pads()
+            local list = {}
+            for entry in string.gfind(GetCVar("KartPads") or "", "[^;]+") do
+                local _, _, key, name = string.find(entry, "^([^|]*)|(.*)$")
+                if key then table.insert(list, { key = key, name = name }) end
+            end
+            return list
+        end
+
+        function BenillaKartSettings_PadLabel()
+            local chosen = GetCVar("KartPad") or ""
+            if chosen == "" then return "Any controller" end
+            local pads = BenillaKartSettings_Pads()
+            for i = 1, table.getn(pads) do
+                if pads[i].key == chosen then return pads[i].name end
+            end
+            return "Not connected (any used)"
+        end
+
+        function BenillaKartSettings_PadMenu()
+            local chosen = GetCVar("KartPad") or ""
+            local info = { text = "Any controller", value = "", func = BenillaKartSettings_PadClick }
+            if chosen == "" then info.checked = 1 end
+            UIDropDownMenu_AddButton(info)
+            local pads = BenillaKartSettings_Pads()
+            for i = 1, table.getn(pads) do
+                info = { text = pads[i].name, value = pads[i].key, func = BenillaKartSettings_PadClick }
+                if pads[i].key == chosen then info.checked = 1 end
+                UIDropDownMenu_AddButton(info)
+            end
+        end
+
+        -- `this` is the list button.
+        function BenillaKartSettings_PadClick()
+            SetCVar("KartPad", this.value)
+            UIDropDownMenu_SetText(BenillaKartSettings_PadLabel(), BenillaKartSettingsFramePad)
+        end
+
         function BenillaKartSettings_Refresh()
             local frame = BenillaKartSettingsFrame
+            UIDropDownMenu_Initialize(BenillaKartSettingsFramePad, BenillaKartSettings_PadMenu)
+            UIDropDownMenu_SetText(BenillaKartSettings_PadLabel(), BenillaKartSettingsFramePad)
             frame.refreshing = 1
             BenillaKartSettingsFrameArrowShow:SetChecked(BenillaKart_Flag("KartArrowShow"))
             BenillaKartSettingsFrameArrowSize:SetValue(tonumber(GetCVar("KartArrowSize")) or 1)
@@ -2719,7 +2761,7 @@
     <!-- The settings: the guide arrow, the camera, the music, the minimap button, the ghost and
          the ground types, each a CVar set as it is clicked, as the stock option boxes are. -->
     <Frame name="BenillaKartSettingsFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="320" y="668"/></Size>
+        <Size><AbsDimension x="320" y="728"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -2755,6 +2797,9 @@
                 </FontString>
                 <FontString name="$parentMusicTitle" inherits="GameFontNormal" text="Music">
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-334"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentPadTitle" inherits="GameFontNormal" text="Controller">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-628"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
@@ -2836,6 +2881,10 @@
                     <OnValueChanged>BenillaKartSettings_Slide(this, "KartGateHeight")</OnValueChanged>
                 </Scripts>
             </Slider>
+            <!-- With several controllers connected, the one that drives (KartPad). -->
+            <Frame name="$parentPad" inherits="UIDropDownMenuTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="8" y="-644"/></Offset></Anchor></Anchors>
+            </Frame>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>
                 <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
@@ -2866,6 +2915,7 @@
                 BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameArrowFov, "Arrow field of view", 20, 110, 5, "Flat", "Wide")
                 BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameMusicVolume, "Music volume", 0, 1, 0.05, "Quiet", "Loud")
                 BenillaKartSettings_SetupSlider(BenillaKartSettingsFrameGateHeight, "Checkpoint gate height", 0, 40, 1, "Beams only", "Tall")
+                UIDropDownMenu_SetWidth(240, BenillaKartSettingsFramePad)
                 if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
                 BenillaKart_Movable(this)
             </OnLoad>
