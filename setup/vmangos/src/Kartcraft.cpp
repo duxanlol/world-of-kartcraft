@@ -936,6 +936,19 @@ namespace Kartcraft
         return best;
     }
 
+    // A new leader on a challenge's board, told to every player in the world: a system line to
+    // each session, whatever its map, zone, instance or faction (World::SendGlobalMessage).
+    static void AnnounceChallengeRecord(bool daily, std::string const& name, std::string const& course,
+        uint32 ms, std::string const& was)
+    {
+        Course const* c = FindCourse(course);
+        std::string text = std::string("|cffffd100") + (daily ? "Daily" : "Weekly") + " challenge record!|r " +
+            name + ": " + (c ? c->name : course) + " in " + Clock(ms) + was + ".";
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_SYSTEM, text.c_str());
+        sWorld.SendGlobalMessage(&data);
+    }
+
     // A time trial's finish on the day's or the week's course: a better time than the racer's
     // in the period goes on its board.
     static void ChallengeFinish(uint32 guid, std::string const& name, std::string const& course, uint32 ms)
@@ -945,6 +958,10 @@ namespace Kartcraft
         {
             if (board->course != course || !ms)
                 continue;
+            // The board's leader before this time, to tell a new record.
+            Record const* leader = ChallengeLeader(*board);
+            bool record = !leader || ms < leader->ms;
+            std::string was = leader ? " (was " + Clock(leader->ms) + " by " + leader->name + ")" : "";
             Record& best = board->bests[guid];
             if (best.ms && best.ms <= ms)
                 continue;
@@ -955,6 +972,8 @@ namespace Kartcraft
             CharacterDatabase.PExecute("REPLACE INTO `kartcraft_challenge` (`period`, `course`, `guid`, `name`, "
                 "`ms`, `at`) VALUES ('%s', '%s', %u, '%s', %u, %u)", board->period.c_str(), course.c_str(), guid,
                 escaped.c_str(), ms, uint32(std::time(nullptr)));
+            if (record)
+                AnnounceChallengeRecord(board == &s_daily, name, course, ms, was);
         }
     }
 
