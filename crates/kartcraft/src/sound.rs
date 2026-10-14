@@ -967,7 +967,8 @@ pub fn music_on() -> bool {
     std::env::var("WOW_KART_MUSIC").map_or(true, |v| v != "off") && !tracks().is_empty()
 }
 
-/// The track for this ride: `WOW_KART_MUSIC=<track>`, else a different one each time.
+/// The track for this ride: `WOW_KART_MUSIC=<track>`, else the next of a shuffled round, so every
+/// track plays once before any plays again.
 fn pick_track() -> Option<&'static Track> {
     let tracks = tracks();
     if let Ok(name) = std::env::var("WOW_KART_MUSIC") {
@@ -975,10 +976,48 @@ fn pick_track() -> Option<&'static Track> {
             return Some(t);
         }
     }
-    let seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos() as usize);
-    tracks.get(seed % tracks.len().max(1))
+    static ROUND: std::sync::Mutex<(Vec<usize>, Option<usize>)> =
+        std::sync::Mutex::new((Vec::new(), None));
+    let mut round = ROUND
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (left, last) = &mut *round;
+    let next = next_in_round(left, last, tracks.len(), random)?;
+    tracks.get(next)
+}
+
+/// The next index of a shuffled round of `0..n`: a new round when this one is spent, and one that
+/// does not open with the index played `last`.
+fn next_in_round(
+    left: &mut Vec<usize>,
+    last: &mut Option<usize>,
+    n: usize,
+    mut random: impl FnMut() -> u64,
+) -> Option<usize> {
+    if n == 0 {
+        return None;
+    }
+    if left.is_empty() || left.iter().any(|&i| i >= n) {
+        *left = (0..n).collect();
+        // Fisher-Yates; the round is popped from the back.
+        for i in (1..n).rev() {
+            left.swap(i, (random() % (i as u64 + 1)) as usize);
+        }
+        if n > 1 && left.last().copied() == *last {
+            left.swap(0, n - 1);
+        }
+    }
+    let next = left.pop()?;
+    *last = Some(next);
+    Some(next)
+}
+
+/// A random number: std's hasher keys are random per process and advance on every `new`.
+fn random() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    std::collections::hash_map::RandomState::new()
+        .build_hasher()
+        .finish()
 }
 
 impl Sounds {
@@ -1435,6 +1474,40 @@ mod tests {
         assert!(
             (periods - periods.round()).abs() < 1e-3,
             "{periods} periods"
+        );
+    }
+
+    /// Every song plays once before any repeats, and a round never opens with the last song, even
+    /// fed a Windows clock's numbers (nanoseconds in steps of 100, which picked 4 songs of 16).
+    #[test]
+    fn every_track_plays_once_a_round_and_never_twice_in_a_row() {
+        let mut clock = 0u64;
+        let mut random = || {
+            clock += 1_000_000_300;
+            clock
+        };
+        let (mut left, mut last) = (Vec::new(), None);
+        let mut prev = None;
+        for _ in 0..10 {
+            let mut round: Vec<usize> = (0..16)
+                .map(|_| super::next_in_round(&mut left, &mut last, 16, &mut random).unwrap())
+                .collect();
+            assert_ne!(
+                Some(round[0]),
+                prev,
+                "a round opens with the song just played"
+            );
+            prev = round.last().copied();
+            round.sort_unstable();
+            assert_eq!(round, (0..16).collect::<Vec<_>>());
+        }
+        assert_eq!(
+            super::next_in_round(&mut Vec::new(), &mut None, 0, || 0),
+            None
+        );
+        assert_eq!(
+            super::next_in_round(&mut Vec::new(), &mut Some(0), 1, || 0),
+            Some(0)
         );
     }
 }
