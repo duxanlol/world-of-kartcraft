@@ -713,7 +713,17 @@ pub(crate) mod schedule_tests {
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
+    #[cfg(not(target_os = "macos"))]
     const UPDATE_ACTIONABLE_CEILING: usize = 5_084;
+    /// macOS: eight more, all the native cursor's (`cursor::macos::drive`, eleven pairs in the
+    /// dump). Unlike `cursor::other::drive`, it reads `CameraControl`, `Cinematic` and the window
+    /// focus to hide the arrow while the camera is dragged or a cinematic plays, against their
+    /// writers (`player::controller::control`, `camera::latch_world_mouse`,
+    /// `camera_saved::load_camera_pose`, `camera_view::drain_view_requests`,
+    /// `ui_logout::drain_logout`, `cinematic::{drive, start_pending, take_trigger}`): a frame-old
+    /// value hides or shows the cursor a frame late, which no one sees.
+    #[cfg(target_os = "macos")]
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_092;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
