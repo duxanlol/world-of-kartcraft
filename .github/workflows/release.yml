@@ -1,4 +1,4 @@
-# Builds the clients, Windows and Mac, from the branch it is started on (the staging branch, by
+# Builds the clients, Windows, Mac and Linux, from the branch it is started on (the staging branch, by
 # deploy-staging.sh or Actions → "Release" → Run workflow) and publishes them to the testers. It
 # runs only when started by hand.
 #
@@ -132,3 +132,53 @@ jobs:
         run: |
           dist/upload.sh dist/macos/out/updates candidate/macos/ "dist/macos/out/World of Kartcraft.zip" "candidate/macos/World of Kartcraft.zip"
           dist/upload.sh dist/macos/out/staging/updates staging/macos/ "dist/macos/out/staging/World of Kartcraft.zip" "staging/macos/World of Kartcraft.zip"
+
+  # The Linux launcher, an AppImage (the game a Linux player runs is the Windows one, through
+  # Proton, from the Windows updates). Built in Debian 12, so it starts on Ubuntu 22.04 and newer.
+  linux:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Presets
+        run: |
+          mkdir -p .setup
+          printf 'SERVER=%s\nUPDATE_URL=%s\nREGISTER_URL=%s\n' "${{ vars.KARTCRAFT_SERVER }}" "${{ vars.KARTCRAFT_UPDATE_URL }}" "${{ vars.KARTCRAFT_REGISTER_URL }}" > .setup/production.cfg
+          printf 'SERVER=%s\nUPDATE_URL=%s\nREGISTER_URL=%s\n' "${{ vars.KARTCRAFT_STAGING_SERVER }}" "${{ vars.KARTCRAFT_STAGING_UPDATE_URL }}" "${{ vars.KARTCRAFT_STAGING_REGISTER_URL }}" > .setup/staging.cfg
+      - name: Package for staging
+        run: PUBLISH_CFG=.setup/staging.cfg KARTCRAFT_OUT=dist/linux/out/staging dist/appimage.sh
+      - name: Package for production
+        run: PUBLISH_CFG=.setup/production.cfg dist/appimage.sh
+      # Why it is built in Debian 12: Ubuntu 22.04 has glibc 2.35.
+      - name: glibc 2.35 at most
+        run: |
+          for image in "dist/linux/out/staging/Kartcraft Launcher.AppImage" "dist/linux/out/Kartcraft Launcher.AppImage"; do
+            rm -rf "$RUNNER_TEMP/squashfs-root"
+            (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/$image" --appimage-extract >/dev/null)
+            need=$(objdump -T "$RUNNER_TEMP/squashfs-root/usr/bin/kartcraft-launcher" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+            echo "$image needs $need"
+            [ "$(printf '%s\nGLIBC_2.35\n' "$need" | sort -V | tail -1)" = GLIBC_2.35 ]
+          done
+      - name: Keep the packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: world-of-kartcraft-linux-${{ env.VERSION }}
+          path: |
+            dist/linux/out/staging/Kartcraft Launcher.AppImage
+            dist/linux/out/Kartcraft Launcher.AppImage
+          retention-days: 30
+          if-no-files-found: error
+      - name: Upload
+        if: vars.AZURE_STORAGE != ''
+        env:
+          ACCOUNT: ${{ vars.AZURE_STORAGE }}
+          KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+          WEB: ${{ vars.KARTCRAFT_UPDATE_URL }}
+        run: |
+          dist/upload.sh dist/linux/out/updates candidate/linux/ "dist/linux/out/Kartcraft Launcher.AppImage" "candidate/linux/Kartcraft Launcher.AppImage"
+          dist/upload.sh dist/linux/out/staging/updates staging/linux/ "dist/linux/out/staging/Kartcraft Launcher.AppImage" "staging/linux/Kartcraft Launcher.AppImage"

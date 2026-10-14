@@ -33,13 +33,14 @@ while IFS= read -r name; do
     grep -qxF "$gz" <<<"$new" || grep -qxF "$gz" <<<"$old" || az storage blob delete -c '$web' -n "$name" "${auth[@]}" -o none
 done <<<"$remote"
 
-# The files a new player downloads: the Windows launcher, the Mac zip.
+# The files a new player downloads: the Windows launcher, the Mac zip, the Linux AppImage.
 while [ $# -ge 2 ]; do
     file="$1" blob="$2"
     shift 2
     echo "  $blob"
     case "$blob" in
     *.exe) az storage blob upload -c '$web' -n "$blob" -f "$file" --content-type application/vnd.microsoft.portable-executable --content-disposition "attachment; filename*=UTF-8''Kartcraft%20Launcher.exe" --content-cache-control no-cache --overwrite --no-progress "${auth[@]}" -o none ;;
+    *.AppImage) az storage blob upload -c '$web' -n "$blob" -f "$file" --content-type application/octet-stream --content-cache-control no-cache --overwrite --no-progress "${auth[@]}" -o none ;;
     *.zip) az storage blob upload -c '$web' -n "$blob" -f "$file" --content-type application/zip --content-cache-control no-cache --overwrite --no-progress "${auth[@]}" -o none ;;
     *) echo "upload.sh: no content type for $blob" >&2 && exit 1 ;;
     esac
