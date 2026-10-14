@@ -639,6 +639,9 @@ fn load_config(world: &mut World) {
         // The controller test is open, and its motor tried, for this run only.
         cvars.own_for_session("KartPadTest", None);
         cvars.own_for_session("KartPadRumble", None);
+        // A replay plays, and the list of them is made, in this run only.
+        cvars.own_for_session("KartReplay", None);
+        cvars.own_for_session("KartReplays", None);
         match stored {
             StoredConfig::Absent => {} // no file, hermetic capture, or no install
             StoredConfig::Bad(msg) => {

@@ -1092,6 +1092,7 @@
             { name = "BenillaKartCameraFrame" },
             { name = "BenillaKartGuideFrame", page = "BenillaKartGuide_Turn" },
             { name = "BenillaKartPadFrame" },
+            { name = "BenillaKartReplaysFrame" },
         }
         -- The popups the controller answers: Cross is the first button, Circle the second.
         BENILLA_PAD_POPUPS = { "BENILLA_KART_READY", "BENILLA_KART_RETURN" }
@@ -1290,6 +1291,8 @@
               function() BenillaKartMenu_OpenChallenge("weekly") end },
             { "Race Finder", function() BenillaKart_Open(BenillaKartFinderFrame) end },
             { "Tracks and time trials", function() BenillaKartTrackBrowser_Toggle() end },
+            { function() return BenillaKartReplays_Playing() and "Stop replay" or "Replays" end,
+              function() BenillaKartReplays_MenuClick() end },
             { function() return BenillaKartRaceMode and "Race mode: on" or "Race mode: off" end,
               function() BenillaKart_RaceModeToggle() end },
             { "Leave race", function() BenillaKart_LeaveRace() end },
@@ -1327,6 +1330,62 @@
             if DEFAULT_CHAT_FRAME then
                 DEFAULT_CHAT_FRAME:AddMessage(text, 1, 1, 0)
             end
+        end
+
+        -- ── Replays ──
+
+        -- The races we were in, kept by the engine (KartReplays: "token|label" newest first,
+        -- joined by ";"); KartReplay plays one ("0" none) while we sit in the kart.
+        BENILLA_KART_REPLAY_ROWS = 10
+
+        function BenillaKartReplays_Playing()
+            local v = GetCVar("KartReplay")
+            return v ~= nil and v ~= "" and v ~= "0"
+        end
+
+        function BenillaKartReplays_List()
+            local list = {}
+            for entry in string.gfind(GetCVar("KartReplays") or "", "[^;]+") do
+                local _, _, token, label = string.find(entry, "^([^|]+)|(.*)$")
+                if token then table.insert(list, { token = token, label = label }) end
+            end
+            return list
+        end
+
+        function BenillaKartReplays_Refresh()
+            local list = BenillaKartReplays_List()
+            BenillaKartReplayList = list
+            for i = 1, BENILLA_KART_REPLAY_ROWS do
+                local b = getglobal("BenillaKartReplaysFrameEntry" .. i)
+                if list[i] then
+                    b:SetText(list[i].label)
+                    b:Show()
+                else
+                    b:Hide()
+                end
+            end
+            if table.getn(list) == 0 then
+                BenillaKartReplaysFrameEmpty:Show()
+            else
+                BenillaKartReplaysFrameEmpty:Hide()
+            end
+        end
+
+        function BenillaKartReplays_MenuClick()
+            if BenillaKartReplays_Playing() then
+                SetCVar("KartReplay", "0")
+            else
+                BenillaKart_Open(BenillaKartReplaysFrame)
+            end
+        end
+
+        function BenillaKartReplays_Choose(i)
+            local r = BenillaKartReplayList and BenillaKartReplayList[i]
+            if not r then return end
+            BenillaKartReplaysFrame:Hide()
+            SetCVar("KartReplay", r.token)
+            BenillaKart_Say("Replay: " .. r.label .. ". It plays while you sit in your kart: steer to watch another racer, "
+                .. BenillaKartGuide_Key("KARTCRAFT_CAMERA", "L2") .. " to change the view, Stop replay in the Kartcraft menu to end it.")
         end
 
         -- ── The Kartcraft Guide ──
@@ -1659,6 +1718,7 @@
                 { text = "Race mode", func = BenillaKart_RaceModeToggle, checkable = 1, checked = BenillaKartRaceMode,
                   tooltipTitle = "Race mode", tooltipText = "Nobody can target or attack you, and you can't attack anyone: for waiting in the queue. Kept across logins." },
                 { text = "Track browser", func = BenillaKartTrackBrowser_Toggle },
+                { text = BenillaKartReplays_Playing() and "Stop replay" or "Replays...", func = BenillaKartReplays_MenuClick },
                 { text = "Show Race Marshals", func = BenillaKart_MarshalsToggle, checkable = 1,
                   checked = GetCVar("KartRaceMarshals") ~= "0", keepShownOnClick = 1,
                   tooltipTitle = "Show Race Marshals", tooltipText = "The Race Marshals on the minimap and the world map, where every course starts." },
@@ -3377,7 +3437,7 @@
     <!-- The Kartcraft menu (Options on the controller, KARTCRAFT_MENU): what racing needs, one
          entry each, for a player on the controller alone. -->
     <Frame name="BenillaKartMenuFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="280" y="396"/></Size>
+        <Size><AbsDimension x="280" y="422"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -3459,6 +3519,11 @@
                 <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-320"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
             </Button>
+            <Button name="$parentEntry13" inherits="UIPanelButtonTemplate" id="13">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-346"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>
                 <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
@@ -3478,6 +3543,103 @@
             <OnHide>PlaySound("igMainMenuClose")</OnHide>
             <OnDragStart>this:StartMoving()</OnDragStart>
             <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+    <Frame name="BenillaKartReplaysFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
+        <Size><AbsDimension x="400" y="370"/></Size>
+        <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
+            <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
+            <TileSize><AbsValue val="32"/></TileSize>
+            <EdgeSize><AbsValue val="32"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
+                    <Size><AbsDimension x="256" y="64"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
+                </Texture>
+                <FontString inherits="GameFontNormal" text="Replays">
+                    <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentEmpty" inherits="GameFontHighlight" text="No replays yet. Every race you run is kept here, the newest ten." hidden="true">
+                    <Size><AbsDimension x="320" y="60"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-60"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString inherits="GameFontDisableSmall" text="Plays while you sit in your kart. Steer to watch another racer.">
+                    <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="48"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <Button name="$parentEntry1" inherits="UIPanelButtonTemplate" id="1">
+                <Size><AbsDimension x="340" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-34"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry2" inherits="UIPanelButtonTemplate" id="2">
+                <Size><AbsDimension x="340" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-60"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry3" inherits="UIPanelButtonTemplate" id="3">
+                <Size><AbsDimension x="340" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-86"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry4" inherits="UIPanelButtonTemplate" id="4">
+                <Size><AbsDimension x="340" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-112"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry5" inherits="UIPanelButtonTemplate" id="5">
+                <Size><AbsDimension x="340" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-138"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry6" inherits="UIPanelButtonTemplate" id="6">
+                <Size><AbsDimension x="340" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-164"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry7" inherits="UIPanelButtonTemplate" id="7">
+                <Size><AbsDimension x="340" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-190"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry8" inherits="UIPanelButtonTemplate" id="8">
+                <Size><AbsDimension x="340" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-216"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry9" inherits="UIPanelButtonTemplate" id="9">
+                <Size><AbsDimension x="340" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-242"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry10" inherits="UIPanelButtonTemplate" id="10">
+                <Size><AbsDimension x="340" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-268"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartReplaysFrame:Hide()</OnClick></Scripts>
+            </Button>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
+                BenillaKart_Movable(this)
+            </OnLoad>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+            <OnShow>
+                BenillaKartReplays_Refresh()
+                PlaySound("igMainMenuOpen")
+            </OnShow>
+            <OnHide>PlaySound("igMainMenuClose")</OnHide>
         </Scripts>
     </Frame>
 

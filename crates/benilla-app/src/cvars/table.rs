@@ -790,6 +790,18 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "1",
         "Kartcraft's own — CTR's race music; 1.12 has no kart",
     ),
+    // The races we were in, to rewatch (`kart::replay`): the replay playing (`0` none), and the
+    // replays on disk for the Kartcraft menu's window; both for the session only.
+    ours(
+        "KartReplay",
+        "0",
+        "Kartcraft's own — the replay playing; 1.12 has no kart",
+    ),
+    ours(
+        "KartReplays",
+        "",
+        "Kartcraft's own — the replays kept; 1.12 has no kart",
+    ),
     // The ghost of our best run on a course, raced from GO (`kart::ghost`).
     ours(
         "KartGhost",

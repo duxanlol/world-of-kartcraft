@@ -22,6 +22,7 @@ mod pads;
 mod profession;
 mod race;
 mod remote;
+mod replay;
 mod score;
 mod seat;
 pub(crate) mod settings;
@@ -177,7 +178,18 @@ fn update(
     profession: profession::Profession,
     mut score: ResMut<score::KartScore>,
     settings: Res<settings::KartSettings>,
-    (remotes, mut extras, races, mut arms, mut rumble, mut show, mut free, mouse, buttons): (
+    (
+        remotes,
+        mut extras,
+        races,
+        mut arms,
+        mut rumble,
+        mut show,
+        mut free,
+        mouse,
+        buttons,
+        mut replays,
+    ): (
         Res<remote::RemoteKarts>,
         ResMut<kartcraft::hud::HudExtras>,
         Res<race::Races>,
@@ -187,6 +199,7 @@ fn update(
         ResMut<freecam::FreeCam>,
         Res<bevy::input::mouse::AccumulatedMouseMotion>,
         Res<ButtonInput<MouseButton>>,
+        ResMut<replay::Replays>,
     ),
 ) {
     let now = time.elapsed_secs();
@@ -352,7 +365,9 @@ fn update(
     let cycle = showing && controls.camera;
     // The free camera flying takes the controls; the kart holds still meanwhile.
     let fly = controls;
-    let controls = if showing || free.flying() {
+    // A replay playing steers with them instead (`replay`).
+    replays.feed(controls);
+    let controls = if showing || free.flying() || replays.playing() {
         input::Controls::default()
     } else {
         controls
@@ -618,6 +633,8 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<race::Races>()
         .init_resource::<race::RaceText>()
         .init_resource::<ghost::Ghosts>()
+        .init_resource::<replay::Replays>()
+        .add_observer(replay::on_cvar)
         .init_resource::<ui::KartOverlay>()
         // Before `CvarLoad`'s boot fold, which fires their observer.
         .init_resource::<race::GuideHud>()
@@ -643,7 +660,8 @@ pub(crate) fn plugin(app: &mut App) {
                 race::update,
                 showcase::banner,
                 sound::overtakes,
-                ghost::update,
+                // After the drive: a replay playing takes its camera.
+                (ghost::update, replay::update).chain(),
                 weapons::update,
                 race::beams,
                 race::guide,

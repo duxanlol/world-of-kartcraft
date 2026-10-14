@@ -742,6 +742,7 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
             "Race Finder",
             "Race mode",
             "Track browser",
+            "Replays...",
             "Show Race Marshals",
             "Leave race",
             "Unstuck",
@@ -2100,6 +2101,67 @@ fn the_menu_names_the_challenges_and_opens_their_course() {
             .unwrap(),
         "stormwind"
     );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+#[test]
+fn the_replays_window_lists_the_kept_races_and_plays_one() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let shown = |s: &mut UiScript, frame: &str| {
+        s.eval::<bool>(&format!("return {frame}:IsVisible() == 1"))
+            .unwrap()
+    };
+    s.run("SetCVar('KartReplays','000000000002-sprint|Northshire Sprint: 1st of 2, 1:02.40;000000000001-stormwind|Road to Stormwind: did not finish')")
+        .unwrap();
+    s.run("BenillaKartMenu_Toggle()").unwrap();
+    let entry = |s: &mut UiScript, i: u32| -> String {
+        s.eval(&format!("return BenillaKartMenuFrameEntry{i}:GetText()"))
+            .unwrap()
+    };
+    assert_eq!(entry(&mut s, 6), "Replays");
+    s.run("BenillaKartMenuFrameEntry6:Click()").unwrap();
+    assert!(shown(&mut s, "BenillaKartReplaysFrame"));
+    let row = |s: &mut UiScript, i: u32| -> (String, bool) {
+        (
+            s.eval(&format!(
+                "return BenillaKartReplaysFrameEntry{i}:GetText() or ''"
+            ))
+            .unwrap(),
+            s.eval::<bool>(&format!(
+                "return BenillaKartReplaysFrameEntry{i}:IsVisible() == 1"
+            ))
+            .unwrap(),
+        )
+    };
+    assert_eq!(
+        row(&mut s, 1),
+        ("Northshire Sprint: 1st of 2, 1:02.40".to_string(), true)
+    );
+    assert_eq!(row(&mut s, 2).0, "Road to Stormwind: did not finish");
+    assert!(!row(&mut s, 3).1, "only the kept ones");
+    // Choosing one plays it; the menu then offers to stop it.
+    s.run("BenillaKartReplaysFrameEntry2:Click()").unwrap();
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartReplay')").unwrap(),
+        "000000000001-stormwind"
+    );
+    assert!(!shown(&mut s, "BenillaKartReplaysFrame"));
+    s.run("BenillaKartMenu_Toggle()").unwrap();
+    assert_eq!(entry(&mut s, 6), "Stop replay");
+    s.run("BenillaKartMenuFrameEntry6:Click()").unwrap();
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartReplay')").unwrap(),
+        "0"
+    );
+    // None kept: the window says so.
+    s.run("SetCVar('KartReplays', '') BenillaKartReplaysFrame:Show()")
+        .unwrap();
+    assert!(shown(&mut s, "BenillaKartReplaysFrameEmpty"));
+    assert!(!row(&mut s, 1).1);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 

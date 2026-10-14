@@ -193,6 +193,12 @@ pub(crate) fn kart_ghost_path(course: &str) -> Option<PathBuf> {
     )
 }
 
+/// `benilla-config/kart-replays/`: the races we were in, to rewatch (`crate::kart`'s `replay`
+/// owns the format and keeps the newest few).
+pub(crate) fn kart_replays_dir() -> Option<PathBuf> {
+    Some(home()?.join("kart-replays"))
+}
+
 /// `benilla-config/Logs/`: `WoWChatLog.txt` and `WoWCombatLog.txt`, the reference's names.
 pub(crate) fn logs_dir() -> Option<PathBuf> {
     home().map(|h| h.join("Logs"))

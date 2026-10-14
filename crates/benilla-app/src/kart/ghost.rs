@@ -27,7 +27,33 @@ pub(crate) struct Pose {
 }
 
 impl Pose {
-    fn lerp(self, to: Pose, k: f32) -> Pose {
+    /// A pose's bytes in a file: its position (3 × f32), its rotation (4 × i16, a unit
+    /// quaternion's x, y, z, w over 32767) and its steer (i8 over 127). Little endian.
+    pub(crate) const BYTES: usize = 21;
+
+    pub(crate) fn put(&self, out: &mut Vec<u8>) {
+        for v in self.pos.to_array() {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        for v in self.rot.normalize().to_array() {
+            let q = (v.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+            out.extend_from_slice(&q.to_le_bytes());
+        }
+        out.push(((self.steer.clamp(-1.0, 1.0) * 127.0).round() as i8) as u8);
+    }
+
+    pub(crate) fn take(r: &mut Reader<'_>) -> Option<Pose> {
+        let pos = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
+        let mut q = [0.0; 4];
+        for v in &mut q {
+            *v = f32::from(r.i16()?) / 32767.0;
+        }
+        let rot = Quat::from_array(q).normalize();
+        let steer = f32::from(r.u8()? as i8) / 127.0;
+        (pos.is_finite() && rot.is_finite()).then_some(Pose { pos, rot, steer })
+    }
+
+    pub(crate) fn lerp(self, to: Pose, k: f32) -> Pose {
         Pose {
             pos: self.pos.lerp(to.pos, k),
             rot: self.rot.slerp(to.rot, k),
@@ -48,12 +74,10 @@ pub(crate) struct Ghost {
 
 impl Ghost {
     /// The file: `KGST`, a version byte, the rate, the time (u32), the racer (a length byte and
-    /// ASCII), the sample count (u32), then per sample its position (3 × f32), its rotation
-    /// (4 × i16, a unit quaternion's x, y, z, w over 32767) and its steer (i8 over 127). Little
-    /// endian.
+    /// ASCII), the sample count (u32), then each sample ([`Pose::put`]). Little endian.
     pub(crate) fn encode(&self) -> Vec<u8> {
         let racer = &self.racer.as_bytes()[..self.racer.len().min(255)];
-        let mut out = Vec::with_capacity(16 + racer.len() + self.poses.len() * 21);
+        let mut out = Vec::with_capacity(16 + racer.len() + self.poses.len() * Pose::BYTES);
         out.extend_from_slice(MAGIC);
         out.push(VERSION);
         out.push(self.rate);
@@ -62,14 +86,7 @@ impl Ghost {
         out.extend_from_slice(racer);
         out.extend_from_slice(&(self.poses.len() as u32).to_le_bytes());
         for p in &self.poses {
-            for v in p.pos.to_array() {
-                out.extend_from_slice(&v.to_le_bytes());
-            }
-            for v in p.rot.normalize().to_array() {
-                let q = (v.clamp(-1.0, 1.0) * 32767.0).round() as i16;
-                out.extend_from_slice(&q.to_le_bytes());
-            }
-            out.push(((p.steer.clamp(-1.0, 1.0) * 127.0).round() as i8) as u8);
+            p.put(&mut out);
         }
         out
     }
@@ -85,22 +102,15 @@ impl Ghost {
         let len = usize::from(r.u8()?);
         let racer = std::str::from_utf8(r.take(len)?).ok()?.to_string();
         let count = r.u32()? as usize;
-        if rate == 0 || count > MAX_SECS as usize * usize::from(rate) || r.0.len() != count * 21 {
+        if rate == 0
+            || count > MAX_SECS as usize * usize::from(rate)
+            || r.0.len() != count * Pose::BYTES
+        {
             return None;
         }
         let mut poses = Vec::with_capacity(count);
         for _ in 0..count {
-            let pos = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
-            let mut q = [0.0; 4];
-            for v in &mut q {
-                *v = f32::from(r.i16()?) / 32767.0;
-            }
-            let rot = Quat::from_array(q).normalize();
-            let steer = f32::from(r.u8()? as i8) / 127.0;
-            if !pos.is_finite() || !rot.is_finite() {
-                return None;
-            }
-            poses.push(Pose { pos, rot, steer });
+            poses.push(Pose::take(&mut r)?);
         }
         Some(Ghost {
             ms,
@@ -126,10 +136,10 @@ impl Ghost {
     }
 }
 
-struct Reader<'a>(&'a [u8]);
+pub(crate) struct Reader<'a>(pub(crate) &'a [u8]);
 
 impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+    pub(crate) fn take(&mut self, n: usize) -> Option<&'a [u8]> {
         if self.0.len() < n {
             return None;
         }
@@ -137,13 +147,13 @@ impl<'a> Reader<'a> {
         self.0 = rest;
         Some(head)
     }
-    fn u8(&mut self) -> Option<u8> {
+    pub(crate) fn u8(&mut self) -> Option<u8> {
         Some(self.take(1)?[0])
     }
     fn i16(&mut self) -> Option<i16> {
         Some(i16::from_le_bytes(self.take(2)?.try_into().ok()?))
     }
-    fn u32(&mut self) -> Option<u32> {
+    pub(crate) fn u32(&mut self) -> Option<u32> {
         Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
     }
     fn f32(&mut self) -> Option<f32> {

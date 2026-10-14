@@ -1072,8 +1072,9 @@ pub(crate) fn update(
         }
     }
 
-    // `WOW_KART_RACE` joins, hosts or starts for unattended runs, as the Race Marshal does.
-    let press = auto.press(now, races);
+    // `WOW_KART_RACE` joins, hosts or starts for unattended runs, as the Race Marshal does, once
+    // we are in the kart: a press before it would be lost.
+    let press = drive.active && auto.press(now, races);
     *text = RaceText::default();
     extras.start_timer = None;
 
@@ -1113,7 +1114,15 @@ pub(crate) fn update(
         .iter()
         .filter(|c| c.map == map && near(c.start(), START_RADIUS))
         .collect();
-    if press {
+    if AutoRace::gives_up(now, races) {
+        if let Some(race) = races.race.take() {
+            info!("kart race: {} given up by the test hook", race.id);
+            profession.send(format!("KARTCRAFT\tR\tQ\t{}", race.id));
+        }
+    }
+    if let (true, Some((course, _))) = (press, AutoRace::trial()) {
+        profession.send(format!("KARTCRAFT\tR\tTB\t{course}"));
+    } else if press {
         match (&races.race, &races.offer, here.first()) {
             (Some(race), _, _) if race.host && race.go_at.is_none() => {
                 profession.send(format!("KARTCRAFT\tR\tS\t{}", race.id));
@@ -1269,8 +1278,9 @@ pub(crate) fn update(
 }
 
 /// `WOW_KART_RACE=host:<course>` hosts at that course's start and starts once another racer is
-/// in; `WOW_KART_RACE=join` joins the first race offered. A test hook: it sends what the Race
-/// Marshal's gossip would.
+/// in; `WOW_KART_RACE=join` joins the first race offered; `WOW_KART_RACE=tt:<course>[:<s>]` asks
+/// for that course's time trial, as the track browser does, and leaves it `<s>` seconds after GO
+/// if given. A test hook: it sends what the Race Marshal's gossip would.
 #[derive(Default)]
 pub(crate) struct AutoRace {
     since: Option<f32>,
@@ -1280,12 +1290,40 @@ pub(crate) struct AutoRace {
 }
 
 impl AutoRace {
+    /// `tt:<course>[:<s>]`'s course, and when to leave it (s after GO).
+    fn trial() -> Option<(String, Option<f32>)> {
+        let spec = std::env::var("WOW_KART_RACE").ok()?;
+        let rest = spec.strip_prefix("tt:")?;
+        Some(match rest.split_once(':') {
+            Some((course, secs)) => (course.to_string(), secs.parse().ok()),
+            None => (rest.to_string(), None),
+        })
+    }
+
+    /// The time trial's time is up: leave it.
+    fn gives_up(now: f32, races: &Races) -> bool {
+        let Some((_, Some(secs))) = Self::trial() else {
+            return false;
+        };
+        races
+            .race
+            .as_ref()
+            .is_some_and(|r| r.time_trial && !r.done && r.go_at.is_some_and(|go| now - go > secs))
+    }
+
     fn press(&mut self, now: f32, races: &Races) -> bool {
         let Ok(spec) = std::env::var("WOW_KART_RACE") else {
             return false;
         };
         let since = *self.since.get_or_insert(now);
         if now - since < 6.0 {
+            return false;
+        }
+        if spec.starts_with("tt:") {
+            if !self.hosted && races.race.is_none() {
+                self.hosted = true;
+                return true;
+            }
             return false;
         }
         if spec == "join" {
