@@ -1,0 +1,87 @@
+# Builds and publishes the Mac client without a Mac at hand: dist/macos/package.sh on a macOS
+# runner, the bundle and the update folder kept as a workflow artifact, and, when the repository
+# is set up for it, uploaded to the Azure static website as the `macos/` folder beside the Windows
+# updates, where every installed Mac launcher looks on its next start.
+#
+# It runs only when started by hand (Actions → "Release macOS" → Run workflow), on the branch or
+# tag picked there, so a Windows publish never ships a Mac build nobody asked for. To run it after
+# each Windows publish: `gh workflow run release-macos.yml --ref main` at the end of publish.ps1.
+#
+# Settings (Settings → Secrets and variables → Actions):
+#   variables  KARTCRAFT_SERVER, KARTCRAFT_UPDATE_URL, KARTCRAFT_REGISTER_URL — the presets
+#              .setup/publish.cfg carries on the maintainer's machine, built into the launcher;
+#              AZURE_STORAGE — the storage account whose $web container holds the updates.
+#   secret     AZURE_STORAGE_KEY — that account's key. Without AZURE_STORAGE the upload step is
+#              skipped and the build is only an artifact to download and upload by hand.
+name: Release macOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-macos
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: macos-14
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: rustup toolchain install && rustup target add x86_64-apple-darwin && rustc -V
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-macos
+      - name: Presets
+        env:
+          SERVER: ${{ vars.KARTCRAFT_SERVER }}
+          UPDATE_URL: ${{ vars.KARTCRAFT_UPDATE_URL }}
+          REGISTER_URL: ${{ vars.KARTCRAFT_REGISTER_URL }}
+        run: |
+          mkdir -p .setup
+          { echo "SERVER=$SERVER"; echo "UPDATE_URL=$UPDATE_URL"; echo "REGISTER_URL=$REGISTER_URL"; } > .setup/publish.cfg
+      - name: Package
+        run: dist/macos/package.sh
+      - name: Keep the build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: world-of-kartcraft-macos
+          path: |
+            dist/macos/out/World of Kartcraft.zip
+            dist/macos/out/updates
+          if-no-files-found: error
+      # New objects first, the manifest after them, stale objects last, as publish.ps1 does, so a
+      # launcher mid-download never reads a manifest naming files not there yet. The runner has no
+      # memory of the previous publish, so its objects go at once; a launcher caught between the
+      # two finishes on its next start.
+      - name: Upload to Azure
+        if: vars.AZURE_STORAGE != ''
+        env:
+          ACCOUNT: ${{ vars.AZURE_STORAGE }}
+          KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+        run: |
+          set -euo pipefail
+          auth=(--account-name "$ACCOUNT" --account-key "$KEY" --only-show-errors -o none)
+          cd dist/macos/out/updates
+          remote="$(az storage blob list -c '$web' --prefix macos/files/ --query '[].name' -o tsv --account-name "$ACCOUNT" --account-key "$KEY" --only-show-errors)"
+          for f in files/*.gz; do
+            grep -qxF "macos/$f" <<<"$remote" && continue
+            az storage blob upload -c '$web' -n "macos/$f" -f "$f" --content-type application/gzip --overwrite --no-progress "${auth[@]}"
+          done
+          az storage blob upload -c '$web' -n macos/manifest.json -f manifest.json --content-type application/json --content-cache-control no-cache --overwrite --no-progress "${auth[@]}"
+          keep="$(cat previous.txt)"
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            grep -qxF "${name#macos/files/}" <<<"$keep" || az storage blob delete -c '$web' -n "$name" "${auth[@]}"
+          done <<<"$remote"
+          # The one file a new Mac player downloads.
+          az storage blob upload -c '$web' -n 'macos/World of Kartcraft.zip' -f '../World of Kartcraft.zip' --content-type application/zip --content-cache-control no-cache --overwrite --no-progress "${auth[@]}"
