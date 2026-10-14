@@ -110,6 +110,9 @@
             if rest == "" then
                 return strsub(prefix, 1, -2)
             end
+            -- Kartcraft's controller buttons, which 1.12 has no KEY_* name for.
+            local pad = BENILLA_KEY_PADS and BENILLA_KEY_PADS[rest]
+            if pad then return prefix .. pad end
             return prefix .. BenillaKeyBindings_String("KEY_" .. rest, rest)
         end
 

@@ -160,6 +160,9 @@ mod tests {
     /// `Local`s in VM-holding systems that are not memory about the VM, keyed
     /// `(path under src/, parameter name)`.
     const EXEMPT: &[(&str, &str)] = &[
+        // The controller's buttons held, stale or eaten: the pad's state, which a new VM meets as
+        // it is (a held button is still held).
+        ("ui_script/input.rs", "gate"),
         // A raster fact; a fresh VM re-seats its measurer on `!has_text_measurer()` anyway.
         ("ui_script/extract/mod.rs", "last_seam"),
         // The plate driver's anti-overlap scratch, cleared at the top of every run.

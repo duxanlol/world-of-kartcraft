@@ -1079,24 +1079,27 @@
         end
 
         -- ── The controller in Kartcraft's windows ──
-        -- The controller's buttons as keys (the engine's PAD names), labelled for Key Bindings.
-        KEY_PAD1 = "Pad Cross / A"
-        KEY_PAD2 = "Pad Circle / B"
-        KEY_PAD3 = "Pad Square / X"
-        KEY_PAD4 = "Pad Triangle / Y"
-        KEY_PADDUP = "Pad Up"
-        KEY_PADDDOWN = "Pad Down"
-        KEY_PADDLEFT = "Pad Left"
-        KEY_PADDRIGHT = "Pad Right"
-        KEY_PADLSHOULDER = "Pad L1 / LB"
-        KEY_PADRSHOULDER = "Pad R1 / RB"
-        KEY_PADLTRIGGER = "Pad L2 / LT"
-        KEY_PADRTRIGGER = "Pad R2 / RT"
-        KEY_PADLSTICK = "Pad L3"
-        KEY_PADRSTICK = "Pad R3"
-        KEY_PADFORWARD = "Pad Options / Menu"
-        KEY_PADBACK = "Pad Create / View"
-        KEY_PADSYSTEM = "Pad PS / Guide"
+        -- The controller's buttons as keys (the engine's PAD names), labelled for Key Bindings
+        -- (BenillaKeyBindings_KeyText) and the guide: 1.12 names no such key, so no KEY_* global.
+        BENILLA_KEY_PADS = {
+            PAD1 = "Pad Cross / A",
+            PAD2 = "Pad Circle / B",
+            PAD3 = "Pad Square / X",
+            PAD4 = "Pad Triangle / Y",
+            PADDUP = "Pad Up",
+            PADDDOWN = "Pad Down",
+            PADDLEFT = "Pad Left",
+            PADDRIGHT = "Pad Right",
+            PADLSHOULDER = "Pad L1 / LB",
+            PADRSHOULDER = "Pad R1 / RB",
+            PADLTRIGGER = "Pad L2 / LT",
+            PADRTRIGGER = "Pad R2 / RT",
+            PADLSTICK = "Pad L3",
+            PADRSTICK = "Pad R3",
+            PADFORWARD = "Pad Options / Menu",
+            PADBACK = "Pad Create / View",
+            PADSYSTEM = "Pad PS / Guide",
+        }
         BINDING_NAME_KARTCRAFT_MENU = "Kartcraft Menu"
 
         -- The windows the controller drives, the first one shown in this order: its buttons, check
@@ -1415,7 +1418,11 @@
         function BenillaKartGuide_Key(binding, fallback)
             local key = GetBindingKey and GetBindingKey(binding)
             if not key then return fallback end
-            if GetBindingText then key = GetBindingText(key, "KEY_") end
+            if BENILLA_KEY_PADS[key] then
+                key = BENILLA_KEY_PADS[key]
+            elseif GetBindingText then
+                key = GetBindingText(key, "KEY_")
+            end
             key = string.gsub(key, "%-$", "")
             return key
         end
