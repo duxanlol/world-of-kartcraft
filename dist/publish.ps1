@@ -1,7 +1,14 @@
 # Builds the World of Kartcraft client for friends and publishes it as an update.
 #
 #   powershell -ExecutionPolicy Bypass -File dist\publish.ps1          build, package, publish
-#   powershell -ExecutionPolicy Bypass -File dist\publish.ps1 -NoBuild  reuse target-dist's build
+#   powershell -ExecutionPolicy Bypass -File dist\publish.ps1 -NoBuild  reuse target-dist's game build
+#   powershell -ExecutionPolicy Bypass -File dist\publish.ps1 -Channel staging   to the testers
+#
+# Two channels: production (the players') and staging (the testers', on the staging server). A
+# release goes to staging first; once tested, `-Channel production -NoBuild` publishes the very
+# same game binaries to the players. Only the launcher is built for each channel, since it carries
+# the channel's server and update address in itself. Staging's package and updates are kept apart
+# in dist\staging\, and uploaded under `staging/` in the storage account's website.
 #
 # It leaves three things in dist\:
 #   WorldOfKartcraft\      the client folder (the binaries, launcher, updater, docs, source.zip)
@@ -16,25 +23,37 @@
 #   UPDATE_URL=https://... where launchers look for updates (default http://SERVER:8080)
 #   REGISTER_URL=https://... the account sign-up page, shown to new players
 #   AZURE_STORAGE=name    also upload dist\updates to that storage account's static website
-param([switch]$NoBuild)
+# .setup\publish-staging.cfg, read over it for -Channel staging, names the staging server, its
+# update address (the website's `staging` folder) and its sign-up page.
+param([switch]$NoBuild, [ValidateSet('production', 'staging')][string]$Channel = 'production')
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $repo = Split-Path -Parent $PSScriptRoot
 $dist = $PSScriptRoot
 $template = Join-Path $dist 'template'
-$client = Join-Path $dist 'WorldOfKartcraft'
-$updates = Join-Path $dist 'updates'
+# Each channel's package, updates and zip in a folder of its own.
+$out = if ($Channel -eq 'staging') { Join-Path $dist 'staging' } else { $dist }
+$client = Join-Path $out 'WorldOfKartcraft'
+$updates = Join-Path $out 'updates'
+# Where in the storage website the channel's updates live; a launcher's UPDATE_URL names it.
+$prefix = if ($Channel -eq 'staging') { 'staging/' } else { '' }
 $bin = Join-Path $repo 'target-dist\release'
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 
 $settings = @{}
-$settingsFile = Join-Path $repo '.setup\publish.cfg'
-if (Test-Path $settingsFile) {
+$settingsFiles = @(Join-Path $repo '.setup\publish.cfg')
+if ($Channel -eq 'staging') {
+    $settingsFiles += Join-Path $repo '.setup\publish-staging.cfg'
+    if (-not (Test-Path $settingsFiles[1])) { throw ".setup\publish-staging.cfg is missing: it names the staging server" }
+}
+foreach ($settingsFile in $settingsFiles) {
+    if (-not (Test-Path $settingsFile)) { continue }
     foreach ($line in Get-Content $settingsFile) {
         if ($line -match '^\s*([A-Z_]+)\s*=\s*(.*?)\s*$') { $settings[$Matches[1]] = $Matches[2] }
     }
 }
+Write-Host "== Channel: $Channel (server $($settings['SERVER'])) =="
 
 # Zips a folder's contents with '/' in the entry names: Windows PowerShell's .NET writes '\',
 # which other unzippers take for part of a file name.
@@ -49,24 +68,26 @@ function New-Zip($from, $to) {
     } finally { $archive.Dispose() }
 }
 
-if (-not $NoBuild) {
-    Write-Host '== Building (static CRT, player build) =='
-    $env:CARGO_TARGET_DIR = Join-Path $repo 'target-dist'
-    $env:RUSTFLAGS = '-C target-feature=+crt-static'
-    Push-Location $repo
-    try {
+$env:CARGO_TARGET_DIR = Join-Path $repo 'target-dist'
+$env:RUSTFLAGS = '-C target-feature=+crt-static'
+Push-Location $repo
+try {
+    if (-not $NoBuild) {
+        Write-Host '== Building (static CRT, player build) =='
         cargo build --release -p benilla --no-default-features
         if ($LASTEXITCODE) { throw 'building the client failed' }
         cargo build --release -p kart-demo -p ctr-assets
         if ($LASTEXITCODE) { throw 'building the demo and converter failed' }
-        # The launcher carries the presets in itself: it is one file, with no defaults.cfg beside it.
-        $env:KARTCRAFT_SERVER = $settings['SERVER']
-        $env:KARTCRAFT_UPDATE_URL = $settings['UPDATE_URL']
-        $env:KARTCRAFT_REGISTER_URL = $settings['REGISTER_URL']
-        cargo build --release -p kartcraft-launcher
-        if ($LASTEXITCODE) { throw 'building the launcher failed' }
-    } finally { Pop-Location }
-}
+    }
+    # The launcher carries the channel's presets in itself (it is one file, with no defaults.cfg
+    # beside it), so it is built for each publish, -NoBuild or not.
+    Write-Host "== Building the $Channel launcher =="
+    $env:KARTCRAFT_SERVER = $settings['SERVER']
+    $env:KARTCRAFT_UPDATE_URL = $settings['UPDATE_URL']
+    $env:KARTCRAFT_REGISTER_URL = $settings['REGISTER_URL']
+    cargo build --release -p kartcraft-launcher
+    if ($LASTEXITCODE) { throw 'building the launcher failed' }
+} finally { Pop-Location }
 
 Write-Host '== Assembling dist\WorldOfKartcraft =='
 New-Item -ItemType Directory -Force -Path $client | Out-Null
@@ -155,30 +176,30 @@ Set-Content $previous ($entries | ForEach-Object { "$($_.sha256).gz" })
 # manifest after them, stale objects last, for the same reason as above.
 if ($settings['AZURE_STORAGE']) {
     $account = $settings['AZURE_STORAGE']
-    Write-Host "== Uploading to Azure storage $account =="
+    Write-Host "== Uploading to Azure storage $account, $Channel ($(if ($prefix) { $prefix } else { 'the root' })) =="
     $key = az storage account keys list -n $account --query '[0].value' -o tsv
     if ($LASTEXITCODE) { throw "no access to storage account $account (az login?)" }
     $auth = @('--account-name', $account, '--account-key', $key, '--only-show-errors')
-    $remote = @(az storage blob list -c '$web' --prefix files/ --query '[].name' -o tsv @auth)
+    $remote = @(az storage blob list -c '$web' --prefix "${prefix}files/" --query '[].name' -o tsv @auth)
     foreach ($e in $entries) {
-        if ($remote -contains $e.gz) { continue }
-        Write-Host "  $($e.gz)"
-        az storage blob upload -c '$web' -n $e.gz -f (Join-Path $updates $e.gz) --content-type application/gzip --overwrite --no-progress @auth -o none
+        if ($remote -contains "$prefix$($e.gz)") { continue }
+        Write-Host "  $prefix$($e.gz)"
+        az storage blob upload -c '$web' -n "$prefix$($e.gz)" -f (Join-Path $updates $e.gz) --content-type application/gzip --overwrite --no-progress @auth -o none
         if ($LASTEXITCODE) { throw "uploading $($e.gz) failed" }
     }
-    az storage blob upload -c '$web' -n manifest.json -f (Join-Path $updates 'manifest.json') --content-type application/json --content-cache-control 'no-cache' --overwrite --no-progress @auth -o none
+    az storage blob upload -c '$web' -n "${prefix}manifest.json" -f (Join-Path $updates 'manifest.json') --content-type application/json --content-cache-control 'no-cache' --overwrite --no-progress @auth -o none
     if ($LASTEXITCODE) { throw 'uploading the manifest failed' }
     foreach ($name in $remote) {
-        if ($keep -notcontains ($name -replace '^files/', '')) { az storage blob delete -c '$web' -n $name @auth -o none }
+        if ($keep -notcontains ($name -replace "^${prefix}files/", '')) { az storage blob delete -c '$web' -n $name @auth -o none }
     }
     # The one file new players download (worldofkartcraft.com/download leads here): the launcher,
     # which fetches the rest.
-    az storage blob upload -c '$web' -n 'KartcraftLauncher.exe' -f (Join-Path $client 'Kartcraft Launcher.exe') --content-type application/vnd.microsoft.portable-executable --content-disposition "attachment; filename*=UTF-8''Kartcraft%20Launcher.exe" --content-cache-control 'no-cache' --overwrite --no-progress @auth -o none
+    az storage blob upload -c '$web' -n "${prefix}KartcraftLauncher.exe" -f (Join-Path $client 'Kartcraft Launcher.exe') --content-type application/vnd.microsoft.portable-executable --content-disposition "attachment; filename*=UTF-8''Kartcraft%20Launcher.exe" --content-cache-control 'no-cache' --overwrite --no-progress @auth -o none
     if ($LASTEXITCODE) { throw 'uploading the launcher failed' }
 }
 
 Write-Host '== WorldOfKartcraft.zip =='
-$full = Join-Path $dist 'WorldOfKartcraft.zip'
+$full = Join-Path $out 'WorldOfKartcraft.zip'
 Remove-Item -Force $full -ErrorAction SilentlyContinue
 $stage = Join-Path $env:TEMP "kartcraft-zip-$PID"
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
@@ -189,7 +210,7 @@ Remove-Item -Recurse -Force $stage
 
 $mb = [math]::Round((Get-Item $full).Length / 1MB, 1)
 Write-Host ''
-Write-Host "Published $version."
+Write-Host "Published $version to $Channel."
 Write-Host "  New friends: send dist\WorldOfKartcraft\Kartcraft Launcher.exe, or the zip ($mb MB)."
 if ($settings['AZURE_STORAGE']) {
     Write-Host "  Everyone else updates the next time they start the game, from Azure storage."
