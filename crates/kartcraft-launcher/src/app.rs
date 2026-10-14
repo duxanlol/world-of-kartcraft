@@ -46,6 +46,9 @@ struct App {
     config: Config,
     shared: Arc<Mutex<Shared>>,
     started: bool,
+    /// The Protons installed, newest first (Linux).
+    #[cfg(target_os = "linux")]
+    protons: Vec<crate::proton::Proton>,
 }
 
 /// The window's icon: the WoK badge (`dist/icon.png`), as the Windows binary's resource icon.
@@ -72,7 +75,15 @@ pub fn run() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("World of Kartcraft")
-            .with_inner_size([560.0, 420.0])
+            // Linux's Proton row needs the room.
+            .with_inner_size([
+                560.0,
+                if cfg!(target_os = "linux") {
+                    500.0
+                } else {
+                    420.0
+                },
+            ])
             .with_resizable(false)
             .with_icon(icon()),
         ..Default::default()
@@ -99,6 +110,8 @@ impl App {
                 ..Default::default()
             })),
             started: false,
+            #[cfg(target_os = "linux")]
+            protons: crate::proton::installed(),
         };
         app.start_update();
         app.start_search();
@@ -115,6 +128,11 @@ impl App {
         let shared = self.shared.clone();
         let root = self.root.clone();
         let state = self.state.clone();
+        // The launcher's own update, where it has a manifest apart from the game's (Linux).
+        #[cfg(target_os = "linux")]
+        let own_base = self.config.launcher_updates();
+        #[cfg(not(target_os = "linux"))]
+        let own_base: Option<String> = None;
         let Some(base) = self.config.updates() else {
             let mut s = self.shared();
             s.updated = true;
@@ -140,10 +158,23 @@ impl App {
             let stale = update::stale(&root, &manifest);
             let (launcher, rest): (Vec<_>, Vec<_>) =
                 stale.into_iter().partition(|f| f.path == LAUNCHER);
+            // A manifest of the launcher's own, if it has one: none published yet is no update.
+            let (launcher_base, launcher) = match &own_base {
+                Some(own) => match update::manifest(own) {
+                    Ok(m) => (own.clone(), update::stale(&root, &m)),
+                    Err(_) => (own.clone(), Vec::new()),
+                },
+                None => (base.clone(), launcher),
+            };
+            let launcher: Vec<_> = launcher
+                .into_iter()
+                .filter(|f| f.path == LAUNCHER)
+                .collect();
             // The launcher first: a new one replaces this file and starts in its place.
             if !launcher.is_empty() {
                 set(&|s| s.status = "Updating the launcher…".into());
-                if update::download(&base, &root, &launcher, |_, _| {}).is_ok() && update::swap_in()
+                if update::download(&launcher_base, &root, &launcher, |_, _| {}).is_ok()
+                    && update::swap_in()
                 {
                     set(&|s| s.restart = true);
                     return;
@@ -228,6 +259,7 @@ impl App {
         let shared = self.shared.clone();
         let root = self.root.clone();
         let state = self.state.clone();
+        let config = self.config.clone();
         {
             let mut s = self.shared();
             s.converting = true;
@@ -235,12 +267,9 @@ impl App {
             s.reconvert = false;
         }
         std::thread::spawn(move || {
-            let mut cmd = std::process::Command::new(root.join(CONVERTER));
-            cmd.arg(&disc)
-                .arg(state.join("kart-data"))
-                .arg("--all")
-                .current_dir(&state);
-            let out = crate::install::quiet(&mut cmd).output();
+            let out = crate::launch::converter(&state, &config, &root.join(CONVERTER), &disc)
+                .map_err(std::io::Error::other)
+                .and_then(|mut cmd| cmd.output());
             let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
             s.converting = false;
             match out {
@@ -282,17 +311,10 @@ impl App {
         let Some(wow) = self.wow() else { return };
         self.config.account_seen = true;
         self.config.save(&self.state);
-        let mut cmd = std::process::Command::new(self.root.join(GAME));
-        // The game's own state folder goes with the kart data, not beside the binary: on macOS
-        // that would be inside the bundle.
-        cmd.current_dir(&self.state)
-            .env("WOW_DATA", wow.join("Data"))
-            .env("WOW_KART_DATA", self.state.join("kart-data"))
-            .env("BENILLA_HOME", self.state.join("benilla-config"));
-        if let Some(server) = &self.config.server {
-            cmd.env("WOW_HOST", server);
-        }
-        match cmd.spawn() {
+        let started = crate::launch::game(&self.state, &self.config, &self.root.join(GAME), &wow)
+            .map_err(std::io::Error::other)
+            .and_then(|mut cmd| cmd.spawn());
+        match started {
             Ok(_) => {
                 self.started = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -439,6 +461,11 @@ impl eframe::App for App {
                     None => Some("Pick the disc image itself: a .bin (with its .cue), a .cue or an .iso.".into()),
                 },
             );
+            #[cfg(target_os = "linux")]
+            {
+                ui.add_space(6.0);
+                self.proton_row(ui);
+            }
             if let Some(e) = &convert_error {
                 ui.label(egui::RichText::new(e).color(BAD));
             }
@@ -448,6 +475,7 @@ impl eframe::App for App {
 
             ui.add_space(16.0);
             let ready = wow.is_some()
+                && crate::launch::blocked(&self.config).is_none()
                 && self.converted()
                 && !converting
                 && self.root.join(GAME).is_file()
@@ -481,6 +509,77 @@ impl eframe::App for App {
         });
         if !self.started {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl App {
+    /// The Proton row: the one the game runs with, the others installed to pick from, Browse… for
+    /// one elsewhere, and a warning when the pick is older than the Proton that made the prefix.
+    fn proton_row(&mut self, ui: &mut egui::Ui) {
+        let chosen = crate::launch::proton(&self.config);
+        let name_of = |script: &PathBuf| {
+            self.protons
+                .iter()
+                .find(|p| &p.script == script)
+                .map(|p| p.name.clone())
+                .or_else(|| crate::proton::at(script.parent()?).map(|p| p.name))
+                .unwrap_or_else(|| script.display().to_string())
+        };
+        let chosen_name = chosen.as_ref().map(name_of);
+        let warning = crate::proton::prefix_made_by(&self.root)
+            .zip(chosen_name.clone())
+            .and_then(|(made, picked)| crate::proton::downgrade(&made, &picked));
+        let mut picked: Option<PathBuf> = None;
+        let mut error: Option<String> = None;
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let ok = chosen.is_some();
+                ui.label(
+                    egui::RichText::new(if ok { "✔" } else { "✖" }).color(if ok { GOOD } else { BAD }),
+                );
+                ui.label(egui::RichText::new("Proton").strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Browse…").clicked() {
+                        if let Some(p) = rfd::FileDialog::new()
+                            .set_title("A Proton's proton script")
+                            .pick_file()
+                        {
+                            match p.parent().and_then(crate::proton::at) {
+                                Some(found) => picked = Some(found.script),
+                                None => error = Some("Pick the file named proton inside a Proton's folder.".into()),
+                            }
+                        }
+                    }
+                    egui::ComboBox::from_id_salt("proton")
+                        .selected_text(chosen_name.clone().unwrap_or_else(|| "none".into()))
+                        .show_ui(ui, |ui| {
+                            for p in &self.protons {
+                                let on = chosen.as_ref() == Some(&p.script);
+                                if ui.selectable_label(on, &p.name).clicked() {
+                                    picked = Some(p.script.clone());
+                                }
+                            }
+                        });
+                });
+            });
+            let text = match &chosen {
+                Some(p) => p.display().to_string(),
+                None => "Not found. Install one through Steam (or GE-Proton), or pick its proton script.".into(),
+            };
+            ui.label(egui::RichText::new(text).color(DIM).small());
+            if let Some(w) = &warning {
+                ui.label(egui::RichText::new(w).color(BAD).small());
+            }
+            if let Some(e) = &error {
+                ui.label(egui::RichText::new(e).color(BAD).small());
+            }
+        });
+        if let Some(p) = picked {
+            self.config.proton = Some(p);
+            self.config.save(&self.state);
         }
     }
 }

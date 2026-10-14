@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=World of Kartcraft
+Comment=Updates, sets up and starts World of Kartcraft
+Exec=kartcraft-launcher
+Icon=kartcraft-launcher
+Categories=Game;
+Terminal=false

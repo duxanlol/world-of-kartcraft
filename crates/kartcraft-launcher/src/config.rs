@@ -1,7 +1,9 @@
 //! The launcher's settings: the player's answers in `kartcraft.cfg` (`WOW_DIR`, `CTR_DISC`,
 //! `SERVER`, `UPDATE_URL`, `ACCOUNT_SEEN`) in the state folder (`install::state`), the published
 //! presets in `defaults.cfg` (`install::defaults_file`), and the presets built into the launcher,
-//! last. On Windows both files sit beside the launcher, so a zip install carries on.
+//! last. On Windows both files sit beside the launcher, so a zip install carries on. On Linux the
+//! answers are `play-proton.sh`'s `kartcraft-linux.cfg`, with the Proton picked (`PROTON`), so
+//! the two Linux launchers share them.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -16,8 +18,18 @@ pub const BUILT_REGISTER_URL: Option<&str> = option_env!("KARTCRAFT_REGISTER_URL
 /// Mac launcher never fetches a Windows file.
 #[cfg(target_os = "macos")]
 const PLATFORM_DIR: &str = "/macos";
-#[cfg(windows)]
+#[cfg(not(target_os = "macos"))]
 const PLATFORM_DIR: &str = "";
+/// A Linux launcher runs the Windows game, so the game comes from the Windows manifest; the
+/// AppImage itself has a manifest of its own in `linux/`, which the Linux release writes.
+#[cfg(target_os = "linux")]
+const LAUNCHER_DIR: &str = "/linux";
+
+/// The player's answers: `play-proton.sh`'s on Linux, `kartcraft.cfg` elsewhere.
+#[cfg(target_os = "linux")]
+pub const CFG_FILE: &str = "kartcraft-linux.cfg";
+#[cfg(not(target_os = "linux"))]
+pub const CFG_FILE: &str = "kartcraft.cfg";
 
 /// The settings file's line ending: Notepad's on Windows.
 #[cfg(windows)]
@@ -36,6 +48,8 @@ pub struct Config {
     own_server: Option<String>,
     own_update_url: Option<String>,
     pub account_seen: bool,
+    /// The `proton` script the Windows game runs through (Linux).
+    pub proton: Option<PathBuf>,
 }
 
 fn read(path: &Path) -> BTreeMap<String, String> {
@@ -53,7 +67,7 @@ impl Config {
     /// `root` holds the published presets, `state` the player's own file.
     pub fn load(root: &Path, state: &Path) -> Config {
         let defaults = read(&crate::install::defaults_file(root));
-        let own = read(&state.join("kartcraft.cfg"));
+        let own = read(&state.join(CFG_FILE));
         let get = |key: &str, built: Option<&str>| {
             own.get(key)
                 .or_else(|| defaults.get(key))
@@ -76,6 +90,10 @@ impl Config {
             own_server: own.get("SERVER").cloned(),
             own_update_url: own.get("UPDATE_URL").cloned(),
             account_seen: own.contains_key("ACCOUNT_SEEN"),
+            proton: own
+                .get("PROTON")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from),
         }
     }
 
@@ -86,6 +104,12 @@ impl Config {
             .clone()
             .or_else(|| self.server.as_ref().map(|s| format!("http://{s}:8080")))
             .map(|u| format!("{}{PLATFORM_DIR}", u.trim_end_matches('/')))
+    }
+
+    /// Where the launcher's own update comes from, when not with the game's ([`Config::updates`]).
+    #[cfg(target_os = "linux")]
+    pub fn launcher_updates(&self) -> Option<String> {
+        self.updates().map(|u| format!("{u}{LAUNCHER_DIR}"))
     }
 
     pub fn save(&self, state: &Path) {
@@ -105,8 +129,11 @@ impl Config {
         if self.account_seen {
             out += &format!("ACCOUNT_SEEN=1{EOL}");
         }
+        if let Some(p) = &self.proton {
+            out += &format!("PROTON={}{EOL}", p.display());
+        }
         let _ = std::fs::create_dir_all(state);
-        let _ = std::fs::write(state.join("kartcraft.cfg"), out);
+        let _ = std::fs::write(state.join(CFG_FILE), out);
     }
 }
 
@@ -143,5 +170,33 @@ pub fn disc_image(picked: &Path) -> Option<PathBuf> {
                 .or_else(|| Some(picked.with_extension("bin")).filter(|p| p.is_file()))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_answers_round_trip_with_the_proton_picked() {
+        let dir = std::env::temp_dir().join(format!("kartcraft-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = Config {
+            wow_dir: Some(PathBuf::from("/games/WoW 1.12")),
+            ctr_disc: Some(PathBuf::from("/games/ctr.bin")),
+            account_seen: true,
+            proton: Some(PathBuf::from("/steam/GE-Proton10-34/proton")),
+            ..Default::default()
+        };
+        config.save(&dir);
+        let text = std::fs::read_to_string(dir.join(CFG_FILE)).unwrap();
+        let back = Config::load(&dir, &dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(back.wow_dir, config.wow_dir);
+        assert_eq!(back.ctr_disc, config.ctr_disc);
+        assert_eq!(back.proton, config.proton);
+        assert!(back.account_seen);
+        // One line per answer, the platform's own line ending.
+        assert!(text.ends_with(EOL));
     }
 }
