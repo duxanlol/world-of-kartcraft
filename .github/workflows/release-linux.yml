@@ -1,0 +1,89 @@
+# Builds and publishes the Linux launcher, as Release macOS does the Mac client: dist/appimage.sh
+# on a Linux runner (the launcher built in Debian 12, so it starts on Ubuntu 22.04 and newer), the
+# AppImage and its update folder kept as a workflow artifact, and, when the repository is set up
+# for it, uploaded to the Azure static website as the `linux/` folder beside the Windows updates,
+# where every installed Linux launcher looks for itself on its next start. The game a Linux
+# launcher runs is the Windows one, through Proton, from the Windows updates.
+#
+# It runs when started by hand (Actions → "Release Linux" → Run workflow) and on every push to the
+# staging branch, which always builds the staging channel. The channels and the settings are
+# Release macOS's: the same variables and the same AZURE_STORAGE_KEY secret, nothing new.
+name: Release Linux
+
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Who gets it
+        type: choice
+        options: [staging, production]
+        default: staging
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-linux-${{ (inputs.channel || 'staging') }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Presets
+        env:
+          SERVER: ${{ (inputs.channel || 'staging') == 'staging' && vars.KARTCRAFT_STAGING_SERVER || vars.KARTCRAFT_SERVER }}
+          UPDATE_URL: ${{ (inputs.channel || 'staging') == 'staging' && vars.KARTCRAFT_STAGING_UPDATE_URL || vars.KARTCRAFT_UPDATE_URL }}
+          REGISTER_URL: ${{ (inputs.channel || 'staging') == 'staging' && vars.KARTCRAFT_STAGING_REGISTER_URL || vars.KARTCRAFT_REGISTER_URL }}
+        run: |
+          mkdir -p .setup
+          { echo "SERVER=$SERVER"; echo "UPDATE_URL=$UPDATE_URL"; echo "REGISTER_URL=$REGISTER_URL"; } > .setup/publish.cfg
+      - name: Package
+        run: dist/appimage.sh
+      # Why it is built in Debian 12: Ubuntu 22.04 has glibc 2.35.
+      - name: glibc 2.35 at most
+        run: |
+          cd "$RUNNER_TEMP"
+          "$GITHUB_WORKSPACE/dist/linux/out/Kartcraft Launcher.AppImage" --appimage-extract >/dev/null
+          need=$(objdump -T squashfs-root/usr/bin/kartcraft-launcher | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "needs $need"
+          [ "$(printf '%s\nGLIBC_2.35\n' "$need" | sort -V | tail -1)" = GLIBC_2.35 ]
+      - name: Keep the build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: world-of-kartcraft-linux-${{ (inputs.channel || 'staging') }}
+          path: |
+            dist/linux/out/Kartcraft Launcher.AppImage
+            dist/linux/out/updates
+          if-no-files-found: error
+      # As Release macOS uploads: new objects first, the manifest after them, stale objects last.
+      - name: Upload to Azure
+        if: vars.AZURE_STORAGE != ''
+        env:
+          ACCOUNT: ${{ vars.AZURE_STORAGE }}
+          KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+          # The channel's folder in the website: staging/linux/ or linux/.
+          DIR: ${{ (inputs.channel || 'staging') == 'staging' && 'staging/linux' || 'linux' }}
+        run: |
+          set -euo pipefail
+          auth=(--account-name "$ACCOUNT" --account-key "$KEY" --only-show-errors -o none)
+          cd dist/linux/out/updates
+          remote="$(az storage blob list -c '$web' --prefix "$DIR/files/" --query '[].name' -o tsv --account-name "$ACCOUNT" --account-key "$KEY" --only-show-errors)"
+          for f in files/*.gz; do
+            grep -qxF "$DIR/$f" <<<"$remote" && continue
+            az storage blob upload -c '$web' -n "$DIR/$f" -f "$f" --content-type application/gzip --overwrite --no-progress "${auth[@]}"
+          done
+          az storage blob upload -c '$web' -n "$DIR/manifest.json" -f manifest.json --content-type application/json --content-cache-control no-cache --overwrite --no-progress "${auth[@]}"
+          keep="$(cat previous.txt)"
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            grep -qxF "${name#"$DIR"/files/}" <<<"$keep" || az storage blob delete -c '$web' -n "$name" "${auth[@]}"
+          done <<<"$remote"
+          # The one file a new Linux player downloads.
+          az storage blob upload -c '$web' -n "$DIR/Kartcraft Launcher.AppImage" -f '../Kartcraft Launcher.AppImage' --content-type application/octet-stream --content-cache-control no-cache --overwrite --no-progress "${auth[@]}"

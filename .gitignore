@@ -52,12 +52,13 @@ __pycache__/
 /target-*
 
 # The friends' client package and its update folder, built by dist/publish.ps1 (Windows) and
-# dist/macos/package.sh (Mac).
+# dist/macos/package.sh (Mac), and the Linux launcher's, by dist/appimage.sh.
 /dist/WorldOfKartcraft/
 /dist/WorldOfKartcraft.zip
 /dist/updates/
 /dist/staging/
 /dist/macos/out/
+/dist/linux/out/
 
 # The sign-up page's settings on the server host: its database password.
 /setup/register/.env

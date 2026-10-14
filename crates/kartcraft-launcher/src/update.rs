@@ -3,7 +3,9 @@
 //! downloaded (gzip-compressed, by hash) and checked before they replace the old. The launcher
 //! itself is one of them: a new one goes in beside the running one, which then gives way to it.
 //! The files' paths are relative to `install::root`: a flat folder on Windows, the `.app` bundle
-//! on macOS, whose programs the Mac package ships signed, so what lands here runs as it is.
+//! on macOS, whose programs the Mac package ships signed, so what lands here runs as it is. On
+//! Linux the game is the Windows manifest's and the AppImage comes from a manifest of its own
+//! (`config::Config::launcher_updates`).
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -11,6 +13,13 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::install::LAUNCHER;
+
+/// The Windows launcher, in the Windows manifest a Linux launcher takes the game from: never
+/// downloaded there.
+#[cfg(target_os = "linux")]
+const NOT_OURS: &[&str] = &["Kartcraft Launcher.exe"];
+#[cfg(not(target_os = "linux"))]
+const NOT_OURS: &[&str] = &[];
 
 /// Where a file of the manifest lives: the launcher is the running file, the rest are in `root`.
 fn local(root: &Path, path: &str) -> PathBuf {
@@ -91,16 +100,18 @@ pub fn sha256(path: &Path) -> Option<String> {
 pub fn stale(root: &Path, m: &Manifest) -> Vec<Entry> {
     m.files
         .iter()
+        .filter(|f| !NOT_OURS.contains(&f.path.as_str()))
         .filter(|f| sha256(&local(root, &f.path)).as_deref() != Some(f.sha256.as_str()))
         .cloned()
         .collect()
 }
 
-/// A program of the bundle: a download is a plain file until it is made executable again.
+/// A program of the bundle, or the AppImage: a download is a plain file until it is made
+/// executable again.
 #[cfg(unix)]
 fn make_executable(path: &Path, manifest_path: &str) {
     use std::os::unix::fs::PermissionsExt;
-    if manifest_path.starts_with("Contents/MacOS/") {
+    if manifest_path.starts_with("Contents/MacOS/") || manifest_path == LAUNCHER {
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
     }
 }

@@ -12,6 +12,9 @@
 //! Downloads) copies itself to `~/Applications/World of Kartcraft.app` and opens from there. The
 //! settings, the kart data, `version.txt` and the game's own `benilla-config` live under
 //! `~/Library/Application Support/World of Kartcraft`, never inside the bundle.
+//!
+//! Linux: as on Windows, with the launcher an AppImage (`$APPIMAGE`, not the binary in its
+//! read-only mount). The game and the converter are the Windows ones, run through Proton.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -30,21 +33,31 @@ pub const GAME: &str = "Contents/MacOS/WorldOfKartcraft";
 pub const CONVERTER: &str = "Contents/MacOS/ctr-extract";
 #[cfg(target_os = "macos")]
 pub const LAUNCHER: &str = "Contents/MacOS/Kartcraft Launcher";
+#[cfg(target_os = "linux")]
+pub const GAME: &str = "WorldOfKartcraft.exe";
+#[cfg(target_os = "linux")]
+pub const CONVERTER: &str = "ctr-extract.exe";
+#[cfg(target_os = "linux")]
+pub const LAUNCHER: &str = "Kartcraft Launcher.AppImage";
 
 /// `CREATE_NO_WINDOW`: a helper process without a console flashing up.
 #[cfg(windows)]
 const NO_WINDOW: u32 = 0x0800_0000;
 
 /// The game's folder beside a launcher that is not in one.
-#[cfg(windows)]
+#[cfg(not(target_os = "macos"))]
 const GAME_FOLDER: &str = "WorldOfKartcraft";
 
 /// The bundle's name, where it is installed.
 #[cfg(target_os = "macos")]
 const BUNDLE: &str = "World of Kartcraft.app";
 
-/// The launcher's own file.
+/// The launcher's own file: in an AppImage the `.AppImage` the player runs.
 pub fn me() -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    if let Some(image) = std::env::var_os("APPIMAGE") {
+        return Some(PathBuf::from(image));
+    }
     std::env::current_exe().ok()
 }
 
@@ -59,18 +72,20 @@ pub fn quiet(cmd: &mut Command) -> &mut Command {
     cmd
 }
 
-#[cfg(windows)]
+#[cfg(not(target_os = "macos"))]
 fn is_game_folder(dir: &Path) -> bool {
-    dir.join("kartcraft.cfg").is_file() || dir.join(GAME).is_file()
+    dir.join(crate::config::CFG_FILE).is_file()
+        || dir.join("kartcraft.cfg").is_file()
+        || dir.join(GAME).is_file()
 }
 
-/// The folder the game lives in: on Windows the launcher's own or `WorldOfKartcraft` beside it,
-/// on macOS the `.app` bundle (or, run bare from a build folder, that folder).
+/// The folder the game lives in: on Windows and Linux the launcher's own or `WorldOfKartcraft`
+/// beside it, on macOS the `.app` bundle (or, run bare from a build folder, that folder).
 pub fn root() -> PathBuf {
     let here = me()
         .and_then(|p| p.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."));
-    #[cfg(windows)]
+    #[cfg(not(target_os = "macos"))]
     {
         if is_game_folder(&here) {
             here
@@ -92,9 +107,9 @@ fn bundle() -> Option<PathBuf> {
 }
 
 /// Where the player's settings, the kart data and `version.txt` live: the game's folder on
-/// Windows, Application Support on macOS.
+/// Windows and Linux, Application Support on macOS.
 pub fn state() -> PathBuf {
-    #[cfg(windows)]
+    #[cfg(not(target_os = "macos"))]
     {
         root()
     }
@@ -110,10 +125,10 @@ pub fn state() -> PathBuf {
     }
 }
 
-/// The published presets, `defaults.cfg`: beside the launcher on Windows, in the bundle's
-/// Resources on macOS.
+/// The published presets, `defaults.cfg`: in the game's folder on Windows and Linux, in the
+/// bundle's Resources on macOS.
 pub fn defaults_file(root: &Path) -> PathBuf {
-    #[cfg(windows)]
+    #[cfg(not(target_os = "macos"))]
     {
         root.join("defaults.cfg")
     }
@@ -213,6 +228,8 @@ pub fn restart() -> bool {
 
 /// An error before the window can show it.
 pub fn fatal(text: &str) {
+    // A terminal sees it too, where a Linux desktop may have no dialog for it.
+    eprintln!("{text}");
     rfd::MessageDialog::new()
         .set_title("World of Kartcraft")
         .set_description(text)

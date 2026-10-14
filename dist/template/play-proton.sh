@@ -46,6 +46,9 @@ STEAM_DIR=$HOME/.local/share/Steam
 export STEAM_COMPAT_DATA_PATH=$ROOT/.proton-prefix
 export STEAM_COMPAT_CLIENT_INSTALL_PATH=${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$STEAM_DIR}
 mkdir -p "$STEAM_COMPAT_DATA_PATH"
+# Vulkan, which Proton passes straight through, unless set: left to itself the game may take DX12
+# (a Steam Deck does), whose shader compiler under Proton fails on its compute shaders.
+export WGPU_BACKEND=${WGPU_BACKEND:-vulkan}
 # Wine's WGI hands a DS4 (054c:09cc) its axes as RY RX LY LX R2 L2, not the order SDL's Windows
 # mapping expects (measured under GE-Proton 10). One line per pad that needs it.
 export SDL_GAMECONTROLLERCONFIG="030000004c050000cc09000000000000,PS4 Controller,a:b1,b:b2,back:b8,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b12,leftshoulder:b4,leftstick:b10,lefttrigger:a5,leftx:a3,lefty:a2,rightshoulder:b5,rightstick:b11,righttrigger:a4,rightx:a1,righty:a0,start:b9,touchpad:b13,x:b0,y:b3,platform:Windows,"
