@@ -860,8 +860,24 @@ namespace Kartcraft
         return h;
     }
 
+    // The course the owner picked for `period` (kartcraft_challenge_pick, written by the website's
+    // admin page), if it is an open-world course; else empty.
+    static std::string ChallengePick(std::string const& period)
+    {
+        std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
+            "SELECT `course` FROM `kartcraft_challenge_pick` WHERE `period` = '%s'", period.c_str());
+        if (!result)
+            return std::string();
+        std::string key = result->Fetch()[0].GetCppString();
+        Course const* c = FindCourse(key);
+        return c && c->map <= 1 ? key : std::string();
+    }
+
     static std::string ChallengeCourse(std::string const& period)
     {
+        std::string picked = ChallengePick(period);
+        if (!picked.empty())
+            return picked;
         std::vector<Course const*> open;
         for (Course const& c : COURSES)
             if (c.map <= 1)
@@ -885,16 +901,27 @@ namespace Kartcraft
         return { day, "w" + std::to_string((days + 3) / 7) };
     }
 
-    // The board for `period`, loaded on its first use.
-    static void ChallengeTo(ChallengeBoard& board, std::string const& period)
+    // The board for `period`, loaded on its first use and again when the period's course is
+    // changed under it (the owner's pick, looked at every CHALLENGE_RECHECK_MS): its times are
+    // the ones set on that course.
+    static uint32 const CHALLENGE_RECHECK_MS = 30 * IN_MILLISECONDS;
+    static uint32 s_challengeChecked = 0;
+
+    static void ChallengeTo(ChallengeBoard& board, std::string const& period, bool recheck)
     {
-        if (board.period == period)
+        if (board.period == period && !recheck)
+            return;
+        std::string course = ChallengeCourse(period);
+        if (board.period == period && board.course == course)
             return;
         board.period = period;
-        board.course = ChallengeCourse(period);
+        board.course = course;
         board.bests.clear();
+        std::string escaped = course;
+        CharacterDatabase.escape_string(escaped);
         std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
-            "SELECT `guid`, `name`, `ms` FROM `kartcraft_challenge` WHERE `period` = '%s'", period.c_str());
+            "SELECT `guid`, `name`, `ms` FROM `kartcraft_challenge` WHERE `period` = '%s' AND `course` = '%s'",
+            period.c_str(), escaped.c_str());
         if (!result)
             return;
         do
@@ -909,12 +936,23 @@ namespace Kartcraft
     static void ChallengesNow()
     {
         std::pair<std::string, std::string> periods = ChallengePeriods();
-        ChallengeTo(s_daily, periods.first);
-        ChallengeTo(s_weekly, periods.second);
+        uint32 now = WorldTimer::getMSTime();
+        bool recheck = !s_challengeChecked || WorldTimer::getMSTimeDiff(s_challengeChecked, now) >= CHALLENGE_RECHECK_MS;
+        if (recheck)
+            s_challengeChecked = now ? now : 1;
+        ChallengeTo(s_daily, periods.first, recheck);
+        ChallengeTo(s_weekly, periods.second, recheck);
     }
 
     static void CreateChallenges()
     {
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_challenge_pick` ("
+            "`period` VARCHAR(12) NOT NULL COMMENT 'd<YYYYMMDD> a day, w<weeks since 1969-12-29> a week, UTC', "
+            "`course` VARCHAR(32) NOT NULL COMMENT 'the course the owner picked for it', "
+            "`at` INT UNSIGNED NOT NULL COMMENT 'when picked, unix time', "
+            "PRIMARY KEY (`period`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
         CharacterDatabase.DirectExecute(
             "CREATE TABLE IF NOT EXISTS `kartcraft_challenge` ("
             "`period` VARCHAR(12) NOT NULL COMMENT 'd<YYYYMMDD> a day, w<weeks since 1969-12-29> a week, UTC', "
