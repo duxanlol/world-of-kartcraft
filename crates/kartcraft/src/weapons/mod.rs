@@ -564,12 +564,10 @@ impl Weapons {
         self.credit_wumpa();
         self.our_cloud_tick(kart);
         let cloud = self.our_cloud().is_some();
+        // Deviates (the owner's call): out of a race CTR births no mask to carry the kart
+        // (`VehPickupItem_MaskUseWeapon`: none unless `LOAD_IsOpen_RacingOrBattle`, and none in
+        // the Adventure Arena), so its rescue there has no Aku Aku; here he comes everywhere.
         self.ours = Look::of(kart, &self.ours, self.frame, cloud);
-        // Out of a race there is no mask to carry the kart (`VehPickupItem_MaskUseWeapon` births
-        // none unless `LOAD_IsOpen_RacingOrBattle`, `VehPickupItem.c:207-210`).
-        if !self.live() {
-            self.ours.grab = None;
-        }
         self.effects
             .retain(|e| self.frame.saturating_sub(e.born) < EFFECT_FRAMES);
         let frame = self.frame;
@@ -1036,9 +1034,13 @@ impl Weapons {
                 ctr_kart::Event::DriftSpinOut if self.live() => {
                     self.outbox.push((self.me, Up::Lose(wire::Loss::SpinOut)));
                 }
-                ctr_kart::Event::MaskGrab if self.live() => {
-                    self.outbox.push((self.me, Up::Lose(wire::Loss::MaskGrab)));
-                    // The mask comes with its call (`VehPickupItem.c:284`, `:305`).
+                ctr_kart::Event::MaskGrab => {
+                    // The Wumpa a rescue costs is only in a race.
+                    if self.live() {
+                        self.outbox.push((self.me, Up::Lose(wire::Loss::MaskGrab)));
+                    }
+                    // The mask comes with its call (`VehPickupItem.c:284`, `:305`), out of a race
+                    // too (the deviation above).
                     let sfx = if good_guy(crate::model::our_kart()) {
                         Sfx::Aku
                     } else {

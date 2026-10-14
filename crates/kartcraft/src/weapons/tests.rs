@@ -463,6 +463,15 @@ fn a_mask_grab_reports_its_wumpa_in_a_race_and_not_outside_one() {
     kart.mask_grab(Vec3::Y * 40.0, 0);
     w.tick(&world, &mut kart, ORIGIN);
     assert!(w.outbox.is_empty());
+    // But Aku Aku is seen carrying it (CTR shows no mask out of a race; ours does), once he
+    // comes down to it, 480 ms into the grab.
+    tick(&mut w, &world, &mut kart, 20);
+    assert!(
+        w.our_look().grab.is_some(),
+        "the mask out of a race, carrying the kart"
+    );
+    tick(&mut w, &world, &mut kart, 120);
+    assert!(w.outbox.is_empty(), "still nothing to report");
 
     w.receive(Down::Layout {
         first: 0,
