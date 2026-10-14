@@ -1414,9 +1414,17 @@
         -- ── The Kartcraft Guide ──
 
         -- A binding's key as the player has it bound, else what it ships with; a modifier bound
-        -- alone ("SHIFT-") without its dash.
+        -- alone ("SHIFT-") without its dash. Its first key, not a controller button: the guide
+        -- names the keyboard's.
         function BenillaKartGuide_Key(binding, fallback)
-            local key = GetBindingKey and GetBindingKey(binding)
+            local key
+            local all = { GetBindingKey and GetBindingKey(binding) }
+            for i = 1, table.getn(all) do
+                if not string.find(all[i], "^PAD") and not string.find(all[i], "%-PAD") then
+                    key = all[i]
+                    break
+                end
+            end
             if not key then return fallback end
             if BENILLA_KEY_PADS[key] then
                 key = BENILLA_KEY_PADS[key]

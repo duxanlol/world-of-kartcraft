@@ -12,6 +12,11 @@
 //! command keeps its defaults. Tokens are canonical chord strings and never contain spaces.
 //! Deviation: the reference saves a full snapshot (`bindings-cache.wtf`); a diff is stored
 //! because a full snapshot would leave every command added later unbound for a saved file.
+//!
+//! A file written before the overlay plane's commands took controller buttons ([`PADS_MARK`]
+//! absent from its header) gets each of those commands it lists its default buttons back where
+//! no other command of the plane holds them ([`migrate_pads`]): a pad could not drive through a
+//! binding then, so a listed driving control naming none had simply not been offered one.
 
 use benilla_ui::script::keybind::KeyBinding;
 
@@ -41,7 +46,7 @@ pub(crate) fn to_diff(snapshot: &[(String, Vec<String>)], defaults: &[KeyBinding
             .find(|(c, _)| c.eq_ignore_ascii_case(name))
             .map_or(&[][..], |(_, k)| k.as_slice())
     };
-    let mut out = String::from("# benilla key bindings — diff vs defaults\n");
+    let mut out = format!("# benilla key bindings — diff vs defaults; {PADS_MARK}\n");
     let unlisted = defaults
         .iter()
         .filter(|(c, _)| !snapshot.iter().any(|(n, _)| n.eq_ignore_ascii_case(c)))
@@ -59,6 +64,52 @@ pub(crate) fn to_diff(snapshot: &[(String, Vec<String>)], defaults: &[KeyBinding
         out.push('\n');
     }
     out
+}
+
+/// The header's words saying the file was written with the plane's controller buttons bound.
+const PADS_MARK: &str = "controller buttons bound";
+
+/// A controller button's key, `PAD…` under any modifiers.
+pub(crate) fn is_pad_key(key: &str) -> bool {
+    let mut rest = key;
+    for m in ["ALT-", "CTRL-", "SHIFT-"] {
+        rest = rest.strip_prefix(m).unwrap_or(rest);
+    }
+    rest.starts_with("PAD")
+}
+
+/// The diff in `text` ([`from_diff`]), and for a file older than [`PADS_MARK`], each listed
+/// `overlay` command given back its default controller buttons that no other command of the
+/// plane holds in the file.
+pub(crate) fn from_diff_migrated(
+    text: &str,
+    defaults: &[KeyBinding],
+    overlay: &[String],
+) -> Vec<(String, Vec<String>)> {
+    let mut diff = from_diff(text);
+    if !text.lines().next().is_some_and(|l| l.contains(PADS_MARK)) {
+        migrate_pads(&mut diff, defaults, overlay);
+    }
+    diff
+}
+
+fn migrate_pads(diff: &mut [(String, Vec<String>)], defaults: &[KeyBinding], overlay: &[String]) {
+    use benilla_ui::script::keybind::in_overlay;
+    let taken: Vec<String> = diff
+        .iter()
+        .filter(|(c, _)| in_overlay(overlay, c))
+        .flat_map(|(_, keys)| keys.iter().cloned())
+        .collect();
+    for (name, keys) in diff.iter_mut() {
+        if !in_overlay(overlay, name) || keys.iter().any(|k| is_pad_key(k)) {
+            continue;
+        }
+        for (key, command) in defaults {
+            if command.eq_ignore_ascii_case(name) && is_pad_key(key) && !taken.contains(key) {
+                keys.push(key.clone());
+            }
+        }
+    }
 }
 
 /// Parse a diff file into `(command, keys)` overrides; unknown commands are kept, malformed lines
@@ -107,6 +158,63 @@ pub(crate) fn resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The kart's plane, two driving controls with keys and controller buttons, and one stock
+    /// command.
+    fn pad_defaults() -> (Vec<KeyBinding>, Vec<String>) {
+        let defaults = [
+            ("W", "KARTCRAFT_ACCELERATE"),
+            ("PAD1", "KARTCRAFT_ACCELERATE"),
+            ("PADRTRIGGER", "KARTCRAFT_ACCELERATE"),
+            ("E", "KARTCRAFT_FIRE"),
+            ("PAD2", "KARTCRAFT_FIRE"),
+            ("SPACE", "JUMP"),
+        ]
+        .into_iter()
+        .map(|(k, c)| (k.to_string(), c.to_string()))
+        .collect();
+        let overlay = vec!["KARTCRAFT_ACCELERATE".into(), "KARTCRAFT_FIRE".into()];
+        (defaults, overlay)
+    }
+
+    #[test]
+    fn an_old_file_s_driving_controls_get_their_controller_buttons_back() {
+        let (defaults, overlay) = pad_defaults();
+        // Written before the pad's buttons were bindings: gas rebound to I, fire to PAD1 (which
+        // the gas's default then cannot have), a stock command moved.
+        let old = "# benilla key bindings — diff vs defaults
+                   bind KARTCRAFT_ACCELERATE I
+                   bind KARTCRAFT_FIRE PAD1
+                   bind JUMP F
+";
+        let diff = from_diff_migrated(old, &defaults, &overlay);
+        let keys = |name: &str| diff.iter().find(|(c, _)| c == name).unwrap().1.clone();
+        assert_eq!(keys("KARTCRAFT_ACCELERATE"), ["I", "PADRTRIGGER"]);
+        assert_eq!(
+            keys("KARTCRAFT_FIRE"),
+            ["PAD1"],
+            "it named a button: left as it is"
+        );
+        assert_eq!(keys("JUMP"), ["F"], "the stock plane is not touched");
+        // A file this version wrote is read as written: an unbound pad stays unbound.
+        let snapshot = vec![("KARTCRAFT_ACCELERATE".to_string(), vec!["I".to_string()])];
+        let new = to_diff(&snapshot, &defaults);
+        assert!(new.lines().next().unwrap().contains(PADS_MARK));
+        let diff = from_diff_migrated(&new, &defaults, &overlay);
+        assert_eq!(
+            diff.iter()
+                .find(|(c, _)| c == "KARTCRAFT_ACCELERATE")
+                .unwrap()
+                .1,
+            ["I"]
+        );
+    }
+
+    #[test]
+    fn a_pad_key_is_a_pad_under_any_modifier_and_numpad_is_not() {
+        assert!(is_pad_key("PAD1") && is_pad_key("SHIFT-PADDUP") && is_pad_key("ALT-CTRL-PAD2"));
+        assert!(!is_pad_key("NUMPAD1") && !is_pad_key("W") && !is_pad_key("SHIFT-"));
+    }
 
     fn defaults() -> Vec<KeyBinding> {
         [

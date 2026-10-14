@@ -1,9 +1,11 @@
-//! The kart's controls: a PlayStation pad laid out as CTR's (✕ accelerates, □ brakes and reverses,
-//! R1 and L1 hop, powerslide and boost, ○ fires the held item), an Xbox pad by position (A as ✕,
-//! X brakes and reverses as □, B fires as ○, the shoulders hop and powerslide as R1/L1, the left
-//! stick steers), or the keyboard for want of one, through [`Keys`]: the host's rebindable keys, or
-//! the fixed layout. The D-pad's abilities are read by the host. Select swaps the camera's
-//! distance and the right stick's click looks back, CTR's L2 and R2.
+//! The kart's controls, through [`Keys`] twice over: the keyboard's and the controller's buttons,
+//! each the host's rebindable bindings or a fixed layout ([`Keys::from_keyboard`],
+//! [`Keys::from_pad`]), and the controller's left stick, which steers and, held down, reverses.
+//! The pad's default layout is CTR's on a PlayStation pad (✕ or R2 accelerates, □ or L2 brakes,
+//! R1 and L1 hop, powerslide and boost, ○ fires the held item, the D-pad's abilities), an Xbox pad
+//! by position; Select swaps the camera's distance and the right stick's click looks back, CTR's L2
+//! and R2. A pad's brake is CTR's □: it reverses with the stick held down, where the keyboard's
+//! brake reverses alone.
 
 use bevy::input::gamepad::{Gamepad, GamepadAxis, GamepadButton};
 use bevy::prelude::*;
@@ -57,6 +59,29 @@ pub struct Keys {
 }
 
 impl Keys {
+    /// The controller's fixed layout ([`PAD_LAYOUT`]), for a host with no bindings.
+    pub fn from_pad(pad: &Gamepad) -> Keys {
+        let pressed = |b| pad.pressed(b);
+        let just = |b| pad.just_pressed(b);
+        Keys {
+            accelerate: pressed(GamepadButton::South) || pressed(GamepadButton::RightTrigger2),
+            brake: pressed(GamepadButton::West) || pressed(GamepadButton::LeftTrigger2),
+            left: false,
+            right: false,
+            hop: pressed(GamepadButton::RightTrigger),
+            boost: pressed(GamepadButton::LeftTrigger),
+            fire: just(GamepadButton::East),
+            abilities: [
+                just(GamepadButton::DPadUp),
+                just(GamepadButton::DPadRight),
+                just(GamepadButton::DPadDown),
+                just(GamepadButton::DPadLeft),
+            ],
+            camera: just(GamepadButton::Select),
+            look_back: pressed(GamepadButton::RightThumb),
+        }
+    }
+
     /// The fixed layout: arrows or WASD, Space to hop, Shift for the second shoulder, E to fire,
     /// digits 1–4 for the abilities, C to swap the camera's distance, X held to look back.
     pub fn from_keyboard(keys: &ButtonInput<KeyCode>) -> Keys {
@@ -81,33 +106,48 @@ impl Keys {
     }
 }
 
-/// The first connected pad's controls, else the keyboard's.
-/// `held`: the buttons the interface holds while its menu or popup is up, which do not drive;
-/// `all`: it holds the whole pad.
-pub fn read(keys: &Keys, pads: &Query<&Gamepad>, held: &[GamepadButton], all: bool) -> Controls {
+/// The keyboard's controls and the first connected pad's together: `keys` the keyboard's buttons,
+/// `pad_keys` the controller's (the host's bindings resolve both, leaving out a button the
+/// interface holds); `all`: the interface holds the whole pad, its stick too.
+pub fn read(keys: &Keys, pad_keys: &Keys, pads: &Query<&Gamepad>, all: bool) -> Controls {
     let keyboard = from_keys(keys);
     match pads.iter().next().filter(|_| !all) {
-        Some(pad) => merge(from_pad(pad, held), keyboard),
+        Some(pad) => merge(from_pad(pad, pad_keys), keyboard),
         None => keyboard,
     }
 }
 
-/// The buttons [`from_pad`] drives with, which are no binding's while we drive.
-pub const DRIVING_PADS: &[GamepadButton] = &[
-    GamepadButton::South,
-    GamepadButton::West,
-    GamepadButton::East,
-    GamepadButton::RightTrigger,
-    GamepadButton::LeftTrigger,
-    GamepadButton::RightTrigger2,
-    GamepadButton::LeftTrigger2,
-    GamepadButton::DPadUp,
-    GamepadButton::DPadRight,
-    GamepadButton::DPadDown,
-    GamepadButton::DPadLeft,
-    GamepadButton::Select,
-    GamepadButton::RightThumb,
+/// The controller's default layout by binding name (`PAD1` ✕ or A, `PAD2` ○ or B, `PAD3` □ or
+/// X, the shoulders, the triggers, the D-pad, `PADBACK` Select, `PADRSTICK` the right stick's
+/// click), as the host ships it beside the keyboard's: what [`Keys::from_pad`] reads.
+pub const PAD_LAYOUT: &[(&str, PadControl)] = &[
+    ("PAD1", PadControl::Accelerate),
+    ("PADRTRIGGER", PadControl::Accelerate),
+    ("PAD3", PadControl::Brake),
+    ("PADLTRIGGER", PadControl::Brake),
+    ("PADRSHOULDER", PadControl::Hop),
+    ("PADLSHOULDER", PadControl::Boost),
+    ("PAD2", PadControl::Fire),
+    ("PADDUP", PadControl::Ability(0)),
+    ("PADDRIGHT", PadControl::Ability(1)),
+    ("PADDDOWN", PadControl::Ability(2)),
+    ("PADDLEFT", PadControl::Ability(3)),
+    ("PADBACK", PadControl::Camera),
+    ("PADRSTICK", PadControl::LookBack),
 ];
+
+/// A control a pad button drives in [`PAD_LAYOUT`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PadControl {
+    Accelerate,
+    Brake,
+    Hop,
+    Boost,
+    Fire,
+    Ability(usize),
+    Camera,
+    LookBack,
+}
 
 /// How far the stick must lean before it steers over the keys.
 const STICK_OVER_KEYS: f32 = 0.15;
@@ -131,36 +171,30 @@ fn merge(pad: Controls, keys: Controls) -> Controls {
     }
 }
 
-/// The first pad's controls.
-fn from_pad(pad: &Gamepad, held: &[GamepadButton]) -> Controls {
-    // A button the interface holds does not drive.
-    let free = |b: GamepadButton| !held.contains(&b);
-    let pressed = |b| free(b) && pad.pressed(b);
-    let just = |b| free(b) && pad.just_pressed(b);
-    // The triggers accelerate and brake too, for those who drive a racing game that way.
-    let trigger = |b| free(b) && pad.get(b).unwrap_or(0.0) > 0.4;
+/// The first pad's controls: its stick, and its buttons as `keys` resolves them. The stick steers
+/// once it leans (raw: the driving model applies CTR's own dead zone and response curve), else
+/// buttons bound to steering do; down on it reverses, with the brake (CTR's □).
+fn from_pad(pad: &Gamepad, keys: &Keys) -> Controls {
+    let stick = pad
+        .get(GamepadAxis::LeftStickX)
+        .unwrap_or(0.0)
+        .clamp(-1.0, 1.0);
+    let buttons = f32::from(i8::from(keys.right)) - f32::from(i8::from(keys.left));
     Controls {
-        // Raw: the driving model applies CTR's own dead zone and response curve.
-        steer: pad
-            .get(GamepadAxis::LeftStickX)
-            .unwrap_or(0.0)
-            .clamp(-1.0, 1.0),
-        accelerate: pressed(GamepadButton::South) || trigger(GamepadButton::RightTrigger2),
-        brake: pressed(GamepadButton::West) || trigger(GamepadButton::LeftTrigger2),
+        steer: if stick.abs() > STICK_OVER_KEYS {
+            stick
+        } else {
+            buttons
+        },
+        accelerate: keys.accelerate,
+        brake: keys.brake,
         reverse: pad.get(GamepadAxis::LeftStickY).unwrap_or(0.0) < -0.6,
-        hop: pressed(GamepadButton::RightTrigger),
-        hop_alt: pressed(GamepadButton::LeftTrigger),
-        fire: just(GamepadButton::East),
-        dpad: [
-            just(GamepadButton::DPadUp),
-            just(GamepadButton::DPadRight),
-            just(GamepadButton::DPadDown),
-            just(GamepadButton::DPadLeft),
-        ],
-        // CTR swaps the camera with L2 and looks back with R2, but the triggers here are the gas
-        // and the brake (above); Select and the right stick's click are free on either pad.
-        camera: just(GamepadButton::Select),
-        look_back: pressed(GamepadButton::RightThumb),
+        hop: keys.hop,
+        hop_alt: keys.boost,
+        fire: keys.fire,
+        dpad: keys.abilities,
+        camera: keys.camera,
+        look_back: keys.look_back,
         pad: true,
     }
 }
@@ -233,6 +267,37 @@ const AUTOFIRE_SECS: f32 = 1.5;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pad_s_buttons_drive_as_bound_and_its_brake_reverses_only_with_the_stick() {
+        let pad = Gamepad::default();
+        let c = from_pad(
+            &pad,
+            &Keys {
+                brake: true,
+                left: true,
+                fire: true,
+                ..Default::default()
+            },
+        );
+        assert!(c.brake && c.fire && c.pad);
+        assert!(
+            !c.reverse,
+            "CTR's square brakes; down on the stick reverses"
+        );
+        assert_eq!(
+            c.steer, -1.0,
+            "buttons bound to steering steer while the stick rests"
+        );
+        // The keyboard's brake reverses on its own.
+        assert!(
+            from_keys(&Keys {
+                brake: true,
+                ..Default::default()
+            })
+            .reverse
+        );
+    }
 
     #[test]
     fn an_idle_pad_leaves_the_keyboard_driving() {

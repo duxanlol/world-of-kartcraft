@@ -10,11 +10,15 @@
         ESCAPE filter).
         Deviation: every bind, unbind and reset saves at once, as the era panel commits, where
         1.12 had Okay and Cancel; only Reset To Default and leaving the character set confirm.
+        Deviation, Kartcraft's: a third capsule, Controller, holds a command's controller buttons
+        (the PAD keys) apart from its two keys, so a pad binding never takes a key's place. A
+        controller button pressed while any capsule is armed binds there, replacing the command's
+        buttons; a key pressed while Controller is armed binds nothing (Escape disarms).
     -->
 
     <!-- 1.12's KeyBindingFrameBindingButtonTemplate; all five buttons reach the handler. -->
     <Button name="BenillaKeyBindingButtonTemplate" virtual="true">
-        <Size><AbsDimension x="180" y="22"/></Size>
+        <Size><AbsDimension x="125" y="22"/></Size>
         <ButtonText name="$parentText"/>
         <NormalTexture file="Interface\Buttons\UI-Panel-Button-Up"><TexCoords left="0" right="0.625" top="0" bottom="0.6875"/></NormalTexture>
         <PushedTexture file="Interface\Buttons\UI-Panel-Button-Down"><TexCoords left="0" right="0.625" top="0" bottom="0.6875"/></PushedTexture>
@@ -71,6 +75,9 @@
             </Button>
             <Button name="$parentKey2Button" inherits="BenillaKeyBindingButtonTemplate" id="2">
                 <Anchors><Anchor point="LEFT" relativeTo="$parentKey1Button" relativePoint="RIGHT"><Offset><AbsDimension x="0" y="0"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentKey3Button" inherits="BenillaKeyBindingButtonTemplate" id="3">
+                <Anchors><Anchor point="LEFT" relativeTo="$parentKey2Button" relativePoint="RIGHT"><Offset><AbsDimension x="0" y="0"/></Offset></Anchor></Anchors>
             </Button>
         </Frames>
     </Frame>
@@ -192,16 +199,76 @@
         end
 
         -- ── Painters ── shared by the list and the search rows, which capture in place.
+        -- ── Keys and controller buttons ── a PAD key under any modifiers is a controller button.
+        function BenillaKeyBindings_IsPad(key)
+            if not key then return nil end
+            local rest = key
+            while true do
+                if string.sub(rest, 1, 4) == "ALT-" then
+                    rest = string.sub(rest, 5)
+                elseif string.sub(rest, 1, 5) == "CTRL-" then
+                    rest = string.sub(rest, 6)
+                elseif string.sub(rest, 1, 6) == "SHIFT-" then
+                    rest = string.sub(rest, 7)
+                else
+                    break
+                end
+            end
+            return string.sub(rest, 1, 3) == "PAD"
+        end
+
+        -- A command's keys and its controller buttons, each in binding order: GetBinding's row
+        -- names them all, where GetBindingKey stops at two.
+        function BenillaKeyBindings_KeysOf(command)
+            local keys, pads = {}, {}
+            for i = 1, GetNumBindings() do
+                local row = { GetBinding(i) }
+                if row[1] == command then
+                    for j = 2, table.getn(row) do
+                        if BenillaKeyBindings_IsPad(row[j]) then
+                            table.insert(pads, row[j])
+                        else
+                            table.insert(keys, row[j])
+                        end
+                    end
+                    break
+                end
+            end
+            return keys, pads
+        end
+
+        -- The Controller capsule's text: its buttons, or Not Bound; two or more in short ("Pad
+        -- Cross / A" as "Cross/A"), to fit the capsule.
+        function BenillaKeyBindings_PadText(pads)
+            local n = table.getn(pads)
+            if n == 0 then return BenillaKeyBindings_KeyText(nil) end
+            if n == 1 then return BenillaKeyBindings_KeyText(pads[1]) end
+            local out = {}
+            for i = 1, n do
+                local text = BenillaKeyBindings_KeyText(pads[i])
+                text = string.gsub(text, "^Pad ", "")
+                text = string.gsub(text, " / ", "/")
+                table.insert(out, text)
+            end
+            return table.concat(out, ", ")
+        end
+
         function BenillaKeyBindings_PaintBindRow(name, index)
-            local command, key1, key2 = GetBinding(index)
+            local command = GetBinding(index)
+            local keys, pads = BenillaKeyBindings_KeysOf(command)
+            local key1, key2 = keys[1], keys[2]
             local b1 = getglobal(name .. "Key1Button")
             local b2 = getglobal(name .. "Key2Button")
+            local b3 = getglobal(name .. "Key3Button")
             b1.commandName = command
             b2.commandName = command
+            b3.commandName = command
             b1:SetText(BenillaKeyBindings_KeyText(key1))
             b2:SetText(BenillaKeyBindings_KeyText(key2))
+            b3:SetText(BenillaKeyBindings_PadText(pads))
             if key1 then b1:SetAlpha(1) else b1:SetAlpha(0.8) end
             if key2 then b2:SetAlpha(1) else b2:SetAlpha(0.8) end
+            if pads[1] then b3:SetAlpha(1) else b3:SetAlpha(0.8) end
             local desc = getglobal(name .. "Description")
             desc:SetText(BenillaKeyBindings_String("BINDING_NAME_" .. command, command))
             desc:Show()
@@ -216,8 +283,14 @@
             else
                 b2:UnlockHighlight()
             end
+            if page.selected == command and page.keyID == 3 then
+                b3:LockHighlight()
+            else
+                b3:UnlockHighlight()
+            end
             b1:Show()
             b2:Show()
+            b3:Show()
             getglobal(name .. "Header"):Hide()
         end
 
@@ -236,6 +309,7 @@
             getglobal(name .. "Description"):Hide()
             getglobal(name .. "Key1Button"):Hide()
             getglobal(name .. "Key2Button"):Hide()
+            getglobal(name .. "Key3Button"):Hide()
         end
 
         -- ── The list repaint (1.12 KeyBindingFrame_Update) ──
@@ -381,19 +455,40 @@
             if IsControlKeyDown() then chord = "CTRL-" .. chord end
             if IsAltKeyDown() then chord = "ALT-" .. chord end
             local selected = page.selected
+            local keys, pads = BenillaKeyBindings_KeysOf(selected)
+            local isPad = BenillaKeyBindings_IsPad(chord)
+            -- The Controller capsule takes a controller button only; Escape disarms it.
+            if page.keyID == 3 and not isPad then
+                if chord == "ESCAPE" then
+                    BenillaKeyBindings_SetSelected(nil)
+                    BenillaKeyBindings_Output("")
+                    BenillaKeyBindings_RepaintVisible()
+                else
+                    BenillaKeyBindings_Output("Press a controller button to bind it, or Escape.")
+                end
+                return
+            end
             -- Who holds the chord now: a holder this bind leaves keyless is told so, as 1.12's
             -- window tells it (Blizzard_BindingUI.lua:186-196), once the keys have moved.
             local holders = BenillaKeyBindings_Holders(chord)
-            local key1, key2 = GetBindingKey(selected)
-            if key1 then BenillaKeyBindings_ClearKey(key1, selected) end
-            if key2 then BenillaKeyBindings_ClearKey(key2, selected) end
             local bound
-            if page.keyID == 1 then
-                bound = BenillaKeyBindings_SetOrRestore(chord, selected, key1)
-                if key2 then SetBinding(key2, selected) end
+            if isPad then
+                -- A controller button, from any capsule: the command's buttons are this one.
+                for i = 1, table.getn(pads) do
+                    BenillaKeyBindings_ClearKey(pads[i], selected)
+                end
+                bound = BenillaKeyBindings_SetOrRestore(chord, selected, pads[1])
             else
-                if key1 then SetBinding(key1, selected) end
-                bound = BenillaKeyBindings_SetOrRestore(chord, selected, key2)
+                local key1, key2 = keys[1], keys[2]
+                if key1 then BenillaKeyBindings_ClearKey(key1, selected) end
+                if key2 then BenillaKeyBindings_ClearKey(key2, selected) end
+                if page.keyID == 1 then
+                    bound = BenillaKeyBindings_SetOrRestore(chord, selected, key1)
+                    if key2 then SetBinding(key2, selected) end
+                else
+                    if key1 then SetBinding(key1, selected) end
+                    bound = BenillaKeyBindings_SetOrRestore(chord, selected, key2)
+                end
             end
             if bound then
                 local lost = nil
@@ -479,13 +574,21 @@
         -- 1.12's Unbind Key body, then the live commit.
         function BenillaKeyBindings_Unbind()
             local page = BenillaKeyBindingsPage
-            local key1, key2 = GetBindingKey(page.selected)
-            if key1 then BenillaKeyBindings_ClearKey(key1, page.selected) end
-            if key2 then BenillaKeyBindings_ClearKey(key2, page.selected) end
-            if key1 and page.keyID == 1 then
-                if key2 then SetBinding(key2, page.selected) end
+            local keys, pads = BenillaKeyBindings_KeysOf(page.selected)
+            if page.keyID == 3 then
+                -- The Controller capsule: every controller button the command has.
+                for i = 1, table.getn(pads) do
+                    BenillaKeyBindings_ClearKey(pads[i], page.selected)
+                end
             else
-                if key1 then SetBinding(key1, page.selected) end
+                local key1, key2 = keys[1], keys[2]
+                if key1 then BenillaKeyBindings_ClearKey(key1, page.selected) end
+                if key2 then BenillaKeyBindings_ClearKey(key2, page.selected) end
+                if key1 and page.keyID == 1 then
+                    if key2 then SetBinding(key2, page.selected) end
+                else
+                    if key1 then SetBinding(key1, page.selected) end
+                end
             end
             BenillaKeyBindings_Commit()
             BenillaKeyBindings_SetSelected(nil)

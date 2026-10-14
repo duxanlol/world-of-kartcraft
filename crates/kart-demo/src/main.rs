@@ -398,7 +398,13 @@ fn drive(
         // Unattended: the kart stands at the start, facing the dummies, whatever pad is about.
         input::Controls::default()
     } else {
-        input::read(&input::Keys::from_keyboard(&keys), &pads, &[], false)
+        // No bindings here: the pad's fixed layout.
+        let pad_keys = pads
+            .iter()
+            .next()
+            .map(input::Keys::from_pad)
+            .unwrap_or_default();
+        input::read(&input::Keys::from_keyboard(&keys), &pad_keys, &pads, false)
     };
     // The autopilot fires now and then while it holds an item (a shield or a bomb it keeps).
     let holding = matches!(weapons.held(), HeldView::Item(_) | HeldView::Spinning);

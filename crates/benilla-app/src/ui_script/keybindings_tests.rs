@@ -335,6 +335,56 @@ fn the_capture_flow_binds_steals_and_refuses_like_112() {
 /// (`Blizzard_BindingUI.lua:246`) and the window's (`Blizzard_BindingUI.xml:538-540`), here the
 /// page's `OnMouseUp`; left and right clicks only select.
 #[test]
+fn the_controller_capsule_holds_the_pad_buttons_apart_from_the_keys() {
+    benilla_formats::wow_data_or_skip!();
+    let mut s = harness();
+    on_page(&mut s);
+    s.run(&format!("{ROW}1Header:Click()")).unwrap(); // expand Movement
+    let keys = |s: &UiScript| -> String {
+        s.eval("local a, b = GetBindingKey('MOVEFORWARD') return (a or '') .. ',' .. (b or '')")
+            .unwrap()
+    };
+    let holder = |s: &UiScript, key: &str| -> String {
+        s.eval(&format!("return GetBindingAction('{key}')"))
+            .unwrap()
+    };
+    let pad_text = |s: &UiScript| -> String {
+        s.eval(&format!("return {ROW}3Key3ButtonText:GetText()"))
+            .unwrap()
+    };
+    // Row 3 is MOVEFORWARD (W, UP): its Controller capsule starts unbound.
+    assert_eq!(keys(&s), "W,UP");
+    assert!(pad_text(&s).contains(&label(&s, "NOT_BOUND", "Not Bound")));
+    // Armed on Controller, a key binds nothing; a controller button binds there, the keys stay.
+    s.run(&format!("{ROW}3Key3Button:Click()")).unwrap();
+    assert!(armed(&s));
+    assert!(press(&mut s, "J"));
+    assert!(armed(&s), "a key does not bind on the Controller capsule");
+    assert_eq!(holder(&s, "J"), "");
+    assert!(press(&mut s, "PAD1"));
+    assert!(!armed(&s));
+    assert_eq!(holder(&s, "PAD1"), "MOVEFORWARD");
+    assert_eq!(keys(&s), "W,UP", "the keys are untouched");
+    assert!(pad_text(&s).contains("PAD1") || pad_text(&s).contains("Cross"));
+    // A controller button pressed on a key capsule goes to the Controller one, replacing it.
+    s.run(&format!("{ROW}3Key1Button:Click()")).unwrap();
+    assert!(press(&mut s, "PAD2"));
+    assert_eq!(holder(&s, "PAD2"), "MOVEFORWARD");
+    assert_eq!(holder(&s, "PAD1"), "", "the old button is let go");
+    assert_eq!(keys(&s), "W,UP");
+    // Unbind on the Controller capsule clears the buttons alone.
+    s.run(&format!("{ROW}3Key3Button:Click()")).unwrap();
+    s.run("BenillaOptionsFrameContainerUnbind:Click()").unwrap();
+    assert_eq!(holder(&s, "PAD2"), "");
+    assert_eq!(keys(&s), "W,UP");
+    // Escape disarms the Controller capsule.
+    s.run(&format!("{ROW}3Key3Button:Click()")).unwrap();
+    press(&mut s, "ESCAPE");
+    assert!(!armed(&s));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+#[test]
 fn mouse_buttons_bind_through_the_capsules_and_the_page() {
     benilla_formats::wow_data_or_skip!();
     let mut s = harness();

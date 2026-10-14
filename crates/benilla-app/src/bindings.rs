@@ -140,13 +140,15 @@ pub(crate) struct BindingOverlay {
     /// and the owner's stock-plane ones; a stock-plane default on a key the stock defaults bind
     /// is dropped, so the owner never takes a stock key.
     defaults: &'static [(&'static str, &'static str)],
-    /// The controller buttons the mode reads itself, which no binding gets while it is on.
-    pads: &'static [bevy::input::gamepad::GamepadButton],
     /// The mode is on: the plane's keys are its own.
     pub(crate) active: bool,
-    /// Commands down this frame, and those whose key went down this frame.
+    /// Commands down this frame, and those whose key went down this frame, off the keyboard and
+    /// the mouse; and the same off the controller's buttons, apart, since a mode may read a
+    /// button and a key differently (the kart's brake reverses on a key, not on a pad).
     held: Vec<&'static str>,
     just: Vec<&'static str>,
+    pad_held: Vec<&'static str>,
+    pad_just: Vec<&'static str>,
 }
 
 impl BindingOverlay {
@@ -161,20 +163,6 @@ impl BindingOverlay {
         }
     }
 
-    /// The controller buttons the mode reads itself.
-    pub(crate) fn with_pads(
-        mut self,
-        pads: &'static [bevy::input::gamepad::GamepadButton],
-    ) -> Self {
-        self.pads = pads;
-        self
-    }
-
-    /// Does the mode read this controller button itself right now?
-    pub(crate) fn takes_pad(&self, b: bevy::input::gamepad::GamepadButton) -> bool {
-        self.active && self.pads.contains(&b)
-    }
-
     /// Is a key bound to this command down (only while the mode is on)?
     pub(crate) fn held(&self, command: &str) -> bool {
         self.held.contains(&command)
@@ -183,6 +171,16 @@ impl BindingOverlay {
     /// Did a key bound to this command go down this frame (only while the mode is on)?
     pub(crate) fn just_pressed(&self, command: &str) -> bool {
         self.just.contains(&command)
+    }
+
+    /// Is a controller button bound to this command down (only while the mode is on)?
+    pub(crate) fn pad_held(&self, command: &str) -> bool {
+        self.pad_held.contains(&command)
+    }
+
+    /// Did a controller button bound to this command go down this frame?
+    pub(crate) fn pad_just_pressed(&self, command: &str) -> bool {
+        self.pad_just.contains(&command)
     }
 
     /// The stock defaults with this plane's own added.
@@ -335,7 +333,7 @@ pub(crate) fn seed_bindings_for_vm(world: &mut World, script: &mut UiScript) {
     let defaults = script.default_bindings();
     let planes = script.binding_overlay();
     let account = crate::local_state::bindings_account_path();
-    let overrides = read_diff(&account).unwrap_or_default();
+    let overrides = read_diff(&account, &defaults, &planes).unwrap_or_default();
     script.seed_binding_set(1, Some(store::resolve(&overrides, &defaults, &planes)));
     script.load_binding_set(1);
 
@@ -347,7 +345,7 @@ pub(crate) fn seed_bindings_for_vm(world: &mut World, script: &mut UiScript) {
     let character = id
         .as_ref()
         .and_then(|(realm, name)| crate::local_state::bindings_character_path(realm, name));
-    match read_diff(&character) {
+    match read_diff(&character, &defaults, &planes) {
         Some(overrides) => {
             script.seed_binding_set(2, Some(store::resolve(&overrides, &defaults, &planes)));
             script.load_binding_set(2);
@@ -365,10 +363,14 @@ pub(crate) fn seed_bindings_for_vm(world: &mut World, script: &mut UiScript) {
 }
 
 /// Read and parse one diff file; `None` (the defaults) when absent or unreadable.
-fn read_diff(path: &Option<std::path::PathBuf>) -> Option<Vec<(String, Vec<String>)>> {
+fn read_diff(
+    path: &Option<std::path::PathBuf>,
+    defaults: &[benilla_ui::script::keybind::KeyBinding],
+    planes: &[String],
+) -> Option<Vec<(String, Vec<String>)>> {
     let path = path.as_ref()?;
     match std::fs::read_to_string(path) {
-        Ok(text) => Some(store::from_diff(&text)),
+        Ok(text) => Some(store::from_diff_migrated(&text, defaults, planes)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => {
             warn!("bindings: reading {}: {e}", path.display());
@@ -647,13 +649,14 @@ fn latch_and_dispatch(
     // ── Controller buttons ── Kartcraft's deviation (`chord::PAD_BUTTONS`): a press is a key
     // press by its `PAD` name, as a modifier-held one is its chord. Not while typing, not one the
     // interface took first (`UiKeyboardCapture::pad_consumed`: a key-capture frame, the layer's
-    // menus and popups), and not one the overlay's mode reads itself (the kart's driving buttons).
+    // menus and popups), and not one bound in the overlay's plane while its mode is on (the kart's
+    // driving buttons), as a key there is not.
     for pad in &gamepads {
         for &b in pad.get_just_pressed() {
             if typing
                 || sup
                 || capture.pad_consumed.contains(&b)
-                || overlay.takes_pad(b)
+                || (overlay.active && dispatch.overlay_takes(BindKey::Pad(b), alt, ctrl, shift))
                 || state.latched.iter().any(|(k, _)| *k == Held::Pad(b))
             {
                 continue;
@@ -770,11 +773,14 @@ fn poll_overlay(
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
     capture: Res<UiKeyboardCapture>,
+    gamepads: Query<&bevy::input::gamepad::Gamepad>,
     mut overlay: ResMut<BindingOverlay>,
 ) {
     let overlay = &mut *overlay;
     overlay.held.clear();
     overlay.just.clear();
+    overlay.pad_held.clear();
+    overlay.pad_just.clear();
     let sup = keys.any_pressed([KeyCode::SuperLeft, KeyCode::SuperRight]);
     if !overlay.active || capture.typing || sup {
         return;
@@ -790,16 +796,23 @@ fn poll_overlay(
     };
     let down = names(keys.get_pressed().collect());
     let pressed_now = names(keys.get_just_pressed().collect());
+    // A button the interface holds (its menu, a popup, the whole pad) or took a press of drives
+    // nothing.
+    let pad_free = |b: &bevy::input::gamepad::GamepadButton| {
+        !capture.pad_all && !capture.pad_owned.contains(b) && !capture.pad_consumed.contains(b)
+    };
+    let pad_down = |b| gamepads.iter().any(|p| p.pressed(b)) && pad_free(&b);
+    let pad_now = |b| gamepads.iter().any(|p| p.just_pressed(b)) && pad_free(&b);
     for (k, command) in &dispatch.overlay {
         if !k.modifiers_held(alt, ctrl, shift) {
             continue;
         }
+        let pad = matches!(k.key, Some(BindKey::Pad(_)));
         let (held, just) = match k.key {
             Some(BindKey::Key(n)) => (down.contains(&n), pressed_now.contains(&n)),
             Some(BindKey::Mouse(b)) => (buttons.pressed(b), buttons.just_pressed(b)),
             Some(BindKey::WheelUp | BindKey::WheelDown) => (false, false),
-            // The kart reads the controller itself (`kartcraft::input::DRIVING_PADS`).
-            Some(BindKey::Pad(_)) => (false, false),
+            Some(BindKey::Pad(b)) => (pad_down(b), pad_now(b)),
             // A lone modifier, held as `modifiers_held` found it.
             None => {
                 let mods = [
@@ -820,11 +833,16 @@ fn poll_overlay(
         else {
             continue;
         };
-        if held && !overlay.held.contains(&name) {
-            overlay.held.push(name);
+        let (held_list, just_list) = if pad {
+            (&mut overlay.pad_held, &mut overlay.pad_just)
+        } else {
+            (&mut overlay.held, &mut overlay.just)
+        };
+        if held && !held_list.contains(&name) {
+            held_list.push(name);
         }
-        if just && !overlay.just.contains(&name) {
-            overlay.just.push(name);
+        if just && !just_list.contains(&name) {
+            just_list.push(name);
         }
     }
 }
