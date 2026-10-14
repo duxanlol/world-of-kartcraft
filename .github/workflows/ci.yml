@@ -79,4 +79,31 @@ jobs:
         continue-on-error: true
         run: powershell -ExecutionPolicy Bypass -File setup\setup.ps1 -Doctor
       - name: check
-        run: cargo check --release -p benilla -p kart-demo
+        run: cargo check --release -p benilla -p kart-demo -p kartcraft-launcher
+
+  macos:
+    # Apple Silicon: the workspace builds and the tests that need neither the install nor the
+    # disc run, on every pull request, since the maintainer's own machine is Windows.
+    runs-on: macos-14
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      # Set and empty: no install, as the gates' test-no-install runs.
+      WOW_DATA: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: rustup toolchain install && rustc -V
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: build
+        run: cargo build --workspace
+      - name: test
+        run: cargo test --workspace
+      - name: player-tests
+        run: cargo test -p benilla-formats -p benilla-app --no-default-features --lib
+      - name: package.sh parses
+        run: bash -n dist/macos/package.sh
