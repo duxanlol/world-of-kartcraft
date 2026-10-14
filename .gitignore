@@ -51,10 +51,12 @@ __pycache__/
 /kart-data
 /target-*
 
-# The friends' client package and its update folder, built by dist/publish.ps1.
+# The friends' client package and its update folder, built by dist/publish.ps1 (Windows) and
+# dist/macos/package.sh (Mac).
 /dist/WorldOfKartcraft/
 /dist/WorldOfKartcraft.zip
 /dist/updates/
+/dist/macos/out/
 
 # The sign-up page's settings on the server host: its database password.
 /setup/register/.env
