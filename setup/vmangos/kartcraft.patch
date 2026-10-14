@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..ab1e96f
+index 0000000..50b56b3
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,3759 @@
+@@ -0,0 +1,3935 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -1044,6 +1044,171 @@ index 0000000..ab1e96f
 +                "`ms`, `at`) VALUES ('%s', '%s', %u, '%s', %u, %u)", board->period.c_str(), course.c_str(), guid,
 +                escaped.c_str(), ms, uint32(std::time(nullptr)));
 +        }
++    }
++
++    // Cosmetics: a kart paint and a boost trail, each earned by what a racer has done, the
++    // server's tables the measure: races run, races won (of two or more), course records held
++    // (races and time trials), challenge times set, and finished ladder seasons ended in the top
++    // three or on top. The catalogues are here, sent to the client with each racer's numbers
++    // ("CC"); the client draws a paint or trail by its index. What a racer wears is
++    // kartcraft_cosmetic; an equip the numbers do not earn is refused.
++    enum CosmeticStat : uint8
++    {
++        STAT_RACES,
++        STAT_WINS,
++        STAT_RECORDS,
++        STAT_CHALLENGES,
++        STAT_PODIUMS,
++        STAT_CHAMPIONS,
++        STAT_COUNT
++    };
++
++    struct Cosmetic
++    {
++        char const* name;
++        uint8 stat;
++        uint32 need; // 0: everyone's
++    };
++
++    static std::vector<Cosmetic> const PAINTS = {
++        { "Stock", STAT_RACES, 0 },
++        { "Copper", STAT_RACES, 10 },
++        { "Silver", STAT_WINS, 5 },
++        { "Gold", STAT_WINS, 25 },
++        { "Midnight", STAT_RACES, 100 },
++        { "Record Red", STAT_RECORDS, 1 },
++        { "Challenger Teal", STAT_CHALLENGES, 1 },
++        { "Champion Violet", STAT_PODIUMS, 1 },
++    };
++
++    static std::vector<Cosmetic> const TRAILS = {
++        { "None", STAT_RACES, 0 },
++        { "Sparks", STAT_RACES, 25 },
++        { "Wumpa", STAT_WINS, 10 },
++        { "Frost", STAT_RECORDS, 3 },
++        { "Rainbow", STAT_CHAMPIONS, 1 },
++    };
++
++    static void CreateCosmetics()
++    {
++        CharacterDatabase.DirectExecute(
++            "CREATE TABLE IF NOT EXISTS `kartcraft_cosmetic` ("
++            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
++            "`paint` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'index into PAINTS', "
++            "`trail` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'index into TRAILS', "
++            "`at` INT UNSIGNED NOT NULL COMMENT 'when, unix time', "
++            "PRIMARY KEY (`guid`)"
++            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
++    }
++
++    static uint32 CountOf(char const* sql)
++    {
++        std::unique_ptr<QueryResult> result = CharacterDatabase.Query(sql);
++        return result ? result->Fetch()[0].GetUInt32() : 0;
++    }
++
++    // A racer's numbers, STAT_COUNT of them, read now.
++    static std::vector<uint32> CosmeticStats(uint32 guid)
++    {
++        std::vector<uint32> stats(STAT_COUNT, 0);
++        char sql[640];
++        std::snprintf(sql, sizeof(sql),
++            "SELECT COUNT(*) FROM `kartcraft_results` WHERE `guid` = %u AND `trial` = 0", guid);
++        stats[STAT_RACES] = CountOf(sql);
++        std::snprintf(sql, sizeof(sql),
++            "SELECT COUNT(*) FROM `kartcraft_results` WHERE `guid` = %u AND `trial` = 0 AND `place` = 1 "
++            "AND `field` >= 2", guid);
++        stats[STAT_WINS] = CountOf(sql);
++        for (char const* table : { "kartcraft_records", "kartcraft_tt_records" })
++        {
++            std::snprintf(sql, sizeof(sql),
++                "SELECT COUNT(*) FROM `%s` r WHERE r.`guid` = %u AND r.`ms` > 0 AND r.`ms` = "
++                "(SELECT MIN(o.`ms`) FROM `%s` o WHERE o.`course` = r.`course` AND o.`ms` > 0)",
++                table, guid, table);
++            stats[STAT_RECORDS] += CountOf(sql);
++        }
++        std::snprintf(sql, sizeof(sql),
++            "SELECT COUNT(*) FROM `kartcraft_challenge` WHERE `guid` = %u", guid);
++        stats[STAT_CHALLENGES] = CountOf(sql);
++        uint32 season = SeasonNow();
++        for (uint8 stat : { STAT_PODIUMS, STAT_CHAMPIONS })
++        {
++            std::snprintf(sql, sizeof(sql),
++                "SELECT COUNT(*) FROM `kartcraft_ladder` l WHERE l.`guid` = %u AND l.`season` < %u AND "
++                "(SELECT COUNT(*) FROM `kartcraft_ladder` o WHERE o.`season` = l.`season` AND o.`rating` > l.`rating`) < %u",
++                guid, season, stat == STAT_PODIUMS ? 3u : 1u);
++            stats[stat] = CountOf(sql);
++        }
++        return stats;
++    }
++
++    static bool Earned(std::vector<Cosmetic> const& list, uint32 index, std::vector<uint32> const& stats)
++    {
++        return index < list.size() && stats[list[index].stat] >= list[index].need;
++    }
++
++    // What a racer wears: (paint, trail), 0 for none on file.
++    static std::pair<uint32, uint32> Worn(uint32 guid)
++    {
++        std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
++            "SELECT `paint`, `trail` FROM `kartcraft_cosmetic` WHERE `guid` = %u", guid);
++        if (!result)
++            return { 0, 0 };
++        Field* f = result->Fetch();
++        return { f[0].GetUInt32(), f[1].GetUInt32() };
++    }
++
++    static std::string Catalogue(std::vector<Cosmetic> const& list)
++    {
++        std::string text;
++        for (Cosmetic const& c : list)
++        {
++            if (!text.empty())
++                text += ";";
++            text += std::string(c.name) + ":" + std::to_string(c.stat) + ":" + std::to_string(c.need);
++        }
++        return text;
++    }
++
++    // "KARTCRAFT\tR\tCC\tP\t<name:stat:need;...>", the same for "T" (the trails), then
++    // "KARTCRAFT\tR\tCO\t<races,wins,records,challenges,podiums,champions>\t<paint>\t<trail>": the
++    // garage's Paint and Trail rows, and what we wear. A paint or trail no longer earned (a record
++    // lost) is worn no more.
++    static void SendCosmetics(Player* player)
++    {
++        uint32 guid = player->GetGUIDLow();
++        std::vector<uint32> stats = CosmeticStats(guid);
++        std::pair<uint32, uint32> worn = Worn(guid);
++        if (!Earned(PAINTS, worn.first, stats))
++            worn.first = 0;
++        if (!Earned(TRAILS, worn.second, stats))
++            worn.second = 0;
++        SendLine(player, "KARTCRAFT\tR\tCC\tP\t" + Catalogue(PAINTS));
++        SendLine(player, "KARTCRAFT\tR\tCC\tT\t" + Catalogue(TRAILS));
++        std::string numbers;
++        for (uint32 v : stats)
++            numbers += (numbers.empty() ? "" : ",") + std::to_string(v);
++        SendLine(player, "KARTCRAFT\tR\tCO\t" + numbers + "\t" + std::to_string(worn.first) + "\t" +
++            std::to_string(worn.second));
++    }
++
++    // "R\tCE\tP|T\t<index>": wear a paint or a trail, if earned; the answer is "CO" either way.
++    static void EquipCosmetic(Player* player, std::string const& kind, std::string const& index)
++    {
++        uint32 guid = player->GetGUIDLow();
++        uint32 i = uint32(std::strtoul(index.c_str(), nullptr, 10));
++        std::vector<uint32> stats = CosmeticStats(guid);
++        std::pair<uint32, uint32> worn = Worn(guid);
++        bool paint = kind == "P";
++        if (Earned(paint ? PAINTS : TRAILS, i, stats))
++        {
++            (paint ? worn.first : worn.second) = i;
++            CharacterDatabase.PExecute("REPLACE INTO `kartcraft_cosmetic` (`guid`, `paint`, `trail`, `at`) "
++                "VALUES (%u, %u, %u, %u)", guid, worn.first, worn.second, uint32(std::time(nullptr)));
++        }
++        else
++            ChatHandler(player->GetSession()).SendSysMessage("Not earned yet.");
++        SendCosmetics(player);
 +    }
 +
 +    // "KARTCRAFT\tR\tCH\t<day's course>\t<week's course>\t<your day best>\t<day leader>\t<their ms>
@@ -3200,6 +3365,16 @@ index 0000000..ab1e96f
 +            SendChallenges(player);
 +            return;
 +        }
++        if (f.size() >= 2 && f[1] == "CO")
++        {
++            SendCosmetics(player);
++            return;
++        }
++        if (f.size() >= 4 && f[1] == "CE" && (f[2] == "P" || f[2] == "T"))
++        {
++            EquipCosmetic(player, f[2], f[3]);
++            return;
++        }
 +        // The showcase's verb works on foot, as a GM's teleport does.
 +        if (f.size() >= 2 && HandleShow(player, f))
 +            return;
@@ -3805,6 +3980,7 @@ index 0000000..ab1e96f
 +        marshal->RegisterSelf(true);
 +        CreateResults();
 +        CreateChallenges();
++        CreateCosmetics();
 +        LoadLadder();
 +        LoadRecords(s_raceBoard, "race");
 +        LoadRecords(s_trialBoard, "time trial");
