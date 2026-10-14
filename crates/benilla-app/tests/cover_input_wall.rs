@@ -129,6 +129,8 @@ const VERDICTS: &[(&str, Verdict)] = &[
     ("PresentMode", Plumbing),
     ("PrimaryWindow", Plumbing),
     ("RawHandleWrapper", Plumbing),
+    // winit's own windows, borrowed only to give the window its icon (`window_icon.rs`).
+    ("WINIT_WINDOWS", Plumbing),
     ("Window", Plumbing),
     ("WindowLevel", Plumbing),
     ("WindowMode", Plumbing),

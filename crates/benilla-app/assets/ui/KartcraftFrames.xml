@@ -525,13 +525,20 @@
                 BenillaKartTracksFrameText:SetText(track.text)
                 BenillaKartTracksFrameShow:Enable()
                 BenillaKartTracksFrameRate:Enable()
-                if track.map > 1 then BenillaKartTracksFrameTrial:Disable() else BenillaKartTracksFrameTrial:Enable() end
+                if track.map > 1 then
+                    BenillaKartTracksFrameTrial:Disable()
+                    BenillaKartTracksFrameMarshal:Disable()
+                else
+                    BenillaKartTracksFrameTrial:Enable()
+                    BenillaKartTracksFrameMarshal:Enable()
+                end
             else
                 BenillaKartTracksFrameTitle:SetText("")
                 BenillaKartTracksFrameText:SetText("Pick a track to read about it and see it on the map.")
                 BenillaKartTracksFrameShow:Disable()
                 BenillaKartTracksFrameTrial:Disable()
                 BenillaKartTracksFrameRate:Disable()
+                BenillaKartTracksFrameMarshal:Disable()
             end
             if BenillaKartRoute.key and BenillaKartRoute.key == selected then
                 BenillaKartTracksFrameShow:SetText("Shown on the map")
@@ -546,6 +553,15 @@
             local track = BenillaKartTrackBrowser.selected and BenillaKartTrack(BenillaKartTrackBrowser.selected)
             if not track or track.map > 1 then return end
             BenillaKart_Send("TB\t" .. track.key)
+            BenillaKartTracksFrame:Hide()
+        end
+
+        -- To the track's Race Marshal, in front of them, from wherever we are; the server says when
+        -- the last trip was too recent. A party course's marshal stands inside its dungeon.
+        function BenillaKartTrackBrowser_ToMarshal()
+            local track = BenillaKartTrackBrowser.selected and BenillaKartTrack(BenillaKartTrackBrowser.selected)
+            if not track or track.map > 1 then return end
+            BenillaKart_Send("MT\t" .. track.key)
             BenillaKartTracksFrame:Hide()
         end
 
@@ -732,6 +748,8 @@
         end
 
         function BenillaKartMap_SetTrack(name, laps, list)
+            BenillaKartShortcuts.racing = name ~= nil and name ~= ""
+            BenillaKartShortcuts_Update()
             local m = BenillaKartMap
             if not name or name == "" then
                 BenillaKartMapFrame:Hide()
@@ -866,6 +884,9 @@
                 BenillaKartLobby_Set(line[3], line[4])
             elseif verb == "Ux" then
                 BenillaKart_Say(format("Unstuck: you can use it again in %d seconds.",
+                    tonumber(line[3]) or 0))
+            elseif verb == "MTx" then
+                BenillaKart_Say(format("You can travel to a Race Marshal again in %d seconds.",
                     tonumber(line[3]) or 0))
             elseif verb == "Un" then
                 BenillaKart_Say("Unstuck: no course starts within 300 yards.")
@@ -1342,12 +1363,25 @@
             { "Controller test", function() BenillaKartPad_Toggle() end },
         }
 
+        -- The menu as wide as its widest entry: a challenge names its course, and a long name
+        -- fits on its button, every button the same width, the window around them.
+        BENILLA_KART_MENU_WIDTH = 220
+        BENILLA_KART_MENU_PADDING = 32
+        BENILLA_KART_MENU_MARGIN = 60
+
         function BenillaKartMenu_Refresh()
+            local widest = BENILLA_KART_MENU_WIDTH
             for i = 1, table.getn(BENILLA_KART_MENU) do
                 local label = BENILLA_KART_MENU[i][1]
                 if type(label) == "function" then label = label() end
-                getglobal("BenillaKartMenuFrameEntry" .. i):SetText(label)
+                local entry = getglobal("BenillaKartMenuFrameEntry" .. i)
+                entry:SetText(label)
+                widest = math.max(widest, entry:GetTextWidth() + BENILLA_KART_MENU_PADDING)
             end
+            for i = 1, table.getn(BENILLA_KART_MENU) do
+                getglobal("BenillaKartMenuFrameEntry" .. i):SetWidth(widest)
+            end
+            BenillaKartMenuFrame:SetWidth(widest + BENILLA_KART_MENU_MARGIN)
         end
 
         -- An entry chosen: the menu goes first, so a window it opens takes the controller.
@@ -1643,7 +1677,23 @@
             "PartyMemberFrame2", "PartyMemberFrame3", "PartyMemberFrame4",
         }
 
+        -- In the kart and out of a race, two shortcuts: a time trial (the track browser, where the
+        -- course is picked) and the Race Finder. A race under way (a course on the race map) or
+        -- climbing out puts them away.
+        BenillaKartShortcuts = {}
+
+        function BenillaKartShortcuts_Update()
+            local s = BenillaKartShortcuts
+            if s.seated and not s.racing then
+                BenillaKartShortcutsFrame:Show()
+            else
+                BenillaKartShortcutsFrame:Hide()
+            end
+        end
+
         function BenillaKartSeated_Set(seated)
+            BenillaKartShortcuts.seated = seated
+            BenillaKartShortcuts_Update()
             if seated then BenillaKartGuide_FirstDrive() end
             if not BenillaKartHiddenHolder then
                 BenillaKartHiddenHolder = CreateFrame("Frame", nil, UIParent)
@@ -3434,7 +3484,7 @@
 
     <!-- Over the world map, which it opens, so another track can be picked with the map up. -->
     <Frame name="BenillaKartTracksFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="FULLSCREEN_DIALOG">
-        <Size><AbsDimension x="340" y="498"/></Size>
+        <Size><AbsDimension x="340" y="526"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="-220" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -3530,6 +3580,12 @@
                 <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="46"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartTrackBrowser_TimeTrial()</OnClick></Scripts>
             </Button>
+            <!-- To the track's Race Marshal (BenillaKartTrackBrowser_ToMarshal). -->
+            <Button name="$parentMarshal" inherits="UIPanelButtonTemplate" text="Go to marshal">
+                <Size><AbsDimension x="140" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="74"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartTrackBrowser_ToMarshal()</OnClick></Scripts>
+            </Button>
             <Button name="$parentShow" inherits="UIPanelButtonTemplate" text="Show on map">
                 <Size><AbsDimension x="140" y="22"/></Size>
                 <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="18"/></Offset></Anchor></Anchors>
@@ -3596,6 +3652,47 @@
                 </FontString>
             </Layer>
         </Layers>
+        <Scripts>
+            <OnLoad>
+                this:SetBackdropColor(0, 0, 0, 0.75)
+                BenillaKart_Movable(this)
+            </OnLoad>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+
+    <!-- The kart's shortcuts while out of a race (BenillaKartShortcuts_Update): a time trial and
+         the Race Finder. Dragged to where it suits. -->
+    <Frame name="BenillaKartShortcutsFrame" parent="UIParent" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" frameStrata="MEDIUM">
+        <Size><AbsDimension x="260" y="54"/></Size>
+        <!-- The screen's bottom edge, out of the kart's way. -->
+        <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="6"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+            <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>
+            <TileSize><AbsValue val="16"/></TileSize>
+            <EdgeSize><AbsValue val="16"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <!-- It moves: said on it, where a player looks. -->
+                <FontString name="$parentHint" inherits="GameFontDisableSmall" text="Drag to move">
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-6"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <Button name="$parentTrial" inherits="UIPanelButtonTemplate" text="Time trial">
+                <Size><AbsDimension x="116" y="24"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="10" y="8"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartTrackBrowser_Open()</OnClick></Scripts>
+            </Button>
+            <Button name="$parentFinder" inherits="UIPanelButtonTemplate" text="Race Finder">
+                <Size><AbsDimension x="116" y="24"/></Size>
+                <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-10" y="8"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKart_Open(BenillaKartFinderFrame)</OnClick></Scripts>
+            </Button>
+        </Frames>
         <Scripts>
             <OnLoad>
                 this:SetBackdropColor(0, 0, 0, 0.75)
