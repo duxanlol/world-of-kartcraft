@@ -589,8 +589,8 @@ fn a_finder_race_offers_the_way_back_and_new_bests_reach_the_chat() {
     assert_eq!(
         s.eval::<String>("return StaticPopup1Text:GetText()")
             .unwrap(),
-        "Return to where you were before the race?\n\n|cff999999Controller: Cross / A to return, \
-         Circle / B to stay|r"
+        "Return to where you were before the race?\n\n|cff999999Controller: Triangle / Y to return, \
+         Square / X to stay|r"
     );
     assert_eq!(
         s.eval::<String>("return StaticPopup1Button1:GetText()")
@@ -1350,7 +1350,7 @@ fn key_bindings_lists_the_kart_s_controls_and_they_run() {
         names,
         "Accelerate,Brake / Reverse,Steer Left,Steer Right,Reverse,Hop / Powerslide,\
          Boost (Second Shoulder),Fire Item,Toggle Camera Distance,Look Back,Wumpa Juice,Turbo Boost,Super Engine,Aku Aku,\
-         Summon / Dismiss Kart,Race Finder,Leave Race,Unstuck,Kartcraft Settings,Kart Garage,\
+         Summon / Dismiss Kart,Race Finder,Leave Race,Unstuck,Restart Time Trial,Kartcraft Settings,Kart Garage,\
          Clean Screen (hide all interface),Free Camera (fly, park, off),Next Kart,\
          Kartcraft Guide,Kartcraft Menu"
     );
@@ -2060,14 +2060,22 @@ fn the_controller_drives_the_kartcraft_menu_and_answers_its_popups() {
     assert_eq!(owns(&mut s), "");
     assert_eq!(focus(&mut s), "");
 
-    // A popup takes Cross and Circle only, while it is up.
+    // The way back takes Triangle and Square only, while it is up: Cross, likely still held
+    // from driving, answers nothing.
     sent(&mut s);
     s.run("StaticPopup_Show('BENILLA_KART_RETURN')").unwrap();
-    assert_eq!(owns(&mut s), "PAD1 PAD2");
-    assert!(!press(&mut s, "PAD4"));
-    assert!(press(&mut s, "PAD1"));
+    assert_eq!(owns(&mut s), "PAD4 PAD3");
+    assert!(!press(&mut s, "PAD1"));
+    assert!(press(&mut s, "PAD4"));
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tBack"]);
     assert_eq!(owns(&mut s), "");
+    s.run("StaticPopup_Show('BENILLA_KART_RETURN')").unwrap();
+    assert!(press(&mut s, "PAD3"));
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tStay"]);
+    // The race-ready popup keeps Cross and Circle.
+    s.run("StaticPopup_Show('BENILLA_KART_READY', 'Elwynn Loop', 2)").unwrap();
+    assert_eq!(owns(&mut s), "PAD1 PAD2");
+    s.run("StaticPopup_Hide('BENILLA_KART_READY')").unwrap();
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 

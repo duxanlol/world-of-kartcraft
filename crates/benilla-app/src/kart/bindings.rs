@@ -36,6 +36,8 @@ pub(super) const ABILITIES: [&str; 4] = [
 ];
 /// Summon Kart, or on a stock server in and out of the kart.
 pub(super) const SUMMON: &str = "KARTCRAFT_SUMMON";
+/// A time trial of ours starts over from its line ([`super::race::restart_line`]).
+pub(super) const RESTART: &str = "KARTCRAFT_RESTART";
 
 /// The overlay plane: the controls the kart reads while it drives.
 const DRIVING: &[&str] = &[
@@ -232,6 +234,7 @@ mod tests {
         for command in [
             "KARTCRAFT_LEAVERACE",
             "KARTCRAFT_UNSTUCK",
+            RESTART,
             "KARTCRAFT_SETTINGS",
             "KARTCRAFT_GARAGE",
             "KARTCRAFT_CLEANSCREEN",
@@ -244,7 +247,7 @@ mod tests {
         // Every row the file declares is a command the kart names or a Lua one.
         assert_eq!(
             benilla_ui::bindings_xml::parse(xml).unwrap().len(),
-            DRIVING.len() + 11
+            DRIVING.len() + 12
         );
     }
 }

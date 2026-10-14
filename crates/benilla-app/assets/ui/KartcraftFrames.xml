@@ -65,6 +65,7 @@
         BINDING_NAME_KARTCRAFT_RACEFINDER = "Race Finder"
         BINDING_NAME_KARTCRAFT_LEAVERACE = "Leave Race"
         BINDING_NAME_KARTCRAFT_UNSTUCK = "Unstuck"
+        BINDING_NAME_KARTCRAFT_RESTART = "Restart Time Trial"
         BINDING_NAME_KARTCRAFT_SETTINGS = "Kartcraft Settings"
         BINDING_NAME_KARTCRAFT_GARAGE = "Kart Garage"
         BINDING_NAME_KARTCRAFT_CLEANSCREEN = "Clean Screen (hide all interface)"
@@ -1154,8 +1155,13 @@
             { name = "BenillaKartReplaysFrame" },
             { name = "BenillaKartRateFrame" },
         }
-        -- The popups the controller answers: Cross is the first button, Circle the second.
-        BENILLA_PAD_POPUPS = { "BENILLA_KART_READY", "BENILLA_KART_RETURN" }
+        -- The popups the controller answers, and with which buttons: the first button's, then
+        -- the second's. The way back after a race is Triangle and Square, so the Cross still held
+        -- from driving (or a Circle meant to fire) answers nothing; while it is up neither drives.
+        BENILLA_PAD_POPUPS = {
+            { name = "BENILLA_KART_READY", accept = "PAD1", cancel = "PAD2" },
+            { name = "BENILLA_KART_RETURN", accept = "PAD4", cancel = "PAD3" },
+        }
         BenillaPad = { window = nil, focus = nil }
 
         -- The window the controller drives now, and its entry.
@@ -1258,10 +1264,11 @@
         function BenillaPad_OnButton(key)
             if StaticPopup_Visible then
                 for i = 1, table.getn(BENILLA_PAD_POPUPS) do
-                    local dialog = StaticPopup_Visible(BENILLA_PAD_POPUPS[i])
+                    local p = BENILLA_PAD_POPUPS[i]
+                    local dialog = StaticPopup_Visible(p.name)
                     if dialog then
-                        if key == "PAD1" then getglobal(dialog .. "Button1"):Click() return true end
-                        if key == "PAD2" then getglobal(dialog .. "Button2"):Click() return true end
+                        if key == p.accept then getglobal(dialog .. "Button1"):Click() return true end
+                        if key == p.cancel then getglobal(dialog .. "Button2"):Click() return true end
                     end
                 end
             end
@@ -1318,7 +1325,8 @@
             if frame then return "ALL" end
             if StaticPopup_Visible then
                 for i = 1, table.getn(BENILLA_PAD_POPUPS) do
-                    if StaticPopup_Visible(BENILLA_PAD_POPUPS[i]) then return "PAD1 PAD2" end
+                    local p = BENILLA_PAD_POPUPS[i]
+                    if StaticPopup_Visible(p.name) then return p.accept .. " " .. p.cancel end
                 end
             end
             return ""
@@ -2597,7 +2605,7 @@
             }
             -- After a Race Finder race, as the dungeon finder offers the way out of a dungeon.
             StaticPopupDialogs["BENILLA_KART_RETURN"] = {
-                text = "Return to where you were before the race?\n\n|cff999999Controller: Cross / A to return, Circle / B to stay|r",
+                text = "Return to where you were before the race?\n\n|cff999999Controller: Triangle / Y to return, Square / X to stay|r",
                 button1 = "Return",
                 button2 = "Stay",
                 timeout = 0,

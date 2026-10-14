@@ -1046,6 +1046,13 @@ pub(crate) struct RaceText {
 
 /// Handles the server's lines, the countdown, checkpoints and standings.
 #[allow(clippy::too_many_arguments)]
+/// The server's restart of our time trial (its `TR`), while we are in one, its run under way or
+/// its results still up; nothing in a race with others, nor out of every race.
+pub(super) fn restart_line(races: &Races) -> Option<String> {
+    let race = races.race.as_ref().filter(|r| r.time_trial)?;
+    Some(format!("KARTCRAFT\tR\tTR\t{}", race.id))
+}
+
 pub(crate) fn update(
     time: Res<Time>,
     drive: Res<super::KartDrive>,
@@ -1058,10 +1065,18 @@ pub(crate) fn update(
     names: Option<Res<crate::names::NameCache>>,
     current_map: Option<Res<benilla_world::world_map::CurrentMap>>,
     mut auto: Local<AutoRace>,
+    binds: Res<crate::bindings::BindingsState>,
 ) {
     let now = time.elapsed_secs();
     let races = &mut *races;
     let me = races.me.clone();
+    // The restart binding: our time trial over from its line, the lights at once.
+    if binds.ran(super::bindings::RESTART) {
+        if let Some(line) = restart_line(races) {
+            info!("kart race: restarting the time trial");
+            profession.send(line);
+        }
+    }
 
     // The server's lines.
     for f in std::mem::take(&mut races.inbox) {
@@ -2418,6 +2433,31 @@ mod tests {
         assert!(!races.time_trial());
         assert_eq!(races.weapons_race(), Some(8), "a race has its weapons");
         assert!(!races.run().unwrap().time_trial);
+    }
+
+    #[test]
+    fn only_a_time_trial_of_ours_restarts() {
+        let mut races = racer();
+        assert_eq!(restart_line(&races), None, "out of every race");
+        hear(&mut races, "L\t5\tRacer,Goblin", 1.0);
+        hear(&mut races, "G\t5\t4000\tRacer,Goblin", 2.0);
+        assert_eq!(restart_line(&races), None, "a race with others");
+        hear(&mut races, "L\t7\tRacer", 3.0);
+        hear(&mut races, "TT\t7", 3.0);
+        assert_eq!(restart_line(&races).as_deref(), Some("KARTCRAFT\tR\tTR\t7"));
+        hear(&mut races, "G\t7\t4000\tRacer", 3.0);
+        hear(&mut races, "F\t7\tRacer\t1\t61000", 70.0);
+        assert_eq!(
+            restart_line(&races).as_deref(),
+            Some("KARTCRAFT\tR\tTR\t7"),
+            "its results still up"
+        );
+        // The server's fresh one takes its place, and restarts in turn.
+        hear(&mut races, "L\t8\tRacer", 71.0);
+        hear(&mut races, "TT\t8", 71.0);
+        assert_eq!(restart_line(&races).as_deref(), Some("KARTCRAFT\tR\tTR\t8"));
+        hear(&mut races, "X", 80.0);
+        assert_eq!(restart_line(&races), None, "left");
     }
 
     #[test]

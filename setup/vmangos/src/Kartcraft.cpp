@@ -3272,6 +3272,33 @@ namespace Kartcraft
             r.awaiting = guid;
             r.awaitSince = now;
         }
+        else if (verb == "TR" && f.size() > 2)
+        {
+            // Restart a time trial ("R\tTR\t<race>", the restart binding): their time trial
+            // goes unrecorded (no retirement, no rating asked), a fresh one opens on its course
+            // and its countdown runs as they land on the grid. The spot a track browser trial
+            // took them from stays theirs, and nothing offers the way back now: that comes when
+            // they leave the last one.
+            auto race = s_races.find(uint32(std::strtoul(f[2].c_str(), nullptr, 10)));
+            if (race == s_races.end() || !race->second.timeTrial ||
+                std::none_of(race->second.racers.begin(), race->second.racers.end(),
+                    [guid](Racer const& m) { return m.guid == guid; }))
+                return true;
+            Course const& course = *race->second.course;
+            uint32 const instance = race->second.instance;
+            if (!CanRaceOn(player, course, instance) || RefuseOff(player, course))
+                return true;
+            s_races.erase(race);
+            uint32 raceId = OpenTimeTrial(player, course, instance, now);
+            Race& r = s_races[raceId];
+            if (TeleportToGrid(player, course, 0, instance))
+                StartRace(raceId, r, now, COUNTDOWN);
+            else
+            {
+                r.awaiting = guid;
+                r.awaitSince = now;
+            }
+        }
         else if (verb == "MT" && f.size() > 2)
         {
             if (Course const* course = FindCourse(f[2]))
