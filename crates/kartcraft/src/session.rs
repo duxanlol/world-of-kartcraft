@@ -130,6 +130,36 @@ pub struct Session {
     pads_off: bool,
     /// The last step's [`Feedback`].
     feedback: Feedback,
+    /// The shoulders (R1, L1) seen down in any frame since the last tick: a tap that starts and
+    /// ends between two 30 Hz ticks still reaches the next one, as CTR polls the pad every frame
+    /// it runs and a tap here can fall between them.
+    taps: Taps,
+}
+
+/// The shoulders seen down since the last tick ([`Session::step_with`]).
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
+struct Taps {
+    r1: bool,
+    l1: bool,
+}
+
+impl Taps {
+    /// This frame's controls with every press since the last tick: what the next tick reads.
+    fn with(self, input: &Input) -> Taps {
+        Taps {
+            r1: self.r1 || input.r1,
+            l1: self.l1 || input.l1,
+        }
+    }
+
+    /// `input` as the first tick of a frame reads it, the presses since the last tick in.
+    fn onto(self, input: &Input) -> Input {
+        Input {
+            r1: input.r1 || self.r1,
+            l1: input.l1 || self.l1,
+            ..*input
+        }
+    }
 }
 
 /// Every collision triangle in the box around `centre`, in lu from `origin`; zero-area and
@@ -363,7 +393,24 @@ impl Session {
         nearby: &[NearbyKart],
         after_tick: impl FnMut(&Collision, &mut Kart, Vec3),
     ) -> Vec<Event> {
-        self.step_driven(collide, now, dt, |_| *input, mods, nearby, after_tick)
+        let latched = self.taps.with(input);
+        let mut pending = Some(latched);
+        let events = self.step_driven(
+            collide,
+            now,
+            dt,
+            |_| pending.take().map_or(*input, |t| t.onto(input)),
+            mods,
+            nearby,
+            after_tick,
+        );
+        // No tick ran this frame: the presses wait for the next one.
+        self.taps = if pending.is_some() {
+            latched
+        } else {
+            Taps::default()
+        };
+        events
     }
 
     /// [`Session::step_with`], asking `input` for each tick's controls: a showcase's tape is
@@ -600,6 +647,22 @@ mod tests {
             held += usize::from(hold_at_void(world, kart, before));
         }
         held
+    }
+
+    #[test]
+    fn a_shoulder_tap_between_two_ticks_reaches_the_next_one() {
+        let up = Input::default();
+        let down = Input {
+            r1: true,
+            ..Default::default()
+        };
+        // A frame with R1 down and no tick, then a frame with it up and a tick: the tick sees it.
+        let waiting = Taps::default().with(&down);
+        let next = waiting.with(&up);
+        assert!(next.onto(&up).r1);
+        assert!(!next.onto(&up).l1);
+        // With nothing pressed in between, nothing is invented.
+        assert!(!Taps::default().with(&up).onto(&up).r1);
     }
 
     #[test]
