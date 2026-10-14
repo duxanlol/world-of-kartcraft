@@ -78,10 +78,11 @@ const VERDICTS: &[(&str, Verdict)] = &[
     ),
     // The kart's pad (World of Kartcraft): read only while the kart drives, and a load stops the
     // ride (`Player::may_drive`), so nothing under the cover moves it; the offline demo has no
-    // cover at all.
+    // cover at all. The interface's pad feed (`ui_script::input::feed_pad`) reads the cover itself
+    // and takes no press under it.
     (
         "Gamepad",
-        Open("the kart reads it only while driving, and a load ends the drive"),
+        Open("the kart reads it only while driving, and a load ends the drive; the interface's pad feed checks the cover"),
     ),
     (
         "GamepadAxis",
@@ -89,7 +90,7 @@ const VERDICTS: &[(&str, Verdict)] = &[
     ),
     (
         "GamepadButton",
-        Open("the kart reads it only while driving, and a load ends the drive"),
+        Open("the kart reads it only while driving, and a load ends the drive; the interface's pad feed checks the cover"),
     ),
     (
         "GamepadConnection",

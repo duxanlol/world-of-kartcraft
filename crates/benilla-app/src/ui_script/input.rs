@@ -81,18 +81,30 @@ fn feed_wheel(
 /// as a key by its `PAD` name (the Key Bindings page binds it so), else the layer's
 /// `BenillaPad_OnButton(name)` may (a menu's highlight, a popup's answer); either way its binding
 /// does not run. Then the buttons the layer holds while its window is up (`BenillaPad_Owns()`: the
-/// names, or `ALL`), which the kart leaves alone.
+/// names, or `ALL`), which the kart leaves alone. Under the loading cover no press reaches the
+/// interface, as no key or click does (`loading_screen::input`), and a button held through the
+/// load is not the interface's until let go.
 pub(super) fn feed_pad(
     script: Option<NonSendMut<UiScript>>,
     pads: Query<&bevy::input::gamepad::Gamepad>,
     time: Res<Time>,
+    cover: Option<Res<crate::loading_screen::LoadingScreen>>,
     mut capture: ResMut<UiKeyboardCapture>,
     mut gate: Local<PadGate>,
 ) {
     capture.pad_consumed.clear();
-    let Some(mut script) = script else {
+    let covered = cover.is_some_and(|c| c.covering());
+    let (Some(mut script), false) = (script, covered) else {
         capture.pad_owned.clear();
         capture.pad_all = false;
+        for b in pads
+            .iter()
+            .flat_map(|p| p.get_pressed().copied().collect::<Vec<_>>())
+        {
+            if !gate.stale.contains(&b) {
+                gate.stale.push(b);
+            }
+        }
         return;
     };
     let owns = |script: &mut UiScript| -> String {
@@ -188,38 +200,40 @@ impl PadGate {
 #[cfg(test)]
 mod pad_gate_tests {
     use super::PadGate;
-    use bevy::input::gamepad::GamepadButton::{East, South};
+    use bevy::input::gamepad::GamepadButton;
+    const SOUTH: GamepadButton = GamepadButton::South;
+    const EAST: GamepadButton = GamepadButton::East;
 
     #[test]
     fn cross_held_into_a_popup_answers_nothing_until_pressed_again() {
         let mut g = PadGate::default();
         // Driving, Cross down; the race ends and the popup takes the pad.
-        g.observe(false, &[South], 0.0);
-        g.observe(true, &[South], 1.0);
-        assert!(!g.may_take(South, 1.0));
-        assert!(!g.may_take(South, 5.0), "still the same press");
+        g.observe(false, &[SOUTH], 0.0);
+        g.observe(true, &[SOUTH], 1.0);
+        assert!(!g.may_take(SOUTH, 1.0));
+        assert!(!g.may_take(SOUTH, 5.0), "still the same press");
         // Let go and pressed again, once the popup has been up a moment: it answers.
         g.observe(true, &[], 5.1);
-        assert!(g.may_take(South, 5.2));
+        assert!(g.may_take(SOUTH, 5.2));
         // Circle was not down, but too soon after the popup came is too soon.
         let mut g = PadGate::default();
         g.observe(true, &[], 10.0);
-        assert!(!g.may_take(East, 10.1));
-        assert!(g.may_take(East, 10.4));
+        assert!(!g.may_take(EAST, 10.1));
+        assert!(g.may_take(EAST, 10.4));
     }
 
     #[test]
     fn a_button_a_menu_took_drives_only_once_let_go() {
         let mut g = PadGate::default();
         g.observe(true, &[], 0.0);
-        g.eat(South);
+        g.eat(SOUTH);
         // The menu closed on that press; Cross still down: still eaten, so the kart leaves it.
-        g.observe(false, &[South], 1.0);
-        assert_eq!(g.eaten, [South]);
+        g.observe(false, &[SOUTH], 1.0);
+        assert_eq!(g.eaten, [SOUTH]);
         g.observe(false, &[], 1.1);
         assert!(g.eaten.is_empty());
         // With nothing holding the pad, a press is anyone's.
-        assert!(g.may_take(South, 1.2));
+        assert!(g.may_take(SOUTH, 1.2));
     }
 }
 
