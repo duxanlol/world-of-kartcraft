@@ -1967,8 +1967,9 @@ mod tests {
     }
 
     /// The string-valued rows, a closed list, each default checked on its own terms: `realmName`
-    /// (the reference's registered `""`, `0x882748`), `gxApi` and the kart's `KartReplays` (the
-    /// replays on disk, `kart::replay`) are empty until the session writes them; `gxResolution`, `realmList` and the kart garage's `KartClass` and `KartRacer` pass
+    /// (the reference's registered `""`, `0x882748`), `gxApi` and the kart's `KartReplay` and
+    /// `KartReplays` (the replay playing and those on disk, `kart::replay`) are empty until the
+    /// session writes them; `gxResolution`, `realmList` and the kart garage's `KartClass` and `KartRacer` pass
     /// their observers' parsers ([`crate::video::parse_resolution`],
     /// [`crate::realmlist::normalize`], [`kartcraft::class_named`], `ctr-extract`'s racers).
     #[test]
@@ -1985,6 +1986,7 @@ mod tests {
                 "KartClass",
                 "KartFreeCam",
                 "KartRacer",
+                "KartReplay",
                 "KartReplays",
                 "gxApi",
                 "gxResolution",
@@ -2001,6 +2003,7 @@ mod tests {
         };
         assert_eq!(default_of("realmName"), "");
         assert_eq!(default_of("gxApi"), "");
+        assert_eq!(default_of("KartReplay"), "");
         assert_eq!(default_of("KartReplays"), "");
         assert_eq!(
             crate::video::parse_resolution(default_of("gxResolution")),
@@ -2013,6 +2016,18 @@ mod tests {
         );
         assert!(kartcraft::class_named(default_of("KartClass")).is_some());
         assert!(kartcraft::model::KARTS.contains(&default_of("KartRacer")));
+    }
+
+    /// A replay's token is what the Replays window writes to `KartReplay`; a numeric row would
+    /// refuse it as unparseable, and the replay would never play.
+    #[test]
+    fn kartreplay_takes_a_replay_s_token() {
+        let mut cvars = registry(&[]);
+        let token = "001791946320-needles_mirage_shimmering_3";
+        cvars.set_from_vm("KartReplay", token);
+        assert_eq!(cvars.get("KartReplay"), Some(token));
+        cvars.set_from_vm("KartReplay", "0");
+        assert_eq!(cvars.get("KartReplay"), Some("0"));
     }
 
     /// A registry loaded from `file`, with no disk.

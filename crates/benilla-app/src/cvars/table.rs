@@ -802,11 +802,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "0",
         "Kartcraft's own — the kart's boost trail; 1.12 has no kart",
     ),
-    // The races we were in, to rewatch (`kart::replay`): the replay playing (`0` none), and the
-    // replays on disk for the Kartcraft menu's window; both for the session only.
+    // The races we were in, to rewatch (`kart::replay`): the replay playing (a file's token; empty
+    // or `0` none), and the replays on disk for the Kartcraft menu's window; both for the session
+    // only. Strings, so a token is not refused as an unparseable number.
     ours(
         "KartReplay",
-        "0",
+        "",
         "Kartcraft's own — the replay playing; 1.12 has no kart",
     ),
     ours(

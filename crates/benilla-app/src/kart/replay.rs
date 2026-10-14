@@ -662,7 +662,9 @@ pub(crate) fn update(
         None => want_eye,
     };
     p.eye = Some(eye);
-    let look = pose.pos + yaw * p.behind.1;
+    // At the kart itself, at the chase camera's look height: however the eye lags a spin, the one
+    // watched stays in frame.
+    let look = pose.pos + Vec3::Y * p.behind.1.y.clamp(0.0, 2.0);
     let forward = yaw * Vec3::Z;
     let (camera, fov) = if p.shot == Shot::Behind {
         (
