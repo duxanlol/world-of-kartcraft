@@ -860,6 +860,53 @@ namespace Kartcraft
         return h;
     }
 
+    // Tracks the owner has taken out (kartcraft_course_off, written by the website's admin page):
+    // the Race Finder never picks one, the automatic challenge never lands on one, and hosting or a
+    // time trial on one is refused; the client hides them from its track browser ("R\tOff").
+    // Looked at again every COURSE_OFF_RECHECK_MS.
+    static uint32 const COURSE_OFF_RECHECK_MS = 30 * IN_MILLISECONDS;
+    static std::set<std::string> s_courseOff;
+    static uint32 s_courseOffChecked = 0;
+
+    static void CourseOffNow()
+    {
+        uint32 now = WorldTimer::getMSTime();
+        if (s_courseOffChecked && WorldTimer::getMSTimeDiff(s_courseOffChecked, now) < COURSE_OFF_RECHECK_MS)
+            return;
+        s_courseOffChecked = now ? now : 1;
+        s_courseOff.clear();
+        std::unique_ptr<QueryResult> result = CharacterDatabase.Query("SELECT `course` FROM `kartcraft_course_off`");
+        if (!result)
+            return;
+        do
+            s_courseOff.insert(result->Fetch()[0].GetCppString());
+        while (result->NextRow());
+    }
+
+    static bool CourseOff(Course const& c)
+    {
+        CourseOffNow();
+        return s_courseOff.count(c.key) != 0;
+    }
+
+    // "KARTCRAFT\tR\tOff\t<key,key,...>": the tracks taken out, for the track browser.
+    static void SendCourseOff(Player* player)
+    {
+        CourseOffNow();
+        std::string keys;
+        for (std::string const& k : s_courseOff)
+            keys += (keys.empty() ? "" : ",") + k;
+        SendLine(player, "KARTCRAFT\tR\tOff\t" + keys);
+    }
+
+    static bool RefuseOff(Player* player, Course const& c)
+    {
+        if (!CourseOff(c))
+            return false;
+        ChatHandler(player->GetSession()).SendSysMessage("That track is closed for now.");
+        return true;
+    }
+
     // The course the owner picked for `period` (kartcraft_challenge_pick, written by the website's
     // admin page), if it is an open-world course; else empty.
     static std::string ChallengePick(std::string const& period)
@@ -880,7 +927,7 @@ namespace Kartcraft
             return picked;
         std::vector<Course const*> open;
         for (Course const& c : COURSES)
-            if (c.map <= 1)
+            if (c.map <= 1 && !CourseOff(c))
                 open.push_back(&c);
         return open.empty() ? std::string() : open[Fnv1a(period) % open.size()]->key;
     }
@@ -1216,6 +1263,82 @@ namespace Kartcraft
         line("This week's", s_weekly);
     }
 
+    // Track ratings: after a race, a racer who covered at least half of it and has not rated the
+    // track yet is asked ("R\tRateAsk\t<key>"); the answer ("R\tRate\t<key>\t1|-1\t<reason>") is
+    // kept, one vote a racer a track, changed by rating again (the track browser). Only a racer
+    // with a result on the track may rate it. With the Unstucks used in races
+    // (kartcraft_unstuck) and the results' quits, the website's admin page ranks the tracks.
+    static char const* const RATE_REASONS[] = { "stuck", "route", "long", "bumpy", "boring" };
+
+    static void CreateRatings()
+    {
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_rating` ("
+            "`course` VARCHAR(32) NOT NULL, "
+            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
+            "`vote` TINYINT NOT NULL COMMENT '1 good, -1 bad', "
+            "`reason` VARCHAR(16) NOT NULL DEFAULT '' COMMENT 'a bad vote''s: stuck, route, long, bumpy, boring', "
+            "`at` INT UNSIGNED NOT NULL COMMENT 'when, unix time', "
+            "PRIMARY KEY (`course`, `guid`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_unstuck` ("
+            "`id` INT UNSIGNED NOT NULL AUTO_INCREMENT, "
+            "`course` VARCHAR(32) NOT NULL, "
+            "`guid` INT UNSIGNED NOT NULL, "
+            "`race_at` INT UNSIGNED NOT NULL COMMENT 'the race''s start, unix time', "
+            "`at` INT UNSIGNED NOT NULL, "
+            "PRIMARY KEY (`id`), KEY `course` (`course`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_course_off` ("
+            "`course` VARCHAR(32) NOT NULL, "
+            "`at` INT UNSIGNED NOT NULL COMMENT 'when taken out, unix time', "
+            "PRIMARY KEY (`course`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+    }
+
+    static bool HasRated(uint32 guid, char const* course)
+    {
+        std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
+            "SELECT 1 FROM `kartcraft_rating` WHERE `course` = '%s' AND `guid` = %u", course, guid);
+        return bool(result);
+    }
+
+    // After a racer's result: ask them to rate the track if they raced at least half of it.
+    static void AskRating(Race const& r, Racer const& x, uint32 place)
+    {
+        Course const& c = *r.course;
+        bool half = place > 0 || Passes(x, uint32(c.points.size())) * 2 >= FinalPass(c);
+        if (!half || HasRated(x.guid.GetCounter(), c.key))
+            return;
+        if (Player* p = Recipient(x.guid))
+            SendLine(p, std::string("KARTCRAFT\tR\tRateAsk\t") + c.key);
+    }
+
+    static void Rate(Player* player, std::string const& key, std::string const& vote, std::string const& why)
+    {
+        Course const* c = FindCourse(key);
+        int v = vote == "1" ? 1 : vote == "-1" ? -1 : 0;
+        if (!c || !v)
+            return;
+        std::string reason;
+        if (v < 0)
+            for (char const* r : RATE_REASONS)
+                if (why == r)
+                    reason = r;
+        uint32 guid = player->GetGUIDLow();
+        std::unique_ptr<QueryResult> raced = CharacterDatabase.PQuery(
+            "SELECT 1 FROM `kartcraft_results` WHERE `course` = '%s' AND `guid` = %u LIMIT 1", c->key, guid);
+        if (!raced)
+        {
+            ChatHandler(player->GetSession()).SendSysMessage("Race a track before you rate it.");
+            return;
+        }
+        CharacterDatabase.PExecute("REPLACE INTO `kartcraft_rating` (`course`, `guid`, `vote`, `reason`, `at`) "
+            "VALUES ('%s', %u, %d, '%s', %u)", c->key, guid, v, reason.c_str(), uint32(std::time(nullptr)));
+    }
+
     // One racer's result in a started race: `place` 0 did not finish. The last of a race's
     // results rates it on the ladder.
     static void RecordResult(Race& r, Racer const& x, uint32 place, uint32 ms)
@@ -1231,6 +1354,7 @@ namespace Kartcraft
             "`name`, `place`, `field`, `ms`, `trial`, `at`) VALUES (%u, %u, '%s', %u, '%s', %u, %u, %u, %u, %u)",
             r.startedAt, r.id, r.course->key, x.guid.GetCounter(), escaped.c_str(), place, uint32(r.field), ms,
             r.timeTrial ? 1u : 0u, uint32(std::time(nullptr)));
+        AskRating(r, x, place);
     }
 
     // A finish of `ms` on `course`: "r" a new course record, "p" a new personal best, else "".
@@ -2745,6 +2869,8 @@ namespace Kartcraft
         uint32 ties = 0;
         for (size_t i = 0; i < COURSES.size(); ++i)
         {
+            if (CourseOff(COURSES[i]))
+                continue;
             std::vector<Queued const*> takers;
             for (Queued const& q : s_queue)
                 if (q.courses[i])
@@ -3098,7 +3224,7 @@ namespace Kartcraft
             // back ("R\tRet"). Not a party course: that one is raced inside its dungeon, from
             // its Race Marshal.
             Course const* course = FindCourse(f[2]);
-            if (!course || PartyCourse(*course) || !CanBeRacedOff(player))
+            if (!course || PartyCourse(*course) || !CanBeRacedOff(player) || RefuseOff(player, *course))
                 return true;
             Origin from = { player->GetMapId(), player->GetPositionX(), player->GetPositionY(),
                 player->GetPositionZ(), player->GetOrientation(), now };
@@ -3275,7 +3401,12 @@ namespace Kartcraft
                 auto const& next = c.points[c.laps ? (x.checkpoint + 1) % n : std::min<size_t>(x.checkpoint + 1, n - 1)];
                 float o = std::atan2(next.second - at.second, next.first - at.first);
                 if (TeleportOnto(player, c.map, at.first, at.second, o, false))
+                {
                     s_unstuck[player->GetGUIDLow()] = now;
+                    CharacterDatabase.PExecute("INSERT INTO `kartcraft_unstuck` (`course`, `guid`, `race_at`, `at`) "
+                        "VALUES ('%s', %u, %u, %u)", c.key, player->GetGUIDLow(), r.startedAt,
+                        uint32(std::time(nullptr)));
+                }
                 return;
             }
         }
@@ -3344,6 +3475,16 @@ namespace Kartcraft
             EquipCosmetic(player, f[2], f[3]);
             return;
         }
+        if (f.size() >= 4 && f[1] == "Rate")
+        {
+            Rate(player, f[2], f[3], f.size() >= 5 ? f[4] : std::string());
+            return;
+        }
+        if (f.size() >= 2 && f[1] == "Off")
+        {
+            SendCourseOff(player);
+            return;
+        }
         // The showcase's verb works on foot, as a GM's teleport does.
         if (f.size() >= 2 && HandleShow(player, f))
             return;
@@ -3361,6 +3502,8 @@ namespace Kartcraft
             // "R\tH\t<key>\t1" hosts with ground types on; a race already waiting keeps its own.
             Course const* course = FindCourse(f[2]);
             if (!course || player->GetMapId() != course->map || (!marshal && DistanceTo(player, course->points[0]) > START_RADIUS))
+                return;
+            if (RefuseOff(player, *course))
                 return;
             // A party course is hosted inside its dungeon, by the party's leader.
             uint32 const instance = PartyCourse(*course) ? player->GetInstanceId() : 0;
@@ -3411,7 +3554,7 @@ namespace Kartcraft
             Course const* course = FindCourse(f[2]);
             uint32 const instance = course && PartyCourse(*course) ? player->GetInstanceId() : 0;
             if (!course || player->GetMapId() != course->map || !CanRaceOn(player, *course, instance) ||
-                (!marshal && DistanceTo(player, course->points[0]) > START_RADIUS))
+                (!marshal && DistanceTo(player, course->points[0]) > START_RADIUS) || RefuseOff(player, *course))
                 return;
             uint32 raceId = OpenTimeTrial(player, *course, instance, now);
             TeleportToGrid(player, *course, 0, instance);
@@ -3950,6 +4093,7 @@ namespace Kartcraft
         CreateResults();
         CreateChallenges();
         CreateCosmetics();
+        CreateRatings();
         LoadLadder();
         LoadRecords(s_raceBoard, "race");
         LoadRecords(s_trialBoard, "time trial");
