@@ -2814,3 +2814,51 @@ fn the_kart_s_shortcuts_show_in_the_kart_out_of_a_race_and_open_their_windows() 
     seated(&mut s, false);
     assert!(!shown(&s, "BenillaKartShortcutsFrame"));
 }
+
+#[test]
+fn the_track_browser_takes_us_to_the_track_s_marshal() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    tracks(&mut s);
+    let enabled = |s: &UiScript| -> bool {
+        s.eval("return BenillaKartTracksFrameMarshal:IsEnabled() == 1")
+            .unwrap()
+    };
+    s.run("BenillaKartTrackBrowser_Open()").unwrap();
+    s.tick(0.0);
+    assert!(!enabled(&s), "nothing picked");
+    s.run("BenillaKartTrackBrowser_Select('t1')").unwrap();
+    assert!(enabled(&s));
+    sent(&mut s);
+    s.run("BenillaKartTracksFrameMarshal:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tMT\tt1"]);
+    assert!(!s
+        .eval::<bool>("return BenillaKartTracksFrame:IsVisible() == 1")
+        .unwrap());
+
+    // Too soon after the last trip: the server says how long, and so does the chat.
+    s.run(
+        "BenillaKartSaid = {} local said = BenillaKart_Say \
+         BenillaKart_Say = function(t) table.insert(BenillaKartSaid, t) said(t) end",
+    )
+    .unwrap();
+    from_server(&mut s, "R\tMTx\t12");
+    assert_eq!(
+        s.eval::<Vec<String>>("return BenillaKartSaid").unwrap(),
+        ["You can travel to a Race Marshal again in 12 seconds."]
+    );
+
+    // A party course's marshal is inside its dungeon.
+    s.fire_event(
+        "BENILLA_KART_TRACKS",
+        vec![ScriptValue::Str(
+            "d1\tDeadmines Run\tThe Deadmines\t36\t0\tA sprint.\t0.0,0.0;10.0,10.0".into(),
+        )],
+    );
+    s.run("BenillaKartTrackBrowser_Open() BenillaKartTrackBrowser_Select('d1')")
+        .unwrap();
+    assert!(!enabled(&s));
+}

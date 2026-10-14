@@ -525,13 +525,20 @@
                 BenillaKartTracksFrameText:SetText(track.text)
                 BenillaKartTracksFrameShow:Enable()
                 BenillaKartTracksFrameRate:Enable()
-                if track.map > 1 then BenillaKartTracksFrameTrial:Disable() else BenillaKartTracksFrameTrial:Enable() end
+                if track.map > 1 then
+                    BenillaKartTracksFrameTrial:Disable()
+                    BenillaKartTracksFrameMarshal:Disable()
+                else
+                    BenillaKartTracksFrameTrial:Enable()
+                    BenillaKartTracksFrameMarshal:Enable()
+                end
             else
                 BenillaKartTracksFrameTitle:SetText("")
                 BenillaKartTracksFrameText:SetText("Pick a track to read about it and see it on the map.")
                 BenillaKartTracksFrameShow:Disable()
                 BenillaKartTracksFrameTrial:Disable()
                 BenillaKartTracksFrameRate:Disable()
+                BenillaKartTracksFrameMarshal:Disable()
             end
             if BenillaKartRoute.key and BenillaKartRoute.key == selected then
                 BenillaKartTracksFrameShow:SetText("Shown on the map")
@@ -546,6 +553,15 @@
             local track = BenillaKartTrackBrowser.selected and BenillaKartTrack(BenillaKartTrackBrowser.selected)
             if not track or track.map > 1 then return end
             BenillaKart_Send("TB\t" .. track.key)
+            BenillaKartTracksFrame:Hide()
+        end
+
+        -- To the track's Race Marshal, in front of them, from wherever we are; the server says when
+        -- the last trip was too recent. A party course's marshal stands inside its dungeon.
+        function BenillaKartTrackBrowser_ToMarshal()
+            local track = BenillaKartTrackBrowser.selected and BenillaKartTrack(BenillaKartTrackBrowser.selected)
+            if not track or track.map > 1 then return end
+            BenillaKart_Send("MT\t" .. track.key)
             BenillaKartTracksFrame:Hide()
         end
 
@@ -868,6 +884,9 @@
                 BenillaKartLobby_Set(line[3], line[4])
             elseif verb == "Ux" then
                 BenillaKart_Say(format("Unstuck: you can use it again in %d seconds.",
+                    tonumber(line[3]) or 0))
+            elseif verb == "MTx" then
+                BenillaKart_Say(format("You can travel to a Race Marshal again in %d seconds.",
                     tonumber(line[3]) or 0))
             elseif verb == "Un" then
                 BenillaKart_Say("Unstuck: no course starts within 300 yards.")
@@ -3465,7 +3484,7 @@
 
     <!-- Over the world map, which it opens, so another track can be picked with the map up. -->
     <Frame name="BenillaKartTracksFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="FULLSCREEN_DIALOG">
-        <Size><AbsDimension x="340" y="498"/></Size>
+        <Size><AbsDimension x="340" y="526"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="-220" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -3560,6 +3579,12 @@
                 <Size><AbsDimension x="140" y="22"/></Size>
                 <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="46"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartTrackBrowser_TimeTrial()</OnClick></Scripts>
+            </Button>
+            <!-- To the track's Race Marshal (BenillaKartTrackBrowser_ToMarshal). -->
+            <Button name="$parentMarshal" inherits="UIPanelButtonTemplate" text="Go to marshal">
+                <Size><AbsDimension x="140" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="74"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartTrackBrowser_ToMarshal()</OnClick></Scripts>
             </Button>
             <Button name="$parentShow" inherits="UIPanelButtonTemplate" text="Show on map">
                 <Size><AbsDimension x="140" y="22"/></Size>

@@ -3121,6 +3121,42 @@ namespace Kartcraft
         return raceId;
     }
 
+    // "R\tMT\t<course>": to the course's Race Marshal from the track browser, a few yards in front
+    // of them on the start's side, facing them. Once every MARSHAL_TRIP_COOLDOWN ("R\tMTx\t<secs>"
+    // says how long to wait), never in a race under way nor what CanBeRacedOff refuses, and not
+    // to a party course's marshal, who stands inside a dungeon. A driver goes out of the kart for
+    // the teleport and back into it there, as onto a grid.
+    constexpr uint32 MARSHAL_TRIP_COOLDOWN = 30 * IN_MILLISECONDS;
+    constexpr float MARSHAL_TRIP_GAP = 3.f; // yards in front of the marshal
+    static std::unordered_map<uint32, uint32> s_marshalTrips; // guid low -> when last made (ms)
+
+    static void ToMarshal(Player* player, Course const& c, uint32 now)
+    {
+        if (PartyCourse(c) || InRace(player) || !CanBeRacedOff(player))
+            return;
+        auto made = s_marshalTrips.find(player->GetGUIDLow());
+        if (made != s_marshalTrips.end() && WorldTimer::getMSTimeDiff(made->second, now) < MARSHAL_TRIP_COOLDOWN)
+        {
+            uint32 left = MARSHAL_TRIP_COOLDOWN - WorldTimer::getMSTimeDiff(made->second, now);
+            SendLine(player, "KARTCRAFT\tR\tMTx\t" + std::to_string((left + 999) / IN_MILLISECONDS));
+            return;
+        }
+        // Toward the start the marshal stands beside; straight on in x where they stand on it.
+        float dx = c.points[0].first - c.marshal.first, dy = c.points[0].second - c.marshal.second;
+        float len = std::sqrt(dx * dx + dy * dy);
+        if (len < 0.5f)
+        {
+            dx = 1.f;
+            dy = 0.f;
+            len = 1.f;
+        }
+        dx /= len;
+        dy /= len;
+        float x = c.marshal.first + dx * MARSHAL_TRIP_GAP, y = c.marshal.second + dy * MARSHAL_TRIP_GAP;
+        if (TeleportOnto(player, c.map, x, y, std::atan2(-dy, -dx), player->HasAura(SPELL_SUMMON_KART)))
+            s_marshalTrips[player->GetGUIDLow()] = now;
+    }
+
     // The finder's verbs; false when the line is not one of them.
     static bool HandleFinder(Player* player, std::vector<std::string> const& f, uint32 now)
     {
@@ -3235,6 +3271,11 @@ namespace Kartcraft
             Race& r = s_races[raceId];
             r.awaiting = guid;
             r.awaitSince = now;
+        }
+        else if (verb == "MT" && f.size() > 2)
+        {
+            if (Course const* course = FindCourse(f[2]))
+                ToMarshal(player, *course, now);
         }
         else if (verb == "Q-")
             LeaveQueue(guid);
