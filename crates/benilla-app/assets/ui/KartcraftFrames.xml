@@ -992,7 +992,8 @@
         -- joined into the main chat window once a session, as /join does, unless the player left it
         -- (KartWorldChat, on by default; a /join World brings it back).
         function BenillaKart_WorldChatJoin()
-            if BenillaKartWorldJoined or GetCVar("KartWorldChat") == "0" then return end
+            -- No chat frame (an interface without the stock chat): nothing to join it to.
+            if BenillaKartWorldJoined or GetCVar("KartWorldChat") == "0" or not DEFAULT_CHAT_FRAME then return end
             BenillaKartWorldJoined = 1
             JoinChannelByName("World", nil, DEFAULT_CHAT_FRAME:GetID())
             ChatFrame_AddChannel(DEFAULT_CHAT_FRAME, "World")
