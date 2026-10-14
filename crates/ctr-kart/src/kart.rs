@@ -2550,10 +2550,6 @@ impl Kart {
         l.z = approach(l.z, fwd as f32, 0.0);
     }
 
-    /// The tallest lip the kart steps onto rather than hits (lu, about half a yard): a stair
-    /// riser or a kerb, below the sphere's own radius.
-    const STEP_UP: f32 = 20.0;
-
     /// COLL_MOVED (9.1, 9.2): the kart's sphere moved by its velocity in sub-steps, pushed out of
     /// what it overlaps, with CTR's scrub on each impact: the ground takes the into-surface speed
     /// and becomes the kart's normal; a wall rubs, ends turbos and drifts, and head-on, slams.
@@ -2574,26 +2570,6 @@ impl Kart {
                     break;
                 };
                 centre += contact.normal * (contact.depth + 0.01);
-                // Deviation: a lip no taller than STEP_UP with flat ground on top is stepped onto,
-                // neither hit nor ramped off. CTR keys a wall's scrub on its quad's flag
-                // (`COLL.c:2386-2402`) and its kerbs are road quads; WoW's stair risers, kerbs and
-                // doodad edges are faces like any other, so their edge either counted as a wall
-                // (the reserves wiped, half the speed gone) or, rounded off, launched the kart.
-                // A slope has no flat top at its contact's height, so it drives as before.
-                let bottom = centre.y - r;
-                let rise = contact.point.y - bottom;
-                let inward =
-                    Vec3::new(-contact.normal.x, 0.0, -contact.normal.z).normalize_or_zero();
-                let into = Vec3::new(self.vel.x, 0.0, self.vel.z).dot(inward) > 0.0;
-                if contact.normal.y < 0.95 && rise > 0.5 && rise <= Self::STEP_UP && into {
-                    let probe = contact.point + inward * 4.0 + Vec3::Y * (Self::STEP_UP + 1.0);
-                    if let Some(top) = world.ground(probe, 2.0 * Self::STEP_UP + 2.0) {
-                        if top.normal.y >= 0.95 && (top.point.y - contact.point.y).abs() < 1.5 {
-                            centre.y = top.point.y + r + 0.01;
-                            continue;
-                        }
-                    }
-                }
                 let ground = contact.normal.y >= GROUND_NORMAL_Y;
                 let dot = self.vel.dot(contact.normal);
                 if dot < -2560.0 {
