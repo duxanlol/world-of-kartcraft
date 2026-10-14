@@ -1280,7 +1280,8 @@ pub(crate) fn update(
 /// `WOW_KART_RACE=host:<course>` hosts at that course's start and starts once another racer is
 /// in; `WOW_KART_RACE=join` joins the first race offered; `WOW_KART_RACE=tt:<course>[:<s>]` asks
 /// for that course's time trial, as the track browser does, and leaves it `<s>` seconds after GO
-/// if given. A test hook: it sends what the Race Marshal's gossip would.
+/// if given; `WOW_KART_GIVE_UP=<s>` leaves any race `<s>` seconds after GO. A test hook: it sends
+/// what the Race Marshal's gossip would.
 #[derive(Default)]
 pub(crate) struct AutoRace {
     since: Option<f32>,
@@ -1300,15 +1301,19 @@ impl AutoRace {
         })
     }
 
-    /// The time trial's time is up: leave it.
+    /// The race's time is up: a time trial's by `tt:<course>:<s>`, any race's by
+    /// `WOW_KART_GIVE_UP=<s>`; leave it.
     fn gives_up(now: f32, races: &Races) -> bool {
-        let Some((_, Some(secs))) = Self::trial() else {
-            return false;
-        };
-        races
-            .race
-            .as_ref()
-            .is_some_and(|r| r.time_trial && !r.done && r.go_at.is_some_and(|go| now - go > secs))
+        let any = std::env::var("WOW_KART_GIVE_UP")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok());
+        let trial = Self::trial().and_then(|(_, secs)| secs);
+        races.race.as_ref().is_some_and(|r| {
+            let Some(secs) = any.or(trial.filter(|_| r.time_trial)) else {
+                return false;
+            };
+            !r.done && r.go_at.is_some_and(|go| now - go > secs)
+        })
     }
 
     fn press(&mut self, now: f32, races: &Races) -> bool {
