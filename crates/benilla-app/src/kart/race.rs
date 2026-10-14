@@ -199,6 +199,9 @@ const START_RADIUS: f32 = 55.0;
 /// this many yards of its centre, or on coming this near it (the server allows 45).
 const GATE_HALF_WIDTH: f32 = 20.0;
 const CHECKPOINT_RADIUS: f32 = 8.0;
+/// How far past a gate's posts a crossing still counts (yards): the post's own thickness, half a
+/// kart and a little more, so driving through a post counts.
+const GATE_POST_REACH: f32 = 3.0;
 /// The flat arrow floating in the next checkpoint, pointing on to the one after it: its centre's
 /// height above the ground and its length (yards), the one after next's share of that size, and
 /// its bob (yards), pulse (share of its size) and their rate (Hz).
@@ -666,7 +669,7 @@ impl Active {
         let across = |q: [f32; 2]| ((q[0] - p[0]) * h[1] - (q[1] - p[1]) * h[0]).abs();
         along(from) < 0.0
             && along(to) >= 0.0
-            && across(to).min(across(from)) <= self.gate_half_width(i)
+            && across(to).min(across(from)) <= self.gate_half_width(i) + GATE_POST_REACH
     }
 }
 
@@ -2742,7 +2745,7 @@ mod tests {
     }
 
     #[test]
-    fn the_gate_is_drawn_as_wide_as_it_counts() {
+    fn a_gate_counts_through_its_posts_and_a_little_past_them() {
         let mut race = course();
         race.gates = vec![20.0, 15.0, 25.0, 20.0];
         for i in [1, 2] {
@@ -2754,11 +2757,16 @@ mod tests {
                 let off = [end[0] - p[0], end[1] - p[1]];
                 assert!((off[0].hypot(off[1]) - race.gate_half_width(i)).abs() < 1e-3);
                 assert!((off[0] * h[0] + off[1] * h[1]).abs() < 1e-3);
-                // Crossing just inside the drawn end counts; just outside it does not.
-                let at =
-                    |s: f32, t: f32| [p[0] + off[0] * s + h[0] * t, p[1] + off[1] * s + h[1] * t];
-                assert!(race.passes(i, Some(at(0.98, -0.5)), at(0.98, 0.5)));
-                assert!(!race.passes(i, Some(at(1.02, -0.5)), at(1.02, 0.5)));
+                // Through the post at the drawn end counts, and a little past it; well past it
+                // does not.
+                let w = race.gate_half_width(i);
+                let at = |yards: f32, t: f32| {
+                    let s = yards / w;
+                    [p[0] + off[0] * s + h[0] * t, p[1] + off[1] * s + h[1] * t]
+                };
+                assert!(race.passes(i, Some(at(w, -0.5)), at(w, 0.5)));
+                assert!(race.passes(i, Some(at(w + 2.5, -0.5)), at(w + 2.5, 0.5)));
+                assert!(!race.passes(i, Some(at(w + 4.0, -0.5)), at(w + 4.0, 0.5)));
             }
         }
     }
