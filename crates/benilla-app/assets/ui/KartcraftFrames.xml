@@ -872,6 +872,14 @@
                     BenillaKartRaceMode = nil
                     BenillaKart_Say("Race mode off.")
                 end
+            elseif verb == "CH" then
+                -- The day's and the week's challenge courses, and their boards.
+                BenillaKartChallenge = {
+                    daily = line[3], weekly = line[4],
+                    dailyMine = tonumber(line[5]) or 0, dailyLeader = line[6] or "", dailyLeaderMs = tonumber(line[7]) or 0,
+                    weeklyMine = tonumber(line[8]) or 0, weeklyLeader = line[9] or "", weeklyLeaderMs = tonumber(line[10]) or 0,
+                }
+                if BenillaKartMenuFrame and BenillaKartMenuFrame:IsVisible() then BenillaKartMenu_Refresh() end
             elseif verb == "Mx" then
                 BenillaKart_Say("Race mode: not while you're in combat.")
             elseif verb == "X" then
@@ -1257,9 +1265,29 @@
 
         -- ── The Kartcraft menu (Options on the controller) ──
         -- Its entries: the label (or a function making it) and what choosing it does.
+        -- A challenge's menu entry: its course, opened in the track browser for its time trial.
+        function BenillaKartMenu_Challenge(which)
+            local c = BenillaKartChallenge
+            local key = c and c[which]
+            if not key or key == "" then return (which == "daily" and "Daily" or "Weekly") .. " challenge" end
+            local name = BenillaKartCourseNames and BenillaKartCourseNames[key] or key
+            return (which == "daily" and "Daily: " or "Weekly: ") .. name
+        end
+
+        function BenillaKartMenu_OpenChallenge(which)
+            local c = BenillaKartChallenge
+            if c and c[which] and c[which] ~= "" then
+                BenillaKartTrackBrowser_Open(c[which])
+            end
+        end
+
         BENILLA_KART_MENU = {
             { function() return BenillaKartFinder.queued and "Leave the queue" or "Find a race" end,
               function() BenillaKartFinder_QueueClick() end },
+            { function() return BenillaKartMenu_Challenge("daily") end,
+              function() BenillaKartMenu_OpenChallenge("daily") end },
+            { function() return BenillaKartMenu_Challenge("weekly") end,
+              function() BenillaKartMenu_OpenChallenge("weekly") end },
             { "Race Finder", function() BenillaKart_Open(BenillaKartFinderFrame) end },
             { "Tracks and time trials", function() BenillaKartTrackBrowser_Toggle() end },
             { function() return BenillaKartRaceMode and "Race mode: on" or "Race mode: off" end,
@@ -3349,7 +3377,7 @@
     <!-- The Kartcraft menu (Options on the controller, KARTCRAFT_MENU): what racing needs, one
          entry each, for a player on the controller alone. -->
     <Frame name="BenillaKartMenuFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="280" y="344"/></Size>
+        <Size><AbsDimension x="280" y="396"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -3421,6 +3449,16 @@
                 <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-268"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
             </Button>
+            <Button name="$parentEntry11" inherits="UIPanelButtonTemplate" id="11">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-294"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry12" inherits="UIPanelButtonTemplate" id="12">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-320"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>
                 <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
@@ -3434,6 +3472,7 @@
             </OnLoad>
             <OnShow>
                 BenillaKartMenu_Refresh()
+                BenillaKart_Send("CH")
                 PlaySound("igMainMenuOpen")
             </OnShow>
             <OnHide>PlaySound("igMainMenuClose")</OnHide>

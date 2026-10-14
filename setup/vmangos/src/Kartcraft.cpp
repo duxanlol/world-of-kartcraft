@@ -243,6 +243,8 @@ namespace Kartcraft
         return player->HasAura(SPELL_SUMMON_KART);
     }
 
+    static void ChallengeGreeting(Player* player);
+
     void OnLogin(Player* player)
     {
         // The whole map discovered, every zone's every area, as `.explorecheat 1` sets it
@@ -260,6 +262,7 @@ namespace Kartcraft
             return;
         if (!player->HasSkill(SKILL_KARTING))
             player->SetSkill(SKILL_KARTING, 1, SKILL_MAX);
+        ChallengeGreeting(player);
         LearnUnlocked(player);
     }
 
@@ -827,6 +830,168 @@ namespace Kartcraft
                 change >= 0 ? "+" : "", change, LadderPlace(e.rating));
             ChatHandler(p->GetSession()).SendSysMessage(text);
         }
+    }
+
+    // The challenges: a course a day (UTC) and a course a week (Monday to Sunday, UTC), picked by
+    // FNV-1a over the period's name ("d20261014", "w2911": weeks since the Monday before
+    // 1970-01-01) from the open-world courses in courses.json's order, so the website picks the
+    // same. A time trial on the day's or the week's course counts for its board: each racer's
+    // best in the period, kartcraft_challenge.
+    struct ChallengeBoard
+    {
+        std::string period;
+        std::string course;
+        std::map<uint32, Record> bests; // guid low -> best
+    };
+
+    static std::string Clock(uint32 ms);
+
+    static ChallengeBoard s_daily;
+    static ChallengeBoard s_weekly;
+
+    static uint32 Fnv1a(std::string const& text)
+    {
+        uint32 h = 2166136261u;
+        for (unsigned char c : text)
+        {
+            h ^= c;
+            h *= 16777619u;
+        }
+        return h;
+    }
+
+    static std::string ChallengeCourse(std::string const& period)
+    {
+        std::vector<Course const*> open;
+        for (Course const& c : COURSES)
+            if (c.map <= 1)
+                open.push_back(&c);
+        return open.empty() ? std::string() : open[Fnv1a(period) % open.size()]->key;
+    }
+
+    static std::pair<std::string, std::string> ChallengePeriods()
+    {
+        std::time_t t = std::time(nullptr);
+        std::tm g{};
+#ifdef _WIN32
+        gmtime_s(&g, &t);
+#else
+        gmtime_r(&t, &g);
+#endif
+        char day[16];
+        std::snprintf(day, sizeof(day), "d%04d%02d%02d", g.tm_year + 1900, g.tm_mon + 1, g.tm_mday);
+        // 1970-01-01 was a Thursday: three days after the week's Monday.
+        long long days = (long long)(t / 86400);
+        return { day, "w" + std::to_string((days + 3) / 7) };
+    }
+
+    // The board for `period`, loaded on its first use.
+    static void ChallengeTo(ChallengeBoard& board, std::string const& period)
+    {
+        if (board.period == period)
+            return;
+        board.period = period;
+        board.course = ChallengeCourse(period);
+        board.bests.clear();
+        std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
+            "SELECT `guid`, `name`, `ms` FROM `kartcraft_challenge` WHERE `period` = '%s'", period.c_str());
+        if (!result)
+            return;
+        do
+        {
+            Field* f = result->Fetch();
+            Record& r = board.bests[f[0].GetUInt32()];
+            r.name = f[1].GetCppString();
+            r.ms = f[2].GetUInt32();
+        } while (result->NextRow());
+    }
+
+    static void ChallengesNow()
+    {
+        std::pair<std::string, std::string> periods = ChallengePeriods();
+        ChallengeTo(s_daily, periods.first);
+        ChallengeTo(s_weekly, periods.second);
+    }
+
+    static void CreateChallenges()
+    {
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_challenge` ("
+            "`period` VARCHAR(12) NOT NULL COMMENT 'd<YYYYMMDD> a day, w<weeks since 1969-12-29> a week, UTC', "
+            "`course` VARCHAR(32) NOT NULL COMMENT 'the period''s course key', "
+            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
+            "`name` VARCHAR(12) NOT NULL, "
+            "`ms` INT UNSIGNED NOT NULL COMMENT 'best time trial in the period, ms', "
+            "`at` INT UNSIGNED NOT NULL COMMENT 'when, unix time', "
+            "PRIMARY KEY (`period`, `guid`), KEY `period_ms` (`period`, `ms`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+    }
+
+    static Record const* ChallengeLeader(ChallengeBoard const& board)
+    {
+        Record const* best = nullptr;
+        for (auto const& e : board.bests)
+            if (!best || e.second.ms < best->ms)
+                best = &e.second;
+        return best;
+    }
+
+    // A time trial's finish on the day's or the week's course: a better time than the racer's
+    // in the period goes on its board.
+    static void ChallengeFinish(uint32 guid, std::string const& name, std::string const& course, uint32 ms)
+    {
+        ChallengesNow();
+        for (ChallengeBoard* board : { &s_daily, &s_weekly })
+        {
+            if (board->course != course || !ms)
+                continue;
+            Record& best = board->bests[guid];
+            if (best.ms && best.ms <= ms)
+                continue;
+            best.ms = ms;
+            best.name = name;
+            std::string escaped = name;
+            CharacterDatabase.escape_string(escaped);
+            CharacterDatabase.PExecute("REPLACE INTO `kartcraft_challenge` (`period`, `course`, `guid`, `name`, "
+                "`ms`, `at`) VALUES ('%s', '%s', %u, '%s', %u, %u)", board->period.c_str(), course.c_str(), guid,
+                escaped.c_str(), ms, uint32(std::time(nullptr)));
+        }
+    }
+
+    // "KARTCRAFT\tR\tCH\t<day's course>\t<week's course>\t<your day best>\t<day leader>\t<their ms>
+    // \t<your week best>\t<week leader>\t<their ms>": the menu's two entries and their boards.
+    static void SendChallenges(Player* player)
+    {
+        ChallengesNow();
+        std::string text = "KARTCRAFT\tR\tCH\t" + s_daily.course + "\t" + s_weekly.course;
+        for (ChallengeBoard const* board : { &s_daily, &s_weekly })
+        {
+            auto mine = board->bests.find(player->GetGUIDLow());
+            Record const* leader = ChallengeLeader(*board);
+            text += "\t" + std::to_string(mine == board->bests.end() ? 0 : mine->second.ms) + "\t" +
+                (leader ? leader->name : std::string()) + "\t" + std::to_string(leader ? leader->ms : 0);
+        }
+        SendLine(player, text);
+    }
+
+    // The login's line about the challenges: the day's and the week's course, who leads, your best.
+    static void ChallengeGreeting(Player* player)
+    {
+        ChallengesNow();
+        auto line = [player](char const* which, ChallengeBoard const& board) {
+            Course const* c = FindCourse(board.course);
+            if (!c)
+                return;
+            Record const* leader = ChallengeLeader(board);
+            auto mine = board.bests.find(player->GetGUIDLow());
+            std::string text = std::string(which) + " challenge: " + c->name + " (time trial). ";
+            text += leader ? "Leader: " + leader->name + " " + Clock(leader->ms) + "." : "Nobody has set a time yet.";
+            if (mine != board.bests.end())
+                text += " Your best: " + Clock(mine->second.ms) + ".";
+            ChatHandler(player->GetSession()).SendSysMessage(text.c_str());
+        };
+        line("Today's", s_daily);
+        line("This week's", s_weekly);
     }
 
     // One racer's result in a started race: `place` 0 did not finish. The last of a race's
@@ -2942,6 +3107,11 @@ namespace Kartcraft
             RaceMode(player, f[2] == "1");
             return;
         }
+        if (f.size() >= 2 && f[1] == "CH")
+        {
+            SendChallenges(player);
+            return;
+        }
         // The showcase's verb works on foot, as a GM's teleport does.
         if (f.size() >= 2 && HandleShow(player, f))
             return;
@@ -3093,6 +3263,8 @@ namespace Kartcraft
                     r.firstFinish = now ? now : 1;
                 uint32 ms = WorldTimer::getMSTimeDiff(r.start, now);
                 RecordResult(r, *me, place, ms);
+                if (r.timeTrial)
+                    ChallengeFinish(player->GetGUIDLow(), me->name, c.key, ms);
                 std::string const best = RecordFinish(BoardOf(r), player->GetGUIDLow(), me->name, c, ms);
                 SendRace(r, "KARTCRAFT\tR\tF\t" + std::to_string(id) + "\t" + me->name + "\t" +
                     std::to_string(place) + "\t" + std::to_string(ms) + "\t" + best);
@@ -3544,6 +3716,7 @@ namespace Kartcraft
         marshal->pGossipSelect = &MarshalSelect;
         marshal->RegisterSelf(true);
         CreateResults();
+        CreateChallenges();
         LoadLadder();
         LoadRecords(s_raceBoard, "race");
         LoadRecords(s_trialBoard, "time trial");

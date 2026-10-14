@@ -2036,7 +2036,11 @@ fn the_controller_drives_the_kartcraft_menu_and_answers_its_popups() {
     assert!(press(&mut s, "PADDDOWN"));
     assert_eq!(focus(&mut s), "BenillaKartMenuFrameEntry2");
     assert!(press(&mut s, "PADDUP"));
-    assert!(press(&mut s, "PADDDOWN"));
+    // Down to the fourth, Race Finder (after Find a race and the two challenges).
+    for _ in 0..3 {
+        assert!(press(&mut s, "PADDDOWN"));
+    }
+    assert_eq!(focus(&mut s), "BenillaKartMenuFrameEntry4");
     assert!(press(&mut s, "PAD1"));
     assert!(!shown(&mut s, "BenillaKartMenuFrame"));
     assert!(
@@ -2059,6 +2063,43 @@ fn the_controller_drives_the_kartcraft_menu_and_answers_its_popups() {
     assert!(press(&mut s, "PAD1"));
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tBack"]);
     assert_eq!(owns(&mut s), "");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+#[test]
+fn the_menu_names_the_challenges_and_opens_their_course() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    s.fire_event(
+        "BENILLA_KART_COURSE_NAMES",
+        vec![ScriptValue::Str(
+            "stormwind\tRoad to Stormwind\nsprint\tNorthshire Sprint".into(),
+        )],
+    );
+    sent(&mut s);
+    s.run("BenillaKartMenu_Toggle()").unwrap();
+    // Opening the menu asks the server; its answer names the two courses.
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tCH"]);
+    from_server(&mut s, "R\tCH\tstormwind\tsprint\t0\tGoblin\t62400\t0\t\t0");
+    let entry = |s: &mut UiScript, i: u32| -> String {
+        s.eval(&format!("return BenillaKartMenuFrameEntry{i}:GetText()"))
+            .unwrap()
+    };
+    assert_eq!(entry(&mut s, 2), "Daily: Road to Stormwind");
+    assert_eq!(entry(&mut s, 3), "Weekly: Northshire Sprint");
+    // Choosing the day's opens the track browser on its course, for the time trial.
+    s.run("BenillaKartMenuFrameEntry2:Click()").unwrap();
+    assert!(s
+        .eval::<bool>("return BenillaKartTracksFrame:IsVisible() == 1")
+        .unwrap());
+    assert_eq!(
+        s.eval::<String>("return BenillaKartTrackBrowser.selected")
+            .unwrap(),
+        "stormwind"
+    );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
