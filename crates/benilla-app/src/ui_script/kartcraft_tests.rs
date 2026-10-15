@@ -2758,6 +2758,37 @@ fn the_kartcraft_menu_widens_to_a_challenge_s_long_course_name() {
 }
 
 #[test]
+fn a_courier_delivery_shows_its_clock_against_par_until_delivered() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let shown = |s: &UiScript| -> bool {
+        s.eval("return BenillaKartDeliveryFrame:IsVisible() == 1")
+            .unwrap()
+    };
+    let text = |s: &UiScript| -> String {
+        s.eval("return BenillaKartDeliveryFrameText:GetText() or ''")
+            .unwrap()
+    };
+    assert!(!shown(&s));
+    // Taken: the town, the par, a clock from zero, green.
+    from_server(&mut s, "R\tDel\tGadgetzan\t300\t0");
+    assert!(shown(&s));
+    let t = text(&s);
+    assert!(t.starts_with("Delivery to Gadgetzan"), "{t}");
+    assert!(t.contains("|cff40ff400:00|r / par 5:00"), "{t}");
+    // Back from a relog six minutes in: past par, red.
+    from_server(&mut s, "R\tDel\tGadgetzan\t300\t361");
+    assert!(text(&s).contains("|cffff60606:01|r"), "{}", text(&s));
+    // Delivered: gone.
+    from_server(&mut s, "R\tDel-");
+    assert!(!shown(&s));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+#[test]
 fn the_kart_s_shortcuts_show_in_the_kart_out_of_a_race_and_open_their_windows() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK

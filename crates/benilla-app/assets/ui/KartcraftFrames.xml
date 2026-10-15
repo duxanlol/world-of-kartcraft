@@ -1046,6 +1046,11 @@
             elseif verb == "Ret" then
                 -- Our Race Finder race is over: back to where it took us from?
                 if StaticPopup_Show then StaticPopup_Show("BENILLA_KART_RETURN") end
+            elseif verb == "Del" then
+                -- A courier delivery under way: its town, par and the seconds already gone.
+                BenillaKartDelivery_Start(line[3], tonumber(line[4]) or 0, tonumber(line[5]) or 0)
+            elseif verb == "Del-" then
+                BenillaKartDelivery_Stop()
             elseif verb == "L" then
                 -- A roster with us in it: we are in a race, so the finder is done and closes.
                 local me = UnitName("player")
@@ -1813,6 +1818,48 @@
         -- course is picked) and the Race Finder. A race under way (a course on the race map) or
         -- climbing out puts them away.
         BenillaKartShortcuts = {}
+
+        -- ── The courier delivery's clock (the server's "Del", "Del-") ──
+        -- Elapsed against par, green within it, red past; gone when delivered, or once its quest
+        -- has left the log (abandoned, the package with it).
+        BenillaKartDelivery = {}
+
+        function BenillaKartDelivery_Start(to, par, gone)
+            local d = BenillaKartDelivery
+            d.to, d.par, d.since, d.check = to or "", par, GetTime() - gone, 2
+            BenillaKartDeliveryFrame:Show()
+            BenillaKartDelivery_Update(0)
+        end
+
+        function BenillaKartDelivery_Stop()
+            BenillaKartDeliveryFrame:Hide()
+        end
+
+        -- Whether a delivery's quest is still in the log.
+        function BenillaKartDelivery_InLog()
+            for i = 1, GetNumQuestLogEntries() do
+                local title, _, _, header = GetQuestLogTitle(i)
+                if title and not header and string.find(title, "^Express Delivery") then return true end
+            end
+            return false
+        end
+
+        function BenillaKartDelivery_Update(elapsed)
+            local d = BenillaKartDelivery
+            d.check = d.check - elapsed
+            if d.check <= 0 then
+                d.check = 2
+                if GetNumQuestLogEntries and not BenillaKartDelivery_InLog() then
+                    BenillaKartDeliveryFrame:Hide()
+                    return
+                end
+            end
+            local gone = math.max(0, floor(GetTime() - d.since))
+            local color = "|cff40ff40"
+            if gone > d.par then color = "|cffff6060" end
+            BenillaKartDeliveryFrameText:SetText(format("Delivery to %s   %s%d:%02d|r / par %d:%02d",
+                d.to, color, floor(gone / 60), mod(gone, 60), floor(d.par / 60), mod(d.par, 60)))
+        end
 
         -- Hidden for good (KartShortcuts), off its own right-click or the settings' box, which
         -- brings it back.
@@ -3810,6 +3857,33 @@
 
     <!-- The kart's shortcuts while out of a race (BenillaKartShortcuts_Update): a time trial and
          the Race Finder. Dragged to where it suits. -->
+    <!-- The courier delivery's clock (BenillaKartDelivery_Update), under the minimap's row. -->
+    <Frame name="BenillaKartDeliveryFrame" parent="UIParent" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" frameStrata="MEDIUM">
+        <Size><AbsDimension x="300" y="30"/></Size>
+        <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-110"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+            <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>
+            <TileSize><AbsValue val="16"/></TileSize>
+            <EdgeSize><AbsValue val="16"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentText" inherits="GameFontHighlight">
+                    <Anchors><Anchor point="CENTER"/></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Scripts>
+            <OnLoad>
+                this:SetBackdropColor(0, 0, 0, 0.75)
+                BenillaKart_Movable(this)
+            </OnLoad>
+            <OnUpdate>BenillaKartDelivery_Update(arg1)</OnUpdate>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+
     <Frame name="BenillaKartShortcutsFrame" parent="UIParent" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" frameStrata="MEDIUM">
         <Size><AbsDimension x="260" y="54"/></Size>
         <!-- The screen's bottom edge, out of the kart's way. -->

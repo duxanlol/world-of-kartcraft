@@ -15,6 +15,7 @@
 #include "GameObject.h"
 #include "Group.h"
 #include "MapManager.h"
+#include "QuestDef.h"
 
 #include <cmath>
 #include <ctime>
@@ -245,6 +246,8 @@ namespace Kartcraft
 
     static void ChallengeGreeting(Player* player);
 
+    static void DeliveryLogin(Player* player);
+
     void OnLogin(Player* player)
     {
         // The whole map discovered, every zone's every area, as `.explorecheat 1` sets it
@@ -264,6 +267,7 @@ namespace Kartcraft
             player->SetSkill(SKILL_KARTING, 1, SKILL_MAX);
         ChallengeGreeting(player);
         LearnUnlocked(player);
+        DeliveryLogin(player);
     }
 
     // Points a line needs to raise the skill at `skill`.
@@ -1296,6 +1300,219 @@ namespace Kartcraft
             "`at` INT UNSIGNED NOT NULL COMMENT 'when taken out, unix time', "
             "PRIMARY KEY (`course`)"
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+    }
+
+    // ── Courier deliveries ────────────────────────────────────────────────────────────────────
+    //
+    // Repeatable quests between the neutral towns' people (kartcraft_deliveries.sql): the giver
+    // hands over the Courier's Package, its recipient takes it and pays DELIVERY_PAY tokens (the
+    // quest's own reward), and the server adds DELIVERY_BONUS more when it came within the
+    // route's par. DELIVERIES_A_DAY of the routes are offered each UTC day, the daily
+    // challenge's (ChallengePeriods), each once a day a character; one package at a time. A
+    // package goes by kart: while it is carried no Kartcraft teleport, flight path, hearthstone
+    // or teleport spell takes its carrier (CarryingDelivery).
+    struct Delivery
+    {
+        uint32 quest;
+        char const* to;  // the town, for the client's timer
+        uint32 par;      // seconds
+    };
+    static Delivery const DELIVERIES[] = {
+        { 190200, "Gadgetzan", 300 },
+        { 190201, "Ratchet", 300 },
+        { 190202, "Cenarion Hold", 240 },
+        { 190203, "Gadgetzan", 240 },
+        { 190204, "Everlook", 420 },
+        { 190205, "Thorium Point", 420 },
+        { 190206, "Light's Hope Chapel", 600 },
+    };
+    constexpr size_t DELIVERIES_A_DAY = 3;
+    constexpr uint32 DELIVERY_TOKEN = 190100;
+    constexpr uint32 DELIVERY_PACKAGE = 190101;
+    constexpr uint32 DELIVERY_BONUS = 5;
+
+    static std::mutex s_deliveryMutex;
+    // guid low -> the day, and the routes delivered that day (kartcraft_deliveries).
+    static std::unordered_map<uint32, std::pair<std::string, std::set<uint32>>> s_delivered;
+    // guid low -> the route under way and when it was taken (unix time).
+    static std::unordered_map<uint32, std::pair<uint32, std::time_t>> s_deliveryStart;
+
+    static void CreateDeliveries()
+    {
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_deliveries` ("
+            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
+            "`quest` MEDIUMINT UNSIGNED NOT NULL COMMENT 'the route''s quest', "
+            "`day` VARCHAR(12) NOT NULL COMMENT 'd<YYYYMMDD>, UTC', "
+            "`seconds` INT UNSIGNED NOT NULL COMMENT 'taken to delivered; 0 unknown', "
+            "`bonus` TINYINT UNSIGNED NOT NULL COMMENT '1 within par', "
+            "`at` INT UNSIGNED NOT NULL COMMENT 'when delivered, unix time', "
+            "PRIMARY KEY (`guid`, `quest`, `day`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+    }
+
+    static Delivery const* FindDelivery(uint32 quest)
+    {
+        for (Delivery const& d : DELIVERIES)
+            if (d.quest == quest)
+                return &d;
+        return nullptr;
+    }
+
+    // Today's routes: the DELIVERIES_A_DAY whose hash with the day is lowest.
+    static bool OfferedOn(std::string const& day, uint32 quest)
+    {
+        std::vector<std::pair<uint32, uint32>> ranked;
+        for (Delivery const& d : DELIVERIES)
+            ranked.push_back({ Fnv1a(day + "/" + std::to_string(d.quest)), d.quest });
+        std::sort(ranked.begin(), ranked.end());
+        for (size_t i = 0; i < ranked.size() && i < DELIVERIES_A_DAY; ++i)
+            if (ranked[i].second == quest)
+                return true;
+        return false;
+    }
+
+    // Under s_deliveryMutex: the routes `guid` delivered on `day`, from the table at first.
+    static std::set<uint32>& DeliveredOn(uint32 guid, std::string const& day)
+    {
+        auto& entry = s_delivered[guid];
+        if (entry.first != day)
+        {
+            entry.first = day;
+            entry.second.clear();
+            std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
+                "SELECT `quest` FROM `kartcraft_deliveries` WHERE `guid` = %u AND `day` = '%s'",
+                guid, day.c_str());
+            if (result)
+                do
+                    entry.second.insert(result->Fetch()[0].GetUInt32());
+                while (result->NextRow());
+        }
+        return entry.second;
+    }
+
+    bool CarryingDelivery(Player const* player)
+    {
+        return player->HasItemCount(DELIVERY_PACKAGE, 1);
+    }
+
+    static std::string Clock(uint32 seconds)
+    {
+        char text[16];
+        std::snprintf(text, sizeof(text), "%u:%02u", seconds / 60, seconds % 60);
+        return text;
+    }
+
+    // The client's delivery timer: the town, the par and the seconds already gone.
+    static void SendDeliveryTimer(Player* player, Delivery const& d, uint32 gone)
+    {
+        SendLine(player, std::string("KARTCRAFT\tR\tDel\t") + d.to + "\t" + std::to_string(d.par) + "\t" +
+            std::to_string(gone));
+    }
+
+    bool DeliveryOffered(Player const* player, Quest const* quest, bool msg)
+    {
+        Delivery const* d = FindDelivery(quest->GetQuestId());
+        if (!d)
+            return true;
+        std::string const day = ChallengePeriods().first;
+        if (!OfferedOn(day, d->quest))
+            return false;
+        // The one being delivered is the player's to turn in, whatever else holds.
+        if (player->GetQuestStatus(d->quest) != QUEST_STATUS_NONE)
+            return true;
+        bool done;
+        {
+            std::lock_guard<std::mutex> lock(s_deliveryMutex);
+            done = DeliveredOn(player->GetGUIDLow(), day).count(d->quest) != 0;
+        }
+        if (done)
+        {
+            if (msg)
+                ChatHandler(player->GetSession()).SendSysMessage("You've made that delivery today: it's back tomorrow.");
+            return false;
+        }
+        if (CarryingDelivery(player))
+        {
+            if (msg)
+                ChatHandler(player->GetSession()).SendSysMessage("Deliver the package you're carrying first.");
+            return false;
+        }
+        return true;
+    }
+
+    void OnQuestAccepted(Player* player, Quest const* quest)
+    {
+        Delivery const* d = FindDelivery(quest->GetQuestId());
+        if (!d)
+            return;
+        {
+            std::lock_guard<std::mutex> lock(s_deliveryMutex);
+            s_deliveryStart[player->GetGUIDLow()] = { d->quest, std::time(nullptr) };
+        }
+        ChatHandler(player->GetSession()).PSendSysMessage(
+            "Delivery to %s: beat %s for %u bonus tokens. It goes by kart: no flight paths, hearthstones, "
+            "portals or Kartcraft teleports until it's delivered.", d->to, Clock(d->par).c_str(), DELIVERY_BONUS);
+        SendDeliveryTimer(player, *d, 0);
+    }
+
+    void OnQuestRewarded(Player* player, Quest const* quest)
+    {
+        Delivery const* d = FindDelivery(quest->GetQuestId());
+        if (!d)
+            return;
+        uint32 const guid = player->GetGUIDLow();
+        std::time_t const now = std::time(nullptr);
+        std::string const day = ChallengePeriods().first;
+        uint32 seconds = 0;
+        {
+            std::lock_guard<std::mutex> lock(s_deliveryMutex);
+            auto start = s_deliveryStart.find(guid);
+            if (start != s_deliveryStart.end() && start->second.first == d->quest)
+                seconds = uint32(std::max<std::time_t>(now - start->second.second, 1));
+            s_deliveryStart.erase(guid);
+            DeliveredOn(guid, day).insert(d->quest);
+        }
+        // A start the server forgot (a restart since) pays no bonus: its time is unknown.
+        bool const bonus = seconds && seconds <= d->par;
+        CharacterDatabase.PExecute("REPLACE INTO `kartcraft_deliveries` (`guid`, `quest`, `day`, `seconds`, "
+            "`bonus`, `at`) VALUES (%u, %u, '%s', %u, %u, %u)", guid, d->quest, day.c_str(), seconds,
+            bonus ? 1u : 0u, uint32(now));
+        ChatHandler chat(player->GetSession());
+        if (bonus)
+        {
+            ItemPosCountVec dest;
+            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, DELIVERY_TOKEN, DELIVERY_BONUS) == EQUIP_ERR_OK)
+            {
+                if (Item* item = player->StoreNewItem(dest, DELIVERY_TOKEN, true))
+                    player->SendNewItem(item, DELIVERY_BONUS, true, false);
+                chat.PSendSysMessage("Delivered in %s, under par (%s): %u bonus tokens!",
+                    Clock(seconds).c_str(), Clock(d->par).c_str(), DELIVERY_BONUS);
+            }
+            else
+                chat.SendSysMessage("Delivered under par, but your bags had no room for the bonus tokens.");
+        }
+        else if (seconds)
+            chat.PSendSysMessage("Delivered in %s (par %s).", Clock(seconds).c_str(), Clock(d->par).c_str());
+        SendLine(player, "KARTCRAFT\tR\tDel-");
+    }
+
+    // At login: a delivery under way gets its timer back; a package without a start the server
+    // knows (a restart since) has none.
+    static void DeliveryLogin(Player* player)
+    {
+        if (!CarryingDelivery(player))
+            return;
+        std::pair<uint32, std::time_t> start;
+        {
+            std::lock_guard<std::mutex> lock(s_deliveryMutex);
+            auto found = s_deliveryStart.find(player->GetGUIDLow());
+            if (found == s_deliveryStart.end())
+                return;
+            start = found->second;
+        }
+        if (Delivery const* d = FindDelivery(start.first))
+            SendDeliveryTimer(player, *d, uint32(std::time(nullptr) - start.second));
     }
 
     static bool HasRated(uint32 guid, char const* course)
@@ -2625,7 +2842,8 @@ namespace Kartcraft
     // dungeon, a raid or a battleground (a teleport out of those would lose their place there).
     static bool CanBeRacedOff(Player* player)
     {
-        return Settled(player) && !player->InBattleGround() && !player->GetMap()->Instanceable();
+        return Settled(player) && !player->InBattleGround() && !player->GetMap()->Instanceable() &&
+            !CarryingDelivery(player);
     }
 
     // Whether a racer may be put on `c`'s grid now: off to it from the open world, or, on a party
@@ -3533,6 +3751,14 @@ namespace Kartcraft
             SendChallenges(player);
             return;
         }
+        // A courier's package goes by kart: none of the verbs that teleport (or queue for one).
+        static std::set<std::string> const TELEPORTS = { "TB", "TR", "MT", "LJ", "Q+", "Y", "Back" };
+        if (f.size() >= 2 && TELEPORTS.count(f[1]) && CarryingDelivery(player))
+        {
+            ChatHandler(player->GetSession()).SendSysMessage(
+                "You're carrying a delivery: it goes by kart, so no teleports until it's delivered.");
+            return;
+        }
         if (f.size() >= 2 && f[1] == "CO")
         {
             SendCosmetics(player);
@@ -4162,6 +4388,7 @@ namespace Kartcraft
         CreateChallenges();
         CreateCosmetics();
         CreateRatings();
+        CreateDeliveries();
         LoadLadder();
         LoadRecords(s_raceBoard, "race");
         LoadRecords(s_trialBoard, "time trial");
@@ -4181,6 +4408,16 @@ namespace Kartcraft
                     return SPELL_FAILED_BAD_TARGETS;
                 break;
             }
+        // A courier's package goes by kart: no hearthstone, no teleport of oneself.
+        if (Player const* courier = caster->ToPlayer())
+            if (CarryingDelivery(courier))
+                for (uint32 i = 0; i < MAX_EFFECT_INDEX; ++i)
+                    if (spell->Effect[i] == SPELL_EFFECT_TELEPORT_UNITS)
+                    {
+                        ChatHandler(courier->GetSession()).SendSysMessage(
+                            "You're carrying a delivery: it goes by kart, so no teleports until it's delivered.");
+                        return SPELL_FAILED_DONT_REPORT;
+                    }
         switch (spell->Id)
         {
             case SPELL_SUMMON_KART:

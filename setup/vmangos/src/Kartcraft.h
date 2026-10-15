@@ -17,6 +17,7 @@ class Player;
 class Unit;
 class WorldObject;
 class SpellEntry;
+class Quest;
 
 namespace Kartcraft
 {
@@ -51,6 +52,17 @@ namespace Kartcraft
     // Whether a player is in the kart: a driver springs no dungeon's traps nor its scripted
     // ambushes (Stratholme's rat-trap gates and The Unforgiven, instance_stratholme.cpp).
     bool InKart(Player const* player);
+    // Courier deliveries (kartcraft_deliveries.sql): whether `quest`, if one of them, is offered
+    // to the player now (today's, not yet delivered today, no package already carried), asked
+    // by Player::CanSeeStartQuest and CanTakeQuest; `msg` says why not.
+    bool DeliveryOffered(Player const* player, Quest const* quest, bool msg);
+    // Player::AddQuest: a delivery's clock starts.
+    void OnQuestAccepted(Player* player, Quest const* quest);
+    // Player::RewardQuest: a delivery made, its bonus paid when within par.
+    void OnQuestRewarded(Player* player, Quest const* quest);
+    // Whether the player carries a courier's package: no flight path takes them
+    // (Player::ActivateTaxiPathTo), nor any teleport.
+    bool CarryingDelivery(Player const* player);
 }
 
 #endif

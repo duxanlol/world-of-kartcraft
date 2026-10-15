@@ -170,13 +170,20 @@ if [ ! -d "$SERVER/storage/mangosd/extracted-data/maps" ]; then
 fi
 step "Building the server with the Karting profession (a few minutes)"
 "$ROOT/setup/build-server.sh" "$SERVER" || die "the server build failed (see the lines above)"
-# The Race Marshals (setup/vmangos/sql/kartcraft.sql): the database container runs custom-sql/ on
-# every start, so a changed file restarts it, with the world server stopped meanwhile.
-CUSTOM_SQL="$SERVER/storage/database/custom-sql/kartcraft.sql"
-if ! cmp -s "$ROOT/setup/vmangos/sql/kartcraft.sql" "$CUSTOM_SQL"; then
-    mkdir -p "$(dirname "$CUSTOM_SQL")"
-    cp "$ROOT/setup/vmangos/sql/kartcraft.sql" "$CUSTOM_SQL"
-    echo "  Race Marshals: storage/database/custom-sql/kartcraft.sql"
+# The world database's own rows (setup/vmangos/sql/: the Race Marshals, the courier deliveries):
+# the database container runs custom-sql/ on every start, so a changed file restarts it, with the
+# world server stopped meanwhile.
+CUSTOM_DIR="$SERVER/storage/database/custom-sql"
+sql_changed=
+for sql in "$ROOT"/setup/vmangos/sql/*.sql; do
+    if ! cmp -s "$sql" "$CUSTOM_DIR/$(basename "$sql")"; then
+        mkdir -p "$CUSTOM_DIR"
+        cp "$sql" "$CUSTOM_DIR/"
+        echo "  storage/database/custom-sql/$(basename "$sql")"
+        sql_changed=1
+    fi
+done
+if [ -n "$sql_changed" ]; then
     if [ -n "$(compose ps -q database 2>/dev/null)" ]; then
         compose stop mangosd
         compose restart database
