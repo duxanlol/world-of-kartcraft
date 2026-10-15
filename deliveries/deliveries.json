@@ -1,0 +1,27 @@
+{
+  "_comment": "Courier delivery towns (setup/vmangos/pack.py makes the routes from them: every town to every other on its continent, a repeatable quest each). A route's quest is 190200 + 20 x its from-town's place here + its to-town's place, so towns are only ever added at the end. Each town's courier gives its routes and takes the ones to it; x, y are where they stand (par comes from the distance), zone is the quest log's heading for routes from there.",
+  "towns": [
+    { "key": "ratchet", "name": "Ratchet", "map": 1, "zone": 17,
+      "npc": 3453, "npc_name": "Wharfmaster Dizzywig", "x": -986, "y": -3797 },
+    { "key": "gadgetzan", "name": "Gadgetzan", "map": 1, "zone": 440,
+      "npc": 7564, "npc_name": "Marin Noggenfogger", "x": -7193, "y": -3793 },
+    { "key": "cenarion-hold", "name": "Cenarion Hold", "map": 1, "zone": 1377,
+      "npc": 15174, "npc_name": "Calandrath", "x": -6868, "y": 730 },
+    { "key": "everlook", "name": "Everlook", "map": 1, "zone": 618,
+      "npc": 11118, "npc_name": "Innkeeper Vizzie", "x": 6695, "y": -4673 },
+    { "key": "booty-bay", "name": "Booty Bay", "map": 0, "zone": 33,
+      "npc": 2496, "npc_name": "Baron Revilgaz", "x": -14439, "y": 483 },
+    { "key": "thorium-point", "name": "Thorium Point", "map": 0, "zone": 51,
+      "npc": 14627, "npc_name": "Hansel Heavyhands", "x": -6514, "y": -1184 },
+    { "key": "lights-hope", "name": "Light's Hope Chapel", "map": 0, "zone": 139,
+      "npc": 11038, "npc_name": "Caretaker Alen", "x": 2152, "y": -5265 },
+    { "key": "steamwheedle-port", "name": "Steamwheedle Port", "map": 1, "zone": 440,
+      "npc": 7882, "npc_name": "Security Chief Bilgewhizzle", "x": -6974, "y": -4846 },
+    { "key": "mirage-raceway", "name": "the Mirage Raceway", "map": 1, "zone": 400,
+      "npc": 4452, "npc_name": "Kravel Koalbeard", "x": -6233, "y": -3856 },
+    { "key": "marshals-refuge", "name": "Marshal's Refuge", "map": 1, "zone": 490,
+      "npc": 9270, "npc_name": "Williden Marshal", "x": -6143, "y": -1093 },
+    { "key": "nighthaven", "name": "Nighthaven", "map": 1, "zone": 493,
+      "npc": 11939, "npc_name": "Umber", "x": 7944, "y": -2417 }
+  ]
+}

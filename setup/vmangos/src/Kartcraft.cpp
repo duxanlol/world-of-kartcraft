@@ -1304,7 +1304,8 @@ namespace Kartcraft
 
     // ── Courier deliveries ────────────────────────────────────────────────────────────────────
     //
-    // Repeatable quests between the neutral towns' people (kartcraft_deliveries.sql): the giver
+    // Repeatable quests between the neutral towns' people (deliveries/deliveries.json, made into
+    // kartcraft_deliveries.sql and KartcraftDeliveries.h by pack.py): the giver
     // hands over the Courier's Package, its recipient takes it and pays DELIVERY_PAY tokens (the
     // quest's own reward), and the server adds DELIVERY_BONUS more when it came within the
     // route's par. DELIVERIES_A_DAY of the routes are offered each UTC day, the daily
@@ -1314,19 +1315,14 @@ namespace Kartcraft
     struct Delivery
     {
         uint32 quest;
-        char const* to;  // the town, for the client's timer
-        uint32 par;      // seconds
+        char const* from;  // the towns, for the client
+        char const* to;
+        uint32 giver;      // their couriers
+        uint32 recipient;
+        uint32 par;        // seconds
     };
-    static Delivery const DELIVERIES[] = {
-        { 190200, "Gadgetzan", 300 },
-        { 190201, "Ratchet", 300 },
-        { 190202, "Cenarion Hold", 240 },
-        { 190203, "Gadgetzan", 240 },
-        { 190204, "Everlook", 420 },
-        { 190205, "Thorium Point", 420 },
-        { 190206, "Light's Hope Chapel", 600 },
-    };
-    constexpr size_t DELIVERIES_A_DAY = 3;
+#include "KartcraftDeliveries.h"
+    constexpr size_t DELIVERIES_A_DAY = 10;
     constexpr uint32 DELIVERY_TOKEN = 190100;
     constexpr uint32 DELIVERY_PACKAGE = 190101;
     constexpr uint32 DELIVERY_BONUS = 5;
