@@ -2,11 +2,14 @@
 # request from a fork: a red one is seen before anyone builds it. `--workspace` covers the kart
 # crates (ctr-kart, ctr-assets, kartcraft, kart-demo); ctr-assets' disc test skips without
 # `CTR_DISC`. A Windows job checks the game and the demo still compile there and setup.ps1 parses.
-# The data-gated tests and a live run happen on the maintainer's machine before it lands.
+# The data-gated tests and a live run happen on the maintainer's machine before it lands. A push to
+# staging runs every job too, which saves the build cache the pull requests restore.
 name: CI
 
 on:
   pull_request:
+  push:
+    branches: [staging]
   workflow_dispatch:
 
 permissions:
@@ -14,12 +17,13 @@ permissions:
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # A newer push to a pull request replaces its run; staging's runs finish, to save the cache.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   gates:
     # A branch of this repository runs the full chain before it lands; a fork's pull request runs here.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name != github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 150
     env:
@@ -40,6 +44,11 @@ jobs:
       - name: Toolchain
         run: rustup toolchain install && rustc -V
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # staging's push saves the one cache every pull request restores; a pull request only
+          # reads it, so the caches stay under the repository's 10 GB.
+          save-if: ${{ github.event_name != 'pull_request' }}
+          cache-on-failure: true
       - name: fmt
         run: cargo fmt --all -- --check
       - name: clippy
@@ -50,12 +59,40 @@ jobs:
         run: scripts/doc-links.py
       - name: pass-span-lint
         run: scripts/pass-span-lint.py
+
+  player-tests:
+    # The player build without the `dev` feature: its own feature set rebuilds every dependency,
+    # so it runs beside the gates, with a cache of its own.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      WOW_DATA: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: System libraries
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq pkg-config libasound2-dev libudev-dev
+      - name: Toolchain
+        run: rustup toolchain install && rustc -V
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # staging's push saves the one cache every pull request restores; a pull request only
+          # reads it, so the caches stay under the repository's 10 GB.
+          save-if: ${{ github.event_name != 'pull_request' }}
+          cache-on-failure: true
       - name: player-tests
         run: cargo test -p benilla-formats -p benilla-app --no-default-features --lib
 
   windows:
     # Compiles only: nothing on Windows can be run here without the games.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name != github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: windows-latest
     timeout-minutes: 120
     env:
@@ -68,6 +105,11 @@ jobs:
       - name: Toolchain
         run: rustup toolchain install && rustc -V
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # staging's push saves the one cache every pull request restores; a pull request only
+          # reads it, so the caches stay under the repository's 10 GB.
+          save-if: ${{ github.event_name != 'pull_request' }}
+          cache-on-failure: true
       - name: setup.ps1 parses
         shell: powershell
         run: |
@@ -99,11 +141,38 @@ jobs:
       - name: Toolchain
         run: rustup toolchain install && rustc -V
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # staging's push saves the one cache every pull request restores; a pull request only
+          # reads it, so the caches stay under the repository's 10 GB.
+          save-if: ${{ github.event_name != 'pull_request' }}
+          cache-on-failure: true
       - name: build
         run: cargo build --workspace
       - name: test
         run: cargo test --workspace
-      - name: player-tests
-        run: cargo test -p benilla-formats -p benilla-app --no-default-features --lib
       - name: package.sh parses
         run: bash -n dist/macos/package.sh
+
+  macos-player-tests:
+    # The player build on Apple Silicon, beside the workspace's, as on Linux.
+    runs-on: macos-14
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      WOW_DATA: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: rustup toolchain install && rustc -V
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # staging's push saves the one cache every pull request restores; a pull request only
+          # reads it, so the caches stay under the repository's 10 GB.
+          save-if: ${{ github.event_name != 'pull_request' }}
+          cache-on-failure: true
+      - name: player-tests
+        run: cargo test -p benilla-formats -p benilla-app --no-default-features --lib
