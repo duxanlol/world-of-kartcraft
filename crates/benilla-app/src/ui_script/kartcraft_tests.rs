@@ -749,6 +749,7 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
             "Courier jobs...",
             "Guide...",
             "Kart garage...",
+            "Skin shop...",
             "Kartcraft settings...",
             "Kart camera...",
             "Controller test...",
@@ -3266,4 +3267,104 @@ fn the_track_browser_takes_us_to_the_track_s_marshal() {
     s.run("BenillaKartTrackBrowser_Open() BenillaKartTrackBrowser_Select('d1')")
         .unwrap();
     assert!(!enabled(&s));
+}
+
+#[test]
+fn the_skin_shop_previews_buys_and_wears_through_the_server() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let text = |s: &mut UiScript, name: &str| -> String {
+        s.eval(&format!("return {name}:GetText() or ''")).unwrap()
+    };
+    let enabled = |s: &mut UiScript, name: &str| -> bool {
+        s.eval(&format!("return {name}:IsEnabled() == 1")).unwrap()
+    };
+    let preview =
+        |s: &mut UiScript| -> String { s.eval("return GetCVar('KartSkinPreview')").unwrap() };
+    sent(&mut s);
+    s.run("BenillaKartShop_Toggle()").unwrap();
+    // Opening asks for our purse, and the first skin turns in the pane.
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tSkins"]);
+    assert_eq!(preview(&mut s), "3597");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin1Name"), "Magni");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin12Name"), "Kel'Thuzad");
+    assert_eq!(
+        text(&mut s, "BenillaKartShopFrameTokens"),
+        "Kartcraft Tokens: ?"
+    );
+
+    // 120 tokens: Magni (150) is out of reach, Bolvar (100) is not.
+    from_server(&mut s, "R\tSkins\t120\t\t");
+    assert_eq!(
+        text(&mut s, "BenillaKartShopFrameTokens"),
+        "Kartcraft Tokens: 120"
+    );
+    assert!(!enabled(&mut s, "BenillaKartShopFrameBuy"));
+    s.run("BenillaKartShopFrameSkin7:Click()").unwrap();
+    assert_eq!(preview(&mut s), "5566");
+    assert_eq!(
+        text(&mut s, "BenillaKartShopFrameSkinName"),
+        "Highlord Bolvar Fordragon"
+    );
+    assert!(enabled(&mut s, "BenillaKartShopFrameBuy"));
+    assert!(!enabled(&mut s, "BenillaKartShopFrameWear"));
+    s.run("BenillaKartShopFrameBuy:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tSkinBuy\tbolvar"]);
+
+    // Bought: Wear wears it, and again takes it off.
+    from_server(&mut s, "R\tSkins\t20\t\tbolvar");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin7Price"), "Owned");
+    s.run("BenillaKartShopFrameWear:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tSkinWear\tbolvar"]);
+    from_server(&mut s, "R\tSkins\t20\tbolvar\tbolvar");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin7Price"), "Worn");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameWear"), "Take off");
+    s.run("BenillaKartShopFrameWear:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tSkinWear\t"]);
+
+    // Closed, the pane's unit goes.
+    s.run("BenillaKartShopFrame:Hide()").unwrap();
+    assert_eq!(preview(&mut s), "0");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The shop's catalogue is the server's: every skin's key, display and price in
+/// `BENILLA_KART_SKINS` as `Kartcraft.cpp`'s `SKINS` has them, in its order.
+#[test]
+fn the_skin_shop_sells_what_the_server_sells() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let cpp = std::fs::read_to_string(root.join("setup/vmangos/src/Kartcraft.cpp")).unwrap();
+    let xml =
+        std::fs::read_to_string(root.join("crates/benilla-app/assets/ui/KartcraftFrames.xml"))
+            .unwrap();
+    let server: Vec<(String, u32, u32)> = cpp
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim().strip_prefix("{ \"")?.strip_suffix(" },")?;
+            let (key, rest) = l.split_once("\", ")?;
+            let (display, price) = rest.split_once(", ")?;
+            Some((key.into(), display.parse().ok()?, price.parse().ok()?))
+        })
+        .collect();
+    let field = |l: &str, name: &str| -> Option<String> {
+        let at = l.find(&format!("{name} = "))? + name.len() + 3;
+        let v = l[at..].split(',').next()?;
+        Some(v.trim().trim_matches('"').to_string())
+    };
+    let client: Vec<(String, u32, u32)> = xml
+        .lines()
+        .filter(|l| l.trim_start().starts_with("{ key = "))
+        .filter_map(|l| {
+            Some((
+                field(l, "key")?,
+                field(l, "display")?.parse().ok()?,
+                field(l, "price")?.parse().ok()?,
+            ))
+        })
+        .collect();
+    assert_eq!(client.len(), 12, "the shop's twelve cells");
+    assert_eq!(client, server);
 }

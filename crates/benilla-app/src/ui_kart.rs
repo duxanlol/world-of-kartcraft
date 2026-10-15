@@ -261,6 +261,16 @@ fn score_args(lines: ScoreLines) -> Vec<ScriptValue> {
     args
 }
 
+/// The skin shop pane's yaw, which its rotate buttons turn, for its booth (`crate::kart::skins`).
+pub(crate) fn skin_yaw(
+    script: Option<NonSend<UiScript>>,
+    mut booth: ResMut<crate::portrait::SkinBooth>,
+) {
+    if let Some(script) = script {
+        booth.yaw = script.model_pane_facing("BenillaKartShopFrameModel");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
