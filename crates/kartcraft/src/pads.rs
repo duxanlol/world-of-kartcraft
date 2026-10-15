@@ -11,10 +11,13 @@ use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
-/// A pad's length along the course and width across it, yards: about two karts by one and a
-/// half, so a racer on the line cannot miss it.
-pub const PAD_LENGTH: f32 = 5.0;
-pub const PAD_WIDTH: f32 = 4.0;
+/// A CTR turbo pad's side, level units: CTR's pads are single trigger quadblocks, and across its
+/// tracks both kinds measure a median 384 by 384 (the disc's quadblocks with `quadFlags & 0x40`
+/// and turbo `terrain_type`).
+const PAD_LU: f32 = 384.0;
+/// A pad's length along the course and width across it, yards: CTR's, to the kart as CTR's kart.
+pub const PAD_LENGTH: f32 = PAD_LU * crate::METERS_PER_LU / crate::METERS_PER_YARD;
+pub const PAD_WIDTH: f32 = PAD_LENGTH;
 /// How far above or below the pad (yards) the kart's origin still counts as on it.
 pub const PAD_REACH: f32 = 1.5;
 /// Pads are laid (their ground found and their mesh built) within this many yards of the camera.
@@ -89,7 +92,7 @@ pub fn pad_mesh(pad: &Pad, mut height: impl FnMut(Vec3) -> Option<f32>) -> Optio
         )?;
     }
     // Three chevrons, each two arms meeting at a tip ahead.
-    let (arm, depth) = (0.45, PAD_LENGTH * 0.18);
+    let (arm, depth) = (PAD_LENGTH * 0.09, PAD_LENGTH * 0.18);
     let reach = hw * 0.8;
     for k in 0..3 {
         let tip = -hl + PAD_LENGTH * (0.36 + 0.29 * k as f32);
