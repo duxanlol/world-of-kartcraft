@@ -1,0 +1,14 @@
+[package]
+name = "kart-gps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The courier deliveries' GPS: a continent's roads as a graph and the shortest road route across it"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The road file (`roads/roads.json`) course-gen writes and the client reads.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

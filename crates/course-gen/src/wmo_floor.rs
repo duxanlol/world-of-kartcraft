@@ -254,13 +254,16 @@ fn find(parent: &mut [u32], mut a: u32) -> u32 {
 }
 
 /// The ground of a map whose walkable surfaces are WMOs over `terrain` (heights per pixel, NaN in
-/// a hole). `rotation` is the MODF placement rotation (degrees to a WoW-frame quaternion).
+/// a hole). `rotation` is the MODF placement rotation (degrees to a WoW-frame quaternion). With
+/// `prefer_paved` a pixel's ground is its lowest WMO floor of the ground where it has one (a
+/// bridge's deck over its gorge), not its lowest floor of any kind.
 pub fn walkable_floor(
     chain: &mut Chain,
     grid: &Grid,
     wmos: &[WmoInstance],
     terrain: &[f32],
     rotation: impl Fn([f32; 3]) -> Quat,
+    prefer_paved: bool,
 ) -> Floor {
     let (faces, doodads) = placed_faces(chain, wmos, rotation);
     let triangles = faces.len();
@@ -332,8 +335,13 @@ pub fn walkable_floor(
     let mut solid = vec![false; grid.len()];
     let mut paved = vec![false; grid.len()];
     for i in 0..grid.len() {
-        // The lowest floor of the ground on the pixel.
-        if let Some(k) = of(i).find(|&k| Some(find(&mut parent, k as u32)) == ground) {
+        // The lowest floor of the ground on the pixel, a WMO's first when preferred.
+        let paved_k = prefer_paved
+            .then(|| of(i).find(|&k| paved_node[k] && Some(find(&mut parent, k as u32)) == ground))
+            .flatten();
+        if let Some(k) =
+            paved_k.or_else(|| of(i).find(|&k| Some(find(&mut parent, k as u32)) == ground))
+        {
             height[i] = nodes[k].0;
             paved[i] = paved_node[k];
         }

@@ -38,6 +38,7 @@ fn flat(size: usize) -> ZoneTerrain {
         textures: Vec::new(),
         probes: Vec::new(),
         wmo_ground: false,
+        laid: vec![false; n],
     }
 }
 

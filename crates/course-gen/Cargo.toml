@@ -26,6 +26,8 @@ serde_json = "1"
 glam = "0.30"
 # Test-drives generated courses over CTR's driving model.
 kart-driver = { path = "../kart-driver" }
+# The deliveries' GPS roads `course-gen gps` builds and checks.
+kart-gps = { path = "../kart-gps" }
 # PNG only, for the debug render.
 image = { version = "0.25", default-features = false, features = ["png"] }
 

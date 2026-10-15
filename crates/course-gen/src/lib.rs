@@ -10,6 +10,7 @@ pub mod drivetest;
 pub mod export;
 pub mod generate;
 pub mod geom;
+pub mod gps;
 pub mod marshal;
 pub mod metrics;
 pub mod pads;

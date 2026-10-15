@@ -132,6 +132,9 @@ pub struct TerrainParams {
     pub doodad_bounds: bool,
     /// Lower-cased substrings of texture paths to keep a weight raster for ([`ZoneTerrain::probes`]).
     pub probe_textures: Vec<String>,
+    /// Drive on the walkable floor of the zone's WMOs as well as its terrain ([`crate::wmo_floor`]):
+    /// bridges, tunnels and city streets, as an instance's streets always are.
+    pub wmo_floors: bool,
 }
 
 impl Default for TerrainParams {
@@ -143,6 +146,7 @@ impl Default for TerrainParams {
             road_exclude: ROAD_EXCLUDE.iter().map(|s| s.to_string()).collect(),
             doodad_bounds: true,
             probe_textures: Vec::new(),
+            wmo_floors: false,
         }
     }
 }
@@ -180,6 +184,8 @@ pub struct ZoneTerrain {
     /// The ground is the walkable floor of the map's WMOs (an instance's streets,
     /// [`crate::wmo_floor`]), and `road` marks that floor.
     pub wmo_ground: bool,
+    /// An open WMO floor is laid over the terrain on the pixel ([`TerrainParams::wmo_floors`]).
+    pub laid: Vec<bool>,
 }
 
 impl ZoneTerrain {
@@ -466,24 +472,56 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
     }
 
     // An instance's streets are WMO faces over filler terrain: its ground is the walkable floor.
-    let floor = whole_map.then(|| {
+    let floor = (whole_map || params.wmo_floors).then(|| {
         let wmos: Vec<benilla_formats::WmoInstance> = tiles
             .iter()
             .flat_map(|(t, _)| t.wmos.iter().cloned())
             .collect();
-        crate::wmo_floor::walkable_floor(chain, &grid, &wmos, &height, placement_rotation)
+        crate::wmo_floor::walkable_floor(
+            chain,
+            &grid,
+            &wmos,
+            &height,
+            placement_rotation,
+            !whole_map,
+        )
     });
+    // On a continent the terrain stays the ground, and an open WMO floor (a bridge's deck, a
+    // tunnel's, a city's street) is laid over it where there is one.
+    let mut laid = vec![false; grid.len()];
     if let Some(f) = &floor {
-        height.clone_from(&f.height);
+        if whole_map {
+            height.clone_from(&f.height);
+        }
         for i in 0..grid.len() {
-            in_zone[i] = height[i].is_finite();
+            if whole_map {
+                in_zone[i] = height[i].is_finite();
+            }
             if f.paved[i] && !f.solid[i] {
                 road[i] = 1.0;
+                if !whole_map && f.height[i].is_finite() {
+                    height[i] = f.height[i];
+                    laid[i] = true;
+                }
             }
         }
     }
 
-    let slope = slope_raster(&grid, &height);
+    let mut slope = slope_raster(&grid, &height);
+    // A laid floor's slope is its own: beside a tunnel's floor is the mountain over it.
+    if laid.iter().any(|&l| l) {
+        let floor_only: Vec<f32> = height
+            .iter()
+            .zip(&laid)
+            .map(|(&z, &l)| if l { z } else { f32::NAN })
+            .collect();
+        let own = slope_raster(&grid, &floor_only);
+        for i in 0..grid.len() {
+            if laid[i] {
+                slope[i] = own[i];
+            }
+        }
+    }
 
     // Obstacles: every placement inside the raster, once per uniqueId.
     let mut obstacles = Vec::new();
@@ -492,6 +530,7 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
     let mut m2_hulls: HashMap<String, Option<Hull>> = HashMap::new();
     let mut solid = floor
         .as_ref()
+        .filter(|_| whole_map)
         .map_or_else(|| vec![false; grid.len()], |f| f.solid.clone());
     let inside = |x: f32, y: f32| {
         let (c, r) = grid.pixel_of(x, y);
@@ -622,6 +661,8 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
     }
     .fill_holes(SOLID_HOLE_PX)
     .data;
+    // A laid floor is driven on, whatever footprint its own building stamped.
+    let solid: Vec<bool> = solid.iter().zip(&laid).map(|(&s, &l)| s && !l).collect();
     let area_names = area
         .iter()
         .copied()
@@ -648,6 +689,7 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
         textures,
         probes,
         wmo_ground: whole_map,
+        laid,
     })
 }
 

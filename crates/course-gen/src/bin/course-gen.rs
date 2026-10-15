@@ -16,6 +16,10 @@
 //! `course-gen pads` lays turbo pads on every course's straights (`"pads"`); the client alone
 //! reads them.
 //!
+//! `course-gen gps` finds the cheapest drivable way between every pair of delivery towns over
+//! each continent's drivability grid and lays them as the deliveries' GPS roads
+//! (`roads/roads.json`, `kart_gps`).
+//!
 //! `course-gen showcase [site...] --out <dir> --write showcase/showcase.json` authors the
 //! showcase runs (`/kartshow`) over the real world and keeps their input tapes.
 
@@ -153,6 +157,21 @@ enum Cmd {
         /// The course file.
         #[arg(long, default_value = "courses/courses.json")]
         courses: PathBuf,
+    },
+    /// Build the deliveries' GPS roads (`course_gen::gps`) and route the delivery towns over them.
+    Gps {
+        /// The road file written.
+        #[arg(long, default_value = "roads/roads.json")]
+        out: PathBuf,
+        /// The delivery towns routed between.
+        #[arg(long, default_value = "deliveries/deliveries.json")]
+        deliveries: PathBuf,
+        /// Also draw each continent's grid into `<dir>/gps-map<id>.png`.
+        #[arg(long)]
+        render: Option<PathBuf>,
+        /// Zones loaded, and towns searched from, at once (a large zone takes about 2 GB).
+        #[arg(long, default_value_t = 3)]
+        jobs: usize,
     },
     /// Lay turbo pads on every course's straights, at the ground's height, and write each
     /// course's `"pads"` into the course file (`course_gen::pads`).
@@ -502,6 +521,21 @@ fn main() -> Result<()> {
                 &overrides,
             )?;
             print!("{log}");
+        }
+        Cmd::Gps {
+            out,
+            deliveries,
+            render,
+            jobs,
+        } => {
+            let (roads, report) = course_gen::gps::run(&deliveries, jobs, render.as_deref())?;
+            if let Some(dir) = out.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            std::fs::write(&out, serde_json::to_string(&roads)?)
+                .with_context(|| format!("writing {}", out.display()))?;
+            print!("{report}");
+            println!("wrote {}", out.display());
         }
         Cmd::Pads { courses } => {
             let n = course_gen::pads::run(&courses, open_install()?)?;
