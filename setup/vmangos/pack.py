@@ -302,16 +302,19 @@ def showcase_header():
 
 
 # ── Courier deliveries ───────────────────────────────────────────────────────────────────────────
-# deliveries/deliveries.json's towns make the routes: every town to every other on its continent,
-# quest DELIVERY_QUEST + 20 x the from-town's place + the to-town's, so a town added at the end
-# leaves every route's quest as it was. Par: the straight line, half again for the roads, at 32
+# deliveries/deliveries.json's towns make the routes: every town to every other on its continent
+# that one faction can use (a faction's town to its own faction's and the neutral ones, which
+# then only that faction takes), quest DELIVERY_QUEST + MAX_TOWNS x the from-town's place + the
+# to-town's, so a town added at the end leaves every route's quest as it was. Par: the straight line, half again for the roads, at 32
 # yards a second (the Balanced kart's top is 42), up to the next 30 s, at least 2 minutes.
 DELIVERY_QUEST = 190200
 DELIVERY_TOKEN = 190100
 DELIVERY_PACKAGE = 190101
 DELIVERY_PAY = 10
 DELIVERY_BONUS = 5
-MAX_TOWNS = 20
+MAX_TOWNS = 64
+# A faction's races (RequiredRaces), and its team in KartcraftDeliveries.h (0 either).
+FACTIONS = {'alliance': (77, 1), 'horde': (178, 2)}
 
 
 def load_deliveries():
@@ -332,6 +335,8 @@ def load_deliveries():
         for field in ('x', 'y'):
             if isinstance(t.get(field), bool) or not isinstance(t.get(field), (int, float)):
                 sys.exit(f'{what}: {field} must be a number')
+        if t.get('faction', 'neutral') not in ('neutral',) + tuple(FACTIONS):
+            sys.exit(f'{what}: faction must be alliance, horde or none')
         for field in ('name', 'npc_name'):
             v = t.get(field)
             if not isinstance(v, str) or not v or not v.isascii() or any(c in v for c in '\t\n\r"\\'):
@@ -345,9 +350,15 @@ def delivery_routes(towns):
         for j, b in enumerate(towns):
             if i == j or a['map'] != b['map']:
                 continue
+            fa, fb = a.get('faction'), b.get('faction')
+            if fa and fb and fa != fb:
+                continue
+            faction = fa or fb
             distance = math.hypot(a['x'] - b['x'], a['y'] - b['y'])
             par = max(120, int(math.ceil(distance * 1.5 / 32 / 30)) * 30)
-            routes.append({'quest': DELIVERY_QUEST + MAX_TOWNS * i + j, 'from': a, 'to': b, 'par': par})
+            races, team = FACTIONS.get(faction, (0, 0))
+            routes.append({'quest': DELIVERY_QUEST + MAX_TOWNS * i + j, 'from': a, 'to': b, 'par': par,
+                           'races': races, 'team': team})
     return routes
 
 
@@ -365,7 +376,8 @@ def deliveries_header(routes):
     ]
     for r in routes:
         a, b = r['from'], r['to']
-        out.append(f'        {{ {r["quest"]}, "{a["name"]}", "{b["name"]}", {a["npc"]}, {b["npc"]}, {r["par"]} }},')
+        out.append(f'        {{ {r["quest"]}, "{a["name"]}", "{b["name"]}", {a["npc"]}, {b["npc"]}, {r["par"]}, '
+                   f'{r["team"]} }},')
     out.append('    };')
     return '\n'.join(out) + '\n'
 
@@ -398,10 +410,11 @@ def deliveries_sql(towns, routes):
         f"({DELIVERY_PACKAGE}, 0, 12, 0, 'Courier''s Package', 'By kart only: no flights, no hearthstones, no portals.', 8928, 1, 0, 0, 0, 4, 1, 1);",
         '',
         f'-- The routes: the package handed over on accepting and taken back on delivering, {DELIVERY_PAY} tokens',
-        '-- paid. Repeatable (SpecialFlags 1): the server allows each once a day.',
+        '-- paid. Repeatable (SpecialFlags 1): the server allows each once a day. A faction\'s routes take',
+        '-- only its races (RequiredRaces: Alliance 77, Horde 178; 0 anyone).',
         'INSERT INTO `quest_template` (`entry`, `patch`, `Method`, `ZoneOrSort`, `MinLevel`, `QuestLevel`,',
-        '  `SpecialFlags`, `SrcItemId`, `SrcItemCount`, `Title`, `Details`, `Objectives`, `OfferRewardText`,',
-        '  `RequestItemsText`, `ReqItemId1`, `ReqItemCount1`, `RewItemId1`, `RewItemCount1`) VALUES',
+        '  `RequiredRaces`, `SpecialFlags`, `SrcItemId`, `SrcItemCount`, `Title`, `Details`, `Objectives`,',
+        '  `OfferRewardText`, `RequestItemsText`, `ReqItemId1`, `ReqItemCount1`, `RewItemId1`, `RewItemCount1`) VALUES',
     ]
     rows = []
     for r in routes:
@@ -410,7 +423,7 @@ def deliveries_sql(towns, routes):
                    f"paths, no hearthstones, no portals while you carry it.$B$BGet it there within "
                    f"{clock(r['par'])} and there's a bonus in it for you.")
         rows.append(
-            f"({r['quest']}, 0, 2, {a['zone']}, 1, 60, 1, {DELIVERY_PACKAGE}, 1, "
+            f"({r['quest']}, 0, 2, {a['zone']}, 1, 60, {r['races']}, 1, {DELIVERY_PACKAGE}, 1, "
             f"{sql_str('Express Delivery: ' + b['name'])}, {sql_str(details)}, "
             f"{sql_str('Deliver the Courier' + chr(39) + 's Package to ' + b['npc_name'] + ' in ' + b['name'] + '.')}, "
             f"{sql_str('Right on time. Here' + chr(39) + 's your pay, courier.')}, "

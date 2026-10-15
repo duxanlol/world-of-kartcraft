@@ -1309,7 +1309,8 @@ namespace Kartcraft
     // hands over the Courier's Package, its recipient takes it and pays DELIVERY_PAY tokens (the
     // quest's own reward), and the server adds DELIVERY_BONUS more when it came within the
     // route's par. DELIVERIES_A_DAY of the routes are offered each UTC day, the daily
-    // challenge's (ChallengePeriods), each once a day a character; one package at a time. A
+    // challenge's (ChallengePeriods) and each faction's own, each once a day a character; one
+    // package at a time. A
     // package goes by kart: while it is carried no Kartcraft teleport, flight path, hearthstone
     // or teleport spell takes its carrier (CarryingDelivery).
     struct Delivery
@@ -1320,6 +1321,7 @@ namespace Kartcraft
         uint32 giver;      // their couriers
         uint32 recipient;
         uint32 par;        // seconds
+        uint8 team;        // whose: 0 either faction's, 1 the Alliance's, 2 the Horde's
     };
 #include "KartcraftDeliveries.h"
     constexpr size_t DELIVERIES_A_DAY = 10;
@@ -1355,12 +1357,14 @@ namespace Kartcraft
         return nullptr;
     }
 
-    // Today's routes: the DELIVERIES_A_DAY whose hash with the day is lowest.
-    static bool OfferedOn(std::string const& day, uint32 quest)
+    // Today's routes for a faction (`team` 1 the Alliance, 2 the Horde): the DELIVERIES_A_DAY of
+    // its own and the neutral ones whose hash with the day is lowest.
+    static bool OfferedOn(std::string const& day, uint32 quest, uint8 team)
     {
         std::vector<std::pair<uint32, uint32>> ranked;
         for (Delivery const& d : DELIVERIES)
-            ranked.push_back({ Fnv1a(day + "/" + std::to_string(d.quest)), d.quest });
+            if (!d.team || d.team == team)
+                ranked.push_back({ Fnv1a(day + "/" + std::to_string(d.quest)), d.quest });
         std::sort(ranked.begin(), ranked.end());
         for (size_t i = 0; i < ranked.size() && i < DELIVERIES_A_DAY; ++i)
             if (ranked[i].second == quest)
@@ -1412,7 +1416,7 @@ namespace Kartcraft
         if (!d)
             return true;
         std::string const day = ChallengePeriods().first;
-        if (!OfferedOn(day, d->quest))
+        if (!OfferedOn(day, d->quest, player->GetTeam() == ALLIANCE ? 1 : 2))
             return false;
         // The one being delivered is the player's to turn in, whatever else holds.
         if (player->GetQuestStatus(d->quest) != QUEST_STATUS_NONE)
