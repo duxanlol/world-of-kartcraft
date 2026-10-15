@@ -753,7 +753,7 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
             "Kartcraft settings...",
             "Kart camera...",
             "Controller test...",
-            "Hide minimap button",
+            "Hide minimap buttons",
         ]
     );
     pick(&mut s, "Race Finder");
@@ -782,8 +782,9 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
 
     // Hidden from the menu; the settings window's box brings it back.
     menu(&mut s);
-    pick(&mut s, "Hide minimap button");
+    pick(&mut s, "Hide minimap buttons");
     assert!(!shown(&s, "BenillaKartMinimapButton"));
+    assert!(!shown(&s, "BenillaKartShopMinimapButton"));
     assert_eq!(s.cvar("KartMinimapButton").as_deref(), Some("0"));
     s.run("SlashCmdList['BENILLA_KARTCRAFT']('')").unwrap();
     assert!(!s
@@ -792,7 +793,22 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
     s.run("BenillaKartSettingsFrameMinimapButton:Click()")
         .unwrap();
     assert!(shown(&s, "BenillaKartMinimapButton"));
+    assert!(shown(&s, "BenillaKartShopMinimapButton"));
     assert_eq!(s.cvar("KartMinimapButton").as_deref(), Some("1"));
+
+    // The shop's own button: on the ring at its own angle, a click opens the shop.
+    s.run("BenillaKartSettings_Set('KartShopMinimapAngle', 270, 0) BenillaKartShopButton_Place()")
+        .unwrap();
+    let (x, y): (f32, f32) = s
+        .eval(
+            "local x, y = BenillaKartShopMinimapButton:GetCenter() \
+             local cx, cy = Minimap:GetCenter() return x - cx, y - cy",
+        )
+        .unwrap();
+    assert!(x.abs() < 0.5 && (y + 80.0).abs() < 0.5, "({x}, {y})");
+    s.run("BenillaKartShopMinimapButton:Click('LeftButton')")
+        .unwrap();
+    assert!(shown(&s, "BenillaKartShopFrame"));
 }
 
 #[test]
@@ -819,7 +835,7 @@ fn the_settings_window_sets_the_kart_s_cvars() {
         ("ArrowShow", "Show the guide arrow in a race"),
         ("ChaseCamera", "CTR chase camera (off: your WoW camera)"),
         ("Music", "Play CTR race music"),
-        ("MinimapButton", "Show the minimap button"),
+        ("MinimapButton", "Show the minimap buttons"),
         ("Ghost", "Race the ghost of your best run"),
     ] {
         let frame = format!("BenillaKartSettingsFrame{name}");
@@ -3300,11 +3316,11 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
         "Kartcraft Tokens: ?"
     );
 
-    // 120 tokens: Magni (150) is out of reach, Bolvar (100) is not.
-    from_server(&mut s, "R\tSkins\t120\t\t");
+    // 250 tokens: Magni (300) is out of reach, Bolvar (200) is not.
+    from_server(&mut s, "R\tSkins\t250\t\t");
     assert_eq!(
         text(&mut s, "BenillaKartShopFrameTokens"),
-        "Kartcraft Tokens: 120"
+        "Kartcraft Tokens: 250"
     );
     assert!(!enabled(&mut s, "BenillaKartShopFrameBuy"));
     s.run("BenillaKartShopFrameSkin7:Click()").unwrap();

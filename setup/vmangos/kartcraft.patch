@@ -82,7 +82,7 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..b2d1b87
+index 0000000..bc1b471
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
 @@ -0,0 +1,4725 @@
@@ -1685,16 +1685,16 @@ index 0000000..b2d1b87
 +    };
 +
 +    static Skin const SKINS[] = {
-+        { "magni", 3597, 150 },
-+        { "thrall", 4527, 150 },
-+        { "cairne", 4307, 150 },
-+        { "jaina", 2970, 150 },
-+        { "sylvanas", 11657, 150 },
-+        { "voljin", 10357, 150 },
-+        { "bolvar", 5566, 100 },
-+        { "tyrande", 7274, 100 },
-+        { "mekkatorque", 7006, 100 },
-+        { "vancleef", 2029, 100 },
++        { "magni", 3597, 300 },
++        { "thrall", 4527, 300 },
++        { "cairne", 4307, 300 },
++        { "jaina", 2970, 300 },
++        { "sylvanas", 11657, 300 },
++        { "voljin", 10357, 300 },
++        { "bolvar", 5566, 200 },
++        { "tyrande", 7274, 200 },
++        { "mekkatorque", 7006, 200 },
++        { "vancleef", 2029, 200 },
 +    };
 +
 +    static Skin const* FindSkin(std::string const& key)

@@ -26,7 +26,8 @@
         config.toml: the guide arrow (KartArrowShow, KartArrowSize, KartArrowX, KartArrowY, and
         KartArrowMove while it is being placed), the camera (KartChaseCamera, and KartFarCamera
         for CTR's far chase camera, which the camera binding also swaps), the music
-        (KartMusic, KartMusicVolume), the minimap button (KartMinimapButton, KartMinimapAngle),
+        (KartMusic, KartMusicVolume), the minimap buttons (KartMinimapButton, KartMinimapAngle, and
+        the skin shop's own, KartShopMinimapAngle),
         the Race Marshals on the maps (KartRaceMarshals, kart/marshals.rs), the ghost of the
         best run on a course (KartGhost), CTR's ground types under the kart (KartTerrain,
         kart/ground.rs, off by default), the controller's rumble (KartRumble), the racers'
@@ -2191,13 +2192,36 @@
         -- Its centre's distance from the minimap's: the ring the stock buttons sit on.
         BENILLA_KART_MINIMAP_RADIUS = 80
 
-        -- At `angle` (degrees counter-clockwise from east), else at KartMinimapAngle.
-        function BenillaKartMinimap_Place(angle)
-            angle = math.rad(angle or tonumber(GetCVar("KartMinimapAngle")) or 190)
-            local button = BenillaKartMinimapButton
+        -- `button` on the ring at `angle`, degrees counter-clockwise from east.
+        function BenillaKartRing_Place(button, angle)
+            angle = math.rad(angle)
             button:ClearAllPoints()
             button:SetPoint("CENTER", "Minimap", "CENTER", BENILLA_KART_MINIMAP_RADIUS * math.cos(angle),
                 BENILLA_KART_MINIMAP_RADIUS * math.sin(angle))
+        end
+
+        -- At `angle`, else at KartMinimapAngle.
+        function BenillaKartMinimap_Place(angle)
+            BenillaKartRing_Place(BenillaKartMinimapButton, angle or tonumber(GetCVar("KartMinimapAngle")) or 190)
+        end
+
+        -- The shop's own button beside it, at `angle`, else at KartShopMinimapAngle.
+        function BenillaKartShopButton_Place(angle)
+            BenillaKartRing_Place(BenillaKartShopMinimapButton, angle or tonumber(GetCVar("KartShopMinimapAngle")) or 220)
+        end
+
+        function BenillaKartShopButton_DragStop()
+            BenillaKartShopMinimapButton.dragging = nil
+            BenillaKartSettings_Set("KartShopMinimapAngle", BenillaKartMinimap_CursorAngle(), 0)
+            BenillaKartShopButton_Place()
+        end
+
+        function BenillaKartShopButton_Tooltip()
+            GameTooltip:SetOwner(BenillaKartShopMinimapButton, "ANCHOR_LEFT")
+            GameTooltip:SetText("Kartcraft Shop")
+            GameTooltip:AddLine("Skins for Kartcraft Tokens.", 1, 1, 1)
+            GameTooltip:AddLine("Click to open; drag to move.", 0.8, 0.8, 0.8)
+            GameTooltip:Show()
         end
 
         -- The cursor's angle about the minimap's centre, 0 to 360.
@@ -2217,12 +2241,12 @@
             BenillaKartMinimap_Place()
         end
 
-        -- Shown as KartMinimapButton says.
+        -- Both buttons, Kartcraft's and the shop's, shown as KartMinimapButton says; each applies
+        -- it as it loads, so the other may not be there yet.
         function BenillaKartMinimap_Apply()
-            if GetCVar("KartMinimapButton") == "0" then
-                BenillaKartMinimapButton:Hide()
-            else
-                BenillaKartMinimapButton:Show()
+            local hide = GetCVar("KartMinimapButton") == "0"
+            for _, button in ipairs({ BenillaKartMinimapButton, BenillaKartShopMinimapButton }) do
+                if hide then button:Hide() else button:Show() end
             end
         end
 
@@ -2230,7 +2254,7 @@
             SetCVar("KartMinimapButton", "0")
             BenillaKartMinimap_Apply()
             if DEFAULT_CHAT_FRAME then
-                DEFAULT_CHAT_FRAME:AddMessage("Kartcraft's minimap button is hidden: /kartcraft shows it again.", 1, 0.82, 0)
+                DEFAULT_CHAT_FRAME:AddMessage("Kartcraft's minimap buttons are hidden: /kartcraft shows them again.", 1, 0.82, 0)
             end
         end
 
@@ -2311,7 +2335,7 @@
             table.insert(entries, { text = "Kartcraft settings...", func = BenillaKartSettings_Toggle })
             table.insert(entries, { text = "Kart camera...", func = BenillaKartCamera_Toggle })
             table.insert(entries, { text = "Controller test...", func = BenillaKartPad_Toggle })
-            table.insert(entries, { text = "Hide minimap button", func = BenillaKartMinimap_Hide })
+            table.insert(entries, { text = "Hide minimap buttons", func = BenillaKartMinimap_Hide })
             for i = 1, table.getn(entries) do
                 if not entries[i].checkable then entries[i].notCheckable = 1 end
                 UIDropDownMenu_AddButton(entries[i])
@@ -2799,16 +2823,16 @@
         -- own and wear ("R<TAB>Skins"). The engine turns the picked one in the window's model pane:
         -- KartSkinPreview names its display, 0 none (kart/skins.rs).
         BENILLA_KART_SKINS = {
-            { key = "magni", name = "Magni Bronzebeard", short = "Magni", display = 3597, price = 150, icon = "INV_Misc_Head_Dwarf_01" },
-            { key = "thrall", name = "Thrall", short = "Thrall", display = 4527, price = 150, icon = "INV_Misc_Head_Orc_01" },
-            { key = "cairne", name = "Cairne Bloodhoof", short = "Cairne", display = 4307, price = 150, icon = "INV_Misc_Head_Tauren_01" },
-            { key = "jaina", name = "Jaina Proudmoore", short = "Jaina", display = 2970, price = 150, icon = "INV_Misc_Head_Human_02" },
-            { key = "sylvanas", name = "Lady Sylvanas Windrunner", short = "Sylvanas", display = 11657, price = 150, icon = "INV_Misc_Head_Undead_02" },
-            { key = "voljin", name = "Vol'jin", short = "Vol'jin", display = 10357, price = 150, icon = "INV_Misc_Head_Troll_01" },
-            { key = "bolvar", name = "Highlord Bolvar Fordragon", short = "Bolvar", display = 5566, price = 100, icon = "INV_Misc_Head_Human_01" },
-            { key = "tyrande", name = "Tyrande Whisperwind", short = "Tyrande", display = 7274, price = 100, icon = "INV_Misc_Head_Elf_02" },
-            { key = "mekkatorque", name = "High Tinker Mekkatorque", short = "Mekkatorque", display = 7006, price = 100, icon = "INV_Misc_Head_Gnome_01" },
-            { key = "vancleef", name = "Edwin VanCleef", short = "VanCleef", display = 2029, price = 100, icon = "INV_Misc_Bandana_03" },
+            { key = "magni", name = "Magni Bronzebeard", short = "Magni", display = 3597, price = 300, icon = "INV_Misc_Head_Dwarf_01" },
+            { key = "thrall", name = "Thrall", short = "Thrall", display = 4527, price = 300, icon = "INV_Misc_Head_Orc_01" },
+            { key = "cairne", name = "Cairne Bloodhoof", short = "Cairne", display = 4307, price = 300, icon = "INV_Misc_Head_Tauren_01" },
+            { key = "jaina", name = "Jaina Proudmoore", short = "Jaina", display = 2970, price = 300, icon = "INV_Misc_Head_Human_02" },
+            { key = "sylvanas", name = "Lady Sylvanas Windrunner", short = "Sylvanas", display = 11657, price = 300, icon = "INV_Misc_Head_Undead_02" },
+            { key = "voljin", name = "Vol'jin", short = "Vol'jin", display = 10357, price = 300, icon = "INV_Misc_Head_Troll_01" },
+            { key = "bolvar", name = "Highlord Bolvar Fordragon", short = "Bolvar", display = 5566, price = 200, icon = "INV_Misc_Head_Human_01" },
+            { key = "tyrande", name = "Tyrande Whisperwind", short = "Tyrande", display = 7274, price = 200, icon = "INV_Misc_Head_Elf_02" },
+            { key = "mekkatorque", name = "High Tinker Mekkatorque", short = "Mekkatorque", display = 7006, price = 200, icon = "INV_Misc_Head_Gnome_01" },
+            { key = "vancleef", name = "Edwin VanCleef", short = "VanCleef", display = 2029, price = 200, icon = "INV_Misc_Bandana_03" },
         }
         -- The picked cell, and the server's word: our tokens (nil before it answers), the skins we
         -- own (by key) and the one we wear ("" our own body).
@@ -3388,6 +3412,52 @@
         </Scripts>
     </Button>
 
+    <!-- The shop's own minimap button, built as Kartcraft's: a click opens the shop; it drags
+         around the ring (KartShopMinimapAngle) and hides with Kartcraft's (KartMinimapButton). -->
+    <Button name="BenillaKartShopMinimapButton" parent="Minimap" frameStrata="MEDIUM" enableMouse="true">
+        <Size><AbsDimension x="33" y="33"/></Size>
+        <Anchors><Anchor point="CENTER"/></Anchors>
+        <Layers>
+            <Layer level="BACKGROUND">
+                <Texture name="$parentIcon" file="Interface\Icons\INV_Misc_Ticket_Darkmoon_01">
+                    <Size><AbsDimension x="20" y="20"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="7" y="-6"/></Offset></Anchor></Anchors>
+                    <TexCoords left="0.075" right="0.925" top="0.075" bottom="0.925"/>
+                </Texture>
+            </Layer>
+            <Layer level="ARTWORK">
+                <Texture name="$parentBorder" file="Interface\Minimap\MiniMap-TrackingBorder">
+                    <Size><AbsDimension x="52" y="52"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"/></Anchors>
+                </Texture>
+            </Layer>
+        </Layers>
+        <HighlightTexture file="Interface\Minimap\UI-Minimap-ZoomButton-Highlight" alphaMode="ADD"/>
+        <Scripts>
+            <OnLoad>
+                this:RegisterForClicks("LeftButtonUp")
+                this:RegisterForDrag("LeftButton")
+                this:SetFrameLevel(this:GetFrameLevel() + 1)
+                BenillaKartShopButton_Place()
+                BenillaKartMinimap_Apply()
+            </OnLoad>
+            <OnClick>
+                GameTooltip:Hide()
+                BenillaKartShop_Toggle()
+            </OnClick>
+            <OnDragStart>
+                GameTooltip:Hide()
+                this.dragging = 1
+            </OnDragStart>
+            <OnDragStop>BenillaKartShopButton_DragStop()</OnDragStop>
+            <OnUpdate>
+                if this.dragging then BenillaKartShopButton_Place(BenillaKartMinimap_CursorAngle()) end
+            </OnUpdate>
+            <OnEnter>BenillaKartShopButton_Tooltip()</OnEnter>
+            <OnLeave>GameTooltip:Hide()</OnLeave>
+        </Scripts>
+    </Button>
+
     <CheckButton name="BenillaKartSettingsCheckTemplate" inherits="OptionsCheckButtonTemplate" virtual="true">
         <Scripts>
             <OnClick>BenillaKartSettings_Check(this, this.cvar)</OnClick>
@@ -3538,7 +3608,7 @@
                     { "ChaseCamera", "KartChaseCamera", "CTR chase camera (off: your WoW camera)" },
                     { "FarCamera", "KartFarCamera", "Far chase camera (off: near)" },
                     { "Music", "KartMusic", "Play CTR race music" },
-                    { "MinimapButton", "KartMinimapButton", "Show the minimap button" },
+                    { "MinimapButton", "KartMinimapButton", "Show the minimap buttons" },
                     { "Ghost", "KartGhost", "Race the ghost of your best run" },
                     { "Terrain", "KartTerrain", "Ground types slow you off-road (CTR)" },
                     { "Rumble", "KartRumble", "Shake the controller on crashes" },

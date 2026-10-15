@@ -1597,16 +1597,16 @@ namespace Kartcraft
     };
 
     static Skin const SKINS[] = {
-        { "magni", 3597, 150 },
-        { "thrall", 4527, 150 },
-        { "cairne", 4307, 150 },
-        { "jaina", 2970, 150 },
-        { "sylvanas", 11657, 150 },
-        { "voljin", 10357, 150 },
-        { "bolvar", 5566, 100 },
-        { "tyrande", 7274, 100 },
-        { "mekkatorque", 7006, 100 },
-        { "vancleef", 2029, 100 },
+        { "magni", 3597, 300 },
+        { "thrall", 4527, 300 },
+        { "cairne", 4307, 300 },
+        { "jaina", 2970, 300 },
+        { "sylvanas", 11657, 300 },
+        { "voljin", 10357, 300 },
+        { "bolvar", 5566, 200 },
+        { "tyrande", 7274, 200 },
+        { "mekkatorque", 7006, 200 },
+        { "vancleef", 2029, 200 },
     };
 
     static Skin const* FindSkin(std::string const& key)

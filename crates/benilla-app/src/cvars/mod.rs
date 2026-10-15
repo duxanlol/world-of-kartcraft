@@ -2310,6 +2310,10 @@ mod tests {
                 "the layer's KartcraftFrames.xml places its minimap button on the ring by it",
             ),
             (
+                "KartShopMinimapAngle",
+                "the layer's KartcraftFrames.xml places the shop's minimap button on the ring by it",
+            ),
+            (
                 "KartGuideSeen",
                 "the layer's KartcraftFrames.xml opens the Kartcraft Guide on the first login by it",
             ),

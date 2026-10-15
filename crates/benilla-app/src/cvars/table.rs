@@ -1037,6 +1037,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "190",
         "Kartcraft's own — its minimap button; 1.12 has no kart",
     ),
+    // The skin shop's own minimap button's place on the ring.
+    ours(
+        "KartShopMinimapAngle",
+        "220",
+        "Kartcraft's own — the shop's minimap button; 1.12 has no kart",
+    ),
     // The Race Marshals as landmarks on the minimap and the world map (`kart::marshals`).
     ours(
         "KartRaceMarshals",
