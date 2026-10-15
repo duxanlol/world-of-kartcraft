@@ -315,6 +315,19 @@ DELIVERY_BONUS = 5
 MAX_TOWNS = 64
 # A faction's races (RequiredRaces), and its team in KartcraftDeliveries.h (0 either).
 FACTIONS = {'alliance': (77, 1), 'horde': (178, 2)}
+# What a route's crate holds, as Courier Jobs lists it (the bags' item is the package either way):
+# one of its faction's goods, or the neutral towns', by its quest.
+CARGO = {
+    None: ['Goblin Rocket Fuel', 'Gnomish Gears', 'Gadgetzan Water', 'Thorium Bars', 'Bilgewater Rum',
+           'Venture Co. Blueprints', 'Steamwheedle Contraband', 'Mithril Casings', 'Swiftness Potions',
+           'Nitro Canisters', 'Fireworks', 'Arcane Crystals', 'Seaforium Charges', 'Mechanical Squirrels'],
+    'alliance': ['Stormwind Steel', 'Dwarven Stout', 'Dalaran Sharp Cheese', 'Ironforge Ingots',
+                 'Moonberry Juice', 'Westfall Stew', 'Gnomish Spare Parts', 'Holy Candles', 'Thandol Rivets',
+                 'Mountain Rams\' Feed', 'Silverleaf Bundles', 'Elwynn Lumber'],
+    'horde': ['Orcish Axes', 'Mulgore Spice Bread', 'Thunder Ale', 'Tauren Totems', 'Kodo Hides',
+              'Troll Voodoo Charms', 'Durotar Cactus Apples', 'Horde Banners', 'Razor Hill Fish',
+              'Forsaken Tonics', 'Wolf Saddles', 'Bloodhoof Tallow'],
+}
 
 
 def load_deliveries():
@@ -332,7 +345,7 @@ def load_deliveries():
         for field in ('map', 'zone', 'npc'):
             if not isinstance(t.get(field), int) or isinstance(t.get(field), bool) or t[field] < 0:
                 sys.exit(f'{what}: {field} must be a whole number')
-        for field in ('x', 'y'):
+        for field in ('x', 'y', 'z', 'o'):
             if isinstance(t.get(field), bool) or not isinstance(t.get(field), (int, float)):
                 sys.exit(f'{what}: {field} must be a number')
         if t.get('faction', 'neutral') not in ('neutral',) + tuple(FACTIONS):
@@ -357,8 +370,10 @@ def delivery_routes(towns):
             distance = math.hypot(a['x'] - b['x'], a['y'] - b['y'])
             par = max(120, int(math.ceil(distance * 1.5 / 32 / 30)) * 30)
             races, team = FACTIONS.get(faction, (0, 0))
-            routes.append({'quest': DELIVERY_QUEST + MAX_TOWNS * i + j, 'from': a, 'to': b, 'par': par,
-                           'races': races, 'team': team})
+            quest = DELIVERY_QUEST + MAX_TOWNS * i + j
+            goods = CARGO[faction]
+            routes.append({'quest': quest, 'from': a, 'to': b, 'par': par, 'races': races, 'team': team,
+                           'distance': int(round(distance)), 'cargo': goods[quest % len(goods)]})
     return routes
 
 
@@ -377,7 +392,9 @@ def deliveries_header(routes):
     for r in routes:
         a, b = r['from'], r['to']
         out.append(f'        {{ {r["quest"]}, "{a["name"]}", "{b["name"]}", {a["npc"]}, {b["npc"]}, {r["par"]}, '
-                   f'{r["team"]} }},')
+                   f'{r["team"]}, "{a["npc_name"]}", "{b["npc_name"]}", {a["map"]}, {cfloat(a["x"])}, '
+                   f'{cfloat(a["y"])}, {cfloat(a["z"])}, {cfloat(a["o"])}, {cfloat(b["x"])}, {cfloat(b["y"])}, '
+                   f'{r["distance"]}, "{r["cargo"]}" }},')
     out.append('    };')
     return '\n'.join(out) + '\n'
 

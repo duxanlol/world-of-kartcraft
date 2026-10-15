@@ -66,6 +66,7 @@
         BINDING_NAME_KARTCRAFT_LEAVERACE = "Leave Race"
         BINDING_NAME_KARTCRAFT_UNSTUCK = "Unstuck"
         BINDING_NAME_KARTCRAFT_RESTART = "Restart Time Trial"
+        BINDING_NAME_KARTCRAFT_JOBS = "Courier Jobs"
         BINDING_NAME_KARTCRAFT_SETTINGS = "Kartcraft Settings"
         BINDING_NAME_KARTCRAFT_GARAGE = "Kart Garage"
         BINDING_NAME_KARTCRAFT_CLEANSCREEN = "Clean Screen (hide all interface)"
@@ -451,6 +452,170 @@
             end
         end
 
+        -- ── Courier Jobs ─────────────────────────────────────────────────────────────────────
+        -- Today's courier deliveries as a job market (the server's "Jobs", "Job"): what the crate
+        -- holds, where from and to, how far, its par and whether it's open, under way or
+        -- delivered. Take job puts us in front of its courier ("JT"); the job starts when we take
+        -- their quest. Cancel job abandons the one under way, the package with it.
+        BENILLA_KART_JOB_ROWS = 10
+        BenillaKartJobs = { list = {}, tracks = {} }
+        BENILLA_KART_JOB_STATES = { [0] = "|cffffffffOpen|r", [1] = "|cffffd100Under way|r", [2] = "|cff40ff40Delivered|r" }
+
+        function BenillaKartJobs_Open()
+            BenillaKart_Open(BenillaKartJobsFrame)
+            if not BenillaKartJobsFrame:IsVisible() then return end
+            BenillaKart_Send("JL")
+            BenillaKartJobs_Refresh()
+        end
+
+        function BenillaKartJobs_Toggle()
+            if BenillaKartJobsFrame:IsVisible() then
+                BenillaKartJobsFrame:Hide()
+            else
+                BenillaKartJobs_Open()
+            end
+        end
+
+        function BenillaKartJobs_Begin(count)
+            BenillaKartJobs.list = {}
+            BenillaKartJobs.count = count or 0
+            BenillaKartJobs_Refresh()
+        end
+
+        -- "Job": <i> <quest> <state> <from> <to> <giver> <recipient> <yards> <par> <cargo> <map>
+        -- <giver x> <giver y> <recipient x> <recipient y>, from line[3] on.
+        function BenillaKartJobs_Set(line)
+            local i = tonumber(line[3])
+            if not i then return end
+            local job = { quest = line[4], state = tonumber(line[5]) or 0, from = line[6], to = line[7],
+                giver = line[8], recipient = line[9], yards = tonumber(line[10]) or 0, par = tonumber(line[11]) or 0,
+                cargo = line[12], map = tonumber(line[13]) or 0 }
+            BenillaKartJobs.list[i] = job
+            -- Its ends on the world map, as a track's route is drawn (BenillaKartRoute_Show).
+            BenillaKartJobs.tracks["job:" .. job.quest] = { key = "job:" .. job.quest, map = job.map, zone = "",
+                laps = 0, points = { { tonumber(line[14]) or 0, tonumber(line[15]) or 0 },
+                    { tonumber(line[16]) or 0, tonumber(line[17]) or 0 } } }
+            if not BenillaKartJobs.selected then BenillaKartJobs.selected = 1 end
+            BenillaKartJobs_Refresh()
+        end
+
+        function BenillaKartJobs_Clock(seconds)
+            return format("%d:%02d", floor(seconds / 60), mod(seconds, 60))
+        end
+
+        function BenillaKartJobs_Yards(yards)
+            if yards >= 1000 then return format("%.1fk yd", yards / 1000) end
+            return yards .. " yd"
+        end
+
+        -- Whether a job is under way: then none other is taken.
+        function BenillaKartJobs_Busy()
+            local list = BenillaKartJobs.list
+            for i = 1, BenillaKartJobs.count or 0 do
+                if list[i] and list[i].state == 1 then return true end
+            end
+            return false
+        end
+
+        function BenillaKartJobs_Refresh()
+            local frame = BenillaKartJobsFrame
+            if not frame or not frame:IsVisible() then return end
+            local list = BenillaKartJobs.list
+            for i = 1, BENILLA_KART_JOB_ROWS do
+                local row = getglobal("BenillaKartJobsFrameRow" .. i)
+                local job = list[i]
+                if job then
+                    local name = row:GetName()
+                    getglobal(name .. "Cargo"):SetText(job.cargo)
+                    getglobal(name .. "Route"):SetText(job.from .. " to " .. job.to)
+                    getglobal(name .. "Distance"):SetText(BenillaKartJobs_Yards(job.yards))
+                    getglobal(name .. "Par"):SetText(BenillaKartJobs_Clock(job.par))
+                    getglobal(name .. "State"):SetText(BENILLA_KART_JOB_STATES[job.state] or "")
+                    if i == BenillaKartJobs.selected then row:LockHighlight() else row:UnlockHighlight() end
+                    row:Show()
+                else
+                    row:Hide()
+                end
+            end
+            local job = BenillaKartJobs.selected and list[BenillaKartJobs.selected]
+            if job then
+                BenillaKartJobsFrameTitle:SetText(job.cargo)
+                BenillaKartJobsFrameText:SetText(format("From %s in %s to %s in %s.\n%s as the crow flies, par %s: 10 tokens, 15 within par.\n\nTake job puts you in front of %s: take the quest there, and the clock starts. It goes by kart: no flight paths, hearthstones or teleports while you carry it.",
+                    job.giver, job.from, job.recipient, job.to, BenillaKartJobs_Yards(job.yards),
+                    BenillaKartJobs_Clock(job.par), job.giver))
+                BenillaKartJobsFrameRoute:Enable()
+                if job.state == 0 and not BenillaKartJobs_Busy() then
+                    BenillaKartJobsFrameTake:Enable()
+                else
+                    BenillaKartJobsFrameTake:Disable()
+                end
+                if job.state == 1 then BenillaKartJobsFrameCancel:Enable() else BenillaKartJobsFrameCancel:Disable() end
+            else
+                BenillaKartJobsFrameTitle:SetText("")
+                if (BenillaKartJobs.count or 0) == 0 then
+                    BenillaKartJobsFrameText:SetText("Asking the couriers what's posted today...")
+                else
+                    BenillaKartJobsFrameText:SetText("")
+                end
+                BenillaKartJobsFrameRoute:Disable()
+                BenillaKartJobsFrameTake:Disable()
+                BenillaKartJobsFrameCancel:Disable()
+            end
+        end
+
+        function BenillaKartJobs_Select(i)
+            if BenillaKartJobs.list[i] then
+                BenillaKartJobs.selected = i
+                BenillaKartJobs_Refresh()
+            end
+        end
+
+        -- To the job's courier: the server's teleport, and the board goes.
+        function BenillaKartJobs_Take()
+            local job = BenillaKartJobs.selected and BenillaKartJobs.list[BenillaKartJobs.selected]
+            if not job or job.state ~= 0 or BenillaKartJobs_Busy() then return end
+            BenillaKart_Send("JT\t" .. job.quest)
+            BenillaKartJobsFrame:Hide()
+        end
+
+        function BenillaKartJobs_ShowRoute()
+            local job = BenillaKartJobs.selected and BenillaKartJobs.list[BenillaKartJobs.selected]
+            if job then BenillaKartRoute_Show("job:" .. job.quest) end
+        end
+
+        -- The job under way abandoned, as the quest log's Abandon does; the list asked again.
+        function BenillaKartJobs_Cancel()
+            for i = 1, GetNumQuestLogEntries() do
+                local title, _, _, header = GetQuestLogTitle(i)
+                if title and not header and string.find(title, "^Express Delivery") then
+                    SelectQuestLogEntry(i)
+                    SetAbandonQuest()
+                    AbandonQuest()
+                    break
+                end
+            end
+            BenillaKart_Send("JL")
+        end
+
+        -- The controller here: the D-pad picks the job; Cross takes it, Triangle shows its route,
+        -- Square cancels the one under way, Circle closes.
+        function BenillaKartJobs_Pad(key)
+            local i = BenillaKartJobs.selected or 0
+            if key == "PADDUP" then
+                BenillaKartJobs_Select(math.max(1, i - 1))
+            elseif key == "PADDDOWN" then
+                BenillaKartJobs_Select(math.min(BenillaKartJobs.count or 0, i + 1))
+            elseif key == "PAD1" then
+                BenillaKartJobs_Take()
+            elseif key == "PAD4" then
+                BenillaKartJobs_ShowRoute()
+            elseif key == "PAD3" then
+                if BenillaKartJobsFrameCancel:IsEnabled() == 1 then BenillaKartJobs_Cancel() end
+            elseif key == "PAD2" then
+                BenillaKartJobsFrame:Hide()
+            end
+        end
+
         -- ── The track browser ─────────────────────────────────────────────────────────────────
         -- Every course from BENILLA_KART_TRACKS: { key, name, zone, map, laps, text, points },
         -- searchable; "Show on map" opens the world map at the course's zone and draws its route,
@@ -464,6 +629,8 @@
         BenillaKartTrackBrowser = { search = "" }
         -- The course on the map (its key), and its dots.
         BenillaKartRoute = { dots = {} }
+        -- The windows a route shown on the world map keeps up over it.
+        BENILLA_KART_MAP_RIDERS = { "BenillaKartTracksFrame", "BenillaKartJobsFrame" }
 
         function BenillaKartTracks_Set(list)
             BenillaKartTracks = {}
@@ -489,6 +656,8 @@
             for i = 1, table.getn(BenillaKartTracks) do
                 if BenillaKartTracks[i].key == key then return BenillaKartTracks[i] end
             end
+            -- A courier job's two ends (BenillaKartJobs_Set).
+            return BenillaKartJobs and BenillaKartJobs.tracks[key or ""]
         end
 
         -- The list: every open track (BenillaKartOff, the server's "Off") whose name or zone holds
@@ -676,10 +845,13 @@
             layer:SetScript("OnEvent", function() BenillaKartRoute_Draw() end)
             layer:SetScript("OnHide", function()
                 BenillaKartRoute_Clear()
-                -- A browser that rode on the map goes back to the screen, still open.
-                if BenillaKartTracksFrame:GetParent() == WorldMapFrame then
-                    BenillaKartTracksFrame:SetParent(UIParent)
-                    BenillaKartTracksFrame:SetFrameStrata("FULLSCREEN_DIALOG")
+                -- A window that rode on the map goes back to the screen, still open.
+                for i = 1, table.getn(BENILLA_KART_MAP_RIDERS) do
+                    local w = getglobal(BENILLA_KART_MAP_RIDERS[i])
+                    if w and w:GetParent() == WorldMapFrame then
+                        w:SetParent(UIParent)
+                        w:SetFrameStrata("FULLSCREEN_DIALOG")
+                    end
                 end
             end)
             return layer
@@ -794,12 +966,16 @@
             if WorldMapFrame and not WorldMapFrame:IsVisible() then
                 -- The map is a full-screen panel: it hides UIParent and every window with it. The
                 -- browser rides on the map while it is up, and goes back when it closes.
-                local browsing = BenillaKartTracksFrame:IsVisible()
+                local riding = {}
+                for i = 1, table.getn(BENILLA_KART_MAP_RIDERS) do
+                    local w = getglobal(BENILLA_KART_MAP_RIDERS[i])
+                    if w and w:IsVisible() then table.insert(riding, w) end
+                end
                 if ToggleWorldMap then ToggleWorldMap() else WorldMapFrame:Show() end
-                if browsing then
-                    BenillaKartTracksFrame:SetParent(WorldMapFrame)
-                    BenillaKartTracksFrame:SetFrameStrata("FULLSCREEN_DIALOG")
-                    BenillaKartTracksFrame:Show()
+                for i = 1, table.getn(riding) do
+                    riding[i]:SetParent(WorldMapFrame)
+                    riding[i]:SetFrameStrata("FULLSCREEN_DIALOG")
+                    riding[i]:Show()
                 end
             end
             BenillaKartRoute.key = key
@@ -1046,6 +1222,12 @@
             elseif verb == "Ret" then
                 -- Our Race Finder race is over: back to where it took us from?
                 if StaticPopup_Show then StaticPopup_Show("BENILLA_KART_RETURN") end
+            elseif verb == "Jobs" then
+                BenillaKartJobs_Begin(tonumber(line[3]) or 0)
+            elseif verb == "Job" then
+                BenillaKartJobs_Set(line)
+            elseif verb == "JTx" then
+                BenillaKart_Say(format("You can take another job in %d seconds.", tonumber(line[3]) or 0))
             elseif verb == "Del" then
                 -- A courier delivery under way: its town, par and the seconds already gone.
                 BenillaKartDelivery_Start(line[3], tonumber(line[4]) or 0, tonumber(line[5]) or 0)
@@ -1246,6 +1428,8 @@
             { name = "BenillaKartMenuFrame" },
             { name = "BenillaKartTracksFrame", buttons = "BenillaKartTrackBrowser_Pad",
               legend = "D-pad: pick a track    L1 / R1: page\nCross / A: time trial    Square / X: marshal\nTriangle / Y: map    Select: rate    Circle / B: close" },
+            { name = "BenillaKartJobsFrame", buttons = "BenillaKartJobs_Pad",
+              legend = "D-pad: pick a job    Cross / A: take it    Triangle / Y: route\nSquare / X: cancel the job under way    Circle / B: close" },
             { name = "BenillaKartFinderFrame", buttons = "BenillaKartFinder_Pad",
               legend = "D-pad: move    L1 / R1: page    Cross / A: tick or join\nStart: find race (again: leave the queue)    Circle / B: close" },
             { name = "BenillaKartGarageFrame" },
@@ -1490,6 +1674,7 @@
             { "Tracks and time trials", function() BenillaKartTrackBrowser_Toggle() end },
             { function() return BenillaKartReplays_Playing() and "Stop replay" or "Replays" end,
               function() BenillaKartReplays_MenuClick() end },
+            { "Courier jobs", function() BenillaKartJobs_Toggle() end },
             { function() return BenillaKartRaceMode and "Race mode: on" or "Race mode: off" end,
               function() BenillaKart_RaceModeToggle() end },
             { "Leave race", function() BenillaKart_LeaveRace() end },
@@ -2074,6 +2259,7 @@
             if BenillaKartFinder.queued then
                 table.insert(entries, { text = "Leave queue", func = BenillaKartFinder_QueueClick })
             end
+            table.insert(entries, { text = "Courier jobs...", func = BenillaKartJobs_Toggle })
             table.insert(entries, { text = "Guide...", func = BenillaKartGuide_Toggle })
             table.insert(entries, { text = "Kart garage...", func = BenillaKartGarage_Toggle })
             table.insert(entries, { text = "Kartcraft settings...", func = BenillaKartSettings_Toggle })
@@ -3857,6 +4043,156 @@
 
     <!-- The kart's shortcuts while out of a race (BenillaKartShortcuts_Update): a time trial and
          the Race Finder. Dragged to where it suits. -->
+    <!-- A Courier Jobs row (BenillaKartJobs_Refresh): cargo, route, distance, par, state. -->
+    <Button name="BenillaKartJobRowTemplate" virtual="true">
+        <Size><AbsDimension x="440" y="18"/></Size>
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentCargo" inherits="GameFontNormalSmall" justifyH="LEFT">
+                    <Size><AbsDimension x="128" y="18"/></Size>
+                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="6" y="0"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentRoute" inherits="GameFontHighlightSmall" justifyH="LEFT">
+                    <Size><AbsDimension x="168" y="18"/></Size>
+                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="136" y="0"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentDistance" inherits="GameFontHighlightSmall" justifyH="RIGHT">
+                    <Size><AbsDimension x="50" y="18"/></Size>
+                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="304" y="0"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentPar" inherits="GameFontHighlightSmall" justifyH="RIGHT">
+                    <Size><AbsDimension x="34" y="18"/></Size>
+                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="356" y="0"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentState" inherits="GameFontHighlightSmall" justifyH="RIGHT">
+                    <Size><AbsDimension x="50" y="18"/></Size>
+                    <Anchors><Anchor point="RIGHT"><Offset><AbsDimension x="-4" y="0"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <HighlightTexture file="Interface\QuestFrame\UI-QuestTitleHighlight" alphaMode="ADD"/>
+        <Scripts>
+            <OnClick>BenillaKartJobs_Select(this:GetID())</OnClick>
+            <OnDoubleClick>BenillaKartJobs_Select(this:GetID()) BenillaKartJobs_ShowRoute()</OnDoubleClick>
+        </Scripts>
+    </Button>
+
+    <!-- Courier Jobs: today's deliveries as a job market; over the world map with a route up. -->
+    <Frame name="BenillaKartJobsFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="FULLSCREEN_DIALOG">
+        <Size><AbsDimension x="480" y="452"/></Size>
+        <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
+            <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
+            <TileSize><AbsValue val="32"/></TileSize>
+            <EdgeSize><AbsValue val="32"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="BACKGROUND">
+                <Texture name="$parentGroundDim">
+                    <Anchors>
+                        <Anchor point="TOPLEFT"><Offset><AbsDimension x="15" y="-15"/></Offset></Anchor>
+                        <Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-15" y="15"/></Offset></Anchor>
+                    </Anchors>
+                    <Color r="0" g="0" b="0" a="0.7"/>
+                </Texture>
+            </Layer>
+            <Layer level="ARTWORK">
+                <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
+                    <Size><AbsDimension x="256" y="64"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
+                </Texture>
+                <FontString inherits="GameFontNormal" text="Courier Jobs">
+                    <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString inherits="GameFontDisableSmall" text="Cargo">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="26" y="-38"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString inherits="GameFontDisableSmall" text="Route">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="156" y="-38"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString inherits="GameFontDisableSmall" text="Distance">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="328" y="-38"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString inherits="GameFontDisableSmall" text="Par">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="394" y="-38"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString inherits="GameFontDisableSmall" text="Status">
+                    <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-38"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentTitle" inherits="GameFontNormalLarge" justifyH="LEFT">
+                    <Size><AbsDimension x="430" y="20"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-246"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentText" inherits="GameFontHighlightSmall" justifyH="LEFT" justifyV="TOP">
+                    <Size><AbsDimension x="430" y="90"/></Size>
+                    <Anchors><Anchor point="TOPLEFT" relativeTo="$parentTitle" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-6"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <Button name="$parentRow1" inherits="BenillaKartJobRowTemplate" id="1">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="20" y="-54"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentRow2" inherits="BenillaKartJobRowTemplate" id="2">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow1" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentRow3" inherits="BenillaKartJobRowTemplate" id="3">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow2" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentRow4" inherits="BenillaKartJobRowTemplate" id="4">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow3" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentRow5" inherits="BenillaKartJobRowTemplate" id="5">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow4" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentRow6" inherits="BenillaKartJobRowTemplate" id="6">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow5" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentRow7" inherits="BenillaKartJobRowTemplate" id="7">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow6" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentRow8" inherits="BenillaKartJobRowTemplate" id="8">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow7" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentRow9" inherits="BenillaKartJobRowTemplate" id="9">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow8" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentRow10" inherits="BenillaKartJobRowTemplate" id="10">
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow9" relativePoint="BOTTOMLEFT"/></Anchors>
+            </Button>
+            <Button name="$parentTake" inherits="UIPanelButtonTemplate" text="Take job">
+                <Size><AbsDimension x="140" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="46"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartJobs_Take()</OnClick></Scripts>
+            </Button>
+            <Button name="$parentRoute" inherits="UIPanelButtonTemplate" text="Show route">
+                <Size><AbsDimension x="140" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="18"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartJobs_ShowRoute()</OnClick></Scripts>
+            </Button>
+            <Button name="$parentCancel" inherits="UIPanelButtonTemplate" text="Cancel job">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-24" y="46"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartJobs_Cancel()</OnClick></Scripts>
+            </Button>
+            <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-24" y="18"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartJobsFrame:Hide()</OnClick></Scripts>
+            </Button>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
+                BenillaKart_Movable(this)
+            </OnLoad>
+            <OnShow>PlaySound("igMainMenuOpen") BenillaKartJobs_Refresh()</OnShow>
+            <OnHide>PlaySound("igMainMenuClose")</OnHide>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+
     <!-- The courier delivery's clock (BenillaKartDelivery_Update), under the minimap's row. -->
     <Frame name="BenillaKartDeliveryFrame" parent="UIParent" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" frameStrata="MEDIUM">
         <Size><AbsDimension x="300" y="30"/></Size>
@@ -4020,7 +4356,7 @@
     <!-- The Kartcraft menu (Options on the controller, KARTCRAFT_MENU): what racing needs, one
          entry each, for a player on the controller alone. -->
     <Frame name="BenillaKartMenuFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="280" y="422"/></Size>
+        <Size><AbsDimension x="280" y="448"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -4105,6 +4441,11 @@
             <Button name="$parentEntry13" inherits="UIPanelButtonTemplate" id="13">
                 <Size><AbsDimension x="220" y="22"/></Size>
                 <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-346"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry14" inherits="UIPanelButtonTemplate" id="14">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-372"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
             </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">

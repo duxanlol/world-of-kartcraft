@@ -746,6 +746,7 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
             "Show Race Marshals",
             "Leave race",
             "Unstuck",
+            "Courier jobs...",
             "Guide...",
             "Kart garage...",
             "Kartcraft settings...",
@@ -1350,7 +1351,7 @@ fn key_bindings_lists_the_kart_s_controls_and_they_run() {
         names,
         "Accelerate,Brake / Reverse,Steer Left,Steer Right,Reverse,Hop / Powerslide,\
          Boost (Second Shoulder),Fire Item,Toggle Camera Distance,Look Back,Wumpa Juice,Turbo Boost,Super Engine,Aku Aku,\
-         Summon / Dismiss Kart,Race Finder,Leave Race,Unstuck,Restart Time Trial,Kartcraft Settings,Kart Garage,\
+         Summon / Dismiss Kart,Race Finder,Leave Race,Unstuck,Restart Time Trial,Courier Jobs,Kartcraft Settings,Kart Garage,\
          Clean Screen (hide all interface),Free Camera (fly, park, off),Next Kart,\
          Kartcraft Guide,Kartcraft Menu"
     );
@@ -2755,6 +2756,98 @@ fn the_kartcraft_menu_widens_to_a_challenge_s_long_course_name() {
         "all the same width"
     );
     assert_eq!(width(&s, "BenillaKartMenuFrame"), entry + 60.0);
+}
+
+#[test]
+fn courier_jobs_list_today_s_jobs_and_take_one_to_its_courier() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let text = |s: &UiScript, f: &str| -> String {
+        s.eval(&format!("return {f}:GetText() or ''")).unwrap()
+    };
+    let enabled = |s: &UiScript, f: &str| -> bool {
+        s.eval(&format!("return {f}:IsEnabled() == 1")).unwrap()
+    };
+    // Opening asks the server for today's jobs.
+    sent(&mut s);
+    s.run("BenillaKartJobs_Toggle()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tJL"]);
+    from_server(&mut s, "R\tJobs\t2");
+    from_server(
+        &mut s,
+        "R\tJob\t1\t190201\t0\tRatchet\tGadgetzan\tWharfmaster Dizzywig\tMarin Noggenfogger\t6208\t300\tArcane Crystals\t1\t-985\t-3796\t-7193\t-3793",
+    );
+    from_server(
+        &mut s,
+        "R\tJob\t2\t190907\t2\tStormwind\tGoldshire\tInnkeeper Allison\tInnkeeper Farley\t740\t120\tElwynn Lumber\t0\t-8868\t674\t-9463\t16",
+    );
+    // A row a job: cargo, route, distance, par, state.
+    assert_eq!(text(&s, "BenillaKartJobsFrameRow1Cargo"), "Arcane Crystals");
+    assert_eq!(
+        text(&s, "BenillaKartJobsFrameRow1Route"),
+        "Ratchet to Gadgetzan"
+    );
+    assert_eq!(text(&s, "BenillaKartJobsFrameRow1Distance"), "6.2k yd");
+    assert_eq!(text(&s, "BenillaKartJobsFrameRow1Par"), "5:00");
+    assert!(text(&s, "BenillaKartJobsFrameRow2State").contains("Delivered"));
+    assert!(!s
+        .eval::<bool>("return BenillaKartJobsFrameRow3:IsVisible() == 1")
+        .unwrap());
+    // The first is picked: who gives it, where to, and Take job takes us to its courier.
+    let detail = text(&s, "BenillaKartJobsFrameText");
+    assert!(
+        detail.starts_with(
+            "From Wharfmaster Dizzywig in Ratchet to Marin Noggenfogger in Gadgetzan."
+        ),
+        "{detail}"
+    );
+    assert!(enabled(&s, "BenillaKartJobsFrameTake"));
+    assert!(!enabled(&s, "BenillaKartJobsFrameCancel"));
+    // One delivered today can't be taken again.
+    s.run("BenillaKartJobs_Select(2)").unwrap();
+    assert!(!enabled(&s, "BenillaKartJobsFrameTake"));
+    // The controller: up to the first, Cross takes it.
+    s.eval::<bool>("return BenillaPad_OnButton('PADDUP') == true")
+        .unwrap();
+    assert!(s
+        .eval::<bool>("return BenillaPad_OnButton('PAD1') == true")
+        .unwrap());
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tJT\t190201"]);
+    assert!(!s
+        .eval::<bool>("return BenillaKartJobsFrame:IsVisible() == 1")
+        .unwrap());
+
+    // Under way: no other is taken, and Cancel job is offered.
+    s.run("BenillaKartJobs_Open()").unwrap();
+    sent(&mut s);
+    from_server(&mut s, "R\tJobs\t2");
+    from_server(
+        &mut s,
+        "R\tJob\t1\t190201\t1\tRatchet\tGadgetzan\tWharfmaster Dizzywig\tMarin Noggenfogger\t6208\t300\tArcane Crystals\t1\t-985\t-3796\t-7193\t-3793",
+    );
+    from_server(
+        &mut s,
+        "R\tJob\t2\t190907\t0\tStormwind\tGoldshire\tInnkeeper Allison\tInnkeeper Farley\t740\t120\tElwynn Lumber\t0\t-8868\t674\t-9463\t16",
+    );
+    s.run("BenillaKartJobs_Select(1)").unwrap();
+    assert!(enabled(&s, "BenillaKartJobsFrameCancel"));
+    s.run("BenillaKartJobs_Select(2)").unwrap();
+    assert!(!enabled(&s, "BenillaKartJobsFrameTake"), "one at a time");
+    // The cooldown is said.
+    s.run(
+        "BenillaKartSaid = {} local said = BenillaKart_Say \
+         BenillaKart_Say = function(t) table.insert(BenillaKartSaid, t) said(t) end",
+    )
+    .unwrap();
+    from_server(&mut s, "R\tJTx\t12");
+    assert_eq!(
+        s.eval::<Vec<String>>("return BenillaKartSaid").unwrap(),
+        ["You can take another job in 12 seconds."]
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
 #[test]

@@ -235,6 +235,7 @@ mod tests {
             "KARTCRAFT_LEAVERACE",
             "KARTCRAFT_UNSTUCK",
             RESTART,
+            "KARTCRAFT_JOBS",
             "KARTCRAFT_SETTINGS",
             "KARTCRAFT_GARAGE",
             "KARTCRAFT_CLEANSCREEN",
@@ -247,7 +248,7 @@ mod tests {
         // Every row the file declares is a command the kart names or a Lua one.
         assert_eq!(
             benilla_ui::bindings_xml::parse(xml).unwrap().len(),
-            DRIVING.len() + 12
+            DRIVING.len() + 13
         );
     }
 }

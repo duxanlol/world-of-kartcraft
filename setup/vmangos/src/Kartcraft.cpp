@@ -1322,6 +1322,13 @@ namespace Kartcraft
         uint32 recipient;
         uint32 par;        // seconds
         uint8 team;        // whose: 0 either faction's, 1 the Alliance's, 2 the Horde's
+        char const* giverName;
+        char const* recipientName;
+        uint32 map;
+        float gx, gy, gz, go; // where the giver stands and faces (Courier Jobs' take)
+        float rx, ry;         // where the recipient stands
+        uint32 distance;      // yards, the straight line
+        char const* cargo;    // what Courier Jobs says the crate holds
     };
 #include "KartcraftDeliveries.h"
     constexpr size_t DELIVERIES_A_DAY = 10;
@@ -1370,18 +1377,32 @@ namespace Kartcraft
     }
 
     // Today's routes for a faction (`team` 1 the Alliance, 2 the Horde): the DELIVERIES_A_DAY of
-    // its own and the neutral ones whose hash with the day is lowest.
-    static bool OfferedOn(std::string const& day, uint32 quest, uint8 team)
+    // its own and the neutral ones whose hash with the day is lowest, in that order.
+    static std::vector<Delivery const*> Today(std::string const& day, uint8 team)
     {
-        std::vector<std::pair<uint32, uint32>> ranked;
+        std::vector<std::pair<uint32, Delivery const*>> ranked;
         for (Delivery const& d : DELIVERIES)
             if (!d.team || d.team == team)
-                ranked.push_back({ Mix32(Fnv1a(day + "/" + std::to_string(d.quest))), d.quest });
-        std::sort(ranked.begin(), ranked.end());
+                ranked.push_back({ Mix32(Fnv1a(day + "/" + std::to_string(d.quest))), &d });
+        std::sort(ranked.begin(), ranked.end(),
+            [](auto const& a, auto const& b) { return a.first < b.first; });
+        std::vector<Delivery const*> today;
         for (size_t i = 0; i < ranked.size() && i < DELIVERIES_A_DAY; ++i)
-            if (ranked[i].second == quest)
+            today.push_back(ranked[i].second);
+        return today;
+    }
+
+    static bool OfferedOn(std::string const& day, uint32 quest, uint8 team)
+    {
+        for (Delivery const* d : Today(day, team))
+            if (d->quest == quest)
                 return true;
         return false;
+    }
+
+    static uint8 TeamOf(Player const* player)
+    {
+        return player->GetTeam() == ALLIANCE ? 1 : 2;
     }
 
     // Under s_deliveryMutex: the routes `guid` delivered on `day`, from the table at first.
@@ -1428,7 +1449,7 @@ namespace Kartcraft
         if (!d)
             return true;
         std::string const day = ChallengePeriods().first;
-        if (!OfferedOn(day, d->quest, player->GetTeam() == ALLIANCE ? 1 : 2))
+        if (!OfferedOn(day, d->quest, TeamOf(player)))
             return false;
         // The one being delivered is the player's to turn in, whatever else holds.
         if (player->GetQuestStatus(d->quest) != QUEST_STATUS_NONE)
@@ -1509,10 +1530,40 @@ namespace Kartcraft
         SendLine(player, "KARTCRAFT\tR\tDel-");
     }
 
-    // At login: a delivery under way gets its timer back; a package without a start the server
-    // knows (a restart since) has none.
+    // A job's state for the player: 0 open, 1 under way (its quest in the log), 2 delivered today.
+    static uint8 JobState(Player const* player, Delivery const& d, std::string const& day)
+    {
+        if (player->GetQuestStatus(d.quest) != QUEST_STATUS_NONE)
+            return 1;
+        std::lock_guard<std::mutex> lock(s_deliveryMutex);
+        return DeliveredOn(player->GetGUIDLow(), day).count(d.quest) ? 2 : 0;
+    }
+
+    // "R\tJL", Courier Jobs' list: "R\tJobs\t<n>", then a line a job, "R\tJob\t<i>\t<quest>\t<state>\t<from>\t<to>
+    // \t<giver>\t<recipient>\t<yards>\t<par s>\t<cargo>\t<map>\t<giver x>\t<giver y>\t<recipient x>\t<recipient y>".
+    static void SendJobs(Player* player)
+    {
+        std::string const day = ChallengePeriods().first;
+        std::vector<Delivery const*> jobs = Today(day, TeamOf(player));
+        SendLine(player, "KARTCRAFT\tR\tJobs\t" + std::to_string(jobs.size()));
+        for (size_t i = 0; i < jobs.size(); ++i)
+        {
+            Delivery const& d = *jobs[i];
+            SendLine(player, "KARTCRAFT\tR\tJob\t" + std::to_string(i + 1) + "\t" + std::to_string(d.quest) + "\t" +
+                std::to_string(JobState(player, d, day)) + "\t" + d.from + "\t" + d.to + "\t" + d.giverName + "\t" +
+                d.recipientName + "\t" + std::to_string(d.distance) + "\t" + std::to_string(d.par) + "\t" + d.cargo +
+                "\t" + std::to_string(d.map) + "\t" + std::to_string(int32(d.gx)) + "\t" + std::to_string(int32(d.gy)) +
+                "\t" + std::to_string(int32(d.rx)) + "\t" + std::to_string(int32(d.ry)));
+        }
+    }
+
+    // At login: what's posted today, and a delivery under way gets its timer back; a package
+    // without a start the server knows (a restart since) has none.
     static void DeliveryLogin(Player* player)
     {
+        ChatHandler(player->GetSession()).PSendSysMessage(
+            "%u courier jobs are posted today: Courier Jobs, in the Kartcraft menu, takes you to one.",
+            uint32(Today(ChallengePeriods().first, TeamOf(player)).size()));
         if (!CarryingDelivery(player))
             return;
         std::pair<uint32, std::time_t> start;
@@ -3388,6 +3439,48 @@ namespace Kartcraft
     }
 
     // The finder's verbs; false when the line is not one of them.
+    // "R\tJT\t<quest>", Courier Jobs' take: to the courier of one of today's routes, in front of them
+    // and facing them (where they stand, which may be indoors: not the ground from above, as
+    // TeleportOnto finds it). The job starts when they take its quest there. Once every
+    // JOB_TRIP_COOLDOWN ("R\tJTx\t<secs>" says how long), never in a race nor what CanBeRacedOff
+    // refuses, a carrier among them; a driver goes out of the kart for it and back in after.
+    constexpr uint32 JOB_TRIP_COOLDOWN = 30 * IN_MILLISECONDS;
+    constexpr float JOB_GAP = 2.f; // yards in front of the courier
+    static std::unordered_map<uint32, uint32> s_jobTrips; // guid low -> when last made (ms)
+
+    static void TakeJob(Player* player, uint32 quest, uint32 now)
+    {
+        Delivery const* d = FindDelivery(quest);
+        if (!d || InAnyRace(player->GetObjectGuid()) || !CanBeRacedOff(player))
+            return;
+        std::string const day = ChallengePeriods().first;
+        if (!OfferedOn(day, quest, TeamOf(player)))
+            return;
+        if (JobState(player, *d, day) == 2)
+        {
+            ChatHandler(player->GetSession()).SendSysMessage("You've made that delivery today: it's back tomorrow.");
+            return;
+        }
+        auto made = s_jobTrips.find(player->GetGUIDLow());
+        if (made != s_jobTrips.end() && WorldTimer::getMSTimeDiff(made->second, now) < JOB_TRIP_COOLDOWN)
+        {
+            uint32 left = JOB_TRIP_COOLDOWN - WorldTimer::getMSTimeDiff(made->second, now);
+            SendLine(player, "KARTCRAFT\tR\tJTx\t" + std::to_string((left + 999) / IN_MILLISECONDS));
+            return;
+        }
+        float const x = d->gx + std::cos(d->go) * JOB_GAP, y = d->gy + std::sin(d->go) * JOB_GAP;
+        float facing = d->go + 3.14159265f;
+        if (facing > 6.2831853f)
+            facing -= 6.2831853f;
+        bool const kart = player->HasAura(SPELL_SUMMON_KART);
+        if (kart)
+            player->RemoveAurasDueToSpell(SPELL_SUMMON_KART);
+        player->TeleportTo(d->map, x, y, d->gz + 0.5f, facing);
+        if (kart)
+            player->m_Events.AddEventAtOffset(new KartAgainEvent(player), KART_AGAIN_DELAY);
+        s_jobTrips[player->GetGUIDLow()] = now;
+    }
+
     static bool HandleFinder(Player* player, std::vector<std::string> const& f, uint32 now)
     {
         std::string const& verb = f[1];
@@ -3764,11 +3857,21 @@ namespace Kartcraft
             return;
         }
         // A courier's package goes by kart: none of the verbs that teleport (or queue for one).
-        static std::set<std::string> const TELEPORTS = { "TB", "TR", "MT", "LJ", "Q+", "Y", "Back" };
+        if (f.size() >= 2 && f[1] == "JL")
+        {
+            SendJobs(player);
+            return;
+        }
+        static std::set<std::string> const TELEPORTS = { "TB", "TR", "MT", "LJ", "Q+", "Y", "Back", "JT" };
         if (f.size() >= 2 && TELEPORTS.count(f[1]) && CarryingDelivery(player))
         {
             ChatHandler(player->GetSession()).SendSysMessage(
                 "You're carrying a delivery: it goes by kart, so no teleports until it's delivered.");
+            return;
+        }
+        if (f.size() >= 3 && f[1] == "JT")
+        {
+            TakeJob(player, uint32(std::strtoul(f[2].c_str(), nullptr, 10)), uint32(WorldTimer::getMSTime()));
             return;
         }
         if (f.size() >= 2 && f[1] == "CO")
