@@ -248,6 +248,8 @@ namespace Kartcraft
 
     static void DeliveryLogin(Player* player);
 
+    static void SkinLogin(Player* player);
+
     void OnLogin(Player* player)
     {
         // The whole map discovered, every zone's every area, as `.explorecheat 1` sets it
@@ -268,6 +270,7 @@ namespace Kartcraft
         ChallengeGreeting(player);
         LearnUnlocked(player);
         DeliveryLogin(player);
+        SkinLogin(player);
     }
 
     // Points a line needs to raise the skill at `skill`.
@@ -1576,6 +1579,147 @@ namespace Kartcraft
         }
         if (Delivery const* d = FindDelivery(start.first))
             SendDeliveryTimer(player, *d, uint32(std::time(nullptr) - start.second));
+    }
+
+    // ── Skins ──────────────────────────────────────────────────────────────────────────────────
+    //
+    // Famous NPCs' looks, bought with Kartcraft Tokens in the client's skin shop
+    // (BenillaKartShopFrame, whose catalogue kartcraft_tests holds to this one; each a humanoid on
+    // a playable race's body, which sits in the kart: kart/seat.rs tests it) and worn as the
+    // character's own body: the native display, so a form or a transform still shows over it and
+    // gives it back, on foot and in the kart, to everyone. Owned and worn in kartcraft_skins.
+
+    struct Skin
+    {
+        char const* key;
+        uint32 display; // CreatureDisplayInfo
+        uint32 price;   // tokens
+    };
+
+    static Skin const SKINS[] = {
+        { "magni", 3597, 300 },
+        { "thrall", 4527, 300 },
+        { "cairne", 4307, 300 },
+        { "jaina", 2970, 300 },
+        { "sylvanas", 11657, 300 },
+        { "voljin", 10357, 300 },
+        { "bolvar", 5566, 200 },
+        { "tyrande", 7274, 200 },
+        { "mekkatorque", 7006, 200 },
+        { "vancleef", 2029, 200 },
+    };
+
+    static Skin const* FindSkin(std::string const& key)
+    {
+        for (Skin const& s : SKINS)
+            if (key == s.key)
+                return &s;
+        return nullptr;
+    }
+
+    static void CreateSkins()
+    {
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_skins` ("
+            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
+            "`skin` VARCHAR(16) NOT NULL COMMENT 'Kartcraft.cpp SKINS key', "
+            "`worn` TINYINT UNSIGNED NOT NULL DEFAULT 0, "
+            "`at` INT UNSIGNED NOT NULL COMMENT 'when bought, unix time', "
+            "PRIMARY KEY (`guid`, `skin`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+    }
+
+    // The skins a character owns, and the one it wears ("" none).
+    static std::pair<std::set<std::string>, std::string> OwnedSkins(uint32 guid)
+    {
+        std::pair<std::set<std::string>, std::string> out;
+        std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
+            "SELECT `skin`, `worn` FROM `kartcraft_skins` WHERE `guid` = %u", guid);
+        if (result)
+            do
+            {
+                Field* f = result->Fetch();
+                std::string const key = f[0].GetCppString();
+                if (!FindSkin(key))
+                    continue;
+                out.first.insert(key);
+                if (f[1].GetUInt8())
+                    out.second = key;
+            } while (result->NextRow());
+        return out;
+    }
+
+    // "KARTCRAFT\tR\tSkins\t<tokens>\t<worn>\t<owned,...>": the shop's purse and what is ours.
+    static void SendSkins(Player* player)
+    {
+        std::pair<std::set<std::string>, std::string> owned = OwnedSkins(player->GetGUIDLow());
+        std::string list;
+        for (std::string const& key : owned.first)
+            list += (list.empty() ? "" : ",") + key;
+        SendLine(player, "KARTCRAFT\tR\tSkins\t" + std::to_string(player->GetItemCount(DELIVERY_TOKEN)) +
+            "\t" + owned.second + "\t" + list);
+    }
+
+    // The body becomes the skin's, or (none) the race's again; a form or transform showing keeps
+    // showing, and gives back the new body when it ends (Unit::DeMorph).
+    static void ApplySkin(Player* player, Skin const* skin)
+    {
+        uint32 const shown = player->GetDisplayId();
+        bool const morphed = shown != player->GetNativeDisplayId();
+        if (skin)
+        {
+            player->SetObjectScale(Unit::GetScaleForDisplayId(skin->display));
+            player->SetNativeDisplayId(skin->display);
+            player->SetDisplayId(skin->display);
+        }
+        else
+            player->InitPlayerDisplayIds();
+        if (morphed)
+            player->SetDisplayId(shown);
+    }
+
+    static void SkinLogin(Player* player)
+    {
+        if (Skin const* skin = FindSkin(OwnedSkins(player->GetGUIDLow()).second))
+            ApplySkin(player, skin);
+    }
+
+    // "R\tSkins" asks; "R\tSkinBuy\t<key>" buys with tokens; "R\tSkinWear\t<key>" wears an owned
+    // skin, an empty key the race's own body. Each is answered with "Skins". On the world
+    // thread: it takes tokens out of the bags and changes the body.
+    static void HandleSkins(Player* player, std::string const& verb, std::string const& key)
+    {
+        ChatHandler chat(player->GetSession());
+        uint32 const guid = player->GetGUIDLow();
+        Skin const* skin = FindSkin(key);
+        if (verb == "SkinBuy" && skin)
+        {
+            uint32 const tokens = player->GetItemCount(DELIVERY_TOKEN);
+            if (OwnedSkins(guid).first.count(skin->key))
+                chat.SendSysMessage("That skin is already yours.");
+            else if (tokens < skin->price)
+                chat.PSendSysMessage("That skin costs %u Kartcraft Tokens; you have %u. Courier deliveries pay them.",
+                    skin->price, tokens);
+            else
+            {
+                player->DestroyItemCount(DELIVERY_TOKEN, skin->price, true);
+                CharacterDatabase.DirectPExecute("INSERT INTO `kartcraft_skins` (`guid`, `skin`, `worn`, `at`) "
+                    "VALUES (%u, '%s', 0, %u)", guid, skin->key, uint32(std::time(nullptr)));
+                chat.PSendSysMessage("Skin bought for %u Kartcraft Tokens.", skin->price);
+            }
+        }
+        else if (verb == "SkinWear" && (skin || key.empty()))
+        {
+            if (skin && !OwnedSkins(guid).first.count(skin->key))
+                chat.SendSysMessage("Buy that skin first.");
+            else
+            {
+                CharacterDatabase.DirectPExecute("UPDATE `kartcraft_skins` SET `worn` = (`skin` = '%s') WHERE `guid` = %u",
+                    skin ? skin->key : "", guid);
+                ApplySkin(player, skin);
+            }
+        }
+        SendSkins(player);
     }
 
     static bool HasRated(uint32 guid, char const* course)
@@ -3897,6 +4041,17 @@ namespace Kartcraft
             EquipCosmetic(player, f[2], f[3]);
             return;
         }
+        if (f.size() >= 2 && (f[1] == "Skins" || f[1] == "SkinBuy" || f[1] == "SkinWear"))
+        {
+            ObjectGuid const guid = player->GetObjectGuid();
+            std::string const verb = f[1], key = f.size() > 2 ? f[2] : std::string();
+            sWorld.GetMessager().AddMessage([guid, verb, key](World*)
+            {
+                if (Player* p = ObjectAccessor::FindPlayer(guid))
+                    HandleSkins(p, verb, key);
+            });
+            return;
+        }
         if (f.size() >= 4 && f[1] == "Rate")
         {
             Rate(player, f[2], f[3], f.size() >= 5 ? f[4] : std::string());
@@ -4517,6 +4672,7 @@ namespace Kartcraft
         CreateCosmetics();
         CreateRatings();
         CreateDeliveries();
+        CreateSkins();
         LoadLadder();
         LoadRecords(s_raceBoard, "race");
         LoadRecords(s_trialBoard, "time trial");

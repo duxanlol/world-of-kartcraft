@@ -93,12 +93,15 @@ const PETDOLL_SLOT: &str = "petdoll";
 /// The stable window's pane (`0x4cb870`), whose subject may be a stabled pet with no world object
 /// ([`StableBooth`]).
 const STABLE_SLOT: &str = "stable";
+/// World of Kartcraft's skin shop pane: a skin nobody wears yet, on a hidden local unit
+/// ([`SkinBooth`], `crate::kart::skins`).
+const SKIN_SLOT: &str = "kartskin";
 
 /// Which booth a `<Model>`/`<PlayerModel>` pane samples, keyed by the pane's global name from the
 /// stock file (`PaperDollFrame.xml`, `TabardFrame.xml`, `PetPaperDollFrame.xml`,
 /// `InspectPaperDollFrame.xml`, `PetStable.xml`, `DressUpFrame.xml`,
 /// `Blizzard_AuctionDressUp.xml`). A pane not in this table draws nothing.
-const MODEL_PANE_BOOTHS: [(&str, &str); 7] = [
+const MODEL_PANE_BOOTHS: [(&str, &str); 8] = [
     ("CharacterModelFrame", PAPERDOLL_SLOT),
     // The tabard designer's pane: the paper doll's bake, wearing the design under preview.
     ("TabardModel", PAPERDOLL_SLOT),
@@ -110,6 +113,8 @@ const MODEL_PANE_BOOTHS: [(&str, &str); 7] = [
     // app's `TryOn`/`Dress` intents are not per-widget; the reference's two widgets each clone
     // their own model.
     ("AuctionDressUpModel", dressup::DRESSUP_SLOT),
+    // World of Kartcraft's skin shop (`KartcraftFrames.xml`).
+    ("BenillaKartShopFrameModel", SKIN_SLOT),
 ];
 
 /// The booth a named model pane samples, or `None` for a pane no window has claimed.
@@ -133,9 +138,11 @@ const STABLE_LAYER: usize = PETDOLL_LAYER + 1;
 pub(super) const GLUE_LAYER: usize = STABLE_LAYER + 1;
 /// The dressing room's layer.
 pub(super) const DRESSUP_LAYER: usize = GLUE_LAYER + 1;
+/// The skin shop's layer.
+const SKIN_LAYER: usize = DRESSUP_LAYER + 1;
 /// The warm pass's twin booth layer; only the warm menagerie rides it, only while the pass runs
 /// ([`spawn_warm_booth`]).
-pub(crate) const WARM_BOOTH_LAYER: usize = DRESSUP_LAYER + 1;
+pub(crate) const WARM_BOOTH_LAYER: usize = SKIN_LAYER + 1;
 /// The warm pass's orthographic twin camera layer: bevy_pbr keys pipelines on the projection
 /// class, and the tile atlas camera is a third class.
 pub(crate) const WARM_ORTHO_LAYER: usize = WARM_BOOTH_LAYER + 1;
@@ -163,7 +170,8 @@ const _: () = assert!(
         && PAPERDOLL_LAYER != GLUE_LAYER
         && INSPECT_LAYER != GLUE_LAYER
         && DRESSUP_LAYER > GLUE_LAYER
-        && WARM_BOOTH_LAYER > DRESSUP_LAYER
+        && SKIN_LAYER > DRESSUP_LAYER
+        && WARM_BOOTH_LAYER > SKIN_LAYER
         && WARM_ORTHO_LAYER > WARM_BOOTH_LAYER
         && MINIMAP_COMPOSITE_LAYER > WARM_ORTHO_LAYER
         && UI_MODELS_LAYER > MINIMAP_COMPOSITE_LAYER
@@ -349,6 +357,28 @@ pub(crate) struct PetDollBooth {
 }
 
 impl Default for PetDollBooth {
+    fn default() -> Self {
+        Self {
+            yaw: 0.61,
+            unit: None,
+        }
+    }
+}
+
+/// The skin shop booth's bake: its feeds (`crate::kart::skins`, `crate::ui_kart::skin_yaw`) run
+/// before it.
+#[derive(SystemSet, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct SkinBoothSet;
+
+/// The skin shop pane's yaw and unit, a hidden local one wearing the picked skin
+/// (`crate::kart::skins`); `None` empties the booth.
+#[derive(Resource)]
+pub(crate) struct SkinBooth {
+    pub(crate) yaw: f32,
+    pub(crate) unit: Option<Entity>,
+}
+
+impl Default for SkinBooth {
     fn default() -> Self {
         Self {
             yaw: 0.61,
@@ -759,6 +789,7 @@ impl Plugin for PortraitPlugin {
             .init_resource::<PetDollBooth>()
             .init_resource::<StableBooth>()
             .init_resource::<StableStandIn>()
+            .init_resource::<SkinBooth>()
             .init_resource::<glue_booth::GluePreview>()
             .init_resource::<glue_booth::GluePreviewBake>()
             .init_resource::<glue_booth::GluePetBake>()
@@ -787,6 +818,7 @@ impl Plugin for PortraitPlugin {
                     // The stand-in must exist before the booth mirrors it.
                     sync_stable_standin,
                     sync_stable_booth,
+                    sync_skin_booth.in_set(SkinBoothSet),
                     // The scene before the character standing in it: they commit as one pair
                     // (`glue_booth::PendingSwap`), and the booth reads the stage off the scene.
                     glue_booth::sync_glue_scene,
@@ -979,13 +1011,14 @@ fn setup_booths(
         );
     }
 
-    // The four body booths: the paper doll, inspect, the pet paper doll and the stable
-    // (`0x4cb870`), at 512², aimed per bake by `sync_body_booth`.
+    // The body booths: the paper doll, inspect, the pet paper doll, the stable (`0x4cb870`) and
+    // the skin shop, at 512², aimed per bake by `sync_body_booth`.
     for (i, (slot, layer_index)) in [
         (PAPERDOLL_SLOT, PAPERDOLL_LAYER),
         (INSPECT_SLOT, INSPECT_LAYER),
         (PETDOLL_SLOT, PETDOLL_LAYER),
         (STABLE_SLOT, STABLE_LAYER),
+        (SKIN_SLOT, SKIN_LAYER),
     ]
     .into_iter()
     .enumerate()
@@ -1621,6 +1654,48 @@ fn sync_inspect_booth(
         INSPECT_SLOT,
         inspect.unit,
         inspect.yaw,
+        &mut last_pose,
+        framing_in.gx.0,
+        &mut commands,
+        &mut booths,
+        &mut portraits,
+        &mut booth_light,
+        creatures.as_deref(),
+        &ent_q,
+        &look,
+        &mut wow_mats,
+        &mut cams,
+        anim_data.as_deref(),
+        &framing_in.panes,
+    );
+}
+
+/// The skin shop's pane, pointed at the hidden unit wearing the picked skin.
+fn sync_skin_booth(
+    mut commands: Commands,
+    mut booths: ResMut<Booths>,
+    mut portraits: ResMut<PortraitImages>,
+    mut booth_light: ResMut<BoothLight>,
+    creatures: Option<Res<Creatures>>,
+    ent_q: Query<&NetEntity>,
+    look: DressedLook,
+    skin: Res<SkinBooth>,
+    mut palettes: ResMut<benilla_world::rig_palette::RigPalettes>,
+    mut wow_mats: ResMut<Assets<WowModelMaterial>>,
+    mut env_cache: Local<Option<bool>>,
+    mut last_pose: Local<Option<(f32, f32)>>,
+    mut cams: Query<(&BoothCam, &mut Transform, &mut Projection)>,
+    framing_in: BoothFraming,
+    anim_data: Option<Res<crate::creature_anim::AnimData>>,
+) {
+    if test_mode(&mut env_cache) {
+        return;
+    }
+    sync_body_booth(
+        &mut palettes,
+        SKIN_SLOT,
+        skin.unit,
+        skin.yaw,
         &mut last_pose,
         framing_in.gx.0,
         &mut commands,

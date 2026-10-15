@@ -711,13 +711,17 @@ pub(crate) mod schedule_tests {
     ///   kind: each writes only its own arrow, seat pose or event feed, against the screens and
     ///   world writers above. The kart's WoW voices' wound vocal (`sound::creature::injury_vocals`)
     ///   has `fall_landing_vocals`' pairs exactly: it reads a unit's `Transform` for where the
-    ///   grunt sounds, and a frame-old place is the same sound.
+    ///   grunt sounds, and a frame-old place is the same sound. The skin shop's booth
+    ///   (`portrait::sync_skin_booth`) has a subset of the stable booth's pairs exactly (98 of its
+    ///   125, the dump's two lists compared): the same bake over its own booth entities, layer and
+    ///   camera. Its two feeds (`kart::skins::update`, `ui_kart::skin_yaw`) against the terrain
+    ///   colliders' finish: a hidden preview unit far below every collider, and a yaw read.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
     #[cfg(not(target_os = "macos"))]
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_086;
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_102;
     /// macOS: eight more, all the native cursor's (`cursor::macos::drive`, eleven pairs in the
     /// dump). Unlike `cursor::other::drive`, it reads `CameraControl`, `Cinematic` and the window
     /// focus to hide the arrow while the camera is dragged or a cinematic plays, against their
@@ -726,7 +730,7 @@ pub(crate) mod schedule_tests {
     /// `ui_logout::drain_logout`, `cinematic::{drive, start_pending, take_trigger}`): a frame-old
     /// value hides or shows the cursor a frame late, which no one sees.
     #[cfg(target_os = "macos")]
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_092;
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_110;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

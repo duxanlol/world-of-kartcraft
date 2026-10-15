@@ -749,10 +749,11 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
             "Courier jobs...",
             "Guide...",
             "Kart garage...",
+            "Skin shop...",
             "Kartcraft settings...",
             "Kart camera...",
             "Controller test...",
-            "Hide minimap button",
+            "Hide minimap buttons",
         ]
     );
     pick(&mut s, "Race Finder");
@@ -781,8 +782,9 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
 
     // Hidden from the menu; the settings window's box brings it back.
     menu(&mut s);
-    pick(&mut s, "Hide minimap button");
+    pick(&mut s, "Hide minimap buttons");
     assert!(!shown(&s, "BenillaKartMinimapButton"));
+    assert!(!shown(&s, "BenillaKartShopMinimapButton"));
     assert_eq!(s.cvar("KartMinimapButton").as_deref(), Some("0"));
     s.run("SlashCmdList['BENILLA_KARTCRAFT']('')").unwrap();
     assert!(!s
@@ -791,7 +793,22 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
     s.run("BenillaKartSettingsFrameMinimapButton:Click()")
         .unwrap();
     assert!(shown(&s, "BenillaKartMinimapButton"));
+    assert!(shown(&s, "BenillaKartShopMinimapButton"));
     assert_eq!(s.cvar("KartMinimapButton").as_deref(), Some("1"));
+
+    // The shop's own button: on the ring at its own angle, a click opens the shop.
+    s.run("BenillaKartSettings_Set('KartShopMinimapAngle', 270, 0) BenillaKartShopButton_Place()")
+        .unwrap();
+    let (x, y): (f32, f32) = s
+        .eval(
+            "local x, y = BenillaKartShopMinimapButton:GetCenter() \
+             local cx, cy = Minimap:GetCenter() return x - cx, y - cy",
+        )
+        .unwrap();
+    assert!(x.abs() < 0.5 && (y + 80.0).abs() < 0.5, "({x}, {y})");
+    s.run("BenillaKartShopMinimapButton:Click('LeftButton')")
+        .unwrap();
+    assert!(shown(&s, "BenillaKartShopFrame"));
 }
 
 #[test]
@@ -818,7 +835,7 @@ fn the_settings_window_sets_the_kart_s_cvars() {
         ("ArrowShow", "Show the guide arrow in a race"),
         ("ChaseCamera", "CTR chase camera (off: your WoW camera)"),
         ("Music", "Play CTR race music"),
-        ("MinimapButton", "Show the minimap button"),
+        ("MinimapButton", "Show the minimap buttons"),
         ("Ghost", "Race the ghost of your best run"),
     ] {
         let frame = format!("BenillaKartSettingsFrame{name}");
@@ -3266,4 +3283,130 @@ fn the_track_browser_takes_us_to_the_track_s_marshal() {
     s.run("BenillaKartTrackBrowser_Open() BenillaKartTrackBrowser_Select('d1')")
         .unwrap();
     assert!(!enabled(&s));
+}
+
+#[test]
+fn the_skin_shop_previews_buys_and_wears_through_the_server() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let text = |s: &mut UiScript, name: &str| -> String {
+        s.eval(&format!("return {name}:GetText() or ''")).unwrap()
+    };
+    let enabled = |s: &mut UiScript, name: &str| -> bool {
+        s.eval(&format!("return {name}:IsEnabled() == 1")).unwrap()
+    };
+    let preview =
+        |s: &mut UiScript| -> String { s.eval("return GetCVar('KartSkinPreview')").unwrap() };
+    sent(&mut s);
+    s.run("BenillaKartShop_Toggle()").unwrap();
+    // Opening asks for our purse, and the first skin turns in the pane.
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tSkins"]);
+    assert_eq!(preview(&mut s), "3597");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin1Name"), "Magni");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin10Name"), "VanCleef");
+    // Ten skins: the grid's last two cells stay empty.
+    assert!(!s
+        .eval::<bool>("return BenillaKartShopFrameSkin11:IsVisible() == 1")
+        .unwrap());
+    assert_eq!(
+        text(&mut s, "BenillaKartShopFrameTokens"),
+        "Kartcraft Tokens: ?"
+    );
+
+    // 250 tokens: Magni (300) is out of reach, Bolvar (200) is not.
+    from_server(&mut s, "R\tSkins\t250\t\t");
+    assert_eq!(
+        text(&mut s, "BenillaKartShopFrameTokens"),
+        "Kartcraft Tokens: 250"
+    );
+    assert!(!enabled(&mut s, "BenillaKartShopFrameBuy"));
+    s.run("BenillaKartShopFrameSkin7:Click()").unwrap();
+    assert_eq!(preview(&mut s), "5566");
+    assert_eq!(
+        text(&mut s, "BenillaKartShopFrameSkinName"),
+        "Highlord Bolvar Fordragon"
+    );
+    assert!(enabled(&mut s, "BenillaKartShopFrameBuy"));
+    assert!(!enabled(&mut s, "BenillaKartShopFrameWear"));
+    s.run("BenillaKartShopFrameBuy:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tSkinBuy\tbolvar"]);
+
+    // Bought: Wear wears it, and again takes it off.
+    from_server(&mut s, "R\tSkins\t20\t\tbolvar");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin7Price"), "Owned");
+    s.run("BenillaKartShopFrameWear:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tSkinWear\tbolvar"]);
+    from_server(&mut s, "R\tSkins\t20\tbolvar\tbolvar");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin7Price"), "Worn");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameWear"), "Take off");
+    s.run("BenillaKartShopFrameWear:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tSkinWear\t"]);
+
+    // Closed, the pane's unit goes.
+    s.run("BenillaKartShopFrame:Hide()").unwrap();
+    assert_eq!(preview(&mut s), "0");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The shop's catalogue is the server's: every skin's key, display and price in
+/// `BENILLA_KART_SKINS` as `Kartcraft.cpp`'s `SKINS` has them, in its order.
+#[test]
+fn the_skin_shop_sells_what_the_server_sells() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let cpp = std::fs::read_to_string(root.join("setup/vmangos/src/Kartcraft.cpp")).unwrap();
+    let xml =
+        std::fs::read_to_string(root.join("crates/benilla-app/assets/ui/KartcraftFrames.xml"))
+            .unwrap();
+    let server: Vec<(String, u32, u32)> = cpp
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim().strip_prefix("{ \"")?.strip_suffix(" },")?;
+            let (key, rest) = l.split_once("\", ")?;
+            let (display, price) = rest.split_once(", ")?;
+            Some((key.into(), display.parse().ok()?, price.parse().ok()?))
+        })
+        .collect();
+    let field = |l: &str, name: &str| -> Option<String> {
+        let at = l.find(&format!("{name} = "))? + name.len() + 3;
+        let v = l[at..].split(',').next()?;
+        Some(v.trim().trim_matches('"').to_string())
+    };
+    let client: Vec<(String, u32, u32)> = xml
+        .lines()
+        .filter(|l| l.trim_start().starts_with("{ key = "))
+        .filter_map(|l| {
+            Some((
+                field(l, "key")?,
+                field(l, "display")?.parse().ok()?,
+                field(l, "price")?.parse().ok()?,
+            ))
+        })
+        .collect();
+    assert_eq!(client.len(), 10, "the shop's ten skins");
+    assert_eq!(client, server);
+}
+
+/// Every entry of the Kartcraft menu has its button: two branches each adding an entry and the
+/// same next button merge into one button short.
+#[test]
+fn every_kartcraft_menu_entry_has_a_button() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let s = loaded();
+    let missing: Vec<i64> = s
+        .eval(
+            "local out = {} for i = 1, table.getn(BENILLA_KART_MENU) do \
+             if not getglobal('BenillaKartMenuFrameEntry' .. i) then table.insert(out, i) end end \
+             return out",
+        )
+        .unwrap();
+    assert!(
+        missing.is_empty(),
+        "menu entries without a button: {missing:?}"
+    );
 }

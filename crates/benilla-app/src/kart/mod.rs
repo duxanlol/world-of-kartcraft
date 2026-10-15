@@ -6,7 +6,8 @@
 //! Karting profession ([`profession`]) and the score on screen ([`score`]). In a race CTR's
 //! weapons are live ([`weapons`]): crates, items, shots and hits through the server; in a time
 //! trial there are none, and the ghost of our best run on the course races us ([`ghost`]). A GM's
-//! `/kartshow` plays a recorded showcase run through cinematic cameras ([`showcase`]). Its
+//! `/kartshow` plays a recorded showcase run through cinematic cameras ([`showcase`]). The skin
+//! shop's model pane shows a skin nobody wears yet ([`skins`]). Its
 //! settings
 //! are CVars the layer's settings window writes ([`settings`]); its controls are key bindings
 //! ([`bindings`]).
@@ -28,6 +29,7 @@ mod score;
 mod seat;
 pub(crate) mod settings;
 mod showcase;
+mod skins;
 mod sound;
 mod ui;
 pub(crate) use garage::{class_list, racer_list};
@@ -679,6 +681,18 @@ pub(crate) fn plugin(app: &mut App) {
         .add_observer(settings::on_cvar)
         .init_resource::<pad_choice::PadChoice>()
         .add_observer(pad_choice::on_cvar)
+        .init_resource::<skins::SkinPreview>()
+        .add_observer(skins::on_cvar)
+        // The shop's preview unit stood up (after the wire's own units land), then the pane's yaw
+        // read once clicks are in (after the VM's tick), both before the booth bakes them.
+        .add_systems(
+            Update,
+            (skins::update, crate::ui_kart::skin_yaw)
+                .chain()
+                .after(crate::net::apply_net_updates)
+                .after(crate::ui_script::UiInput)
+                .before(crate::portrait::SkinBoothSet),
+        )
         .add_systems(
             Startup,
             (kartcraft::hud::spawn, |_: Commands| {

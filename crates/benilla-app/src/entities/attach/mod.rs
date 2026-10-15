@@ -331,7 +331,7 @@ pub(super) fn attach_entity_visuals(
                 _ => None,
             }),
         };
-        let worn = resolve_worn_equip(net, equipment, dm);
+        let worn = resolve_worn_equip(net, equipment, dm, stores.get(entity).ok().map(|s| &s.0));
         let equip = worn.bodyslots;
         // An empty `parts` list is either a model that draws nothing (an answer) or no model at
         // all (a gap of ours, which the cube shows).

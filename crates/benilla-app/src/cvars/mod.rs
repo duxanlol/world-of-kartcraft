@@ -647,6 +647,8 @@ fn load_config(world: &mut World) {
         // The paint and trail come from the server at each login.
         cvars.own_for_session("KartPaint", None);
         cvars.own_for_session("KartTrail", None);
+        // The skin shop's preview is the open window's.
+        cvars.own_for_session("KartSkinPreview", None);
         match stored {
             StoredConfig::Absent => {} // no file, hermetic capture, or no install
             StoredConfig::Bad(msg) => {
@@ -2306,6 +2308,10 @@ mod tests {
             (
                 "KartMinimapAngle",
                 "the layer's KartcraftFrames.xml places its minimap button on the ring by it",
+            ),
+            (
+                "KartShopMinimapAngle",
+                "the layer's KartcraftFrames.xml places the shop's minimap button on the ring by it",
             ),
             (
                 "KartGuideSeen",

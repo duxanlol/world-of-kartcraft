@@ -26,7 +26,8 @@
         config.toml: the guide arrow (KartArrowShow, KartArrowSize, KartArrowX, KartArrowY, and
         KartArrowMove while it is being placed), the camera (KartChaseCamera, and KartFarCamera
         for CTR's far chase camera, which the camera binding also swaps), the music
-        (KartMusic, KartMusicVolume), the minimap button (KartMinimapButton, KartMinimapAngle),
+        (KartMusic, KartMusicVolume), the minimap buttons (KartMinimapButton, KartMinimapAngle, and
+        the skin shop's own, KartShopMinimapAngle),
         the Race Marshals on the maps (KartRaceMarshals, kart/marshals.rs), the ghost of the
         best run on a course (KartGhost), CTR's ground types under the kart (KartTerrain,
         kart/ground.rs, off by default), the controller's rumble (KartRumble), the racers'
@@ -38,6 +39,10 @@
         moves: the skill, the classes in the order the skill opens them with the skill each
         needs, and the racers whose karts the player's kart data holds. A class the skill has not
         opened is greyed; the kart drives the best opened class at or below the one picked.
+
+        The skin shop (/kartshop) sells famous NPCs' looks for Kartcraft Tokens, worn as our body:
+        a grid of them, the picked one turning in a model pane the engine draws (KartSkinPreview,
+        kart/skins.rs). The server sells and dresses ("R<TAB>Skins", "SkinBuy", "SkinWear").
 
         The kart's controls are the layer's Bindings.xml, named here for Key Bindings as an
         addon names its own.
@@ -1196,6 +1201,14 @@
                 SetCVar("KartPaint", look.worn.P)
                 SetCVar("KartTrail", look.worn.T)
                 if BenillaKartGarageFrame:IsVisible() then BenillaKartGarage_Refresh() end
+            elseif verb == "Skins" then
+                -- The skin shop's purse and what is ours: tokens, the skin worn, the skins owned.
+                local shop = BenillaKartShop
+                shop.tokens = tonumber(line[3])
+                shop.worn = line[4] or ""
+                shop.owned = {}
+                for key in string.gfind(line[5] or "", "[^,]+") do shop.owned[key] = 1 end
+                if BenillaKartShopFrame:IsVisible() then BenillaKartShop_Refresh() end
             elseif verb == "CH" then
                 -- The day's and the week's challenge courses, and their boards.
                 BenillaKartChallenge = {
@@ -1433,6 +1446,7 @@
             { name = "BenillaKartFinderFrame", buttons = "BenillaKartFinder_Pad",
               legend = "D-pad: move    L1 / R1: page    Cross / A: tick or join\nStart: find race (again: leave the queue)    Circle / B: close" },
             { name = "BenillaKartGarageFrame" },
+            { name = "BenillaKartShopFrame" },
             { name = "BenillaKartSettingsFrame" },
             { name = "BenillaKartCameraFrame" },
             { name = "BenillaKartGuideFrame", page = "BenillaKartGuide_Turn",
@@ -1685,6 +1699,7 @@
             { "Leave race", function() BenillaKart_LeaveRace() end },
             { "Unstuck", function() BenillaKart_Unstuck() end },
             { "Kart garage", function() BenillaKartGarage_Toggle() end },
+            { "Skin shop", function() BenillaKartShop_Toggle() end },
             { "Kartcraft settings", function() BenillaKartSettings_Toggle() end },
             { "Guide", function() BenillaKartGuide_Toggle() end },
             { "Controller test", function() BenillaKartPad_Toggle() end },
@@ -2177,13 +2192,36 @@
         -- Its centre's distance from the minimap's: the ring the stock buttons sit on.
         BENILLA_KART_MINIMAP_RADIUS = 80
 
-        -- At `angle` (degrees counter-clockwise from east), else at KartMinimapAngle.
-        function BenillaKartMinimap_Place(angle)
-            angle = math.rad(angle or tonumber(GetCVar("KartMinimapAngle")) or 190)
-            local button = BenillaKartMinimapButton
+        -- `button` on the ring at `angle`, degrees counter-clockwise from east.
+        function BenillaKartRing_Place(button, angle)
+            angle = math.rad(angle)
             button:ClearAllPoints()
             button:SetPoint("CENTER", "Minimap", "CENTER", BENILLA_KART_MINIMAP_RADIUS * math.cos(angle),
                 BENILLA_KART_MINIMAP_RADIUS * math.sin(angle))
+        end
+
+        -- At `angle`, else at KartMinimapAngle.
+        function BenillaKartMinimap_Place(angle)
+            BenillaKartRing_Place(BenillaKartMinimapButton, angle or tonumber(GetCVar("KartMinimapAngle")) or 190)
+        end
+
+        -- The shop's own button beside it, at `angle`, else at KartShopMinimapAngle.
+        function BenillaKartShopButton_Place(angle)
+            BenillaKartRing_Place(BenillaKartShopMinimapButton, angle or tonumber(GetCVar("KartShopMinimapAngle")) or 220)
+        end
+
+        function BenillaKartShopButton_DragStop()
+            BenillaKartShopMinimapButton.dragging = nil
+            BenillaKartSettings_Set("KartShopMinimapAngle", BenillaKartMinimap_CursorAngle(), 0)
+            BenillaKartShopButton_Place()
+        end
+
+        function BenillaKartShopButton_Tooltip()
+            GameTooltip:SetOwner(BenillaKartShopMinimapButton, "ANCHOR_LEFT")
+            GameTooltip:SetText("Kartcraft Shop")
+            GameTooltip:AddLine("Skins for Kartcraft Tokens.", 1, 1, 1)
+            GameTooltip:AddLine("Click to open; drag to move.", 0.8, 0.8, 0.8)
+            GameTooltip:Show()
         end
 
         -- The cursor's angle about the minimap's centre, 0 to 360.
@@ -2203,12 +2241,12 @@
             BenillaKartMinimap_Place()
         end
 
-        -- Shown as KartMinimapButton says.
+        -- Both buttons, Kartcraft's and the shop's, shown as KartMinimapButton says; each applies
+        -- it as it loads, so the other may not be there yet.
         function BenillaKartMinimap_Apply()
-            if GetCVar("KartMinimapButton") == "0" then
-                BenillaKartMinimapButton:Hide()
-            else
-                BenillaKartMinimapButton:Show()
+            local hide = GetCVar("KartMinimapButton") == "0"
+            for _, button in ipairs({ BenillaKartMinimapButton, BenillaKartShopMinimapButton }) do
+                if hide then button:Hide() else button:Show() end
             end
         end
 
@@ -2216,7 +2254,7 @@
             SetCVar("KartMinimapButton", "0")
             BenillaKartMinimap_Apply()
             if DEFAULT_CHAT_FRAME then
-                DEFAULT_CHAT_FRAME:AddMessage("Kartcraft's minimap button is hidden: /kartcraft shows it again.", 1, 0.82, 0)
+                DEFAULT_CHAT_FRAME:AddMessage("Kartcraft's minimap buttons are hidden: /kartcraft shows them again.", 1, 0.82, 0)
             end
         end
 
@@ -2293,10 +2331,11 @@
             table.insert(entries, { text = "Courier jobs...", func = BenillaKartJobs_Toggle })
             table.insert(entries, { text = "Guide...", func = BenillaKartGuide_Toggle })
             table.insert(entries, { text = "Kart garage...", func = BenillaKartGarage_Toggle })
+            table.insert(entries, { text = "Skin shop...", func = BenillaKartShop_Toggle })
             table.insert(entries, { text = "Kartcraft settings...", func = BenillaKartSettings_Toggle })
             table.insert(entries, { text = "Kart camera...", func = BenillaKartCamera_Toggle })
             table.insert(entries, { text = "Controller test...", func = BenillaKartPad_Toggle })
-            table.insert(entries, { text = "Hide minimap button", func = BenillaKartMinimap_Hide })
+            table.insert(entries, { text = "Hide minimap buttons", func = BenillaKartMinimap_Hide })
             for i = 1, table.getn(entries) do
                 if not entries[i].checkable then entries[i].notCheckable = 1 end
                 UIDropDownMenu_AddButton(entries[i])
@@ -2777,6 +2816,99 @@
             return 1
         end
 
+        -- ── The skin shop ──
+        -- Famous NPCs' looks, bought with Kartcraft Tokens (courier deliveries pay them) and worn as
+        -- our own body, on foot and in the kart. The keys, displays and prices are the server's
+        -- SKINS (Kartcraft.cpp; kartcraft_tests holds the two alike), and the server says what we
+        -- own and wear ("R<TAB>Skins"). The engine turns the picked one in the window's model pane:
+        -- KartSkinPreview names its display, 0 none (kart/skins.rs).
+        BENILLA_KART_SKINS = {
+            { key = "magni", name = "Magni Bronzebeard", short = "Magni", display = 3597, price = 300, icon = "INV_Misc_Head_Dwarf_01" },
+            { key = "thrall", name = "Thrall", short = "Thrall", display = 4527, price = 300, icon = "INV_Misc_Head_Orc_01" },
+            { key = "cairne", name = "Cairne Bloodhoof", short = "Cairne", display = 4307, price = 300, icon = "INV_Misc_Head_Tauren_01" },
+            { key = "jaina", name = "Jaina Proudmoore", short = "Jaina", display = 2970, price = 300, icon = "INV_Misc_Head_Human_02" },
+            { key = "sylvanas", name = "Lady Sylvanas Windrunner", short = "Sylvanas", display = 11657, price = 300, icon = "INV_Misc_Head_Undead_02" },
+            { key = "voljin", name = "Vol'jin", short = "Vol'jin", display = 10357, price = 300, icon = "INV_Misc_Head_Troll_01" },
+            { key = "bolvar", name = "Highlord Bolvar Fordragon", short = "Bolvar", display = 5566, price = 200, icon = "INV_Misc_Head_Human_01" },
+            { key = "tyrande", name = "Tyrande Whisperwind", short = "Tyrande", display = 7274, price = 200, icon = "INV_Misc_Head_Elf_02" },
+            { key = "mekkatorque", name = "High Tinker Mekkatorque", short = "Mekkatorque", display = 7006, price = 200, icon = "INV_Misc_Head_Gnome_01" },
+            { key = "vancleef", name = "Edwin VanCleef", short = "VanCleef", display = 2029, price = 200, icon = "INV_Misc_Bandana_03" },
+        }
+        -- The picked cell, and the server's word: our tokens (nil before it answers), the skins we
+        -- own (by key) and the one we wear ("" our own body).
+        BenillaKartShop = { selected = 1, owned = {}, worn = "" }
+        -- The grid's cells (BenillaKartShopFrameSkin1..).
+        BENILLA_KART_SHOP_CELLS = 12
+
+        function BenillaKartShop_Toggle()
+            if BenillaKartShopFrame:IsVisible() then
+                BenillaKartShopFrame:Hide()
+            else
+                BenillaKart_Open(BenillaKartShopFrame)
+            end
+        end
+
+        function BenillaKartShop_Select(i)
+            BenillaKartShop.selected = i
+            SetCVar("KartSkinPreview", BENILLA_KART_SKINS[i].display)
+            BenillaKartShop_Refresh()
+        end
+
+        function BenillaKartShop_Refresh()
+            local shop = BenillaKartShop
+            BenillaKartShopFrameTokens:SetText("Kartcraft Tokens: " .. (shop.tokens or "?"))
+            -- The grid has room for more skins than are sold: the rest of it stays empty.
+            for i = table.getn(BENILLA_KART_SKINS) + 1, BENILLA_KART_SHOP_CELLS do
+                getglobal("BenillaKartShopFrameSkin" .. i):Hide()
+            end
+            for i = 1, table.getn(BENILLA_KART_SKINS) do
+                local skin = BENILLA_KART_SKINS[i]
+                local cell = "BenillaKartShopFrameSkin" .. i
+                getglobal(cell .. "Icon"):SetTexture("Interface\\Icons\\" .. skin.icon)
+                getglobal(cell .. "Name"):SetText(skin.short)
+                local price = getglobal(cell .. "Price")
+                if shop.worn == skin.key then
+                    price:SetText("Worn")
+                    price:SetTextColor(0.1, 1, 0.1)
+                elseif shop.owned[skin.key] then
+                    price:SetText("Owned")
+                    price:SetTextColor(0.1, 1, 0.1)
+                else
+                    price:SetText(skin.price .. " tokens")
+                    price:SetTextColor(1, 0.82, 0)
+                end
+                if i == shop.selected then getglobal(cell):LockHighlight() else getglobal(cell):UnlockHighlight() end
+            end
+            local skin = BENILLA_KART_SKINS[shop.selected]
+            local buy, wear = BenillaKartShopFrameBuy, BenillaKartShopFrameWear
+            BenillaKartShopFrameSkinName:SetText(skin.name)
+            if shop.owned[skin.key] then
+                BenillaKartShopFrameSkinInfo:SetText(shop.worn == skin.key and "Yours, and worn" or "Yours")
+                buy:SetText("Owned")
+                buy:Disable()
+                wear:SetText(shop.worn == skin.key and "Take off" or "Wear")
+                wear:Enable()
+            else
+                BenillaKartShopFrameSkinInfo:SetText(skin.price .. " Kartcraft Tokens")
+                buy:SetText("Buy")
+                -- The server says what is short; the button only knows once it has answered.
+                if shop.tokens and shop.tokens < skin.price then buy:Disable() else buy:Enable() end
+                wear:SetText("Wear")
+                wear:Disable()
+            end
+        end
+
+        function BenillaKartShop_Buy()
+            BenillaKart_Send("SkinBuy\t" .. BENILLA_KART_SKINS[BenillaKartShop.selected].key)
+        end
+
+        -- Wear the picked skin, or take it off (back to our own body) if it is the one worn.
+        function BenillaKartShop_Wear()
+            local key = BENILLA_KART_SKINS[BenillaKartShop.selected].key
+            if BenillaKartShop.worn == key then key = "" end
+            BenillaKart_Send("SkinWear\t" .. key)
+        end
+
         function BenillaKartGarage_Toggle()
             if BenillaKartGarageFrame:IsVisible() then
                 BenillaKartGarageFrame:Hide()
@@ -3030,6 +3162,8 @@
             SlashCmdList["BENILLA_UNSTUCK"] = function() BenillaKart_Unstuck() end
             SLASH_BENILLA_GARAGE1 = "/garage"
             SlashCmdList["BENILLA_GARAGE"] = function() BenillaKartGarage_Toggle() end
+            SLASH_BENILLA_KARTSHOP1 = "/kartshop"
+            SlashCmdList["BENILLA_KARTSHOP"] = function() BenillaKartShop_Toggle() end
             SLASH_BENILLA_KARTFREE1 = "/kartfree"
             SlashCmdList["BENILLA_KARTFREE"] = function(msg) BenillaKartFreeCam(msg) end
             SLASH_BENILLA_KARTNEXT1 = "/kartnext"
@@ -3278,6 +3412,52 @@
         </Scripts>
     </Button>
 
+    <!-- The shop's own minimap button, built as Kartcraft's: a click opens the shop; it drags
+         around the ring (KartShopMinimapAngle) and hides with Kartcraft's (KartMinimapButton). -->
+    <Button name="BenillaKartShopMinimapButton" parent="Minimap" frameStrata="MEDIUM" enableMouse="true">
+        <Size><AbsDimension x="33" y="33"/></Size>
+        <Anchors><Anchor point="CENTER"/></Anchors>
+        <Layers>
+            <Layer level="BACKGROUND">
+                <Texture name="$parentIcon" file="Interface\Icons\INV_Misc_Ticket_Darkmoon_01">
+                    <Size><AbsDimension x="20" y="20"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="7" y="-6"/></Offset></Anchor></Anchors>
+                    <TexCoords left="0.075" right="0.925" top="0.075" bottom="0.925"/>
+                </Texture>
+            </Layer>
+            <Layer level="ARTWORK">
+                <Texture name="$parentBorder" file="Interface\Minimap\MiniMap-TrackingBorder">
+                    <Size><AbsDimension x="52" y="52"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"/></Anchors>
+                </Texture>
+            </Layer>
+        </Layers>
+        <HighlightTexture file="Interface\Minimap\UI-Minimap-ZoomButton-Highlight" alphaMode="ADD"/>
+        <Scripts>
+            <OnLoad>
+                this:RegisterForClicks("LeftButtonUp")
+                this:RegisterForDrag("LeftButton")
+                this:SetFrameLevel(this:GetFrameLevel() + 1)
+                BenillaKartShopButton_Place()
+                BenillaKartMinimap_Apply()
+            </OnLoad>
+            <OnClick>
+                GameTooltip:Hide()
+                BenillaKartShop_Toggle()
+            </OnClick>
+            <OnDragStart>
+                GameTooltip:Hide()
+                this.dragging = 1
+            </OnDragStart>
+            <OnDragStop>BenillaKartShopButton_DragStop()</OnDragStop>
+            <OnUpdate>
+                if this.dragging then BenillaKartShopButton_Place(BenillaKartMinimap_CursorAngle()) end
+            </OnUpdate>
+            <OnEnter>BenillaKartShopButton_Tooltip()</OnEnter>
+            <OnLeave>GameTooltip:Hide()</OnLeave>
+        </Scripts>
+    </Button>
+
     <CheckButton name="BenillaKartSettingsCheckTemplate" inherits="OptionsCheckButtonTemplate" virtual="true">
         <Scripts>
             <OnClick>BenillaKartSettings_Check(this, this.cvar)</OnClick>
@@ -3428,7 +3608,7 @@
                     { "ChaseCamera", "KartChaseCamera", "CTR chase camera (off: your WoW camera)" },
                     { "FarCamera", "KartFarCamera", "Far chase camera (off: near)" },
                     { "Music", "KartMusic", "Play CTR race music" },
-                    { "MinimapButton", "KartMinimapButton", "Show the minimap button" },
+                    { "MinimapButton", "KartMinimapButton", "Show the minimap buttons" },
                     { "Ghost", "KartGhost", "Race the ghost of your best run" },
                     { "Terrain", "KartTerrain", "Ground types slow you off-road (CTR)" },
                     { "Rumble", "KartRumble", "Shake the controller on crashes" },
@@ -3813,6 +3993,186 @@
                 BenillaKartGarage_Refresh()
             </OnShow>
             <OnHide>PlaySound("igMainMenuClose")</OnHide>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+
+    <!-- A skin shop cell: the skin's icon, its short name, and its price or that it is ours. -->
+    <Button name="BenillaKartShopSkinTemplate" virtual="true">
+        <Size><AbsDimension x="82" y="78"/></Size>
+        <Layers>
+            <Layer level="ARTWORK">
+                <Texture name="$parentIcon">
+                    <Size><AbsDimension x="40" y="40"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-4"/></Offset></Anchor></Anchors>
+                </Texture>
+                <FontString name="$parentName" inherits="GameFontHighlightSmall">
+                    <Size><AbsDimension x="80" y="12"/></Size>
+                    <Anchors><Anchor point="TOP" relativeTo="$parentIcon" relativePoint="BOTTOM"><Offset><AbsDimension x="0" y="-3"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentPrice" inherits="GameFontNormalSmall">
+                    <Size><AbsDimension x="80" y="12"/></Size>
+                    <Anchors><Anchor point="TOP" relativeTo="$parentName" relativePoint="BOTTOM"><Offset><AbsDimension x="0" y="-1"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <HighlightTexture file="Interface\QuestFrame\UI-QuestLogTitleHighlight" alphaMode="ADD"/>
+        <Scripts>
+            <OnClick>BenillaKartShop_Select(this:GetID())</OnClick>
+        </Scripts>
+    </Button>
+
+    <!-- The skin shop (/kartshop): the skins on the left, the picked one turning on the right,
+         bought and worn with the buttons under it. -->
+    <Frame name="BenillaKartShopFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
+        <Size><AbsDimension x="620" y="440"/></Size>
+        <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
+            <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
+            <TileSize><AbsValue val="32"/></TileSize>
+            <EdgeSize><AbsValue val="32"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="BACKGROUND">
+                <!-- As the garage's: the window 0.88 opaque over the HUD. -->
+                <Texture name="$parentGroundDim">
+                    <Anchors>
+                        <Anchor point="TOPLEFT"><Offset><AbsDimension x="15" y="-15"/></Offset></Anchor>
+                        <Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-15" y="15"/></Offset></Anchor>
+                    </Anchors>
+                    <Color r="0" g="0" b="0" a="0.7"/>
+                </Texture>
+            </Layer>
+            <Layer level="ARTWORK">
+                <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
+                    <Size><AbsDimension x="256" y="64"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
+                </Texture>
+                <FontString inherits="GameFontNormal" text="Skin Shop">
+                    <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
+                </FontString>
+                <Texture name="$parentTokenIcon" file="Interface\Icons\INV_Misc_Ticket_Darkmoon_01">
+                    <Size><AbsDimension x="16" y="16"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-32"/></Offset></Anchor></Anchors>
+                </Texture>
+                <FontString name="$parentTokens" inherits="GameFontHighlight" justifyH="LEFT">
+                    <Anchors><Anchor point="LEFT" relativeTo="$parentTokenIcon" relativePoint="RIGHT"><Offset><AbsDimension x="6" y="0"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString inherits="GameFontDisableSmall" justifyH="LEFT" text="Courier deliveries pay Kartcraft Tokens: see the innkeepers and the neutral towns' couriers.">
+                    <Size><AbsDimension x="336" y="28"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-306"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentSkinName" inherits="GameFontNormalLarge">
+                    <Size><AbsDimension x="230" y="20"/></Size>
+                    <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-330"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentSkinInfo" inherits="GameFontHighlightSmall">
+                    <Size><AbsDimension x="230" y="14"/></Size>
+                    <Anchors><Anchor point="TOP" relativeTo="$parentSkinName" relativePoint="BOTTOM"><Offset><AbsDimension x="0" y="-2"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <Button name="$parentSkin1" inherits="BenillaKartShopSkinTemplate" id="1">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="20" y="-56"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentSkin2" inherits="BenillaKartShopSkinTemplate" id="2">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="104" y="-56"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentSkin3" inherits="BenillaKartShopSkinTemplate" id="3">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="188" y="-56"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentSkin4" inherits="BenillaKartShopSkinTemplate" id="4">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="272" y="-56"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentSkin5" inherits="BenillaKartShopSkinTemplate" id="5">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="20" y="-138"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentSkin6" inherits="BenillaKartShopSkinTemplate" id="6">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="104" y="-138"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentSkin7" inherits="BenillaKartShopSkinTemplate" id="7">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="188" y="-138"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentSkin8" inherits="BenillaKartShopSkinTemplate" id="8">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="272" y="-138"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentSkin9" inherits="BenillaKartShopSkinTemplate" id="9">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="20" y="-220"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentSkin10" inherits="BenillaKartShopSkinTemplate" id="10">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="104" y="-220"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentSkin11" inherits="BenillaKartShopSkinTemplate" id="11">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="188" y="-220"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentSkin12" inherits="BenillaKartShopSkinTemplate" id="12">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="272" y="-220"/></Offset></Anchor></Anchors>
+            </Button>
+            <!-- The picked skin, drawn by the engine (kart/skins.rs, KartSkinPreview). -->
+            <PlayerModel name="$parentModel">
+                <Size><AbsDimension x="230" y="290"/></Size>
+                <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-32"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnLoad>Model_OnLoad()</OnLoad>
+                    <OnUpdate>Model_OnUpdate(arg1, this)</OnUpdate>
+                </Scripts>
+                <Frames>
+                    <Button name="$parentRotateLeftButton">
+                        <Size><AbsDimension x="35" y="35"/></Size>
+                        <Anchors><Anchor point="BOTTOMLEFT"/></Anchors>
+                        <Scripts>
+                            <OnLoad>this:RegisterForClicks("LeftButtonDown", "LeftButtonUp")</OnLoad>
+                            <OnClick>Model_RotateLeft(this:GetParent())</OnClick>
+                        </Scripts>
+                        <NormalTexture file="Interface\Buttons\UI-RotationLeft-Button-Up"/>
+                        <PushedTexture file="Interface\Buttons\UI-RotationLeft-Button-Down"/>
+                        <HighlightTexture file="Interface\Buttons\ButtonHilight-Round" alphaMode="ADD"/>
+                    </Button>
+                    <Button name="$parentRotateRightButton">
+                        <Size><AbsDimension x="35" y="35"/></Size>
+                        <Anchors><Anchor point="LEFT" relativeTo="$parentRotateLeftButton" relativePoint="RIGHT"/></Anchors>
+                        <Scripts>
+                            <OnLoad>this:RegisterForClicks("LeftButtonDown", "LeftButtonUp")</OnLoad>
+                            <OnClick>Model_RotateRight(this:GetParent())</OnClick>
+                        </Scripts>
+                        <NormalTexture file="Interface\Buttons\UI-RotationRight-Button-Up"/>
+                        <PushedTexture file="Interface\Buttons\UI-RotationRight-Button-Down"/>
+                        <HighlightTexture file="Interface\Buttons\ButtonHilight-Round" alphaMode="ADD"/>
+                    </Button>
+                </Frames>
+            </PlayerModel>
+            <Button name="$parentBuy" inherits="UIPanelButtonTemplate" text="Buy">
+                <Size><AbsDimension x="112" y="22"/></Size>
+                <Anchors><Anchor point="TOPLEFT" relativeTo="$parentModel" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-48"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartShop_Buy()</OnClick></Scripts>
+            </Button>
+            <Button name="$parentWear" inherits="UIPanelButtonTemplate" text="Wear">
+                <Size><AbsDimension x="112" y="22"/></Size>
+                <Anchors><Anchor point="TOPRIGHT" relativeTo="$parentModel" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-48"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartShop_Wear()</OnClick></Scripts>
+            </Button>
+            <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartShopFrame:Hide()</OnClick></Scripts>
+            </Button>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
+                BenillaKart_Movable(this)
+            </OnLoad>
+            <OnShow>
+                PlaySound("igMainMenuOpen")
+                BenillaKart_Send("Skins")
+                BenillaKartShop_Select(BenillaKartShop.selected)
+            </OnShow>
+            <OnHide>
+                PlaySound("igMainMenuClose")
+                SetCVar("KartSkinPreview", "0")
+            </OnHide>
             <OnDragStart>this:StartMoving()</OnDragStart>
             <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
         </Scripts>
@@ -4414,7 +4774,7 @@
     <!-- The Kartcraft menu (Options on the controller, KARTCRAFT_MENU): what racing needs, one
          entry each, for a player on the controller alone. -->
     <Frame name="BenillaKartMenuFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="280" y="448"/></Size>
+        <Size><AbsDimension x="280" y="474"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -4504,6 +4864,11 @@
             <Button name="$parentEntry14" inherits="UIPanelButtonTemplate" id="14">
                 <Size><AbsDimension x="220" y="22"/></Size>
                 <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-372"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry15" inherits="UIPanelButtonTemplate" id="15">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-398"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
             </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">

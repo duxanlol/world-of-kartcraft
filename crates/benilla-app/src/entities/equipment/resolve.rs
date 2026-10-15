@@ -482,7 +482,15 @@ pub(in crate::entities) fn resolve_equipment(
             }
         }
         // Helm and shoulders: a player's visible items, or an NPC's CreatureDisplayInfoExtra.
+        let npc = net_entity
+            .display_id
+            .and_then(|disp| creatures.as_deref()?.models.get(&disp))
+            .and_then(|dm| dm.npc_outfit(net_entity, Some(s)));
         let head_shoulder: Option<(u32, u32, u8, u8)> = match net_entity.kind {
+            // A player morphed into a character-model NPC wears the NPC's, as the NPC does.
+            EntityKind::Player | EntityKind::Unit if npc.is_some() => {
+                npc.map(|npc| (npc.equipment[0], npc.equipment[1], npc.race, npc.sex.min(1)))
+            }
             EntityKind::Player if char_component => {
                 let race = s.unit_race().unwrap_or(1);
                 let sex = s.unit_gender().unwrap_or(0).min(1);
@@ -499,11 +507,6 @@ pub(in crate::entities) fn resolve_equipment(
                 let shoulder = resolve(2);
                 Some((helm, shoulder, race, sex))
             }
-            EntityKind::Unit => net_entity
-                .display_id
-                .and_then(|disp| creatures.as_deref()?.models.get(&disp))
-                .and_then(|dm| dm.npc_appearance.as_ref())
-                .map(|npc| (npc.equipment[0], npc.equipment[1], npc.race, npc.sex.min(1))),
             _ => None,
         };
         if let Some((helm, shoulder, race, sex)) = head_shoulder {
