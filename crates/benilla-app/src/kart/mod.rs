@@ -409,9 +409,10 @@ fn update(
     arms.press(fire, controls.reverse);
     arms.camera = view.camera;
     arms.camera_fov = view.fov;
-    // Wumpa from the race's fruit, or all ten under Wumpa Juice.
+    // Wumpa from the race's fruit, or all ten under Wumpa Juice; counted only in a race with
+    // others, the one place crates give fruit (a time trial has none).
     let wumpa = if auras.juice { 10 } else { arms.wumpa() };
-    extras.wumpa = wumpa;
+    extras.wumpa = races.with_crates().then_some(wumpa);
     // A race's countdown holds the kart on the line, revving with the gas as CTR's does until
     // GO, which gives the revs their start boost (`ctr_kart::rev`); pinned there so a start on
     // a slope does not roll it back.

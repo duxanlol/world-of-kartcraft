@@ -57,8 +57,8 @@ pub struct HudExtras {
     pub lap: Option<(u8, u8)>,
     pub place: Option<u8>,
     pub ranks: Vec<String>,
-    /// Wumpa fruit held (10 is juiced).
-    pub wumpa: u8,
+    /// Wumpa fruit held (10 is juiced); `None` hides the counter, out of a race with its crates.
+    pub wumpa: Option<u8>,
     /// The item slot: `(heldItemID, count)` in CTR's ids, 0x10 the roulette; a count above 0
     /// draws the digit (`UI/UI_Weapon.c`).
     pub item: Option<(u8, u8)>,
@@ -229,8 +229,8 @@ pub fn draw(
             .meter
             .map(|(filled, _)| (((1.0 - filled) * 960.0).round() as u32, 960, 480)),
         jump: hud.jump.map(|(ms, _)| ms.max(0) as u32),
-        wumpa: Some(extras.wumpa),
-        juiced: extras.wumpa >= 10,
+        wumpa: extras.wumpa,
+        juiced: extras.wumpa.is_some_and(|w| w >= 10),
         lap: extras.lap,
         place: extras.place,
         item: extras.item,

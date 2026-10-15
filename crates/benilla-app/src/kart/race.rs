@@ -793,6 +793,12 @@ impl Races {
         (r.go_at.is_some() && !r.done).then_some(r.ground_types && !r.time_trial)
     }
 
+    /// Whether we are in a race with others, the one place crates give Wumpa fruit (a time
+    /// trial has none).
+    pub(crate) fn with_crates(&self) -> bool {
+        self.race.as_ref().is_some_and(|r| !r.time_trial)
+    }
+
     /// Whether we must hold on the line, in the kart or on foot (out of it for the grid's
     /// teleport until it comes back): a countdown is running, or a time trial waits for one,
     /// which the track browser's starts only once we are on its grid in the kart.
@@ -2433,6 +2439,19 @@ mod tests {
         assert!(!races.time_trial());
         assert_eq!(races.weapons_race(), Some(8), "a race has its weapons");
         assert!(!races.run().unwrap().time_trial);
+    }
+
+    #[test]
+    fn wumpa_count_only_in_a_race_with_others() {
+        let mut races = racer();
+        assert!(!races.with_crates(), "out of every race");
+        hear(&mut races, "L\t5\tRacer,Goblin", 1.0);
+        assert!(races.with_crates(), "a race with others");
+        hear(&mut races, "L\t7\tRacer", 2.0);
+        hear(&mut races, "TT\t7", 2.0);
+        assert!(!races.with_crates(), "a time trial has no crates");
+        hear(&mut races, "X", 3.0);
+        assert!(!races.with_crates(), "left");
     }
 
     #[test]

@@ -458,7 +458,7 @@ fn drive(
         demo.far_camera = !demo.far_camera;
     }
     let wumpa = if demo.juice { 10 } else { weapons.wumpa() };
-    extras.wumpa = wumpa;
+    extras.wumpa = Some(wumpa);
     extras.item = weapons.hud_item();
     let mods = Modifiers {
         wumpa,
