@@ -1396,7 +1396,7 @@ namespace Kartcraft
         return player->HasItemCount(DELIVERY_PACKAGE, 1);
     }
 
-    static std::string Clock(uint32 seconds)
+    static std::string DeliveryClock(uint32 seconds)
     {
         char text[16];
         std::snprintf(text, sizeof(text), "%u:%02u", seconds / 60, seconds % 60);
@@ -1452,7 +1452,7 @@ namespace Kartcraft
         }
         ChatHandler(player->GetSession()).PSendSysMessage(
             "Delivery to %s: beat %s for %u bonus tokens. It goes by kart: no flight paths, hearthstones, "
-            "portals or Kartcraft teleports until it's delivered.", d->to, Clock(d->par).c_str(), DELIVERY_BONUS);
+            "portals or Kartcraft teleports until it's delivered.", d->to, DeliveryClock(d->par).c_str(), DELIVERY_BONUS);
         SendDeliveryTimer(player, *d, 0);
     }
 
@@ -1487,13 +1487,13 @@ namespace Kartcraft
                 if (Item* item = player->StoreNewItem(dest, DELIVERY_TOKEN, true))
                     player->SendNewItem(item, DELIVERY_BONUS, true, false);
                 chat.PSendSysMessage("Delivered in %s, under par (%s): %u bonus tokens!",
-                    Clock(seconds).c_str(), Clock(d->par).c_str(), DELIVERY_BONUS);
+                    DeliveryClock(seconds).c_str(), DeliveryClock(d->par).c_str(), DELIVERY_BONUS);
             }
             else
                 chat.SendSysMessage("Delivered under par, but your bags had no room for the bonus tokens.");
         }
         else if (seconds)
-            chat.PSendSysMessage("Delivered in %s (par %s).", Clock(seconds).c_str(), Clock(d->par).c_str());
+            chat.PSendSysMessage("Delivered in %s (par %s).", DeliveryClock(seconds).c_str(), DeliveryClock(d->par).c_str());
         SendLine(player, "KARTCRAFT\tR\tDel-");
     }
 
