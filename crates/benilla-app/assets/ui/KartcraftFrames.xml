@@ -4774,7 +4774,7 @@
     <!-- The Kartcraft menu (Options on the controller, KARTCRAFT_MENU): what racing needs, one
          entry each, for a player on the controller alone. -->
     <Frame name="BenillaKartMenuFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="280" y="448"/></Size>
+        <Size><AbsDimension x="280" y="474"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -4864,6 +4864,11 @@
             <Button name="$parentEntry14" inherits="UIPanelButtonTemplate" id="14">
                 <Size><AbsDimension x="220" y="22"/></Size>
                 <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-372"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry15" inherits="UIPanelButtonTemplate" id="15">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-398"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
             </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">

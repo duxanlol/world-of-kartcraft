@@ -3388,3 +3388,25 @@ fn the_skin_shop_sells_what_the_server_sells() {
     assert_eq!(client.len(), 10, "the shop's ten skins");
     assert_eq!(client, server);
 }
+
+/// Every entry of the Kartcraft menu has its button: two branches each adding an entry and the
+/// same next button merge into one button short.
+#[test]
+fn every_kartcraft_menu_entry_has_a_button() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let s = loaded();
+    let missing: Vec<i64> = s
+        .eval(
+            "local out = {} for i = 1, table.getn(BENILLA_KART_MENU) do \
+             if not getglobal('BenillaKartMenuFrameEntry' .. i) then table.insert(out, i) end end \
+             return out",
+        )
+        .unwrap();
+    assert!(
+        missing.is_empty(),
+        "menu entries without a button: {missing:?}"
+    );
+}
