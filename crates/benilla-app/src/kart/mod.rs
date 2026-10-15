@@ -683,7 +683,16 @@ pub(crate) fn plugin(app: &mut App) {
         .add_observer(pad_choice::on_cvar)
         .init_resource::<skins::SkinPreview>()
         .add_observer(skins::on_cvar)
-        .add_systems(Update, (skins::update, crate::ui_kart::skin_yaw))
+        // The shop's preview unit stood up (after the wire's own units land), then the pane's yaw
+        // read once clicks are in (after the VM's tick), both before the booth bakes them.
+        .add_systems(
+            Update,
+            (skins::update, crate::ui_kart::skin_yaw)
+                .chain()
+                .after(crate::net::apply_net_updates)
+                .after(crate::ui_script::UiInput)
+                .before(crate::portrait::SkinBoothSet),
+        )
         .add_systems(
             Startup,
             (kartcraft::hud::spawn, |_: Commands| {

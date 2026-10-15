@@ -365,6 +365,11 @@ impl Default for PetDollBooth {
     }
 }
 
+/// The skin shop booth's bake: its feeds (`crate::kart::skins`, `crate::ui_kart::skin_yaw`) run
+/// before it.
+#[derive(SystemSet, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct SkinBoothSet;
+
 /// The skin shop pane's yaw and unit, a hidden local one wearing the picked skin
 /// (`crate::kart::skins`); `None` empties the booth.
 #[derive(Resource)]
@@ -813,7 +818,7 @@ impl Plugin for PortraitPlugin {
                     // The stand-in must exist before the booth mirrors it.
                     sync_stable_standin,
                     sync_stable_booth,
-                    sync_skin_booth,
+                    sync_skin_booth.in_set(SkinBoothSet),
                     // The scene before the character standing in it: they commit as one pair
                     // (`glue_booth::PendingSwap`), and the booth reads the stage off the scene.
                     glue_booth::sync_glue_scene,
