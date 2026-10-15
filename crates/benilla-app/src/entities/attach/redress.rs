@@ -118,7 +118,12 @@ pub(in crate::entities) fn redress_player_looks(
             continue;
         };
 
-        let worn = resolve_worn_equip(net, Some(live), Some(dm));
+        let worn = resolve_worn_equip(
+            net,
+            Some(live),
+            Some(dm),
+            stores.get(entity).ok().map(|s| &s.0),
+        );
         let look = resolve_char_look(net, Some(dm), entity, &stores);
         // A re-dress is the reference's incremental composite (`0x47789c`–`0x4778c3`): the new
         // geosets apply at once and the atlas composites that frame when its sections are
