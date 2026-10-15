@@ -356,6 +356,59 @@
             end
         end
 
+        -- The controller in the Race Finder, as in the track browser: the D-pad moves a cursor
+        -- down "Any course", the courses and the hosted races (L1 and R1 a page), the list
+        -- following it; Cross ticks the course under it or joins the race; Start finds a race,
+        -- or leaves the queue; Circle closes (or minimizes, queued).
+        BENILLA_KART_FINDER_PAD_STEPS = { PADDUP = -1, PADDDOWN = 1,
+            PADLSHOULDER = -BENILLA_KART_ROWS, PADRSHOULDER = BENILLA_KART_ROWS }
+        function BenillaKartFinder_Pad(key)
+            local f = BenillaKartFinder
+            local list = BenillaKartFinder_Shown()
+            local n = table.getn(list)
+            local lobbies = math.min(table.getn(BenillaKartLobby.races), BENILLA_KART_LOBBY_ROWS)
+            local at = math.max(0, math.min(f.padAt or 0, n + lobbies))
+            local step = BENILLA_KART_FINDER_PAD_STEPS[key]
+            if step then
+                at = math.max(0, math.min(n + lobbies, at + step))
+            elseif key == "PAD1" then
+                if at == 0 then
+                    BenillaKartFinder_Pick(nil)
+                elseif at <= n then
+                    BenillaKartFinder_Pick(list[at].key)
+                else
+                    BenillaKartLobby_Join(getglobal("BenillaKartFinderFrameLobby" .. (at - n)))
+                end
+            elseif key == "PADFORWARD" then
+                BenillaKartFinder_QueueClick()
+            elseif key == "PAD2" then
+                BenillaKartFinderFrameClose:Click()
+                return
+            end
+            f.padAt = at
+            -- A course under the cursor into view, at the list's top or bottom edge.
+            if at >= 1 and at <= n then
+                local bar = getglobal("BenillaKartFinderFrameScrollScrollBar")
+                local offset = FauxScrollFrame_GetOffset and FauxScrollFrame_GetOffset(BenillaKartFinderFrameScroll) or 0
+                if bar and at <= offset then
+                    bar:SetValue((at - 1) * BENILLA_KART_ROW_HEIGHT)
+                elseif bar and at > offset + BENILLA_KART_ROWS then
+                    bar:SetValue((at - BENILLA_KART_ROWS) * BENILLA_KART_ROW_HEIGHT)
+                end
+            end
+            BenillaKartFinder_Refresh()
+            local item = BenillaKartFinderFrameAny
+            if at >= 1 and at <= n then
+                for i = 1, BENILLA_KART_ROWS do
+                    local row = getglobal("BenillaKartFinderFrameRow" .. i)
+                    if row.key == list[at].key then item = row end
+                end
+            elseif at > n then
+                item = getglobal("BenillaKartFinderFrameLobby" .. (at - n) .. "Join")
+            end
+            BenillaPad_Show(item)
+        end
+
         -- BENILLA_KART_COURSE_NAMES: every course, one "key<TAB>name" a line.
         function BenillaKartCourseNames_Set(list)
             BenillaKartCourseNames = {}
@@ -1182,18 +1235,45 @@
         -- boxes and sliders, moved between by the D-pad where they stand on screen. A list that
         -- scrolls by the wheel scrolls when the D-pad runs past its end; L1 and R1 turn a window's
         -- pages. A window with `buttons` answers the pad itself: that function takes every press.
+        -- `legend` is what the window's controller guide says under it (BenillaPadLegend_Update);
+        -- without one, the guide says how the D-pad, Cross and Circle drive it.
         BENILLA_PAD_WINDOWS = {
             { name = "BenillaKartMenuFrame" },
-            { name = "BenillaKartTracksFrame", buttons = "BenillaKartTrackBrowser_Pad" },
-            { name = "BenillaKartFinderFrame", wheel = "BenillaKartFinder_OnMouseWheel" },
+            { name = "BenillaKartTracksFrame", buttons = "BenillaKartTrackBrowser_Pad",
+              legend = "D-pad: pick a track    L1 / R1: page\nCross / A: time trial    Square / X: marshal\nTriangle / Y: map    Select: rate    Circle / B: close" },
+            { name = "BenillaKartFinderFrame", buttons = "BenillaKartFinder_Pad",
+              legend = "D-pad: move    L1 / R1: page    Cross / A: tick or join\nStart: find race (again: leave the queue)    Circle / B: close" },
             { name = "BenillaKartGarageFrame" },
             { name = "BenillaKartSettingsFrame" },
             { name = "BenillaKartCameraFrame" },
-            { name = "BenillaKartGuideFrame", page = "BenillaKartGuide_Turn" },
+            { name = "BenillaKartGuideFrame", page = "BenillaKartGuide_Turn",
+              legend = "L1 / R1: turn the page    D-pad: move    Cross / A: choose    Circle / B: close" },
             { name = "BenillaKartPadFrame" },
             { name = "BenillaKartReplaysFrame" },
             { name = "BenillaKartRateFrame" },
         }
+        BENILLA_PAD_LEGEND = "D-pad: move    Cross / A: choose    Circle / B: close"
+
+        -- The controller's guide under the window it drives, while a controller is connected
+        -- (KartPads): what each button does there. Hidden with no such window.
+        function BenillaPadLegend_Update(frame, w)
+            local legend = BenillaPadLegendFrame
+            if not legend then return end
+            if not frame or (GetCVar("KartPads") or "") == "" then
+                legend:Hide()
+                return
+            end
+            local text = w.legend or BENILLA_PAD_LEGEND
+            if legend.window ~= frame or BenillaPadLegendFrameText:GetText() ~= text then
+                legend.window = frame
+                BenillaPadLegendFrameText:SetText(text)
+                legend:SetWidth(math.max(frame:GetWidth(), 240))
+                legend:SetHeight(BenillaPadLegendFrameText:GetHeight() + 16)
+                legend:ClearAllPoints()
+                legend:SetPoint("TOP", frame, "BOTTOM", 0, 2)
+            end
+            legend:Show()
+        end
         -- The popups the controller answers, and with which buttons: the first button's, then
         -- the second's. The way back after a race is Triangle and Square, so the Cross still held
         -- from driving (or a Circle meant to fire) answers nothing; while it is up neither drives.
@@ -1360,7 +1440,8 @@
         -- a window is up (the kart coasts), Cross and Circle while a popup is. It also lets the
         -- highlight go with a window closed by the mouse.
         function BenillaPad_Owns()
-            local frame = BenillaPad_Window()
+            local frame, w = BenillaPad_Window()
+            BenillaPadLegend_Update(frame, w)
             if not frame and BenillaPad.focus then
                 BenillaPad.window = nil
                 BenillaPad_Show(nil)
@@ -3549,7 +3630,7 @@
 
     <!-- Over the world map, which it opens, so another track can be picked with the map up. -->
     <Frame name="BenillaKartTracksFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="FULLSCREEN_DIALOG">
-        <Size><AbsDimension x="340" y="556"/></Size>
+        <Size><AbsDimension x="340" y="526"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="-220" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -3572,12 +3653,6 @@
                     <Size><AbsDimension x="256" y="64"/></Size>
                     <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
                 </Texture>
-                <!-- The controller's buttons here (BenillaKartTrackBrowser_Pad). -->
-                <FontString name="$parentPadHint" inherits="GameFontDisableSmall" justifyH="CENTER"
-                    text="Controller: D-pad picks a track. Cross / A time trial, Square / X marshal, Triangle / Y map, Select rates, Circle / B closes.">
-                    <Size><AbsDimension x="300" y="26"/></Size>
-                    <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="16"/></Offset></Anchor></Anchors>
-                </FontString>
                 <FontString inherits="GameFontNormal" text="Tracks">
                     <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
                 </FontString>
@@ -3648,29 +3723,29 @@
             <!-- A time trial on the track shown, from anywhere (BenillaKartTrackBrowser_TimeTrial). -->
             <Button name="$parentTrial" inherits="UIPanelButtonTemplate" text="Time trial">
                 <Size><AbsDimension x="140" y="22"/></Size>
-                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="76"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="46"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartTrackBrowser_TimeTrial()</OnClick></Scripts>
             </Button>
             <!-- To the track's Race Marshal (BenillaKartTrackBrowser_ToMarshal). -->
             <Button name="$parentMarshal" inherits="UIPanelButtonTemplate" text="Go to marshal">
                 <Size><AbsDimension x="140" y="22"/></Size>
-                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="104"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="74"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartTrackBrowser_ToMarshal()</OnClick></Scripts>
             </Button>
             <Button name="$parentShow" inherits="UIPanelButtonTemplate" text="Show on map">
                 <Size><AbsDimension x="140" y="22"/></Size>
-                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="48"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="18"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartRoute_Show(BenillaKartTrackBrowser.selected)</OnClick></Scripts>
             </Button>
             <!-- Rate the track shown, or change a rating (the server takes one from a racer of it). -->
             <Button name="$parentRate" inherits="UIPanelButtonTemplate" text="Rate track">
                 <Size><AbsDimension x="120" y="22"/></Size>
-                <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-24" y="76"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-24" y="46"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartRate_Ask(BenillaKartTrackBrowser.selected)</OnClick></Scripts>
             </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>
-                <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-24" y="48"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-24" y="18"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartTracksFrame:Hide()</OnClick></Scripts>
             </Button>
         </Frames>
@@ -4159,6 +4234,29 @@
     </Frame>
 
     <!-- The controller's highlight: an arrow at the focused control's left (BenillaPad_Show). -->
+    <!-- The controller's guide under the window it drives (BenillaPadLegend_Update). -->
+    <Frame name="BenillaPadLegendFrame" parent="UIParent" hidden="true" frameStrata="DIALOG">
+        <Size><AbsDimension x="320" y="40"/></Size>
+        <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+            <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>
+            <TileSize><AbsValue val="16"/></TileSize>
+            <EdgeSize><AbsValue val="16"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentText" inherits="GameFontHighlightSmall" justifyH="CENTER">
+                    <Anchors>
+                        <Anchor point="TOPLEFT"><Offset><AbsDimension x="8" y="-8"/></Offset></Anchor>
+                        <Anchor point="TOPRIGHT"><Offset><AbsDimension x="-8" y="-8"/></Offset></Anchor>
+                    </Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Scripts>
+            <OnLoad>this:SetBackdropColor(0, 0, 0, 0.85)</OnLoad>
+        </Scripts>
+    </Frame>
+
     <Frame name="BenillaPadCursor" parent="UIParent" hidden="true" frameStrata="TOOLTIP">
         <Size><AbsDimension x="20" y="20"/></Size>
         <Layers>

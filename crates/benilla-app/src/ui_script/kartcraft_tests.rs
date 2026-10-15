@@ -2853,6 +2853,118 @@ fn the_kart_s_shortcuts_show_in_the_kart_out_of_a_race_and_open_their_windows() 
 }
 
 #[test]
+fn the_controller_moves_down_the_race_finder_ticks_with_cross_and_queues_with_start() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 12);
+    let press = |s: &mut UiScript, key: &str| -> bool {
+        s.eval(&format!("return BenillaPad_OnButton('{key}') == true"))
+            .unwrap()
+    };
+    let focus = |s: &UiScript| -> String {
+        s.eval("return BenillaPad.focus and BenillaPad.focus:GetName() or ''")
+            .unwrap()
+    };
+    let picked = |s: &UiScript, key: &str| -> bool {
+        s.eval(&format!("return BenillaKartFinder.picked['{key}'] == 1"))
+            .unwrap()
+    };
+    s.run("BenillaKart_Open(BenillaKartFinderFrame)").unwrap();
+    s.tick(0.0);
+    sent(&mut s);
+
+    // The cursor starts on "Any course" and goes down the courses.
+    assert!(press(&mut s, "PADDUP"));
+    assert_eq!(focus(&s), "BenillaKartFinderFrameAny");
+    press(&mut s, "PADDDOWN");
+    assert_eq!(focus(&s), "BenillaKartFinderFrameRow1");
+    press(&mut s, "PADDDOWN");
+    assert_eq!(focus(&s), "BenillaKartFinderFrameRow2");
+    // Cross ticks the course under it, again unticks.
+    press(&mut s, "PAD1");
+    assert!(picked(&s, "elwynn"), "Cross ticks Elwynn Loop");
+    press(&mut s, "PAD1");
+    assert!(!picked(&s, "elwynn"));
+    press(&mut s, "PAD1");
+    // R1 a page down: the list follows the cursor, which stays on a shown row.
+    press(&mut s, "PADRSHOULDER");
+    let at = focus(&s);
+    assert!(at.starts_with("BenillaKartFinderFrameRow"), "{at}");
+    assert!(s
+        .eval::<bool>("return BenillaPad.focus:IsVisible() == 1")
+        .unwrap());
+    // Start finds a race on the ticked course, and again leaves the queue.
+    press(&mut s, "PADFORWARD");
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tQ+\telwynn"]);
+    press(&mut s, "PADFORWARD");
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tQ-"]);
+
+    // A hosted race under the courses: the cursor reaches its Join, Cross joins it.
+    s.run("BenillaKartLobby_Set('', '9:elwynn:Goblin:2') BenillaKartFinder_Refresh()")
+        .unwrap();
+    for _ in 0..20 {
+        press(&mut s, "PADDDOWN");
+    }
+    assert_eq!(focus(&s), "BenillaKartFinderFrameLobby1Join");
+    press(&mut s, "PAD1");
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tLJ\t9"]);
+    // Circle closes it.
+    press(&mut s, "PAD2");
+    assert!(!s
+        .eval::<bool>("return BenillaKartFinderFrame:IsVisible() == 1")
+        .unwrap());
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+#[test]
+fn a_controller_guide_shows_under_the_window_the_pad_drives() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    tracks(&mut s);
+    let legend = |s: &mut UiScript| -> (bool, String) {
+        s.eval::<String>("return BenillaPad_Owns()").unwrap();
+        (
+            s.eval("return BenillaPadLegendFrame:IsVisible() == 1")
+                .unwrap(),
+            s.eval("return BenillaPadLegendFrameText:GetText() or ''")
+                .unwrap(),
+        )
+    };
+    // No controller connected: no guide.
+    s.run("SetCVar('KartPads', '') BenillaKartTrackBrowser_Open()")
+        .unwrap();
+    assert!(!legend(&mut s).0);
+    // One connected: the window's own guide under it.
+    s.run("SetCVar('KartPads', '1|Wireless Controller')")
+        .unwrap();
+    let (shown, text) = legend(&mut s);
+    assert!(shown);
+    assert!(text.contains("Cross / A: time trial"), "{text}");
+    // Another window, its guide; the menu's the plain one.
+    s.run("BenillaKartTracksFrame:Hide() BenillaKart_Open(BenillaKartFinderFrame)")
+        .unwrap();
+    assert!(legend(&mut s).1.contains("Start: find race"));
+    s.run("BenillaKartFinderFrame:Hide() BenillaKartMenu_Toggle()")
+        .unwrap();
+    let (shown, text) = legend(&mut s);
+    assert!(shown);
+    assert_eq!(
+        text,
+        "D-pad: move    Cross / A: choose    Circle / B: close"
+    );
+    // No window the pad drives: no guide.
+    s.run("BenillaKartMenuFrame:Hide()").unwrap();
+    assert!(!legend(&mut s).0);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+#[test]
 fn the_controller_picks_a_track_with_the_d_pad_and_acts_with_a_face_button() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK
