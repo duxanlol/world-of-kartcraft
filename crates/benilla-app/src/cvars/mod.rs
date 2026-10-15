@@ -2300,6 +2300,10 @@ mod tests {
                 "the layer's KartcraftFrames.xml shows or hides its minimap button by it",
             ),
             (
+                "KartShortcuts",
+                "the layer's KartcraftFrames.xml shows or hides the kart's shortcut bar by it",
+            ),
+            (
                 "KartMinimapAngle",
                 "the layer's KartcraftFrames.xml places its minimap button on the ring by it",
             ),

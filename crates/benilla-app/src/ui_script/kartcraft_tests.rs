@@ -2799,7 +2799,7 @@ fn the_kart_s_shortcuts_show_in_the_kart_out_of_a_race_and_open_their_windows() 
     assert_eq!(
         s.eval::<String>("return BenillaKartShortcutsFrameHint:GetText()")
             .unwrap(),
-        "Drag to move"
+        "Drag to move, right-click to hide"
     );
     assert_eq!(
         s.eval::<String>("local p = BenillaKartShortcutsFrame:GetPoint(1) return p")
@@ -2822,6 +2822,34 @@ fn the_kart_s_shortcuts_show_in_the_kart_out_of_a_race_and_open_their_windows() 
     // Out of the kart: gone.
     seated(&mut s, false);
     assert!(!shown(&s, "BenillaKartShortcutsFrame"));
+
+    // A right-click hides it for good, said in chat; the settings' box brings it back.
+    seated(&mut s, true);
+    s.run("arg1 = 'RightButton' BenillaKartShortcutsFrame:GetScript('OnMouseUp')() arg1 = nil")
+        .unwrap();
+    assert!(
+        !shown(&s, "BenillaKartShortcutsFrame"),
+        "hidden by its right-click"
+    );
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartShortcuts')").unwrap(),
+        "0"
+    );
+    seated(&mut s, false);
+    seated(&mut s, true);
+    assert!(
+        !shown(&s, "BenillaKartShortcutsFrame"),
+        "and stays hidden in the kart"
+    );
+    s.run(
+        "BenillaKartSettingsFrame:Show() BenillaKartSettingsFrameShortcuts:SetChecked(1)          BenillaKartSettings_Check(BenillaKartSettingsFrameShortcuts, 'KartShortcuts')",
+    )
+    .unwrap();
+    assert!(
+        shown(&s, "BenillaKartShortcutsFrame"),
+        "the box brings it back"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
 #[test]

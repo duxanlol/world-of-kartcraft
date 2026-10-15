@@ -1019,6 +1019,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "1",
         "Kartcraft's own — its minimap button; 1.12 has no kart",
     ),
+    // The kart's Time trial and Race Finder bar, shown in the kart out of a race.
+    ours(
+        "KartShortcuts",
+        "1",
+        "Kartcraft's own — the kart's shortcut bar; 1.12 has no kart",
+    ),
     ours(
         "KartMinimapAngle",
         "190",

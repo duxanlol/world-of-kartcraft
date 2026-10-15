@@ -1733,9 +1733,17 @@
         -- climbing out puts them away.
         BenillaKartShortcuts = {}
 
+        -- Hidden for good (KartShortcuts), off its own right-click or the settings' box, which
+        -- brings it back.
+        function BenillaKartShortcuts_Hide()
+            SetCVar("KartShortcuts", "0")
+            BenillaKartShortcuts_Update()
+            BenillaKart_Say("The kart shortcut bar is hidden: Kartcraft settings brings it back.")
+        end
+
         function BenillaKartShortcuts_Update()
             local s = BenillaKartShortcuts
-            if s.seated and not s.racing then
+            if s.seated and not s.racing and GetCVar("KartShortcuts") ~= "0" then
                 BenillaKartShortcutsFrame:Show()
             else
                 BenillaKartShortcutsFrame:Hide()
@@ -2040,6 +2048,7 @@
             BenillaKartSettingsFrameTerrain:SetChecked(BenillaKart_Flag("KartTerrain"))
             BenillaKartSettingsFrameRumble:SetChecked(BenillaKart_Flag("KartRumble"))
             BenillaKartSettingsFrameWowVoices:SetChecked(BenillaKart_Flag("KartWowVoices"))
+            BenillaKartSettingsFrameShortcuts:SetChecked(BenillaKart_Flag("KartShortcuts"))
             BenillaKartSettingsFrameGateHeight:SetValue(tonumber(GetCVar("KartGateHeight")) or 8)
             frame.refreshing = nil
         end
@@ -2054,6 +2063,7 @@
                 PlaySound("igMainMenuOptionCheckBoxOff")
             end
             if cvar == "KartMinimapButton" then BenillaKartMinimap_Apply() end
+            if cvar == "KartShortcuts" then BenillaKartShortcuts_Update() end
         end
 
         -- A slider's CVar, two decimals.
@@ -2932,7 +2942,7 @@
     <!-- The settings: the guide arrow, the camera, the music, the minimap button, the ghost and
          the ground types, each a CVar set as it is clicked, as the stock option boxes are. -->
     <Frame name="BenillaKartSettingsFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="320" y="728"/></Size>
+        <Size><AbsDimension x="320" y="756"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -3056,6 +3066,9 @@
             <Frame name="$parentPad" inherits="UIDropDownMenuTemplate">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="8" y="-644"/></Offset></Anchor></Anchors>
             </Frame>
+            <CheckButton name="$parentShortcuts" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-680"/></Offset></Anchor></Anchors>
+            </CheckButton>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>
                 <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
@@ -3075,6 +3088,7 @@
                     { "Terrain", "KartTerrain", "Ground types slow you off-road (CTR)" },
                     { "Rumble", "KartRumble", "Shake the controller on crashes" },
                     { "WowVoices", "KartWowVoices", "WoW character voices (off: CTR's racers)" },
+                    { "Shortcuts", "KartShortcuts", "Show the Time trial and Race Finder bar" },
                 }
                 for i = 1, table.getn(boxes) do
                     local box = getglobal(this:GetName() .. boxes[i][1])
@@ -3733,7 +3747,7 @@
         <Layers>
             <Layer level="ARTWORK">
                 <!-- It moves: said on it, where a player looks. -->
-                <FontString name="$parentHint" inherits="GameFontDisableSmall" text="Drag to move">
+                <FontString name="$parentHint" inherits="GameFontDisableSmall" text="Drag to move, right-click to hide">
                     <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-6"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
@@ -3757,6 +3771,7 @@
             </OnLoad>
             <OnDragStart>this:StartMoving()</OnDragStart>
             <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+            <OnMouseUp>if arg1 == "RightButton" then BenillaKartShortcuts_Hide() end</OnMouseUp>
         </Scripts>
     </Frame>
 
