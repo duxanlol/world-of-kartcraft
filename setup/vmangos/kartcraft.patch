@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..3928359
+index 0000000..b2d1b87
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,4729 @@
+@@ -0,0 +1,4725 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -1672,7 +1672,8 @@ index 0000000..3928359
 +    // ── Skins ──────────────────────────────────────────────────────────────────────────────────
 +    //
 +    // Famous NPCs' looks, bought with Kartcraft Tokens in the client's skin shop
-+    // (BenillaKartShopFrame, whose catalogue kartcraft_tests holds to this one) and worn as the
++    // (BenillaKartShopFrame, whose catalogue kartcraft_tests holds to this one; each a humanoid on
++    // a playable race's body, which sits in the kart: kart/seat.rs tests it) and worn as the
 +    // character's own body: the native display, so a form or a transform still shows over it and
 +    // gives it back, on foot and in the kart, to everyone. Owned and worn in kartcraft_skins.
 +
@@ -1694,12 +1695,7 @@ index 0000000..3928359
 +        { "tyrande", 7274, 100 },
 +        { "mekkatorque", 7006, 100 },
 +        { "vancleef", 2029, 100 },
-+        { "hogger", 384, 50 },
-+        { "kelthuzad", 15945, 250 },
 +    };
-+
-+    // ponytail: a giant's DBC scale (Kel'Thuzad's is 4) capped so the body still fits a kart.
-+    constexpr float SKIN_MAX_SCALE = 1.5f;
 +
 +    static Skin const* FindSkin(std::string const& key)
 +    {
@@ -1760,7 +1756,7 @@ index 0000000..3928359
 +        bool const morphed = shown != player->GetNativeDisplayId();
 +        if (skin)
 +        {
-+            player->SetObjectScale(std::min(Unit::GetScaleForDisplayId(skin->display), SKIN_MAX_SCALE));
++            player->SetObjectScale(Unit::GetScaleForDisplayId(skin->display));
 +            player->SetNativeDisplayId(skin->display);
 +            player->SetDisplayId(skin->display);
 +        }

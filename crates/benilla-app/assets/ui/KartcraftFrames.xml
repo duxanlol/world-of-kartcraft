@@ -2809,12 +2809,12 @@
             { key = "tyrande", name = "Tyrande Whisperwind", short = "Tyrande", display = 7274, price = 100, icon = "INV_Misc_Head_Elf_02" },
             { key = "mekkatorque", name = "High Tinker Mekkatorque", short = "Mekkatorque", display = 7006, price = 100, icon = "INV_Misc_Head_Gnome_01" },
             { key = "vancleef", name = "Edwin VanCleef", short = "VanCleef", display = 2029, price = 100, icon = "INV_Misc_Bandana_03" },
-            { key = "hogger", name = "Hogger", short = "Hogger", display = 384, price = 50, icon = "INV_Misc_Head_Gnoll_01" },
-            { key = "kelthuzad", name = "Kel'Thuzad", short = "Kel'Thuzad", display = 15945, price = 250, icon = "Spell_Shadow_RaiseDead" },
         }
         -- The picked cell, and the server's word: our tokens (nil before it answers), the skins we
         -- own (by key) and the one we wear ("" our own body).
         BenillaKartShop = { selected = 1, owned = {}, worn = "" }
+        -- The grid's cells (BenillaKartShopFrameSkin1..).
+        BENILLA_KART_SHOP_CELLS = 12
 
         function BenillaKartShop_Toggle()
             if BenillaKartShopFrame:IsVisible() then
@@ -2833,6 +2833,10 @@
         function BenillaKartShop_Refresh()
             local shop = BenillaKartShop
             BenillaKartShopFrameTokens:SetText("Kartcraft Tokens: " .. (shop.tokens or "?"))
+            -- The grid has room for more skins than are sold: the rest of it stays empty.
+            for i = table.getn(BENILLA_KART_SKINS) + 1, BENILLA_KART_SHOP_CELLS do
+                getglobal("BenillaKartShopFrameSkin" .. i):Hide()
+            end
             for i = 1, table.getn(BENILLA_KART_SKINS) do
                 local skin = BENILLA_KART_SKINS[i]
                 local cell = "BenillaKartShopFrameSkin" .. i

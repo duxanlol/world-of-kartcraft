@@ -358,6 +358,128 @@ mod tests {
         (1479, "TrollFemale"),
     ];
 
+    /// How one display sits in the kart as the game draws it (CTR's median seat at the host's
+    /// model size), in the kart's frame, meters: the pose played, its seat pose, how far the
+    /// pelvis lands from the seat, and the lowest foot bone and sole over the clip.
+    struct Sitting {
+        anim: u16,
+        pose: SeatPose,
+        pelvis_off: f32,
+        foot: f32,
+        sole: f32,
+    }
+
+    fn sit(
+        chain: &mut benilla_formats::Chain,
+        cat: &benilla_formats::CreatureCatalog,
+        display: u32,
+    ) -> Sitting {
+        let seat = kartcraft::model::MEDIAN_SEAT;
+        let kart = Transform::from_scale(Vec3::splat(
+            super::super::MODEL_SIZE / kartcraft::METERS_PER_YARD,
+        ));
+        let turn = super::super::driver_turn();
+        let raw = cat.model(display).expect("display").model_path;
+        let lower = raw.to_ascii_lowercase();
+        let path = lower
+            .strip_suffix(".mdx")
+            .map_or(lower.clone(), |s| format!("{s}.m2"));
+        let bytes = chain.read_file(&path).expect("model");
+        let skel = benilla_formats::parse_m2_skeleton(&bytes).expect("skeleton");
+        let ms = benilla_assets::model_skeleton(&skel);
+        let binds: Vec<Vec3> = ms.joints.iter().map(|j| j.local_translation).collect();
+        let parents: Vec<i16> = ms.joints.iter().map(|j| j.parent).collect();
+        let anims = benilla_formats::parse_m2_animations(&bytes);
+        let clip_of = |id: u16| {
+            anims
+                .iter()
+                .find(|a| a.anim_id == id)
+                .map(|a| (benilla_assets::pose_clip(a, &ms), a.duration))
+        };
+        let (stand, _) = clip_of(STAND).expect("Stand");
+        let (anim, (clip, duration)) = SEAT_ANIMS
+            .iter()
+            .find_map(|&id| Some((id, clip_of(id)?)))
+            .expect("a seat pose");
+        let f = fit(
+            &binds,
+            &parents,
+            &ms.key_bones,
+            &stand,
+            anim,
+            &clip,
+            duration,
+        )
+        .unwrap_or_else(|| panic!("display {display}: a pelvis and feet"));
+        let (at, rot) = place(&kart, seat, turn, Quat::IDENTITY, Some(&f), 1.0);
+        let body = Transform::from_translation(at).with_rotation(rot);
+        // Into the kart's frame, meters.
+        let to_kart = |p: Vec3| {
+            kart.compute_affine()
+                .inverse()
+                .transform_point3(body.transform_point(p))
+        };
+        let (pelvis_bone, feet) = pelvis_and_feet(&binds, &parents, &ms.key_bones, &stand).unwrap();
+        let pelvis = to_kart(posed_origins(&binds, &parents, &clip, 0.0)[pelvis_bone]);
+        // The lowest foot bone and the lowest sole beneath one, over the clip.
+        let (foot, sole) = (0..SAMPLES)
+            .flat_map(|s| {
+                let p = posed_origins(
+                    &binds,
+                    &parents,
+                    &clip,
+                    duration * s as f32 / SAMPLES as f32,
+                );
+                feet.iter()
+                    .map(move |&(i, depth)| (p[i], p[i] - Vec3::Y * depth))
+                    .collect::<Vec<_>>()
+            })
+            .map(|(bone, sole)| (to_kart(bone).y, to_kart(sole).y))
+            .fold((f32::INFINITY, f32::INFINITY), |(a, b), (f, s)| {
+                (a.min(f), b.min(s))
+            });
+        Sitting {
+            anim,
+            pose: seat_pose(&f, seat, turn, 1.0 / kart.scale.x),
+            pelvis_off: (pelvis - seat).length(),
+            foot,
+            sole,
+        }
+    }
+
+    /// Seated in the chair sit, its pelvis on CTR's seat, its lowest foot bone and sole over the
+    /// floor and nothing lifted: the body is in the kart, not standing in it.
+    fn assert_seated(label: &str, s: &Sitting) {
+        println!(
+            "{label:<15} {:>4} {:>7.1}° {:>6.3}m {:>8.3}m {:>8.3}m {:>8.3}m",
+            s.anim,
+            s.pose.recline.to_degrees(),
+            s.pose.lift,
+            s.pelvis_off,
+            s.foot,
+            s.sole
+        );
+        assert_eq!(s.anim, SIT_CHAIR_LOW, "{label} authors SitChairLow");
+        assert!(
+            s.foot >= FLOOR_CLEARANCE - 1e-3 && s.sole >= FLOOR_CLEARANCE - 1e-3,
+            "{label}: foot {} / sole {} under the floor",
+            s.foot,
+            s.sole
+        );
+        assert!(
+            s.pelvis_off < 0.05,
+            "{label}: pelvis {} off the seat",
+            s.pelvis_off
+        );
+        assert!(
+            s.pose.lift < 1e-3,
+            "{label}: lifted {} off the seat",
+            s.pose.lift
+        );
+    }
+
+    const HEADER: &str = "model           anim  recline    lift  pelvis_d    foot_y    sole_y";
+
     /// Every playable model authors the chair sit, and seated in a kart with it, its pelvis is on
     /// CTR's seat and its lowest foot bone over the floor. The placement is checked by posing the
     /// skeleton through the transform [`place`] gives, at every sample of the clip.
@@ -366,96 +488,33 @@ mod tests {
         let data = benilla_formats::wow_data_or_skip!();
         let mut chain = benilla_formats::open_chain(&data).expect("open chain");
         let cat = benilla_formats::load_creature_catalog(&mut chain).expect("creature catalog");
-        // The kart as the game draws it: CTR's median seat at the host's model size.
-        let seat = kartcraft::model::MEDIAN_SEAT;
-        let kart = Transform::from_scale(Vec3::splat(
-            super::super::MODEL_SIZE / kartcraft::METERS_PER_YARD,
-        ));
-        let turn = super::super::driver_turn();
-        println!(
-            "kart frame, meters; seat {seat}, floor 0\n{:<15} {:>4} {:>8} {:>7} {:>9} {:>9} {:>9} {:>9}",
-            "model", "anim", "recline", "lift", "pelvis_y", "pelvis_d", "foot_y", "sole_y"
-        );
+        println!("{HEADER}");
         for (display, label) in PLAYABLE {
-            let raw = cat.model(display).expect("display").model_path;
-            let lower = raw.to_ascii_lowercase();
-            let path = lower
-                .strip_suffix(".mdx")
-                .map_or(lower.clone(), |s| format!("{s}.m2"));
-            let bytes = chain.read_file(&path).expect("model");
-            let skel = benilla_formats::parse_m2_skeleton(&bytes).expect("skeleton");
-            let ms = benilla_assets::model_skeleton(&skel);
-            let binds: Vec<Vec3> = ms.joints.iter().map(|j| j.local_translation).collect();
-            let parents: Vec<i16> = ms.joints.iter().map(|j| j.parent).collect();
-            let anims = benilla_formats::parse_m2_animations(&bytes);
-            let clip_of = |id: u16| {
-                anims
-                    .iter()
-                    .find(|a| a.anim_id == id)
-                    .map(|a| (benilla_assets::pose_clip(a, &ms), a.duration))
-            };
-            let (stand, _) = clip_of(STAND).expect("Stand");
-            let (anim, (clip, duration)) = SEAT_ANIMS
-                .iter()
-                .find_map(|&id| Some((id, clip_of(id)?)))
-                .expect("a seat pose");
-            assert_eq!(anim, SIT_CHAIR_LOW, "{label} authors SitChairLow");
-            let f = fit(
-                &binds,
-                &parents,
-                &ms.key_bones,
-                &stand,
-                anim,
-                &clip,
-                duration,
-            )
-            .unwrap_or_else(|| panic!("{label}: a pelvis and feet"));
-            let (at, rot) = place(&kart, seat, turn, Quat::IDENTITY, Some(&f), 1.0);
-            let body = Transform::from_translation(at).with_rotation(rot);
-            // Into the kart's frame, meters.
-            let to_kart = |p: Vec3| {
-                kart.compute_affine()
-                    .inverse()
-                    .transform_point3(body.transform_point(p))
-            };
-            let (pelvis_bone, feet) =
-                pelvis_and_feet(&binds, &parents, &ms.key_bones, &stand).unwrap();
-            let pelvis = to_kart(posed_origins(&binds, &parents, &clip, 0.0)[pelvis_bone]);
-            // The lowest foot bone and the lowest sole beneath one, over the clip.
-            let (foot, sole) = (0..SAMPLES)
-                .flat_map(|s| {
-                    let p = posed_origins(
-                        &binds,
-                        &parents,
-                        &clip,
-                        duration * s as f32 / SAMPLES as f32,
-                    );
-                    feet.iter()
-                        .map(move |&(i, depth)| (p[i], p[i] - Vec3::Y * depth))
-                        .collect::<Vec<_>>()
-                })
-                .map(|(bone, sole)| (to_kart(bone).y, to_kart(sole).y))
-                .fold((f32::INFINITY, f32::INFINITY), |(a, b), (f, s)| {
-                    (a.min(f), b.min(s))
-                });
-            let pose = seat_pose(&f, seat, turn, 1.0 / kart.scale.x);
-            println!(
-                "{label:<15} {anim:>4} {:>7.1}° {:>6.3}m {:>8.3}m {:>8.3}m {:>8.3}m {:>8.3}m",
-                pose.recline.to_degrees(),
-                pose.lift,
-                pelvis.y,
-                (pelvis - seat).length(),
-                foot,
-                sole
-            );
-            assert!(
-                foot >= FLOOR_CLEARANCE - 1e-3 && sole >= FLOOR_CLEARANCE - 1e-3,
-                "{label}: foot {foot} / sole {sole} under the floor"
-            );
-            assert!(
-                (pelvis - seat).length() < 0.05,
-                "{label}: pelvis {pelvis} off the seat {seat}"
-            );
+            assert_seated(label, &sit(&mut chain, &cat, display));
+        }
+    }
+
+    /// Every skin the skin shop sells (`Kartcraft.cpp`'s `SKINS`) sits as a playable model does: a
+    /// creature model with no chair sit (a gnoll) would stand in the kart.
+    #[test]
+    fn every_skin_sits_in_the_kart() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let cat = benilla_formats::load_creature_catalog(&mut chain).expect("creature catalog");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let cpp = std::fs::read_to_string(root.join("setup/vmangos/src/Kartcraft.cpp")).unwrap();
+        let skins: Vec<(String, u32)> = cpp
+            .lines()
+            .filter_map(|l| {
+                let l = l.trim().strip_prefix("{ \"")?.strip_suffix(" },")?;
+                let (key, rest) = l.split_once("\", ")?;
+                Some((key.to_string(), rest.split_once(", ")?.0.parse().ok()?))
+            })
+            .collect();
+        assert!(!skins.is_empty(), "the server's SKINS");
+        println!("{HEADER}");
+        for (key, display) in skins {
+            assert_seated(&key, &sit(&mut chain, &cat, display));
         }
     }
 }

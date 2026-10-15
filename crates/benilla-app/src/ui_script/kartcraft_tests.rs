@@ -3290,7 +3290,11 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tSkins"]);
     assert_eq!(preview(&mut s), "3597");
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin1Name"), "Magni");
-    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin12Name"), "Kel'Thuzad");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin10Name"), "VanCleef");
+    // Ten skins: the grid's last two cells stay empty.
+    assert!(!s
+        .eval::<bool>("return BenillaKartShopFrameSkin11:IsVisible() == 1")
+        .unwrap());
     assert_eq!(
         text(&mut s, "BenillaKartShopFrameTokens"),
         "Kartcraft Tokens: ?"
@@ -3365,6 +3369,6 @@ fn the_skin_shop_sells_what_the_server_sells() {
             ))
         })
         .collect();
-    assert_eq!(client.len(), 12, "the shop's twelve cells");
+    assert_eq!(client.len(), 10, "the shop's ten skins");
     assert_eq!(client, server);
 }

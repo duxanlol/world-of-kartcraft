@@ -1584,7 +1584,8 @@ namespace Kartcraft
     // ── Skins ──────────────────────────────────────────────────────────────────────────────────
     //
     // Famous NPCs' looks, bought with Kartcraft Tokens in the client's skin shop
-    // (BenillaKartShopFrame, whose catalogue kartcraft_tests holds to this one) and worn as the
+    // (BenillaKartShopFrame, whose catalogue kartcraft_tests holds to this one; each a humanoid on
+    // a playable race's body, which sits in the kart: kart/seat.rs tests it) and worn as the
     // character's own body: the native display, so a form or a transform still shows over it and
     // gives it back, on foot and in the kart, to everyone. Owned and worn in kartcraft_skins.
 
@@ -1606,12 +1607,7 @@ namespace Kartcraft
         { "tyrande", 7274, 100 },
         { "mekkatorque", 7006, 100 },
         { "vancleef", 2029, 100 },
-        { "hogger", 384, 50 },
-        { "kelthuzad", 15945, 250 },
     };
-
-    // ponytail: a giant's DBC scale (Kel'Thuzad's is 4) capped so the body still fits a kart.
-    constexpr float SKIN_MAX_SCALE = 1.5f;
 
     static Skin const* FindSkin(std::string const& key)
     {
@@ -1672,7 +1668,7 @@ namespace Kartcraft
         bool const morphed = shown != player->GetNativeDisplayId();
         if (skin)
         {
-            player->SetObjectScale(std::min(Unit::GetScaleForDisplayId(skin->display), SKIN_MAX_SCALE));
+            player->SetObjectScale(Unit::GetScaleForDisplayId(skin->display));
             player->SetNativeDisplayId(skin->display);
             player->SetDisplayId(skin->display);
         }
