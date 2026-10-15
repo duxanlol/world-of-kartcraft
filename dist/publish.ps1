@@ -90,6 +90,8 @@ try {
     $env:KARTCRAFT_SERVER = $settings['SERVER']
     $env:KARTCRAFT_UPDATE_URL = $settings['UPDATE_URL']
     $env:KARTCRAFT_REGISTER_URL = $settings['REGISTER_URL']
+    # The testers' launcher installs apart from the players' (kartcraft-launcher's config.rs).
+    $env:KARTCRAFT_CHANNEL = $Channel
     cargo build --release -p kartcraft-launcher
     if ($LASTEXITCODE) { throw 'building the launcher failed' }
 } finally { Pop-Location }

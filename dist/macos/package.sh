@@ -49,12 +49,12 @@ build=1
 cfg="${PUBLISH_CFG:-$repo/.setup/publish.cfg}"
 
 # ── Presets ──────────────────────────────────────────────────────────────────────────────────────
-SERVER="" UPDATE_URL="" REGISTER_URL="" DEVELOPER_ID=""
+SERVER="" UPDATE_URL="" REGISTER_URL="" DEVELOPER_ID="" CHANNEL=""
 if [ -f "$cfg" ]; then
     while IFS='=' read -r key value; do
         value="${value%$'\r'}"
         case "$key" in
-        SERVER | UPDATE_URL | REGISTER_URL | DEVELOPER_ID) printf -v "$key" '%s' "$value" ;;
+        SERVER | UPDATE_URL | REGISTER_URL | DEVELOPER_ID | CHANNEL) printf -v "$key" '%s' "$value" ;;
         esac
     done <"$cfg"
 fi
@@ -73,6 +73,7 @@ if [ "$build" != 0 ]; then
         echo "== Building the launcher for $t (server ${SERVER:-none}) =="
         # The launcher carries the presets in itself: it is one file, with no defaults.cfg beside it.
         KARTCRAFT_SERVER="$SERVER" KARTCRAFT_UPDATE_URL="$UPDATE_URL" KARTCRAFT_REGISTER_URL="$REGISTER_URL" \
+            KARTCRAFT_CHANNEL="$CHANNEL" \
             cargo build --release --target "$t" -p kartcraft-launcher
     done
 fi
@@ -99,6 +100,11 @@ join ctr-extract ctr-extract
 join kartcraft-launcher "Kartcraft Launcher"
 
 version="${VERSION:-$(date +%Y.%m.%d-%H%M)}"
+# The testers' build is its own app: its own name and identifier, so it never takes the players'.
+app_title="World of Kartcraft" bundle_id="com.worldofkartcraft.client"
+if [ "$CHANNEL" = "staging" ]; then
+    app_title="World of Kartcraft Staging" bundle_id="com.worldofkartcraft.client.staging"
+fi
 # The launcher is the bundle's executable: a double-click opens it, and it starts the game.
 cat >"$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -110,13 +116,13 @@ cat >"$app/Contents/Info.plist" <<PLIST
 	<key>CFBundleExecutable</key>
 	<string>Kartcraft Launcher</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.worldofkartcraft.client</string>
+	<string>$bundle_id</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>World of Kartcraft</string>
+	<string>$app_title</string>
 	<key>CFBundleDisplayName</key>
-	<string>World of Kartcraft</string>
+	<string>$app_title</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

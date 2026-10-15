@@ -26,6 +26,7 @@ if [ -f "$cfg" ]; then
             SERVER) export KARTCRAFT_SERVER=$value ;;
             UPDATE_URL) export KARTCRAFT_UPDATE_URL=$value ;;
             REGISTER_URL) export KARTCRAFT_REGISTER_URL=$value ;;
+            CHANNEL) export KARTCRAFT_CHANNEL=$value ;;
         esac
     done <"$cfg"
 fi
@@ -38,7 +39,7 @@ mkdir -p "${CARGO_HOME:-$HOME/.cargo}/registry"
 docker run --rm --user "$(id -u):$(id -g)" \
     -v "$repo:/src" -v "${CARGO_HOME:-$HOME/.cargo}/registry:/usr/local/cargo/registry" -w /src \
     -e CARGO_TARGET_DIR=/src/target-appimage -e CARGO_BUILD_JOBS \
-    -e KARTCRAFT_SERVER -e KARTCRAFT_UPDATE_URL -e KARTCRAFT_REGISTER_URL \
+    -e KARTCRAFT_SERVER -e KARTCRAFT_UPDATE_URL -e KARTCRAFT_REGISTER_URL -e KARTCRAFT_CHANNEL \
     rust:1.98.1-bookworm cargo build --release -p kartcraft-launcher
 
 tool=${APPIMAGETOOL:-$(command -v appimagetool || true)}

@@ -44,13 +44,21 @@ pub const LAUNCHER: &str = "Kartcraft Launcher.AppImage";
 #[cfg(windows)]
 const NO_WINDOW: u32 = 0x0800_0000;
 
-/// The game's folder beside a launcher that is not in one.
+/// The game's folder beside a launcher that is not in one; the testers' apart from the players'.
 #[cfg(not(target_os = "macos"))]
-const GAME_FOLDER: &str = "WorldOfKartcraft";
+fn game_folder() -> &'static str {
+    if crate::config::staging() {
+        "WorldOfKartcraft Staging"
+    } else {
+        "WorldOfKartcraft"
+    }
+}
 
-/// The bundle's name, where it is installed.
+/// The bundle's name, where it is installed; the testers' apart from the players'.
 #[cfg(target_os = "macos")]
-const BUNDLE: &str = "World of Kartcraft.app";
+fn bundle_name() -> String {
+    format!("{}.app", crate::config::title())
+}
 
 /// The launcher's own file: in an AppImage the `.AppImage` the player runs.
 pub fn me() -> Option<PathBuf> {
@@ -90,7 +98,7 @@ pub fn root() -> PathBuf {
         if is_game_folder(&here) {
             here
         } else {
-            here.join(GAME_FOLDER)
+            here.join(game_folder())
         }
     }
     #[cfg(target_os = "macos")]
@@ -119,7 +127,7 @@ pub fn state() -> PathBuf {
             Some(home) => PathBuf::from(home)
                 .join("Library")
                 .join("Application Support")
-                .join("World of Kartcraft"),
+                .join(crate::config::title()),
             None => root(),
         }
     }
@@ -175,7 +183,7 @@ fn install_bundle() -> Option<i32> {
         unquarantine(&app);
         return None;
     }
-    let target = home.join("Applications").join(BUNDLE);
+    let target = home.join("Applications").join(bundle_name());
     if !target.is_dir() {
         if std::fs::create_dir_all(home.join("Applications")).is_err() {
             return None;
@@ -231,7 +239,7 @@ pub fn fatal(text: &str) {
     // A terminal sees it too, where a Linux desktop may have no dialog for it.
     eprintln!("{text}");
     rfd::MessageDialog::new()
-        .set_title("World of Kartcraft")
+        .set_title(crate::config::title())
         .set_description(text)
         .set_level(rfd::MessageLevel::Error)
         .show();

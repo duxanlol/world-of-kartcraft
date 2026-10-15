@@ -13,6 +13,24 @@ use std::path::{Path, PathBuf};
 pub const BUILT_SERVER: Option<&str> = option_env!("KARTCRAFT_SERVER");
 pub const BUILT_UPDATE_URL: Option<&str> = option_env!("KARTCRAFT_UPDATE_URL");
 pub const BUILT_REGISTER_URL: Option<&str> = option_env!("KARTCRAFT_REGISTER_URL");
+/// The release channel the launcher was built for (`KARTCRAFT_CHANNEL`): `staging` installs apart
+/// from the players' game, so a tester's staging launcher never picks up a production install's
+/// settings beside it ([`crate::install`]).
+pub const BUILT_CHANNEL: Option<&str> = option_env!("KARTCRAFT_CHANNEL");
+
+/// Whether this is the testers' launcher.
+pub fn staging() -> bool {
+    BUILT_CHANNEL == Some("staging")
+}
+
+/// The game's name as the launcher shows it and installs it: the testers' says so.
+pub fn title() -> &'static str {
+    if staging() {
+        "World of Kartcraft Staging"
+    } else {
+        "World of Kartcraft"
+    }
+}
 
 /// Mac builds have a manifest and files of their own, in `macos/` beside the Windows ones, so a
 /// Mac launcher never fetches a Windows file.

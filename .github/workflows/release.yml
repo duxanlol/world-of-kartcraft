@@ -154,7 +154,7 @@ jobs:
         run: |
           mkdir -p .setup
           printf 'SERVER=%s\nUPDATE_URL=%s\nREGISTER_URL=%s\n' "${{ vars.KARTCRAFT_SERVER }}" "${{ vars.KARTCRAFT_UPDATE_URL }}" "${{ vars.KARTCRAFT_REGISTER_URL }}" > .setup/production.cfg
-          printf 'SERVER=%s\nUPDATE_URL=%s\nREGISTER_URL=%s\n' "${{ vars.KARTCRAFT_STAGING_SERVER }}" "${{ vars.KARTCRAFT_STAGING_UPDATE_URL }}" "${{ vars.KARTCRAFT_STAGING_REGISTER_URL }}" > .setup/staging.cfg
+          printf 'SERVER=%s\nUPDATE_URL=%s\nREGISTER_URL=%s\nCHANNEL=staging\n' "${{ vars.KARTCRAFT_STAGING_SERVER }}" "${{ vars.KARTCRAFT_STAGING_UPDATE_URL }}" "${{ vars.KARTCRAFT_STAGING_REGISTER_URL }}" > .setup/staging.cfg
       - name: Package for staging
         run: PUBLISH_CFG=.setup/staging.cfg KARTCRAFT_OUT=dist/macos/out/staging dist/macos/package.sh
       - name: Package for production
@@ -194,7 +194,7 @@ jobs:
         run: |
           mkdir -p .setup
           printf 'SERVER=%s\nUPDATE_URL=%s\nREGISTER_URL=%s\n' "${{ vars.KARTCRAFT_SERVER }}" "${{ vars.KARTCRAFT_UPDATE_URL }}" "${{ vars.KARTCRAFT_REGISTER_URL }}" > .setup/production.cfg
-          printf 'SERVER=%s\nUPDATE_URL=%s\nREGISTER_URL=%s\n' "${{ vars.KARTCRAFT_STAGING_SERVER }}" "${{ vars.KARTCRAFT_STAGING_UPDATE_URL }}" "${{ vars.KARTCRAFT_STAGING_REGISTER_URL }}" > .setup/staging.cfg
+          printf 'SERVER=%s\nUPDATE_URL=%s\nREGISTER_URL=%s\nCHANNEL=staging\n' "${{ vars.KARTCRAFT_STAGING_SERVER }}" "${{ vars.KARTCRAFT_STAGING_UPDATE_URL }}" "${{ vars.KARTCRAFT_STAGING_REGISTER_URL }}" > .setup/staging.cfg
       - name: Package for staging
         run: PUBLISH_CFG=.setup/staging.cfg KARTCRAFT_OUT=dist/linux/out/staging dist/appimage.sh
       - name: Package for production

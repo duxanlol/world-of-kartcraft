@@ -74,7 +74,7 @@ pub fn run() -> eframe::Result<()> {
     let config = Config::load(&root, &state);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("World of Kartcraft")
+            .with_title(crate::config::title())
             // Linux's Proton row needs the room.
             .with_inner_size([
                 560.0,
@@ -89,7 +89,7 @@ pub fn run() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "World of Kartcraft",
+        crate::config::title(),
         options,
         Box::new(move |cc| {
             // Dark whatever the system is set to: the game and the website are.
@@ -369,7 +369,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.add_space(8.0);
             ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new("World of Kartcraft").size(28.0).strong().color(ORANGE));
+                ui.label(egui::RichText::new(crate::config::title()).size(28.0).strong().color(ORANGE));
             });
             ui.add_space(10.0);
 
