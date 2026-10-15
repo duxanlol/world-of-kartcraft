@@ -1,7 +1,7 @@
 //! World of Kartcraft's windows (`assets/ui/KartcraftFrames.xml`) on the production load: the
 //! minimap button and its menu, the Race Finder queuing and answering over the addon channel, the
 //! ready check as the stock popup, the kart's race and score events reaching their frames, the
-//! settings window writing its CVars, and the garage gating its classes by skill.
+//! settings window writing its CVars, and the garage's classes.
 
 use benilla_ui::script::{ScriptValue, UiScript};
 
@@ -1184,7 +1184,7 @@ fn garage(s: &mut UiScript, skill: u16) {
 }
 
 #[test]
-fn the_garage_opens_classes_by_skill_and_picks_a_kart() {
+fn the_garage_opens_every_class_and_picks_a_kart() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK
         .lock()
@@ -1197,7 +1197,7 @@ fn the_garage_opens_classes_by_skill_and_picks_a_kart() {
         s.eval(&format!("return {frame}:GetText()")).unwrap()
     };
 
-    // /garage opens it at the CVars, writing nothing: Turning ticked, the rest locked.
+    // /garage opens it at the CVars, writing nothing: Turning ticked, every class open.
     s.run("SlashCmdList['BENILLA_GARAGE']('')").unwrap();
     s.tick(0.0);
     assert!(eval_bool(&s, "BenillaKartGarageFrame:IsVisible() == 1"));
@@ -1222,42 +1222,24 @@ fn the_garage_opens_classes_by_skill_and_picks_a_kart() {
         text(&s, "BenillaKartGarageFrameClass1About"),
         "Speed 1/4, acceleration 3/4, turning 4/4"
     );
-    for (i, needs) in [(2, 75), (3, 150), (4, 225)] {
+    for i in 2..=4 {
         assert!(
-            !eval_bool(
+            eval_bool(
                 &s,
                 &format!("BenillaKartGarageFrameClass{i}:IsEnabled() == 1")
             ),
-            "class {i} is locked at skill 1"
+            "class {i} is open at skill 1"
         );
-        assert_eq!(
-            text(&s, &format!("BenillaKartGarageFrameClass{i}About")),
-            format!("Requires Karting ({needs})")
-        );
+        assert!(text(&s, &format!("BenillaKartGarageFrameClass{i}About")).starts_with("Speed "));
     }
     assert!(
         s.take_cvar_changes().is_empty(),
         "showing the garage wrote a CVar"
     );
 
-    // A locked class cannot be picked.
+    // The fastest class is picked at skill 1.
     s.run("BenillaKartGarage_PickClass(4)").unwrap();
-    assert_eq!(s.cvar("KartClass").as_deref(), Some("turn"));
-
-    // At 160 Balanced and Acceleration open; Speed stays locked.
-    garage(&mut s, 160);
-    assert_eq!(
-        text(&s, "BenillaKartGarageFrameSkill"),
-        "Karting skill: 160"
-    );
-    assert!(eval_bool(
-        &s,
-        "BenillaKartGarageFrameClass3:IsEnabled() == 1"
-    ));
-    assert!(!eval_bool(
-        &s,
-        "BenillaKartGarageFrameClass4:IsEnabled() == 1"
-    ));
+    assert_eq!(s.cvar("KartClass").as_deref(), Some("speed"));
     s.run("BenillaKartGarageFrameClass3:Click()").unwrap();
     assert_eq!(s.cvar("KartClass").as_deref(), Some("accel"));
     assert!(eval_bool(
@@ -1269,20 +1251,13 @@ fn the_garage_opens_classes_by_skill_and_picks_a_kart() {
         "BenillaKartGarageFrameClass1:GetChecked() == 1"
     ));
 
-    // At 300 everything is open.
-    garage(&mut s, 300);
-    assert!((1..=4).all(|i| eval_bool(
-        &s,
-        &format!("BenillaKartGarageFrameClass{i}:IsEnabled() == 1")
-    )));
+    // At any skill the pick is what the kart drives.
     s.run("BenillaKartGarageFrameClass4:Click()").unwrap();
-    assert_eq!(s.cvar("KartClass").as_deref(), Some("speed"));
-    // Back under 225 the pick stays, and the tick falls to what the kart drives.
-    garage(&mut s, 100);
+    garage(&mut s, 300);
     assert_eq!(s.cvar("KartClass").as_deref(), Some("speed"));
     assert!(eval_bool(
         &s,
-        "BenillaKartGarageFrameClass2:GetChecked() == 1"
+        "BenillaKartGarageFrameClass4:GetChecked() == 1"
     ));
 
     // The karts by racer, ours ticked; a click picks another, which the host hears.

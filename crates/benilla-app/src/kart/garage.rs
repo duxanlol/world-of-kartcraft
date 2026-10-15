@@ -1,18 +1,19 @@
-//! The kart garage: which engine class we drive and whose kart we drive it in. The class is earned
-//! with the Karting skill, at the profession tiers a 1.12 trade opens its ranks at: Turning from the
-//! start (the slowest kart, and the easiest to steer), then Balanced at 75, Acceleration at 150 and
-//! Speed at 225. Any racer's kart is free. Both are CVars the layer's garage window writes
+//! The kart garage: which engine class we drive and whose kart we drive it in. Every class is open
+//! from the start, Turning (the slowest kart, and the easiest to steer) picked first; the tiers
+//! keep a Karting skill each needs, all none now, so a class could be earned again. Any racer's
+//! kart is free. Both are CVars the layer's garage window writes
 //! (`KartClass`, `KartRacer`; [`super::settings`]); the class we drive is the one picked only if
 //! our skill has it, else the best one below it ([`effective`]).
 
 use kartcraft::Class;
 
-/// The classes in the order they open, with the Karting skill each needs.
+/// The classes in the garage's order, with the Karting skill each needs: none, every class is
+/// free to pick.
 pub(crate) const TIERS: [(Class, u16); 4] = [
     (Class::Turn, 0),
-    (Class::Balanced, 75),
-    (Class::Accel, 150),
-    (Class::Speed, 225),
+    (Class::Balanced, 0),
+    (Class::Accel, 0),
+    (Class::Speed, 0),
 ];
 
 /// Whether `skill` (none before the line is ours) has `class`.
@@ -93,32 +94,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_skill_opens_turning_then_balanced_acceleration_and_speed() {
+    fn every_class_is_open_from_the_start() {
         let open = |skill: Option<u16>| -> Vec<Class> {
             Class::ALL
                 .into_iter()
                 .filter(|&c| unlocked(c, skill))
                 .collect()
         };
-        assert_eq!(open(None), [Class::Turn]);
-        assert_eq!(open(Some(1)), [Class::Turn]);
-        assert_eq!(open(Some(74)), [Class::Turn]);
-        assert_eq!(open(Some(75)), [Class::Balanced, Class::Turn]);
-        assert_eq!(
-            open(Some(150)),
-            [Class::Balanced, Class::Accel, Class::Turn]
-        );
-        assert_eq!(open(Some(225)), Class::ALL);
+        assert_eq!(open(None), Class::ALL);
+        assert_eq!(open(Some(1)), Class::ALL);
         assert_eq!(open(Some(300)), Class::ALL);
     }
 
     #[test]
-    fn a_locked_class_falls_back_to_the_best_one_below_it() {
+    fn the_class_picked_is_the_class_driven() {
         assert_eq!(effective(Class::Speed, Some(300)), Class::Speed);
-        assert_eq!(effective(Class::Speed, Some(160)), Class::Accel);
-        assert_eq!(effective(Class::Speed, Some(80)), Class::Balanced);
-        assert_eq!(effective(Class::Accel, Some(10)), Class::Turn);
-        assert_eq!(effective(Class::Accel, None), Class::Turn);
+        assert_eq!(effective(Class::Speed, Some(1)), Class::Speed);
+        assert_eq!(effective(Class::Accel, None), Class::Accel);
         // Never above what was picked.
         assert_eq!(effective(Class::Turn, Some(300)), Class::Turn);
         assert_eq!(effective(Class::Balanced, Some(300)), Class::Balanced);
@@ -147,7 +139,7 @@ mod tests {
             lines[0],
             "turn\tTurning\t0\tSpeed 1/4, acceleration 3/4, turning 4/4"
         );
-        assert!(lines[3].starts_with("speed\tSpeed\t225\tSpeed 4/4"));
+        assert!(lines[3].starts_with("speed\tSpeed\t0\tSpeed 4/4"));
         assert_eq!(
             racer_list(&["crash", "coco"]),
             "crash\tCrash Bandicoot\ncoco\tCoco Bandicoot"

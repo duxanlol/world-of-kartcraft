@@ -1925,7 +1925,7 @@
                   action = "Open Race Finder", run = function() BenillaKartGuideFrame:Hide() BenillaKartFinder_Toggle() end },
                 { title = "Your kart",
                   text = "Pick any CTR racer's kart in the Kart Garage." .. NL .. NL ..
-                      "Boosts in a row make a turbo chain. Chains raise your Karting skill and give your character experience. The skill opens faster engine classes in the garage and kart abilities like Turbo Boost and Aku Aku, on keys 1 to 4 while you drive.",
+                      "Boosts in a row make a turbo chain. Chains raise your Karting skill and give your character experience. Every engine class is yours to pick in the garage; the skill opens kart abilities like Turbo Boost and Aku Aku, on keys 1 to 4 while you drive.",
                   action = "Open Kart Garage", run = function() BenillaKartGuideFrame:Hide() BenillaKartGarage_Toggle() end },
                 { title = "If you get stuck",
                   text = "/unstuck puts a wedged kart back on a course." .. NL ..

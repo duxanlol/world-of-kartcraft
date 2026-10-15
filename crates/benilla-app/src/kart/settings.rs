@@ -316,8 +316,8 @@ mod tests {
         let picked = app.world().resource::<KartSettings>().class;
         assert_eq!(picked, kartcraft::Class::Speed);
         assert_eq!(
-            super::super::garage::effective(picked, Some(100)),
-            kartcraft::Class::Balanced
+            super::super::garage::effective(picked, Some(1)),
+            kartcraft::Class::Speed
         );
         set(&mut app, "kartclass", "Acceleration");
         assert_eq!(
