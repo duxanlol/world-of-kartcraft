@@ -1255,3 +1255,29 @@ fn a_full_lock_reverse_keeps_half_its_speed() {
         );
     }
 }
+
+/// Stopped dead with the model still turned off its heading (a wall slam out of a turn), the
+/// kart does not spin in place: the low-speed transfer (4.6) hands the offset to the heading
+/// while the model recentres, so the drawn yaw settles where it was.
+#[test]
+fn a_stopped_kart_with_its_model_turned_settles_instead_of_spinning() {
+    let w = world(floor(4000.0));
+    let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 1.0, 0.0), 0);
+    run(&mut kart, &w, Input::default(), 10);
+    kart.turn_angle = 400;
+    let drawn = |k: &Kart| k.angle + k.turn_angle;
+    let before = drawn(&kart);
+    let mut travelled = 0;
+    let mut prev = before;
+    for _ in 0..90 {
+        kart.tick(&w, &Input::default(), &NONE);
+        travelled += diff(drawn(&kart), prev).abs();
+        prev = drawn(&kart);
+    }
+    assert_eq!(kart.speed(), 0);
+    assert_eq!(kart.turn_angle, 0, "the model recentres");
+    assert!(
+        travelled < 64,
+        "the drawn kart turned {travelled} of 4096 standing still"
+    );
+}
