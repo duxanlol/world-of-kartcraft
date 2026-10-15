@@ -70,7 +70,7 @@ pub struct Config {
     pub proton: Option<PathBuf>,
 }
 
-fn read(path: &Path) -> BTreeMap<String, String> {
+pub(crate) fn read(path: &Path) -> BTreeMap<String, String> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()

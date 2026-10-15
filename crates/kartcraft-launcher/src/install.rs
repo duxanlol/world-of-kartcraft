@@ -80,11 +80,24 @@ pub fn quiet(cmd: &mut Command) -> &mut Command {
     cmd
 }
 
+/// A game folder of this launcher's channel: one with the game in it, whose published presets
+/// (if any) update from the same channel, so a staging launcher dropped into the players' install
+/// never takes that install's update host and turns itself into the players' launcher.
 #[cfg(not(target_os = "macos"))]
 fn is_game_folder(dir: &Path) -> bool {
-    dir.join(crate::config::CFG_FILE).is_file()
+    (dir.join(crate::config::CFG_FILE).is_file()
         || dir.join("kartcraft.cfg").is_file()
-        || dir.join(GAME).is_file()
+        || dir.join(GAME).is_file())
+        && same_channel(dir, crate::config::staging())
+}
+
+/// Whether `dir`'s `defaults.cfg` is for the staging channel when `staging`, the players' when
+/// not: the staging presets update from the host's `staging/` folder. No presets is either.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn same_channel(dir: &Path, staging: bool) -> bool {
+    crate::config::read(&dir.join("defaults.cfg"))
+        .get("UPDATE_URL")
+        .is_none_or(|u| u.trim_end_matches('/').ends_with("/staging") == staging)
 }
 
 /// The folder the game lives in: on Windows and Linux the launcher's own or `WorldOfKartcraft`
@@ -243,4 +256,33 @@ pub fn fatal(text: &str) {
         .set_description(text)
         .set_level(rfd::MessageLevel::Error)
         .show();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_game_folder_belongs_to_the_channel_its_presets_update_from() {
+        let dir = std::env::temp_dir().join(format!("kartcraft-channel-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(
+            same_channel(&dir, true) && same_channel(&dir, false),
+            "no presets: either"
+        );
+        let presets = dir.join("defaults.cfg");
+        std::fs::write(&presets, "UPDATE_URL=https://host.example/staging/\r\n").unwrap();
+        assert!(same_channel(&dir, true));
+        assert!(
+            !same_channel(&dir, false),
+            "the players' launcher leaves a staging install"
+        );
+        std::fs::write(&presets, "SERVER=x\nUPDATE_URL=https://host.example\n").unwrap();
+        assert!(
+            !same_channel(&dir, true),
+            "a staging launcher leaves the players' install"
+        );
+        assert!(same_channel(&dir, false));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
