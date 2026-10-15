@@ -1357,6 +1357,18 @@ namespace Kartcraft
         return nullptr;
     }
 
+    // murmur3's finalizer: FNV-1a alone moves little for a change in the last character, and a
+    // town's routes' quests are neighbours, so its routes ranked together and came in bunches.
+    static uint32 Mix32(uint32 h)
+    {
+        h ^= h >> 16;
+        h *= 0x85ebca6bu;
+        h ^= h >> 13;
+        h *= 0xc2b2ae35u;
+        h ^= h >> 16;
+        return h;
+    }
+
     // Today's routes for a faction (`team` 1 the Alliance, 2 the Horde): the DELIVERIES_A_DAY of
     // its own and the neutral ones whose hash with the day is lowest.
     static bool OfferedOn(std::string const& day, uint32 quest, uint8 team)
@@ -1364,7 +1376,7 @@ namespace Kartcraft
         std::vector<std::pair<uint32, uint32>> ranked;
         for (Delivery const& d : DELIVERIES)
             if (!d.team || d.team == team)
-                ranked.push_back({ Fnv1a(day + "/" + std::to_string(d.quest)), d.quest });
+                ranked.push_back({ Mix32(Fnv1a(day + "/" + std::to_string(d.quest))), d.quest });
         std::sort(ranked.begin(), ranked.end());
         for (size_t i = 0; i < ranked.size() && i < DELIVERIES_A_DAY; ++i)
             if (ranked[i].second == quest)
