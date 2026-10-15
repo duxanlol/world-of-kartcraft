@@ -2251,10 +2251,11 @@ impl Kart {
         self.turn_angle_vel = self.lerp_to_forwards(lerp_target);
         self.turn_angle_vel = (self.turn_angle_vel * self.terrain.turn_angle) >> 8;
         self.turn_angle += self.turn_angle_vel;
+        // The low-speed transfer: the heading takes what the model recentres by, so a stopped kart's
+        // drawn yaw holds. Taking it off the model too would undo the recentring and spin it in place.
         let low = map(self.speed_approx.abs(), 0, 0x600, self.turn_angle_vel, 0);
         if low.abs() > 1 {
             self.angle = wrap(self.angle - low);
-            self.turn_angle -= low;
         }
     }
 
