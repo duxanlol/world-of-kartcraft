@@ -21,6 +21,8 @@
 //! - `BENILLA_KART_TRACKMAP(name, laps, points)`: the race map's track when it changes, its
 //!   checkpoints `x,y;x,y;...` (WoW x, y); an empty name when there is no race.
 //! - `BENILLA_KART_SEATED(seated)`: 1 when we climb into the kart, 0 when we climb out.
+//! - `BENILLA_KART_LEAVE(percent)`: leaving the kart in a race, held for, how far; no arguments
+//!   when let go or done.
 //! - `BENILLA_KART_PAD(name, held, lx, ly, rx, ry, l2, r2)`: the controller test's pad while it
 //!   is open (`KartPadTest`), when it changes: its name (empty with none), the buttons held as
 //!   space-separated tokens, the sticks -1 to 1 and the triggers 0 to 1.
@@ -44,6 +46,7 @@ pub(crate) struct Sent {
     score: Option<Option<ScoreLines>>,
     courses: bool,
     seated: Option<bool>,
+    leaving: Option<Option<u8>>,
     /// The skill the garage was last sent at.
     garage: Option<Option<u16>>,
     /// The race map's track and racers as last sent, and when the racers were.
@@ -118,6 +121,16 @@ pub(crate) fn feed(
             vec![ScriptValue::Number(f64::from(u8::from(overlay.seated)))],
         );
         sent.seated = Some(overlay.seated);
+    }
+    if sent.leaving != Some(overlay.leaving) {
+        script.fire_event(
+            "BENILLA_KART_LEAVE",
+            overlay
+                .leaving
+                .map(|p| vec![ScriptValue::Number(f64::from(p))])
+                .unwrap_or_default(),
+        );
+        sent.leaving = Some(overlay.leaving);
     }
     if sent.pad.as_ref() != Some(&overlay.pad) {
         if let Some(pad) = &overlay.pad {

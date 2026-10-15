@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..95536a5
+index 0000000..073fecc
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,4556 @@
+@@ -0,0 +1,4569 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -2179,7 +2179,9 @@ index 0000000..95536a5
 +        SendLine(player, "KARTCRAFT\tW\tF\t" + std::to_string(me.wumpa));
 +    }
 +
-+    static void SendLayout(Race const& race)
++    // The crates' layout to every racer, or to `only` (one who asked again, "W\tL?": theirs was
++    // lost on the way, a loading screen or a relog in between).
++    static void SendLayout(Race const& race, Player* only = nullptr)
 +    {
 +        std::string const head = "KARTCRAFT\tW\tL\t";
 +        std::string line;
@@ -2187,7 +2189,12 @@ index 0000000..95536a5
 +        auto flush = [&](size_t next)
 +        {
 +            if (!line.empty())
-+                SendRace(race, head + std::to_string(first) + "\t" + line);
++            {
++                if (only)
++                    SendLine(only, head + std::to_string(first) + "\t" + line);
++                else
++                    SendRace(race, head + std::to_string(first) + "\t" + line);
++            }
 +            line.clear();
 +            first = next;
 +        };
@@ -2521,6 +2528,12 @@ index 0000000..95536a5
 +            (race->instance && player->GetInstanceId() != race->instance))
 +            return;
 +        std::string const& verb = f[1];
++        if (verb == "L?")
++        {
++            sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Kartcraft: %s asked for the crates again", player->GetName());
++            SendLayout(*race, player);
++            return;
++        }
 +        std::string const guid = std::to_string(player->GetGUIDLow());
 +
 +        if (verb == "C" && !me->finished)

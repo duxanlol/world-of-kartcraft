@@ -799,6 +799,18 @@ impl Races {
         self.race.as_ref().is_some_and(|r| !r.time_trial)
     }
 
+    /// Whether we are in a race or a time trial not over for us: leaving the kart then is held for.
+    pub(crate) fn in_race(&self) -> bool {
+        self.race.as_ref().is_some_and(|r| !r.done)
+    }
+
+    /// Whether our race with others has passed GO and is not over for us.
+    pub(crate) fn racing_with_crates(&self, now: f32) -> bool {
+        self.race
+            .as_ref()
+            .is_some_and(|r| !r.done && !r.time_trial && r.go_at.is_some_and(|go| now >= go))
+    }
+
     /// Whether we must hold on the line, in the kart or on foot (out of it for the grid's
     /// teleport until it comes back): a countdown is running, or a time trial waits for one,
     /// which the track browser's starts only once we are on its grid in the kart.
@@ -2447,6 +2459,11 @@ mod tests {
         assert!(!races.with_crates(), "out of every race");
         hear(&mut races, "L\t5\tRacer,Goblin", 1.0);
         assert!(races.with_crates(), "a race with others");
+        assert!(races.in_race());
+        assert!(!races.racing_with_crates(2.0), "no countdown yet");
+        hear(&mut races, "G\t5\t4000\tRacer,Goblin", 2.0);
+        assert!(!races.racing_with_crates(5.9), "counting down");
+        assert!(races.racing_with_crates(6.0), "GO: its crates are owed");
         hear(&mut races, "L\t7\tRacer", 2.0);
         hear(&mut races, "TT\t7", 2.0);
         assert!(!races.with_crates(), "a time trial has no crates");

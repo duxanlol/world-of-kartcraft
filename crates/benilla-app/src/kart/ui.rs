@@ -50,6 +50,8 @@ pub(crate) struct KartOverlay {
     pub(crate) seated: bool,
     /// The controller test's view of the pad the kart reads (`/kartpad`), while it is open.
     pub(crate) pad: Option<PadView>,
+    /// Leaving the kart in a race, held for: how far, in percent.
+    pub(crate) leaving: Option<u8>,
 }
 
 /// The pad the kart reads, as the controller test shows it: its name (empty with none), the
@@ -197,6 +199,9 @@ pub(super) fn publish(
     }
     if overlay.seated != drive.active {
         overlay.seated = drive.active;
+    }
+    if overlay.leaving != drive.leaving {
+        overlay.leaving = drive.leaving;
     }
     if overlay.skill != score.skill() {
         overlay.skill = score.skill();

@@ -24,7 +24,14 @@ pub(crate) fn low_guid(guid: u64) -> u32 {
 pub(crate) struct WeaponLink {
     race: Option<u32>,
     pacer: Pacer,
+    /// A race with no crates after GO: when we last asked for its layout again, and how often.
+    asked_at: f32,
+    asks: u8,
 }
+
+/// Seconds between asks for a layout that has not come, and how many before giving up.
+const LAYOUT_ASK_SECS: f32 = 3.0;
+const LAYOUT_ASKS: u8 = 5;
 
 /// The server's weapon lines.
 pub(crate) fn on_chat(In(ev): In<SessionEvent>, mut weapons: ResMut<Weapons>) {
@@ -71,6 +78,23 @@ pub(crate) fn update(
         }
         link.pacer.clear();
         link.race = race;
+        link.asks = 0;
+    }
+    // A layout lost on its way (a loading screen, a relog): past GO with no crates, ask again.
+    let now = time.elapsed_secs();
+    if race.is_some()
+        && weapons.crates().is_empty()
+        && races.racing_with_crates(now)
+        && link.asks < LAYOUT_ASKS
+        && now - link.asked_at >= LAYOUT_ASK_SECS
+    {
+        link.asks += 1;
+        link.asked_at = now;
+        info!(
+            "kart weapons: no crates after GO, asking for the layout again ({})",
+            link.asks
+        );
+        profession.send("KARTCRAFT\tW\tL?\t0".to_string());
     }
     if race.is_none() {
         // A time trial has no weapons: nothing a stray line laid out stays drawn or pickable.

@@ -2248,6 +2248,39 @@ fn a_track_is_rated_after_a_race_and_a_closed_one_leaves_the_browser() {
     from_server(&mut s, "R\tRateAsk\tt1");
     s.run("BenillaKartRateFrameSkip:Click()").unwrap();
     assert!(sent(&mut s).is_empty());
+    // The controller: Start a good track, Select a bad one (its guide says so), then the reason
+    // with the D-pad and Cross as any window's buttons; Circle is not now.
+    let press = |s: &mut UiScript, key: &str| -> bool {
+        s.eval(&format!("return BenillaPad_OnButton('{key}') == true"))
+            .unwrap()
+    };
+    let guide = |s: &mut UiScript| -> String {
+        s.eval::<String>("return BenillaPad_Owns()").unwrap();
+        s.eval("return BenillaPadLegendFrameText:GetText() or ''")
+            .unwrap()
+    };
+    s.run("SetCVar('KartPads', '1|Wireless Controller')")
+        .unwrap();
+    from_server(&mut s, "R\tRateAsk\tt1");
+    assert!(guide(&mut s).starts_with("Start: good track"));
+    assert!(press(&mut s, "PADFORWARD"));
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tRate\tt1\t1\t"]);
+    assert!(!shown(&mut s, "BenillaKartRateFrame"));
+    from_server(&mut s, "R\tRateAsk\tt2");
+    assert!(press(&mut s, "PADBACK"));
+    assert!(sent(&mut s).is_empty(), "the reason first");
+    assert!(shown(&mut s, "BenillaKartRateFrameReason1"));
+    assert!(
+        !guide(&mut s).contains("Start: good track"),
+        "the reasons' own guide"
+    );
+    assert!(press(&mut s, "PADFORWARD"), "the window's, but no vote now");
+    assert!(sent(&mut s).is_empty());
+    s.run("BenillaKartRateFrame:Hide()").unwrap();
+    from_server(&mut s, "R\tRateAsk\tt1");
+    assert!(press(&mut s, "PAD2"));
+    assert!(!shown(&mut s, "BenillaKartRateFrame"), "Circle: not now");
+    assert!(sent(&mut s).is_empty());
     // The browser asks which tracks are closed, and hides them.
     s.run("BenillaKartTrackBrowser_Open()").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tOff"]);
@@ -2847,6 +2880,36 @@ fn courier_jobs_list_today_s_jobs_and_take_one_to_its_courier() {
         s.eval::<Vec<String>>("return BenillaKartSaid").unwrap(),
         ["You can take another job in 12 seconds."]
     );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+#[test]
+fn leaving_the_kart_in_a_race_shows_its_hold_until_let_go() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let shown = |s: &UiScript| -> bool {
+        s.eval("return BenillaKartLeaveFrame:IsVisible() == 1")
+            .unwrap()
+    };
+    assert!(!shown(&s));
+    s.fire_event("BENILLA_KART_LEAVE", vec![ScriptValue::Number(50.0)]);
+    assert!(shown(&s));
+    assert_eq!(
+        s.eval::<String>("return BenillaKartLeaveFrameText:GetText()")
+            .unwrap(),
+        "Hold to leave the kart"
+    );
+    assert_eq!(
+        s.eval::<f64>("return BenillaKartLeaveFrameFill:GetWidth()")
+            .unwrap(),
+        98.0,
+        "half way"
+    );
+    s.fire_event("BENILLA_KART_LEAVE", vec![]);
+    assert!(!shown(&s), "let go, or out");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 

@@ -2091,7 +2091,9 @@ namespace Kartcraft
         SendLine(player, "KARTCRAFT\tW\tF\t" + std::to_string(me.wumpa));
     }
 
-    static void SendLayout(Race const& race)
+    // The crates' layout to every racer, or to `only` (one who asked again, "W\tL?": theirs was
+    // lost on the way, a loading screen or a relog in between).
+    static void SendLayout(Race const& race, Player* only = nullptr)
     {
         std::string const head = "KARTCRAFT\tW\tL\t";
         std::string line;
@@ -2099,7 +2101,12 @@ namespace Kartcraft
         auto flush = [&](size_t next)
         {
             if (!line.empty())
-                SendRace(race, head + std::to_string(first) + "\t" + line);
+            {
+                if (only)
+                    SendLine(only, head + std::to_string(first) + "\t" + line);
+                else
+                    SendRace(race, head + std::to_string(first) + "\t" + line);
+            }
             line.clear();
             first = next;
         };
@@ -2433,6 +2440,12 @@ namespace Kartcraft
             (race->instance && player->GetInstanceId() != race->instance))
             return;
         std::string const& verb = f[1];
+        if (verb == "L?")
+        {
+            sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Kartcraft: %s asked for the crates again", player->GetName());
+            SendLayout(*race, player);
+            return;
+        }
         std::string const guid = std::to_string(player->GetGUIDLow());
 
         if (verb == "C" && !me->finished)

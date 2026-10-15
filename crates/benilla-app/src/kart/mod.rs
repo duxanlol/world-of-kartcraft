@@ -72,6 +72,8 @@ pub(crate) struct KartDrive {
     /// A race's start holds us on the line ([`race::Races::holding`]): on foot too, out of the
     /// kart for the grid's teleport, we may turn but not walk or jump.
     pub(crate) held: bool,
+    /// Leaving the kart in a race, held for: how far, in percent; `None` when not.
+    pub(crate) leaving: Option<u8>,
 }
 
 /// The kart's drive for the frame, which writes [`KartDrive`].
@@ -112,7 +114,13 @@ struct Host {
     settle_seen: f32,
     /// The engine class the kart drives with.
     class: kartcraft::Class,
+    /// Since when the Summon binding has been held to leave the kart in a race (LEAVE_HOLD_SECS).
+    leave_since: Option<f32>,
 }
+
+/// How long the Summon binding is held to leave the kart in a race, so a stray press does not
+/// throw the race away.
+const LEAVE_HOLD_SECS: f32 = 0.5;
 
 fn autostart_after() -> Option<f32> {
     static AFTER: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
@@ -253,8 +261,26 @@ fn update(
     let mut started = false;
     // The test hook only ever climbs in: a kart aura kept over a logout already has us in it.
     let autostart = autostart && !drive.active && !auras.kart;
-    // Summon Kart's binding (`J` by default); the spellbook's Summon Kart is the same toggle.
-    if binds.ran(bindings::SUMMON) || autostart {
+    // Summon Kart's binding (`J` by default); the spellbook's Summon Kart is the same toggle. In
+    // a race leaving the kart is held for LEAVE_HOLD_SECS, its progress on the screen.
+    let in_kart = drive.active || auras.kart;
+    let mut summon = binds.ran(bindings::SUMMON);
+    if summon && server_kart && in_kart && races.in_race() {
+        host.leave_since = Some(now);
+        summon = false;
+    }
+    drive.leaving = None;
+    if let Some(since) = host.leave_since {
+        if !in_kart || !binds.holding(bindings::SUMMON) {
+            host.leave_since = None;
+        } else if now - since >= LEAVE_HOLD_SECS {
+            host.leave_since = None;
+            summon = true;
+        } else {
+            drive.leaving = Some(((now - since) / LEAVE_HOLD_SECS * 100.0) as u8);
+        }
+    }
+    if summon || autostart {
         if server_kart {
             if drive.active || auras.kart {
                 profession.dismiss();

@@ -1439,7 +1439,12 @@
               legend = "L1 / R1: turn the page    D-pad: move    Cross / A: choose    Circle / B: close" },
             { name = "BenillaKartPadFrame" },
             { name = "BenillaKartReplaysFrame" },
-            { name = "BenillaKartRateFrame" },
+            { name = "BenillaKartRateFrame", buttons = "BenillaKartRate_Pad", legend = function()
+                if BenillaKartRateFrameGood:IsVisible() then
+                    return "Start: good track    Select: bad track    Circle / B: not now"
+                end
+                return BENILLA_PAD_LEGEND
+              end },
         }
         BENILLA_PAD_LEGEND = "D-pad: move    Cross / A: choose    Circle / B: close"
 
@@ -1453,6 +1458,7 @@
                 return
             end
             local text = w.legend or BENILLA_PAD_LEGEND
+            if type(text) == "function" then text = text() end
             if legend.window ~= frame or BenillaPadLegendFrameText:GetText() ~= text then
                 legend.window = frame
                 BenillaPadLegendFrameText:SetText(text)
@@ -1583,8 +1589,7 @@
             local frame, w = BenillaPad_Window()
             if not frame then return false end
             if w.buttons and getglobal(w.buttons) then
-                getglobal(w.buttons)(key)
-                return true
+                if getglobal(w.buttons)(key) ~= false then return true end
             end
             local items = BenillaPad_Items(frame)
             local focus = BenillaPad.focus
@@ -1819,6 +1824,20 @@
             end
         end
 
+        -- The controller's vote: Start a good track, Select a bad one, Circle not now; the bad
+        -- one's reasons are picked with the D-pad and Cross, as any window's buttons.
+        function BenillaKartRate_Pad(key)
+            if not BenillaKartRateFrameGood:IsVisible() then return false end
+            if key == "PADFORWARD" then
+                BenillaKartRate_Vote(1)
+            elseif key == "PADBACK" then
+                BenillaKartRate_Vote(-1)
+            elseif key == "PAD2" then
+                BenillaKartRateFrame:Hide()
+            end
+            return true
+        end
+
         function BenillaKartRate_Vote(vote)
             if vote == 1 then
                 BenillaKartRate_Send(1, "")
@@ -2004,6 +2023,16 @@
         -- climbing out puts them away.
         BenillaKartShortcuts = {}
 
+        -- ── Leaving the kart in a race, held for (BENILLA_KART_LEAVE) ──
+        function BenillaKartLeave_Show(percent)
+            if not percent then
+                BenillaKartLeaveFrame:Hide()
+                return
+            end
+            BenillaKartLeaveFrameFill:SetWidth(math.max(1, 196 * percent / 100))
+            BenillaKartLeaveFrame:Show()
+        end
+
         -- ── The courier delivery's clock (the server's "Del", "Del-") ──
         -- Elapsed against par, green within it, red past; gone when delivered, or once its quest
         -- has left the log (abandoned, the package with it).
@@ -2100,6 +2129,8 @@
         function BenillaKartEvents_OnEvent()
             if event == "BENILLA_KART_SEATED" then
                 BenillaKartSeated_Set(arg1 == 1)
+            elseif event == "BENILLA_KART_LEAVE" then
+                BenillaKartLeave_Show(arg1)
             elseif event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_REGEN_ENABLED" then
                 BenillaKart_RaceModeRestore()
                 if event == "PLAYER_ENTERING_WORLD" then
@@ -4193,6 +4224,32 @@
         </Scripts>
     </Frame>
 
+    <!-- Leaving the kart in a race, held for: the hold's bar, mid-screen (BenillaKartLeave_Show). -->
+    <Frame name="BenillaKartLeaveFrame" parent="UIParent" hidden="true" frameStrata="HIGH">
+        <Size><AbsDimension x="220" y="46"/></Size>
+        <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="-80"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+            <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>
+            <TileSize><AbsValue val="16"/></TileSize>
+            <EdgeSize><AbsValue val="16"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentText" inherits="GameFontHighlight" text="Hold to leave the kart">
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-8"/></Offset></Anchor></Anchors>
+                </FontString>
+                <Texture name="$parentFill">
+                    <Size><AbsDimension x="1" y="8"/></Size>
+                    <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="12" y="9"/></Offset></Anchor></Anchors>
+                    <Color r="1" g="0.82" b="0" a="1"/>
+                </Texture>
+            </Layer>
+        </Layers>
+        <Scripts>
+            <OnLoad>this:SetBackdropColor(0, 0, 0, 0.8)</OnLoad>
+        </Scripts>
+    </Frame>
+
     <!-- The courier delivery's clock (BenillaKartDelivery_Update), under the minimap's row. -->
     <Frame name="BenillaKartDeliveryFrame" parent="UIParent" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" frameStrata="MEDIUM">
         <Size><AbsDimension x="300" y="30"/></Size>
@@ -4339,6 +4396,7 @@
                 this:RegisterEvent("BENILLA_KART_COURSE_NAMES")
                 this:RegisterEvent("BENILLA_KART_GARAGE")
                 this:RegisterEvent("BENILLA_KART_SEATED")
+                this:RegisterEvent("BENILLA_KART_LEAVE")
                 this:RegisterEvent("PLAYER_ENTERING_WORLD")
                 this:RegisterEvent("PLAYER_REGEN_ENABLED")
                 this:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")

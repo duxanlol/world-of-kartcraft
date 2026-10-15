@@ -294,6 +294,12 @@ impl BindingsState {
     pub(crate) fn ran(&self, command: &str) -> bool {
         self.ran.iter().any(|c| c.eq_ignore_ascii_case(command))
     }
+    /// Is a key that ran this command still held (latched until its release)?
+    pub(crate) fn holding(&self, command: &str) -> bool {
+        self.latched
+            .iter()
+            .any(|(_, c)| c.eq_ignore_ascii_case(command))
+    }
     /// Total amount for a one-shot this frame (0.0 when idle): the camera zoom's yards.
     pub(crate) fn amount(&self, i: Input) -> f32 {
         self.amounts
@@ -1201,14 +1207,19 @@ mod tests {
         app.update();
         assert!(!overlay(&app).held("KARTGAS"));
 
-        // An ordinary command of the mode's runs as any binding, and its owner sees the press.
+        // An ordinary command of the mode's runs as any binding, and its owner sees the press,
+        // and that its key is held until it is let go.
         press_key(&mut app, KeyCode::KeyJ);
         app.update();
         assert!(state(&app).ran("KARTSUMMON"));
         assert_eq!(lua_count(&app, "SUMMONS"), 1);
+        app.update();
+        assert!(!state(&app).ran("KARTSUMMON"), "ran once");
+        assert!(state(&app).holding("KARTSUMMON"), "still held");
         release_key(&mut app, KeyCode::KeyJ);
         app.update();
         assert!(!state(&app).ran("KARTSUMMON"));
+        assert!(!state(&app).holding("KARTSUMMON"), "let go");
         assert_eq!(lua_count(&app, "KART_RAN"), 0, "a plane body never runs");
     }
 
