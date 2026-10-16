@@ -30,9 +30,33 @@ const SLOPE_DOUBLES: f32 = 25.0;
 /// What a fully painted road costs against open ground's 1.
 const ROAD: f32 = 0.3;
 /// Painted road at or over this weight is driven whatever stands on it (a signpost, a fence's
-/// end, an arch's foot) and up to [`ROAD_CLIFF`]: a road through a pass is the way, not a wall.
+/// end, an arch's foot: Dun Algaz's gatehouse) and up to [`ROAD_CLIFF`], as a player walks it
+/// (WoW's walkable slope is about 50°): a road through a pass is the way, not a wall. Where a
+/// kart cannot in fact get by, the test drives find it ([`repair`]).
 const ROAD_HOLDS: f32 = 0.5;
 const ROAD_CLIFF: f32 = 50.0;
+/// The steepest step between neighbouring cells, rise over run (about 38°, [`CLIFF`]): a cell's
+/// height is its drivable pixels' mean, so a ledge between two flat cells is no slope a pixel
+/// shows.
+const STEP_GRADE: f32 = 0.78;
+/// A ledge this high (yards) is hopped up, whatever the step's run: a single hop clears 1.15 yd
+/// (kart-driver's `measure_the_tallest_box_a_hop_clears`).
+const HOP_LEDGE: f32 = 1.1;
+/// The test-drive rounds ([`repair`]): the roads driven by the CTR-physics bot over the world's
+/// real collision, the ground round each spot it could not drive made this many times dearer
+/// this far round (yards), and the ways found again. Dearer, not shut: a way the bot cannot
+/// take that is the only one (a city's gate it fails) is still found, and still reported.
+pub const REPAIR_ROUNDS: usize = 10;
+/// Rounds in a row that drive no better than the best before the repair stops: past that the
+/// dearer ground piles up and the ways wander.
+const REPAIR_PATIENCE: usize = 2;
+const REPAIR_SPOT: f32 = 10.0;
+/// A delivery's par: its way's yards at the speed the bot drove the kept round's roads at, this
+/// much slower, up to the next [`PAR_STEP`] seconds and at least [`PAR_LEAST`].
+const PAR_SLACK: f32 = 1.25;
+const PAR_STEP: f32 = 30.0;
+const PAR_LEAST: u32 = 120;
+const REPAIR_DEARER: f32 = 25.0;
 /// Water: crossable (a ford), at this cost a yard.
 const WATER: f32 = 12.0;
 /// Road weight at or over which a cell counts as road in the report.
@@ -158,6 +182,8 @@ struct Sum {
     laid: u16,
     laid_cost: f32,
     laid_height: f32,
+    /// The drivable pixels' heights summed: the ground a kart is on, not the cliff beside it.
+    open_height: f32,
     /// A WMO's wall stands on one of the cell's pixels: the cell is shut.
     wall: bool,
 }
@@ -246,6 +272,7 @@ impl Grid {
                             s.n = s.n.saturating_add(1);
                             if c.is_finite() {
                                 s.cost += c;
+                                s.open_height += t.height[i];
                             } else {
                                 s.cliff = s.cliff.saturating_add(1);
                             }
@@ -270,13 +297,13 @@ impl Grid {
         let sums = sums.into_inner().unwrap();
         grid.cost = sums
             .iter()
-            // A wall shuts its cell; otherwise a cell is as passable as its best pixels: a narrow
-            // pass, a gate or a path a pixel wide stays a way through.
+            // A wall shuts its cell; otherwise a cell is passable where at least half its pixels
+            // are: a mountainside a flat pixel here and there dots is no way up.
             .map(|s| match (s.n, s.cliff) {
                 _ if s.laid > 0 => s.laid_cost / f32::from(s.laid),
                 (0, _) => f32::NAN,
                 _ if s.wall => f32::INFINITY,
-                (n, cliff) if cliff >= n => f32::INFINITY,
+                (n, cliff) if 2 * cliff > n => f32::INFINITY,
                 (n, cliff) => s.cost / f32::from(n - cliff),
             })
             .collect();
@@ -285,6 +312,8 @@ impl Grid {
             .map(|s| {
                 if s.laid > 0 {
                     s.laid_height / f32::from(s.laid)
+                } else if s.n > s.cliff {
+                    s.open_height / f32::from(s.n - s.cliff)
                 } else {
                     s.height / f32::from(s.n.max(1))
                 }
@@ -463,7 +492,8 @@ impl Grid {
         seen[start] = true;
         while let Some(i) = stack.pop() {
             let linked = self.links.get(&i).into_iter().flatten().copied();
-            for j in self.neighbours(i).chain(linked) {
+            let stepped = self.neighbours(i).filter(|&j| self.step(i, j));
+            for j in stepped.chain(linked) {
                 if !seen[j] && self.passable(j) {
                     seen[j] = true;
                     stack.push(j);
@@ -603,6 +633,29 @@ impl Grid {
         self.cost[i].is_finite()
     }
 
+    /// Whether a kart steps from cell `i` to its neighbour `j`: no steeper than [`STEP_GRADE`].
+    fn step(&self, i: usize, j: usize) -> bool {
+        let (a, b) = (self.centre(i), self.centre(j));
+        let run = (a[0] - b[0]).hypot(a[1] - b[1]);
+        (a[2] - b[2]).abs() <= run * STEP_GRADE + HOP_LEDGE
+    }
+
+    /// Every cell within `r` yards of `(x, y)` made `times` dearer.
+    fn dearer(&mut self, x: f32, y: f32, r: f32, times: f32) {
+        let k = (r / CELL).ceil() as i32;
+        for dx in -k..=k {
+            for dy in -k..=k {
+                let (px, py) = (x + dx as f32 * CELL, y + dy as f32 * CELL);
+                if (px - x).hypot(py - y) > r {
+                    continue;
+                }
+                if let Some(i) = self.cell(px, py) {
+                    self.cost[i] *= times;
+                }
+            }
+        }
+    }
+
     /// The passable cell nearest `(x, y)`, within 30 cells, on ground that goes somewhere (a
     /// pocket, painted road under a building or a ledge, is passed over for the open ground
     /// beyond) and within [`SNAP_RISE`] yards of `z` where there is one: a town inside a
@@ -654,7 +707,8 @@ impl Grid {
         let mut stack = vec![start];
         while let Some(i) = stack.pop() {
             let linked = self.links.get(&i).into_iter().flatten().copied();
-            for j in self.neighbours(i).chain(linked) {
+            let stepped = self.neighbours(i).filter(|&j| self.step(i, j));
+            for j in stepped.chain(linked) {
                 if self.passable(j) && seen.insert(j) {
                     if seen.len() >= cells {
                         return Ok(());
@@ -703,7 +757,7 @@ impl Grid {
                     continue;
                 }
                 let j = x as usize + y as usize * self.w;
-                if !self.passable(j) {
+                if !self.passable(j) || !self.step(i, j) {
                     continue;
                 }
                 let step = if dx != 0 && dy != 0 { diagonal } else { CELL };
@@ -776,6 +830,7 @@ struct Deliveries {
 
 #[derive(Deserialize)]
 struct Town {
+    key: String,
     name: String,
     map: u32,
     x: f32,
@@ -872,6 +927,135 @@ fn ways(grid: &Grid, towns: &[&Town], jobs: usize) -> (Vec<Way>, Vec<String>) {
     (ways, stranded)
 }
 
+/// The GPS roads `ways` make, laid as trails that share what they share.
+fn lay(ways: &[Way], map: u32) -> kart_gps::RoadMap {
+    let mut b = Builder::default();
+    for w in ways {
+        b.trail(&w.points, MERGE);
+    }
+    b.finish(map)
+}
+
+/// The ways between `towns` and the roads they make, test-driven: each round the roads are driven
+/// by the CTR-physics bot over the world's real collision ([`crate::gps_drive`]), the ground round
+/// every spot it could not get past made dearer ([`REPAIR_DEARER`]) and the ways found again,
+/// until every stretch drives or [`REPAIR_ROUNDS`] are done; the round with the fewest yards the
+/// bot could not drive is kept (steering round one spot can find another). A spot the bot names
+/// nowhere (it kept leaving the line) is left as it is.
+/// Also the bot's speed over the kept round's roads (yd/s; 0 with no test drive).
+fn repair(
+    grid: &mut Grid,
+    towns: &[&Town],
+    map: u32,
+    jobs: usize,
+    rounds: usize,
+    out: &mut String,
+) -> (Vec<Way>, Vec<String>, kart_gps::RoadMap, f32) {
+    if rounds == 0 {
+        let (ways, stranded) = ways(grid, towns, jobs);
+        let roads = lay(&ways, map);
+        return (ways, stranded, roads, 0.0);
+    }
+    struct Round {
+        yards: f32,
+        speed: f32,
+        round: usize,
+        ways: Vec<Way>,
+        stranded: Vec<String>,
+        roads: kart_gps::RoadMap,
+        bad: Vec<String>,
+    }
+    let mut best: Option<Round> = None;
+    let mut worse = 0;
+    for round in 1..=rounds {
+        let (ways, stranded) = ways(grid, towns, jobs);
+        let roads = lay(&ways, map);
+        let driven = crate::gps_drive::drive_map(&roads, jobs);
+        let bad: Vec<&crate::gps_drive::Stretch> = driven.iter().filter(|s| !s.ok).collect();
+        let total: f32 = driven.iter().map(|s| s.length).sum();
+        let yards: f32 = bad.iter().map(|s| s.length).sum();
+        // The bot's speed over what it drove: the roads' own pace, its slopes and bends in it.
+        let (run, secs) = driven
+            .iter()
+            .filter(|s| s.ok && s.time > 0.0)
+            .fold((0.0, 0.0), |(l, t), s| (l + s.length, t + s.time));
+        let speed = if secs > 0.0 { run / secs } else { 0.0 };
+        *out += &format!(
+            "  test drive {round}: {} of {} stretches, {yards:.0} of {total:.0} yd, not drivable\n",
+            bad.len(),
+            driven.len()
+        );
+        let spots: Vec<[f32; 3]> = bad.iter().filter_map(|s| s.blocked_at()).collect();
+        let lines: Vec<String> = bad
+            .iter()
+            .map(|s| {
+                format!(
+                    "    still not drivable: {} ({:.0} yd from ({:.0}, {:.0}, {:.0})): {}\n",
+                    s.zone,
+                    s.length,
+                    s.from[0],
+                    s.from[1],
+                    s.from[2],
+                    s.reject.as_deref().unwrap_or("")
+                )
+            })
+            .collect();
+        let mut done = bad.is_empty() || spots.is_empty();
+        if best.as_ref().is_some_and(|b| yards >= b.yards) {
+            worse += 1;
+            done |= worse >= REPAIR_PATIENCE;
+        } else {
+            worse = 0;
+        }
+        if best.as_ref().is_none_or(|b| yards < b.yards) {
+            best = Some(Round {
+                yards,
+                speed,
+                round,
+                ways,
+                stranded,
+                roads,
+                bad: lines,
+            });
+        }
+        if done {
+            break;
+        }
+        for q in spots {
+            grid.dearer(q[0], q[1], REPAIR_SPOT, REPAIR_DEARER);
+        }
+    }
+    let best = best.expect("one round at least");
+    *out += &format!(
+        "  kept test drive {}; the bot drove its roads at {:.1} yd/s\n",
+        best.round, best.speed
+    );
+    for l in &best.bad {
+        *out += l;
+    }
+    (best.ways, best.stranded, best.roads, best.speed)
+}
+
+/// The delivery pars (`deliveries/pars.json`): per town pair, both ways, the seconds a route
+/// takes by its way at the bot's speed ([`PAR_SLACK`]), and the speed each map was timed at.
+#[derive(Default, serde::Serialize, Deserialize)]
+pub struct Pars {
+    #[serde(rename = "_comment", default)]
+    pub comment: String,
+    /// Each map's (by its id) speed, yd/s.
+    #[serde(default)]
+    pub speed: std::collections::BTreeMap<String, f32>,
+    /// `"<from key>><to key>"`: seconds.
+    #[serde(default)]
+    pub pars: std::collections::BTreeMap<String, u32>,
+}
+
+/// A way's par at `speed` yd/s.
+fn par(yards: f32, speed: f32) -> u32 {
+    let secs = yards / speed * PAR_SLACK;
+    ((secs / PAR_STEP).ceil() * PAR_STEP).max(PAR_LEAST as f32) as u32
+}
+
 /// Builds every continent's grid, the ways between its delivery towns and the GPS roads they
 /// make, and reports how the towns fared.
 /// How much of `roads` (the GPS roads a map was given before) crosses what `grid` holds
@@ -908,24 +1092,43 @@ fn audit(grid: &Grid, roads: &kart_gps::RoadMap) -> (f32, Vec<([f32; 2], f32)>) 
     (total, spots)
 }
 
+/// `rounds` of test drives at most ([`repair`]; 0 for none), `only` one map if given.
 pub fn run(
     deliveries: &Path,
     jobs: usize,
     render: Option<&Path>,
     previous: Option<&RoadFile>,
+    rounds: usize,
+    only: Option<u32>,
 ) -> Result<(RoadFile, String)> {
     let zones = continent_zones(&mut open_install()?)?;
     let towns = read_towns(deliveries)?;
+    // The pars written before: a map not rebuilt keeps its own.
+    let pars_file = deliveries.with_file_name("pars.json");
+    let mut pars: Pars = std::fs::read_to_string(&pars_file)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    pars.comment =
+        "Written by course-gen gps: each delivery's par, seconds, from its GPS way at the \
+        speed the CTR-physics bot drove the map's roads (pack.py reads it; a pair missing here \
+        falls back to the straight line)."
+            .into();
     let mut maps = Vec::new();
     let mut out = String::new();
-    for map in CONTINENTS {
+    for map in CONTINENTS
+        .into_iter()
+        .filter(|m| only.is_none_or(|o| o == *m))
+    {
         let started = std::time::Instant::now();
         let grid = Grid::build(map, &zones, jobs)?;
         let known = grid.cost.iter().filter(|c| !c.is_nan()).count();
         out += &format!(
-            "map {map}: {}×{} cells of {CELL} yd, {known} on the ground, built in {:.0}s\n",
+            "map {map}: {}×{} cells of {CELL} yd from x {} y {}, {known} on the ground, built in {:.0}s\n",
             grid.w,
             grid.h,
+            grid.x0 as f32 * CELL,
+            grid.y0 as f32 * CELL,
             started.elapsed().as_secs_f32()
         );
         if let Some(old) = previous.and_then(|p| p.map(map)) {
@@ -953,12 +1156,25 @@ pub fn run(
             let file = dir.join(format!("gps-map{map}-pieces.png"));
             grid.render_pieces(&file, &cells)?;
         }
-        let (ways, stranded) = ways(&grid, &on_map, jobs);
-        let mut b = Builder::default();
-        for w in &ways {
-            b.trail(&w.points, MERGE);
+        let (ways, stranded, roads, speed) =
+            repair(&mut grid, &on_map, map, jobs, rounds, &mut out);
+        if speed > 0.0 {
+            pars.speed.insert(map.to_string(), speed);
+            pars.pars.retain(|k, _| {
+                let from = k.split('>').next().unwrap_or("");
+                !on_map.iter().any(|t| t.key == from)
+            });
+            for w in &ways {
+                let p = par(w.length, speed);
+                let (a, b) = (&on_map[w.from].key, &on_map[w.to].key);
+                pars.pars.insert(format!("{a}>{b}"), p);
+                pars.pars.insert(format!("{b}>{a}"), p);
+            }
+            out += &format!(
+                "  {} pars at {speed:.1} yd/s, {PAR_SLACK}× slack\n",
+                ways.len() * 2
+            );
         }
-        let roads = b.finish(map);
         // The new roads against the same grid: only the links' spans may cross it.
         let (yards, spots) = audit(&grid, &roads);
         out += &format!(
@@ -1093,6 +1309,11 @@ pub fn run(
             &worse[..worse.len().min(8)]
         );
         maps.push(roads);
+    }
+    if !pars.pars.is_empty() {
+        std::fs::write(&pars_file, serde_json::to_string_pretty(&pars)? + "\n")
+            .with_context(|| format!("writing {}", pars_file.display()))?;
+        out += &format!("wrote {}\n", pars_file.display());
     }
     Ok((RoadFile { maps }, out))
 }

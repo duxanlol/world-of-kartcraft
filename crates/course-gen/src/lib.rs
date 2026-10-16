@@ -11,6 +11,7 @@ pub mod export;
 pub mod generate;
 pub mod geom;
 pub mod gps;
+pub mod gps_drive;
 pub mod marshal;
 pub mod metrics;
 pub mod pads;

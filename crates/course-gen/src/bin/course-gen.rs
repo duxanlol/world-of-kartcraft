@@ -173,6 +173,28 @@ enum Cmd {
         /// Zones loaded, and towns searched from, at once (a large zone takes about 2 GB).
         #[arg(long, default_value_t = 3)]
         jobs: usize,
+        /// Test-drive rounds at most (0: lay the roads undriven).
+        #[arg(long, default_value_t = course_gen::gps::REPAIR_ROUNDS)]
+        rounds: usize,
+        /// One map only (0 the Eastern Kingdoms, 1 Kalimdor); the other keeps its roads.
+        #[arg(long)]
+        map: Option<u32>,
+    },
+    /// Drive the GPS roads with the CTR-physics bot (`course_gen::gps_drive`): every road cut
+    /// into stretches, each driven over its zone's terrain; the ones it cannot drive listed.
+    GpsDrive {
+        /// The road file driven.
+        #[arg(long, default_value = "roads/roads.json")]
+        roads: PathBuf,
+        /// Every stretch and how it drove, as JSON.
+        #[arg(long)]
+        out: PathBuf,
+        /// One map only (0 the Eastern Kingdoms, 1 Kalimdor).
+        #[arg(long)]
+        map: Option<u32>,
+        /// Zones loaded at once.
+        #[arg(long, default_value_t = 3)]
+        jobs: usize,
     },
     /// Lay turbo pads on every course's straights, at the ground's height, and write each
     /// course's `"pads"` into the course file (`course_gen::pads`).
@@ -528,19 +550,76 @@ fn main() -> Result<()> {
             deliveries,
             render,
             jobs,
+            rounds,
+            map,
         } => {
             // The roads written before, audited against the new grid before they are replaced.
             let previous = std::fs::read_to_string(&out)
                 .ok()
                 .and_then(|s| kart_gps::RoadFile::parse(&s).ok());
-            let (roads, report) =
-                course_gen::gps::run(&deliveries, jobs, render.as_deref(), previous.as_ref())?;
+            let (mut roads, report) = course_gen::gps::run(
+                &deliveries,
+                jobs,
+                render.as_deref(),
+                previous.as_ref(),
+                rounds,
+                map,
+            )?;
+            // One map rebuilt: the other's roads as they were.
+            if let (Some(only), Some(old)) = (map, previous.as_ref()) {
+                for m in &old.maps {
+                    if m.map != only {
+                        roads.maps.push(m.clone());
+                    }
+                }
+                roads.maps.sort_by_key(|m| m.map);
+            }
             if let Some(dir) = out.parent() {
                 std::fs::create_dir_all(dir)?;
             }
             std::fs::write(&out, serde_json::to_string(&roads)?)
                 .with_context(|| format!("writing {}", out.display()))?;
             print!("{report}");
+            println!("wrote {}", out.display());
+        }
+        Cmd::GpsDrive {
+            roads,
+            out,
+            map,
+            jobs,
+        } => {
+            let text = std::fs::read_to_string(&roads)
+                .with_context(|| format!("reading {}", roads.display()))?;
+            let file = kart_gps::RoadFile::parse(&text)?;
+            let driven = course_gen::gps_drive::run(&file, map, jobs)?;
+            std::fs::write(&out, serde_json::to_string(&driven)?)
+                .with_context(|| format!("writing {}", out.display()))?;
+            let mut why: std::collections::BTreeMap<String, (usize, f32)> = Default::default();
+            for s in driven.iter().filter(|s| !s.ok) {
+                let reason = s
+                    .reject
+                    .as_deref()
+                    .unwrap_or("")
+                    .split(" (")
+                    .next()
+                    .unwrap_or("");
+                let e = why.entry(reason.to_string()).or_default();
+                e.0 += 1;
+                e.1 += s.length;
+            }
+            let total: f32 = driven.iter().map(|s| s.length).sum();
+            let bad: f32 = driven.iter().filter(|s| !s.ok).map(|s| s.length).sum();
+            println!(
+                "{} stretches, {:.0} yd; not drivable: {} stretches, {:.0} yd ({:.1}%)",
+                driven.len(),
+                total,
+                driven.iter().filter(|s| !s.ok).count(),
+                bad,
+                100.0 * bad / total.max(1.0)
+            );
+            for (reason, (n, yards)) in &why {
+                println!("  {reason}: {n} stretches, {yards:.0} yd");
+            }
             println!("wrote {}", out.display());
         }
         Cmd::Pads { courses } => {

@@ -565,7 +565,7 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
                         placement_rotation(d.rotation),
                         glam::Vec3::from_array(d.position),
                         d.scale,
-                        (d.position[2] - 0.5, d.position[2] + FOOTPRINT_HEIGHT),
+                        (d.position[2] + KERB, d.position[2] + FOOTPRINT_HEIGHT),
                     );
                     hull_footprint(&h.points)
                 })
@@ -856,9 +856,10 @@ fn m2_hull(chain: &mut Chain, model: &str) -> Option<Hull> {
 /// Enclosed open patches of a solid footprint smaller than this (pixels) are inside it.
 const SOLID_HOLE_PX: usize = 200;
 
-/// The height over a street (yards) under which a WMO doodad's hull is ridden over, not hit: a
-/// rubble mound (Stratholme's `KarazahnRockRubble02`, a yard high) or a broken barrel, which a
-/// player walks over too; a crate stands taller.
+/// The height over the ground (yards) under which a doodad's hull is ridden or hopped over, not
+/// hit: a rubble mound (Stratholme's `KarazahnRockRubble02`, a yard high), a broken barrel, a
+/// log, a low fence. The kart's hop clears a box up to 1.15 yd at once (kart-driver's
+/// `measure_the_tallest_box_a_hop_clears`); a crate stands taller.
 const KERB: f32 = 1.1;
 
 /// A WMO doodad whose origin is further than this (yards) above or below the ground under it stands
