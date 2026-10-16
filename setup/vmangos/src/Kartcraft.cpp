@@ -1963,6 +1963,10 @@ namespace Kartcraft
     constexpr float CRATE_ROW_SPACING = 4.f;
     constexpr uint32 CRATE_ROW = 4;
     constexpr uint32 SEGMENT_FRUIT = 3;
+    // Kartcraft's own: a weapon crate row and a fruit crate on one segment in CRATES_EVERY, not
+    // on every one (a quarter of the crates); the rows a segment apart from the fruit crates, and
+    // a course of fewer segments still gets one row.
+    constexpr size_t CRATES_EVERY = 4;
     constexpr float FRUIT_SPACING = 4.f;
 
     // The roulette tables (zGlobal_DATA.c:8108-8174; Race4 samples only its first 19 entries,
@@ -2052,6 +2056,7 @@ namespace Kartcraft
         }
         size_t n = course.points.size();
         size_t segments = !course.crates.empty() ? 0 : course.laps ? n : n - 1;
+        size_t const rowAt = segments ? std::min(CRATES_EVERY / 2, segments - 1) : 0;
         for (size_t i = 0; i < segments; ++i)
         {
             auto const& a = course.points[i];
@@ -2067,13 +2072,17 @@ namespace Kartcraft
                 return std::make_pair(a.first + dx * t + px * across + ux * along,
                     a.second + dy * t + py * across + uy * along);
             };
-            auto fruitCrate = at(0.25f, 0.f, 0.f);
-            place('F', fruitCrate.first, fruitCrate.second);
-            for (uint32 k = 0; k < CRATE_ROW; ++k)
+            if (i % CRATES_EVERY == 0)
             {
-                auto crate = at(0.5f, (k - (CRATE_ROW - 1) / 2.f) * CRATE_ROW_SPACING, 0.f);
-                place('Q', crate.first, crate.second);
+                auto fruitCrate = at(0.25f, 0.f, 0.f);
+                place('F', fruitCrate.first, fruitCrate.second);
             }
+            if (i % CRATES_EVERY == rowAt)
+                for (uint32 k = 0; k < CRATE_ROW; ++k)
+                {
+                    auto crate = at(0.5f, (k - (CRATE_ROW - 1) / 2.f) * CRATE_ROW_SPACING, 0.f);
+                    place('Q', crate.first, crate.second);
+                }
             for (uint32 k = 0; k < SEGMENT_FRUIT; ++k)
             {
                 auto fruit = at(0.75f, 0.f, (k - (SEGMENT_FRUIT - 1) / 2.f) * FRUIT_SPACING);
