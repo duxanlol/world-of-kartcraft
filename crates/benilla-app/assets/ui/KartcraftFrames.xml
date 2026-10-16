@@ -2296,7 +2296,25 @@
         end
 
         -- /marathon: the popup while a queue is open, and our place in it; else when they run.
-        function BenillaKartMarathon_Slash()
+        -- /marathon leave leaves the queue; any other word is a GM's order, the server's to take
+        -- or refuse (status, open, go, end, restart, route, map, delay).
+        function BenillaKartMarathon_Slash(msg)
+            local text = string.gsub(msg or "", "^%s+", "")
+            text = string.gsub(text, "%s+$", "")
+            text = string.gsub(text, "%s+", "\t")
+            local words = BenillaKart_Split(text)
+            local first = string.lower(words[1] or "")
+            if first == "leave" then
+                BenillaKart_Send("Mar-")
+                return
+            elseif first ~= "" then
+                local order = "MarGM"
+                for i = 1, table.getn(words) do
+                    if words[i] ~= "" then order = order .. "\t" .. words[i] end
+                end
+                BenillaKart_Send(order)
+                return
+            end
             local m = BenillaKartMarathon
             if m.open then
                 BenillaKartMarathonFrame:Show()
@@ -3386,7 +3404,7 @@
             SLASH_BENILLA_UNSTUCK1 = "/unstuck"
             SlashCmdList["BENILLA_UNSTUCK"] = function() BenillaKart_Unstuck() end
             SLASH_BENILLA_MARATHON1 = "/marathon"
-            SlashCmdList["BENILLA_MARATHON"] = function() BenillaKartMarathon_Slash() end
+            SlashCmdList["BENILLA_MARATHON"] = function(msg) BenillaKartMarathon_Slash(msg) end
             SLASH_BENILLA_KARTNAV1 = "/kartnav"
             SlashCmdList["BENILLA_KARTNAV"] = function() BenillaKartNav_Toggle() end
             SLASH_BENILLA_GARAGE1 = "/garage"

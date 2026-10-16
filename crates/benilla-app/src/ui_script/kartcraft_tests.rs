@@ -3073,6 +3073,22 @@ fn a_marathon_delivery_is_queued_shut_counted_down_and_driven_on_the_clock() {
     from_server(&mut s, "R@MarEnd".replace('@', "	").as_str());
     assert!(!shown(&s, "BenillaKartDeliveryFrame"));
     assert!(!shown(&s, "BenillaKartMarathonFrame"));
+    // /marathon's words: leave for anyone, any other a GM's order for the server.
+    s.run("SlashCmdList['BENILLA_MARATHON']('  leave ')")
+        .unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT@R@Mar-".replace('@', "	")]);
+    s.run("SlashCmdList['BENILLA_MARATHON']('route Ratchet;Cenarion Hold;Everlook')")
+        .unwrap();
+    assert_eq!(
+        sent(&mut s),
+        ["KARTCRAFT@R@MarGM@route@Ratchet;Cenarion@Hold;Everlook".replace('@', "	")]
+    );
+    s.run("SlashCmdList['BENILLA_MARATHON']('open 20 kalimdor')")
+        .unwrap();
+    assert_eq!(
+        sent(&mut s),
+        ["KARTCRAFT@R@MarGM@open@20@kalimdor".replace('@', "	")]
+    );
     // Someone who did not join: the queue shutting takes the popup away.
     from_server(
         &mut s,

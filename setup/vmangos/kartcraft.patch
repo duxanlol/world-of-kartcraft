@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..b566df2
+index 0000000..db00e20
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,5355 @@
+@@ -0,0 +1,5586 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -119,6 +119,7 @@ index 0000000..b566df2
 +#include <shared_mutex>
 +#include <random>
 +#include <set>
++#include <functional>
 +#include <unordered_map>
 +#include <unordered_set>
 +#include "GridMap.h"
@@ -4071,6 +4072,42 @@ index 0000000..b566df2
 +        m = Marathon();
 +    }
 +
++    // The route's par: each leg's, as a delivery's (pack.py's delivery_routes).
++    static void MarathonPar(Marathon& m)
++    {
++        m.par = 0;
++        for (size_t i = 1; i < m.stops.size(); ++i)
++        {
++            float d = TownDistance(*m.stops[i - 1], *m.stops[i]);
++            m.par += std::max<uint32>(120, uint32(std::ceil(d * 1.5f / 32.f / 30.f)) * 30);
++        }
++    }
++
++    // Everyone told of the open queue as it is now: the popup, and world chat.
++    static void AnnounceMarathonOpen(Marathon const& m)
++    {
++        SendLineToAll("KARTCRAFT\tR\tMarOpen\t" + std::to_string(MarathonSecondsLeft(m)) + "\t" + MarathonStops(m));
++        AnnounceAll("|cffffd100A Marathon Delivery leaves in " + std::to_string((MarathonSecondsLeft(m) + 59) / 60) +
++            " minutes:|r " + MarathonRouteText(m) + ". Join it from the popup, or /marathon. The first three in win!");
++    }
++
++    // The queue opened for a start at `starts` (unix time) on `map` over `stops`; false, and
++    // nothing opened, with fewer than two stops.
++    static bool OpenMarathon(Marathon& m, uint32 starts, uint32 map, std::vector<MarathonTown const*> stops)
++    {
++        if (stops.size() < 2)
++            return false;
++        m = Marathon();
++        m.starts = starts;
++        m.map = map;
++        m.stops = std::move(stops);
++        MarathonPar(m);
++        m.phase = Marathon::OPEN;
++        m.reminded = MarathonSecondsLeft(m) / MINUTE + 1;
++        AnnounceMarathonOpen(m);
++        return true;
++    }
++
 +    // The next start not yet run, from the table, every MARATHON_SCHEDULE_RECHECK: one whose
 +    // queue's window is past without it having opened (a restart, a pause) is marked run.
 +    static void MarathonSchedule(Marathon& m, uint32 now)
@@ -4079,37 +4116,20 @@ index 0000000..b566df2
 +            (s_scheduleChecked && WorldTimer::getMSTimeDiff(s_scheduleChecked, now) < MARATHON_SCHEDULE_RECHECK))
 +            return;
 +        s_scheduleChecked = now;
-+        uint32 const clock = uint32(std::time(nullptr));
-+        WorldDatabase.PExecute("UPDATE `kartcraft_marathons` SET `done` = 1 WHERE `done` = 0 AND `starts` < %u", clock);
++        uint32 const unixNow = uint32(std::time(nullptr));
++        WorldDatabase.PExecute("UPDATE `kartcraft_marathons` SET `done` = 1 WHERE `done` = 0 AND `starts` < %u", unixNow);
 +        std::unique_ptr<QueryResult> result = WorldDatabase.PQuery(
 +            "SELECT `starts`, `map` FROM `kartcraft_marathons` WHERE `done` = 0 AND `starts` >= %u "
-+            "ORDER BY `starts` LIMIT 1", clock);
++            "ORDER BY `starts` LIMIT 1", unixNow);
 +        if (!result)
 +            return;
 +        Field* f = result->Fetch();
 +        uint32 const starts = f[0].GetUInt32();
 +        uint32 const map = f[1].GetUInt32();
-+        if (starts > clock + MARATHON_OPEN)
++        if (starts > unixNow + MARATHON_OPEN)
 +            return;
-+        m.starts = starts;
-+        m.map = map;
-+        m.stops = MarathonRoute(starts, map);
-+        if (m.stops.size() < 2)
-+        {
++        if (!OpenMarathon(m, starts, map, MarathonRoute(starts, map)))
 +            WorldDatabase.PExecute("UPDATE `kartcraft_marathons` SET `done` = 1 WHERE `starts` = %u", starts);
-+            m = Marathon();
-+            return;
-+        }
-+        for (size_t i = 1; i < m.stops.size(); ++i)
-+        {
-+            float d = TownDistance(*m.stops[i - 1], *m.stops[i]);
-+            m.par += std::max<uint32>(120, uint32(std::ceil(d * 1.5f / 32.f / 30.f)) * 30);
-+        }
-+        m.phase = Marathon::OPEN;
-+        m.reminded = MarathonSecondsLeft(m) / MINUTE + 1;
-+        SendLineToAll("KARTCRAFT\tR\tMarOpen\t" + std::to_string(MarathonSecondsLeft(m)) + "\t" + MarathonStops(m));
-+        AnnounceAll("|cffffd100A Marathon Delivery leaves in " + std::to_string((MarathonSecondsLeft(m) + 59) / 60) +
-+            " minutes:|r " + MarathonRouteText(m) + ". Join it from the popup, or /marathon. The first three in win!");
 +    }
 +
 +    // The start: everyone queued who may go, to the first town with the package.
@@ -4197,8 +4217,14 @@ index 0000000..b566df2
 +                (r.place == 1 ? "st" : r.place == 2 ? "nd" : "rd") + ", in " + Clock(r.ms) + ".");
 +    }
 +
++    // GM orders (HandleMarathon's "MarGM"), run by the tick on the world thread, where a
++    // marathon's teleports and packages belong.
++    static std::vector<std::function<void(Marathon&, uint32)>> s_marathonOrders;
++
 +    static void MarathonTick(Marathon& m, uint32 now)
 +    {
++        for (auto& order : std::exchange(s_marathonOrders, {}))
++            order(m, now);
 +        MarathonSchedule(m, now);
 +        switch (m.phase)
 +        {
@@ -4283,11 +4309,216 @@ index 0000000..b566df2
 +        MarathonTick(s_marathon, now);
 +    }
 +
-+    // "R\tMar+", "R\tMar-": the queue joined or left while it is open. False when the line is
-+    // not one of them. Under s_mutex (HandleLine).
++    // Whether `a` and `b` are the same word, any case.
++    static bool SameWord(std::string const& a, std::string const& b)
++    {
++        return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y)
++        {
++            return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
++        });
++    }
++
++    // A neutral town by name, any case.
++    static MarathonTown const* FindMarathonTown(std::string const& name)
++    {
++        for (MarathonTown const& t : MARATHON_TOWNS)
++            if (SameWord(t.name, name))
++                return &t;
++        return nullptr;
++    }
++
++    // "ek" or "kalimdor" (any case, or 0 / 1): the continent; false for neither.
++    static bool MarathonMap(std::string const& word, uint32& map)
++    {
++        if (SameWord(word, "ek") || SameWord(word, "eastern") || word == "0")
++            map = 0;
++        else if (SameWord(word, "kalimdor") || SameWord(word, "kal") || word == "1")
++            map = 1;
++        else
++            return false;
++        return true;
++    }
++
++    // A word as minutes (0 to a day), else `fallback`.
++    static uint32 MarathonMinutes(std::vector<std::string> const& f, size_t i, uint32 fallback)
++    {
++        if (f.size() <= i || f[i].empty() || !std::isdigit(static_cast<unsigned char>(f[i][0])))
++            return fallback;
++        return std::min<uint32>(uint32(std::strtoul(f[i].c_str(), nullptr, 10)), 24 * 60);
++    }
++
++    // "R\tMarGM\t<order>\t<args...>", a GM's (SEC_GAMEMASTER) hand on the marathon: status, open
++    // [minutes] [ek|kalimdor], go, end, restart [minutes], route <town;town;...>, map
++    // <ek|kalimdor>, delay <minutes>. Queued for the tick, which answers the GM.
++    static void MarathonOrder(Player* player, std::vector<std::string> const& f)
++    {
++        ChatHandler chat(player->GetSession());
++        if (player->GetSession()->GetSecurity() < SEC_GAMEMASTER)
++        {
++            chat.SendSysMessage("Only a GM can run the Marathon Delivery by hand.");
++            return;
++        }
++        std::string const order = f.size() > 2 ? f[2] : "status";
++        ObjectGuid const gm = player->GetObjectGuid();
++        auto tell = [gm](std::string const& text)
++        {
++            if (Player* p = ObjectAccessor::FindPlayer(gm))
++                ChatHandler(p->GetSession()).SendSysMessage(("Marathon: " + text).c_str());
++        };
++        uint32 const minutes = MarathonMinutes(f, 3, 10);
++        if (order == "status")
++            s_marathonOrders.push_back([tell](Marathon& m, uint32 /*now*/)
++            {
++                char const* phase[] = { "none", "queue open", "counting down", "running" };
++                std::string text = std::string(phase[m.phase]);
++                if (m.phase != Marathon::NONE)
++                    text += ", " + MarathonRouteText(m) + " (par " + std::to_string(m.par / 60) + " min)";
++                if (m.phase == Marathon::OPEN)
++                    text += ", leaves in " + std::to_string(MarathonSecondsLeft(m)) + " s, " +
++                        std::to_string(m.queue.size()) + " queued";
++                if (m.phase == Marathon::RUNNING || m.phase == Marathon::COUNTDOWN)
++                    text += ", " + std::to_string(m.runners.size()) + " couriers, " +
++                        std::to_string(m.finishers) + " in";
++                tell(text + ".");
++            });
++        else if (order == "open" || order == "restart")
++        {
++            bool const restart = order == "restart";
++            uint32 map = 2;
++            if (f.size() > 4)
++                MarathonMap(f[4], map);
++            else if (f.size() > 3 && !std::isdigit(static_cast<unsigned char>(f[3][0])))
++                MarathonMap(f[3], map);
++            s_marathonOrders.push_back([tell, restart, minutes, map](Marathon& m, uint32 /*now*/)
++            {
++                if (m.phase != Marathon::NONE && !restart)
++                {
++                    tell("one is on already: end or restart it first.");
++                    return;
++                }
++                uint32 on = map < 2 ? map : m.phase != Marathon::NONE ? m.map : uint32(std::time(nullptr) / 60) % 2;
++                if (m.phase != Marathon::NONE)
++                    EndMarathon(m);
++                uint32 const starts = uint32(std::time(nullptr)) + minutes * MINUTE;
++                if (OpenMarathon(m, starts, on, MarathonRoute(starts, on)))
++                    tell("opened: " + MarathonRouteText(m) + ", leaving in " + std::to_string(minutes) + " min.");
++                else
++                    tell("that continent has too few towns.");
++            });
++        }
++        else if (order == "go")
++            s_marathonOrders.push_back([tell](Marathon& m, uint32 /*now*/)
++            {
++                if (m.phase != Marathon::OPEN)
++                {
++                    tell("no queue is open.");
++                    return;
++                }
++                m.starts = uint32(std::time(nullptr));
++                tell("leaving now with " + std::to_string(m.queue.size()) + " queued.");
++            });
++        else if (order == "end")
++            s_marathonOrders.push_back([tell](Marathon& m, uint32 /*now*/)
++            {
++                if (m.phase == Marathon::NONE)
++                {
++                    tell("none is on.");
++                    return;
++                }
++                if (m.phase == Marathon::OPEN)
++                    SendLineToAll("KARTCRAFT\tR\tMarEnd");
++                EndMarathon(m);
++                AnnounceAll("|cffffd100The Marathon Delivery was called off.|r");
++                tell("ended.");
++            });
++        else if (order == "route" || order == "map" || order == "delay")
++        {
++            std::string args;
++            for (size_t i = 3; i < f.size(); ++i)
++                args += (i > 3 ? " " : "") + f[i];
++            s_marathonOrders.push_back([tell, order, args, minutes](Marathon& m, uint32 now)
++            {
++                if (m.phase != Marathon::OPEN)
++                {
++                    tell("only an open queue's marathon can be changed: open one first.");
++                    return;
++                }
++                if (order == "delay")
++                    m.starts = uint32(std::time(nullptr)) + minutes * MINUTE;
++                else if (order == "map")
++                {
++                    uint32 map;
++                    if (!MarathonMap(args, map))
++                    {
++                        tell("which continent? ek or kalimdor.");
++                        return;
++                    }
++                    std::vector<MarathonTown const*> stops = MarathonRoute(m.starts + now, map);
++                    if (stops.size() < 2)
++                    {
++                        tell("that continent has too few towns.");
++                        return;
++                    }
++                    m.map = map;
++                    m.stops = std::move(stops);
++                }
++                else
++                {
++                    std::vector<MarathonTown const*> stops;
++                    size_t from = 0;
++                    while (from <= args.size())
++                    {
++                        size_t to = args.find(';', from);
++                        std::string name = args.substr(from, to == std::string::npos ? std::string::npos : to - from);
++                        while (!name.empty() && name.front() == ' ')
++                            name.erase(name.begin());
++                        while (!name.empty() && name.back() == ' ')
++                            name.pop_back();
++                        if (!name.empty())
++                        {
++                            MarathonTown const* t = FindMarathonTown(name);
++                            if (!t || (!stops.empty() && t->map != stops.front()->map))
++                            {
++                                tell("no neutral town \"" + name + "\" on the route's continent.");
++                                return;
++                            }
++                            stops.push_back(t);
++                        }
++                        if (to == std::string::npos)
++                            break;
++                        from = to + 1;
++                    }
++                    if (stops.size() < 2)
++                    {
++                        tell("a route needs two towns or more, separated by ';'.");
++                        return;
++                    }
++                    m.map = stops.front()->map;
++                    m.stops = std::move(stops);
++                }
++                MarathonPar(m);
++                m.reminded = MarathonSecondsLeft(m) / MINUTE + 1;
++                AnnounceMarathonOpen(m);
++                tell("changed: " + MarathonRouteText(m) + ", leaving in " +
++                    std::to_string((MarathonSecondsLeft(m) + 59) / 60) + " min.");
++            });
++        }
++        else
++            chat.SendSysMessage("Marathon orders: status, open [minutes] [ek|kalimdor], go, end, restart [minutes], "
++                "route <town;town;...>, map <ek|kalimdor>, delay <minutes>.");
++    }
++
++    // "R\tMar+", "R\tMar-": the queue joined or left while it is open; "R\tMarGM": a GM's order.
++    // False when the line is none of them. Under s_mutex (HandleLine).
 +    static bool HandleMarathon(Player* player, std::vector<std::string> const& f)
 +    {
 +        std::string const& verb = f[1];
++        if (verb == "MarGM")
++        {
++            std::lock_guard<std::mutex> lock(s_marathonMutex);
++            MarathonOrder(player, f);
++            return true;
++        }
 +        if (verb != "Mar+" && verb != "Mar-")
 +            return false;
 +        std::lock_guard<std::mutex> lock(s_marathonMutex);
