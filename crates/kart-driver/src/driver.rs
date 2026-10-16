@@ -45,6 +45,17 @@ const SLIDE_TAP_FRAMES: u32 = 40;
 /// Progress the stuck check counts, lu, and how long a recovery reverses, frames.
 const PROGRESS_LU: f32 = 80.0;
 const REVERSE_FRAMES: u32 = 36;
+/// Hopping a low obstacle, as a player does: a face standing ahead at [`HOP_LOW`] yards up and
+/// none at [`HOP_HIGH`] (the hop's apex is 1.4 yd, 51 lu), within the distance the kart covers
+/// in [`HOP_LEAD`] seconds (no nearer than [`HOP_REACH`].0 yards, no farther than .1), a face
+/// steeper than a ramp ([`HOP_WALL`], its normal's up) and no hop in the last [`HOP_EVERY`]
+/// seconds (CTR's 384 ms cooldown and a little).
+const HOP_LOW: f32 = 0.3;
+const HOP_HIGH: f32 = 1.6;
+const HOP_LEAD: f32 = 0.2;
+const HOP_REACH: (f32, f32) = (1.5, 5.0);
+const HOP_WALL: f32 = 0.5;
+const HOP_EVERY: f32 = 0.5;
 
 /// How the driver takes its powerslides: the defaults are the course tester's, a decent player's;
 /// a showcase run slides harder.
@@ -103,6 +114,8 @@ pub struct DriveOpts {
     pub stuck_secs: f32,
     /// Give up after this many recoveries with no gate passed between them.
     pub max_recoveries: u32,
+    /// Hop a low obstacle ahead (a kerb, a fence, a log) rather than drive into it.
+    pub hops: bool,
     /// Powerslide in long bends.
     pub powerslides: bool,
     /// Seconds between trace samples.
@@ -121,6 +134,7 @@ impl Default for DriveOpts {
             checkpoint_radius_yards: 8.0,
             stuck_secs: 2.0,
             max_recoveries: 5,
+            hops: true,
             powerslides: true,
             trace_every: 0.25,
             slide: SlideTuning::default(),
@@ -160,6 +174,8 @@ pub struct DriveReport {
     pub wall_contact_points: Vec<Vec3>,
     pub slams: u32,
     pub stuck_recoveries: u32,
+    /// Hops over low obstacles ([`DriveOpts::hops`]).
+    pub hops: u32,
     pub off_track_events: u32,
     pub off_track_time: f32,
     pub airtime: f32,
@@ -190,6 +206,7 @@ impl DriveReport {
             "wall_contacts": self.wall_contacts,
             "slams": self.slams,
             "stuck_recoveries": self.stuck_recoveries,
+            "hops": self.hops,
             "off_track_events": self.off_track_events,
             "off_track_time": self.off_track_time,
             "airtime": self.airtime,
@@ -270,6 +287,7 @@ pub fn drive(world: &Collision, route: &Route, opts: &DriveOpts) -> DriveReport 
     let mut next_sample = 0.0f32;
     let mut pos = kart.pose().position;
     let mut t = 0.0f32;
+    let mut hopped_at = f32::NEG_INFINITY;
 
     for tick in 0..ticks {
         t = tick as f32 * TICK;
@@ -325,6 +343,25 @@ pub fn drive(world: &Collision, route: &Route, opts: &DriveOpts) -> DriveReport 
             next_sample += opts.trace_every;
         }
 
+        if opts.hops && driver.recover == 0 && kart.grounded() && t - hopped_at > HOP_EVERY {
+            let y = opts.lu_per_yard;
+            let h = kart.pose().heading as f32 / 4096.0 * TAU;
+            let ahead = Vec3::new(h.sin(), 0.0, h.cos());
+            let v = kart.speed().abs() as f32 * SPEED_LUS;
+            let reach = (v * HOP_LEAD).clamp(HOP_REACH.0 * y, HOP_REACH.1 * y);
+            let low = world
+                .ray(pos + Vec3::Y * HOP_LOW * y, ahead, reach)
+                .is_some_and(|hit| hit.normal.y.abs() < HOP_WALL);
+            if low
+                && world
+                    .ray(pos + Vec3::Y * HOP_HIGH * y, ahead, reach + y)
+                    .is_none()
+            {
+                driver.hop = true;
+                hopped_at = t;
+                report.hops += 1;
+            }
+        }
         let input = driver.input(&kart, pos, seg, s);
         kart.tick(world, &input, &mods);
         let here = kart.pose().position;
@@ -470,6 +507,8 @@ pub(crate) struct Driver<'a> {
     l1_prev: bool,
     /// Frames of reversing left.
     recover: u32,
+    /// Hop this frame: a low obstacle ahead.
+    hop: bool,
     tuning: SlideTuning,
 }
 
@@ -496,6 +535,7 @@ impl<'a> Driver<'a> {
             slide: Slide::Off(0),
             l1_prev: false,
             recover: 0,
+            hop: false,
             tuning,
         }
     }
@@ -661,6 +701,10 @@ impl<'a> Driver<'a> {
             }
         }
         self.l1_prev = input.l1;
+        // A low obstacle ahead: a tap of the hop, outside a slide (which holds it already).
+        if std::mem::take(&mut self.hop) && matches!(self.slide, Slide::Off(_)) {
+            input.r1 = true;
+        }
         input
     }
 }

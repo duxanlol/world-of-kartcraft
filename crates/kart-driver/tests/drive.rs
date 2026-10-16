@@ -246,3 +246,66 @@ fn a_hairpin_slows_the_kart_and_still_finishes() {
     assert!(slowest_in_bend < top() * 0.6, "{slowest_in_bend}");
     assert!(report.max_speed > top() * 0.9);
 }
+
+/// A straight with a box across it `height` lu tall at 1500 lu: a log, a kerb or a wall.
+fn across(height: f32) -> (Collision, Route) {
+    let centre = line(
+        Vec3::new(0.0, 0.0, -200.0),
+        Vec3::new(0.0, 0.0, 4000.0),
+        100.0,
+    );
+    let mut tris = corridor(&centre, false, 300.0, 300.0, |_| false);
+    let (x, up) = (Vec3::X * 300.0, Vec3::Y * height);
+    let (near, far) = (Vec3::Z * 1500.0, Vec3::Z * 1530.0);
+    quad(&mut tris, near - x, near + x, near + x + up, near - x + up);
+    quad(
+        &mut tris,
+        near - x + up,
+        near + x + up,
+        far + x + up,
+        far - x + up,
+    );
+    quad(&mut tris, far - x, far + x, far + x + up, far - x + up);
+    let route = Route::new(
+        line(Vec3::ZERO, Vec3::new(0.0, 0.0, 3800.0), 500.0),
+        0,
+        400.0,
+    );
+    (world(tris), route)
+}
+
+#[test]
+fn a_log_across_the_road_is_hopped_and_a_wall_is_not() {
+    // 0.8 yd: under the hop's 1.4 yd apex.
+    let (w, route) = across(29.0);
+    let hopped = drive(&w, &route, &opts(30.0));
+    show("log, hopping", &hopped);
+    assert!(hopped.finished && hopped.hops >= 1, "the log is hopped");
+    let no_hops = DriveOpts {
+        hops: false,
+        ..opts(30.0)
+    };
+    let blocked = drive(&w, &route, &no_hops);
+    show("log, no hops", &blocked);
+    assert!(!blocked.finished, "without a hop the log stops the kart");
+    // 3 yd: no hop clears it, and none is tried.
+    let (w, route) = across(110.0);
+    let wall = drive(&w, &route, &opts(30.0));
+    show("wall", &wall);
+    assert!(!wall.finished && wall.hops == 0);
+}
+
+#[test]
+#[ignore = "a measurement: run with --ignored --nocapture"]
+fn measure_the_tallest_box_a_hop_clears() {
+    for h in (10..=70).step_by(4) {
+        let (w, route) = across(h as f32);
+        let r = drive(&w, &route, &opts(30.0));
+        println!(
+            "box {h} lu ({:.2} yd): finished {} hops {}",
+            h as f32 / 36.576,
+            r.finished,
+            r.hops
+        );
+    }
+}
