@@ -4,7 +4,7 @@
 
 use std::sync::{mpsc, Arc, Mutex};
 
-use benilla_world::collision::WorldCollision;
+use benilla_world::collision::{ColliderPiece, WorldCollision};
 use bevy::prelude::*;
 use ctr_kart::{Class, Collision, Event, Ground, Input, Kart, Modifiers, Pose, State};
 
@@ -98,8 +98,8 @@ pub struct Feedback {
 pub struct Session {
     kart: Option<Kart>,
     world: Option<Arc<Collision>>,
-    /// Asks the builder thread for a grid over these faces; the newest wins.
-    build: Option<mpsc::Sender<(u64, Vec<Tri>)>>,
+    /// Asks the builder thread for a grid over these colliders' faces; the newest wins.
+    build: Option<mpsc::Sender<Job>>,
     built: Option<Mutex<mpsc::Receiver<Built>>>,
     /// Bumped at every start and stop, so a grid built for an old session is dropped.
     epoch: u64,
@@ -164,29 +164,38 @@ impl Taps {
     }
 }
 
-/// Every collision triangle in the box around `centre`, in lu from `origin`; zero-area and
-/// non-finite faces are left out.
-fn gather(collide: &WorldCollision, centre: Vec3, origin: Vec3) -> Vec<Tri> {
-    collide
-        .faces_near_body(centre, GATHER_HALF, usize::MAX)
-        .into_iter()
-        .filter_map(|face| {
-            let t = face.verts().map(|v| to_lu(v, origin));
-            let solid = t.iter().all(|v| v.is_finite())
-                && (t[1] - t[0]).cross(t[2] - t[0]).length_squared() > 1e-4;
-            solid.then(|| t.map(|v| v.to_array()))
-        })
-        .collect()
+/// A grid to build: the session's epoch, the colliders near the kart, the box's centre and the
+/// session's lu origin.
+struct Job {
+    epoch: u64,
+    pieces: Vec<ColliderPiece>,
+    centre: Vec3,
+    origin: Vec3,
 }
 
-type Builder = (
-    mpsc::Sender<(u64, Vec<Tri>)>,
-    mpsc::Receiver<(u64, Arc<Collision>)>,
-);
+/// Every collision triangle of `pieces` in the box around `centre`, in lu from `origin`;
+/// zero-area and non-finite faces are left out. Off the main thread for the moving kart: a
+/// town's box holds tens of thousands of faces.
+fn triangles(pieces: &[ColliderPiece], centre: Vec3, origin: Vec3) -> Vec<Tri> {
+    let mut out = Vec::new();
+    for piece in pieces {
+        piece.faces_in(centre, GATHER_HALF, |verts, _| {
+            let t = verts.map(|v| to_lu(v, origin));
+            let solid = t.iter().all(|v| v.is_finite())
+                && (t[1] - t[0]).cross(t[2] - t[0]).length_squared() > 1e-4;
+            if solid {
+                out.push(t.map(|v| v.to_array()));
+            }
+        });
+    }
+    out
+}
 
-/// The builder thread: the newest face set asked for, bucketed into a grid.
+type Builder = (mpsc::Sender<Job>, mpsc::Receiver<(u64, Arc<Collision>)>);
+
+/// The builder thread: the newest colliders asked for, their faces bucketed into a grid.
 fn spawn_builder() -> std::io::Result<Builder> {
-    let (send, jobs) = mpsc::channel::<(u64, Vec<Tri>)>();
+    let (send, jobs) = mpsc::channel::<Job>();
     let (publish, built) = mpsc::channel();
     std::thread::Builder::new()
         .name("kart-collision".into())
@@ -195,9 +204,9 @@ fn spawn_builder() -> std::io::Result<Builder> {
                 while let Ok(newer) = jobs.try_recv() {
                     job = newer;
                 }
-                let (epoch, tris) = job;
+                let tris = triangles(&job.pieces, job.centre, job.origin);
                 let grid = Arc::new(Collision::new(tris, CELL_LU));
-                if publish.send((epoch, grid)).is_err() {
+                if publish.send((job.epoch, grid)).is_err() {
                     break;
                 }
             }
@@ -287,7 +296,8 @@ impl Session {
         self.origin = at;
         self.centre = at;
         self.gathered_at = now;
-        let world = Collision::new(gather(collide, at, at), CELL_LU);
+        let pieces = collide.colliders_near_body(at, GATHER_HALF);
+        let world = Collision::new(triangles(&pieces, at, at), CELL_LU);
         let faces = world.len();
         // The ground under us, from a little above the feet: a body the server put a little under
         // the terrain (its positions are not exact) must not start the kart beneath it.
@@ -446,11 +456,17 @@ impl Session {
             || rolled.y.abs() > GATHER_HALF.y * 0.5
             || now - self.gathered_at > REFRESH_SECS
         {
-            let triangles = gather(collide, at, self.origin);
+            // Only the colliders here: their faces are walked on the builder thread.
+            let pieces = collide.colliders_near_body(at, GATHER_HALF);
             self.centre = at;
             self.gathered_at = now;
             if let Some(send) = &self.build {
-                let _ = send.send((self.epoch, triangles));
+                let _ = send.send(Job {
+                    epoch: self.epoch,
+                    pieces,
+                    centre: at,
+                    origin: self.origin,
+                });
             }
         }
         let origin = self.origin;

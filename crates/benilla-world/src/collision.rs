@@ -17,6 +17,8 @@ use bevy::math::{Dir3, Quat, Vec3};
 
 mod one_sided;
 
+pub use one_sided::ColliderPiece;
+
 /// The collision audiences. avian puts every collider without explicit `CollisionLayers` on bit 0,
 /// [`CollisionLayer::Default`]; only WMO faces and liquid carry a layer.
 #[derive(PhysicsLayer, Default, Clone, Copy)]
@@ -297,6 +299,13 @@ impl WorldCollision<'_, '_> {
     /// Every front-facing triangle in a box around `at`: the step probe's face gather.
     pub fn faces_near_body(&self, at: Vec3, half: Vec3, limit: usize) -> Vec<one_sided::FaceProbe> {
         one_sided::faces_near(&self.ms, at, half, &Self::body_filter(), limit)
+    }
+
+    /// The colliders that stop the body in the box `at ± half`, as owned pieces whose faces
+    /// another thread can read ([`one_sided::ColliderPiece::faces_in`]): cheap to take here, the
+    /// walk over their faces left to the caller's thread.
+    pub fn colliders_near_body(&self, at: Vec3, half: Vec3) -> Vec<one_sided::ColliderPiece> {
+        one_sided::pieces_near(&self.ms, at, half, &Self::body_filter())
     }
 }
 

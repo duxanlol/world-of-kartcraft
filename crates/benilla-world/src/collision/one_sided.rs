@@ -492,6 +492,74 @@ impl FaceProbe {
 
 /// Every trimesh face in the box `at ± half` that `filter` reaches, nearest centroid first. A
 /// diagnostic, ungated on purpose: it shows the faces the law rejects beside those it keeps.
+/// One collider as another thread can read its faces: its shape (shared, so a clone is a
+/// reference count) and its place.
+#[derive(Clone)]
+pub struct ColliderPiece {
+    pub entity: Entity,
+    collider: Collider,
+    pos: Vec3,
+    rot: Quat,
+}
+
+impl ColliderPiece {
+    /// Its faces within the world box `at ± half`, world space at the authored winding, each with
+    /// its normal; a face with no normal (zero area) is left out.
+    pub fn faces_in(&self, at: Vec3, half: Vec3, mut face: impl FnMut([Vec3; 3], Vec3)) {
+        let Some(trimesh) = self.collider.shape_scaled().as_trimesh() else {
+            return;
+        };
+        let box_aabb = ColliderAabb {
+            min: at - half,
+            max: at + half,
+        };
+        let inv_rot = self.rot.inverse();
+        for tri_id in trimesh
+            .bvh()
+            .intersect_aabb(&aabb_to_local(box_aabb, self.pos, inv_rot))
+        {
+            let tri = trimesh.triangle(tri_id);
+            let Some(n) = tri.normal() else {
+                continue;
+            };
+            face(
+                [tri.a, tri.b, tri.c].map(|v| self.pos + self.rot * v),
+                self.rot * n,
+            );
+        }
+    }
+}
+
+/// The colliders `filter` keeps whose bounds meet the box `at ± half`, as [`ColliderPiece`]s.
+pub(crate) fn pieces_near(
+    ms: &MoveAndSlide<'_, '_>,
+    at: Vec3,
+    half: Vec3,
+    filter: &SpatialQueryFilter,
+) -> Vec<ColliderPiece> {
+    let box_aabb = ColliderAabb {
+        min: at - half,
+        max: at + half,
+    };
+    ms.spatial_query
+        .aabb_intersections_with_aabb(box_aabb)
+        .into_iter()
+        .filter_map(|entity| {
+            let (collider, pos, rot, layers) = ms.colliders.get(entity).ok()?;
+            filter
+                .test(entity, layers.copied().unwrap_or_default())
+                .then(|| ColliderPiece {
+                    entity,
+                    collider: collider.clone(),
+                    pos: pos.0,
+                    rot: rot.0,
+                })
+        })
+        .collect()
+}
+
+/// The faces in the box `at ± half`, nearest first when `limit` cuts them (the sort is skipped
+/// when it keeps them all).
 pub(crate) fn faces_near(
     ms: &MoveAndSlide<'_, '_>,
     at: Vec3,
@@ -499,43 +567,24 @@ pub(crate) fn faces_near(
     filter: &SpatialQueryFilter,
     limit: usize,
 ) -> Vec<FaceProbe> {
-    let box_aabb = ColliderAabb {
-        min: at - half,
-        max: at + half,
-    };
     let mut out = Vec::new();
-    for entity in ms.spatial_query.aabb_intersections_with_aabb(box_aabb) {
-        let Ok((collider, pos, rot, layers)) = ms.colliders.get(entity) else {
-            continue;
-        };
-        if !filter.test(entity, layers.copied().unwrap_or_default()) {
-            continue;
-        }
-        let Some(trimesh) = collider.shape_scaled().as_trimesh() else {
-            continue;
-        };
-        let inv_rot = rot.0.inverse();
-        for tri_id in trimesh
-            .bvh()
-            .intersect_aabb(&aabb_to_local(box_aabb, pos.0, inv_rot))
-        {
-            let tri = trimesh.triangle(tri_id);
-            let Some(n) = tri.normal() else {
-                continue;
-            };
+    for piece in pieces_near(ms, at, half, filter) {
+        piece.faces_in(at, half, |verts, normal| {
             out.push(FaceProbe {
-                entity,
-                normal: rot.0 * n,
-                verts: [tri.a, tri.b, tri.c].map(|v| pos.0 + rot.0 * v),
+                entity: piece.entity,
+                normal,
+                verts,
             });
-        }
+        });
     }
-    out.sort_by(|a, b| {
-        a.centroid()
-            .distance_squared(at)
-            .total_cmp(&b.centroid().distance_squared(at))
-    });
-    out.truncate(limit);
+    if out.len() > limit {
+        out.sort_by(|a, b| {
+            a.centroid()
+                .distance_squared(at)
+                .total_cmp(&b.centroid().distance_squared(at))
+        });
+        out.truncate(limit);
+    }
     out
 }
 
