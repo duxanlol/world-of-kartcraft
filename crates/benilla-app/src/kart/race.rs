@@ -1088,7 +1088,7 @@ pub(crate) fn update(
     let now = time.elapsed_secs();
     let races = &mut *races;
     let me = races.me.clone();
-    // The restart binding: our time trial over from its line, the lights at once.
+    // The restart binding: our time trial over from its line, the lights once the kart is back.
     if binds.ran(super::bindings::RESTART) {
         if let Some(line) = restart_line(races) {
             info!("kart race: restarting the time trial");

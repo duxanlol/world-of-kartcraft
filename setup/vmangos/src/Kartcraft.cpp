@@ -4613,9 +4613,10 @@ namespace Kartcraft
         {
             // Restart a time trial ("R\tTR\t<race>", the restart binding): their time trial
             // goes unrecorded (no retirement, no rating asked), a fresh one opens on its course
-            // and its countdown runs as they land on the grid. The spot a track browser trial
-            // took them from stays theirs, and nothing offers the way back now: that comes when
-            // they leave the last one.
+            // and its countdown runs once they are back on the grid in the kart, as a track
+            // browser trial's does: the teleport takes the kart away for a few seconds, and the
+            // lights are the kart's. The spot a track browser trial took them from stays theirs,
+            // and nothing offers the way back now: that comes when they leave the last one.
             auto race = s_races.find(uint32(std::strtoul(f[2].c_str(), nullptr, 10)));
             if (race == s_races.end() || !race->second.timeTrial ||
                 std::none_of(race->second.racers.begin(), race->second.racers.end(),
@@ -4627,14 +4628,10 @@ namespace Kartcraft
                 return true;
             s_races.erase(race);
             uint32 raceId = OpenTimeTrial(player, course, instance, now);
+            TeleportToGrid(player, course, 0, instance);
             Race& r = s_races[raceId];
-            if (TeleportToGrid(player, course, 0, instance))
-                StartRace(raceId, r, now, COUNTDOWN);
-            else
-            {
-                r.awaiting = guid;
-                r.awaitSince = now;
-            }
+            r.awaiting = guid;
+            r.awaitSince = now;
         }
         else if (verb == "TA" && f.size() > 2)
         {
