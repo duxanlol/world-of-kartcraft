@@ -209,13 +209,21 @@ pub fn lay(
             })
         })
         .clone();
-    let glow = 0.75 + 0.25 * (std::f32::consts::TAU * PULSE_HZ * time.elapsed_secs()).sin();
-    if let Some(m) = materials.get_mut(&material) {
-        m.base_color = Color::linear_rgba(1.0, 1.0, 1.0, glow);
-    }
     let Ok(eye) = camera.single().map(GlobalTransform::translation) else {
         return;
     };
+    // The glow pulses only with a laid pad in range: a change to the material prepares it again.
+    let near = |p: Vec3| Vec3::new(p.x - eye.x, 0.0, p.z - eye.z).length() <= LAY_RANGE;
+    if field
+        .spots
+        .iter()
+        .any(|s| s.laid.is_some_and(|(p, _)| near(p.centre)))
+    {
+        let glow = 0.75 + 0.25 * (std::f32::consts::TAU * PULSE_HZ * time.elapsed_secs()).sin();
+        if let Some(m) = materials.get_mut(&material) {
+            m.base_color = Color::linear_rgba(1.0, 1.0, 1.0, glow);
+        }
+    }
     let mut laid_any = false;
     for spot in field.spots.iter_mut().filter(|s| s.laid.is_none()) {
         let flat = Vec3::new(spot.pad.centre.x - eye.x, 0.0, spot.pad.centre.z - eye.z);

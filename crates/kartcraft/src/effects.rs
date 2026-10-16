@@ -916,6 +916,14 @@ pub fn draw(
         (&built.skids, skids),
         (&built.lines, lines),
     ] {
+        // An empty batch over an empty mesh is left alone: a write uploads the mesh again.
+        let drawn = meshes
+            .get(handle)
+            .and_then(|m| m.attribute(Mesh::ATTRIBUTE_POSITION))
+            .map_or(0, |a| a.len());
+        if streams.positions.is_empty() && drawn == 0 {
+            continue;
+        }
         if let Some(mesh) = meshes.get_mut(handle) {
             streams.write(mesh);
         }
