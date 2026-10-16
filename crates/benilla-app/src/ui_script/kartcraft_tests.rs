@@ -3012,6 +3012,81 @@ fn the_navigation_window_switches_each_guide_and_colours_the_gps() {
 }
 
 #[test]
+fn a_marathon_delivery_is_queued_shut_counted_down_and_driven_on_the_clock() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let shown = |s: &UiScript, frame: &str| -> bool {
+        s.eval(&format!("return {frame}:IsVisible() == 1")).unwrap()
+    };
+    let text = |s: &UiScript, fs: &str| -> String {
+        s.eval(&format!("return {fs}:GetText() or ''")).unwrap()
+    };
+    // The queue opens: the popup, its route and the time to the start.
+    from_server(
+        &mut s,
+        "R@MarOpen@600@Ratchet;Gadgetzan;Cenarion Hold"
+            .replace('@', "	")
+            .as_str(),
+    );
+    assert!(shown(&s, "BenillaKartMarathonFrame"));
+    assert_eq!(
+        text(&s, "BenillaKartMarathonFrameRoute"),
+        "Ratchet > Gadgetzan > Cenarion Hold"
+    );
+    assert!(text(&s, "BenillaKartMarathonFrameStatus").starts_with("Leaves in 10:00, 0 queued"));
+    // Join: the line goes, and the server's answer says we're in.
+    sent(&mut s);
+    s.run("BenillaKartMarathonFrameJoin:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT@R@Mar+".replace('@', "	")]);
+    from_server(&mut s, "R@MarQ@3@1".replace('@', "	").as_str());
+    s.tick(0.1);
+    assert!(text(&s, "BenillaKartMarathonFrameStatus").contains("3 queued"));
+    assert!(text(&s, "BenillaKartMarathonFrameStatus").contains("You're in"));
+    assert_eq!(text(&s, "BenillaKartMarathonFrameJoin"), "Leave queue");
+    // The start: the queue shuts, and we are off in ten.
+    from_server(&mut s, "R@MarShut".replace('@', "	").as_str());
+    from_server(&mut s, "R@MarGo@10".replace('@', "	").as_str());
+    s.tick(0.1);
+    assert!(shown(&s, "BenillaKartMarathonFrame"));
+    assert!(text(&s, "BenillaKartMarathonFrameStatus").starts_with("Off in"));
+    // The first leg: the clock in the marathon's words, and it stays with no quest in the log.
+    from_server(
+        &mut s,
+        "R@MDel@Gadgetzan@1800@0@1@2".replace('@', "	").as_str(),
+    );
+    assert!(!shown(&s, "BenillaKartMarathonFrame"));
+    for _ in 0..30 {
+        s.tick(0.1);
+    }
+    assert!(
+        shown(&s, "BenillaKartDeliveryFrame"),
+        "no quest log check for a marathon"
+    );
+    let clock = text(&s, "BenillaKartDeliveryFrameText");
+    assert!(clock.starts_with("Marathon: to Gadgetzan (1/2)"), "{clock}");
+    // In, then over: the clock goes.
+    from_server(&mut s, "R@MarDone@2@2482000@50".replace('@', "	").as_str());
+    from_server(&mut s, "R@Del-".replace('@', "	").as_str());
+    from_server(&mut s, "R@MarEnd".replace('@', "	").as_str());
+    assert!(!shown(&s, "BenillaKartDeliveryFrame"));
+    assert!(!shown(&s, "BenillaKartMarathonFrame"));
+    // Someone who did not join: the queue shutting takes the popup away.
+    from_server(
+        &mut s,
+        "R@MarOpen@60@Booty Bay;Thorium Point"
+            .replace('@', "	")
+            .as_str(),
+    );
+    assert!(shown(&s, "BenillaKartMarathonFrame"));
+    from_server(&mut s, "R@MarShut".replace('@', "	").as_str());
+    assert!(!shown(&s, "BenillaKartMarathonFrame"));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+#[test]
 fn the_kart_s_shortcuts_show_in_the_kart_out_of_a_race_and_open_their_windows() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK

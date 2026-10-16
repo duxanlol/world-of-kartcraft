@@ -1265,6 +1265,25 @@
                 BenillaKartDelivery_Start(line[3], tonumber(line[4]) or 0, tonumber(line[5]) or 0)
             elseif verb == "Del-" then
                 BenillaKartDelivery_Stop()
+            elseif verb == "MDel" then
+                -- A Marathon Delivery's next stop: its town, the route's par, the seconds gone, and
+                -- which stop of how many.
+                BenillaKartDelivery_Start(line[3], tonumber(line[4]) or 0, tonumber(line[5]) or 0,
+                    tonumber(line[6]) or 1, tonumber(line[7]) or 1)
+                BenillaKartMarathon.goAt = nil
+                BenillaKartMarathonFrame:Hide()
+            elseif verb == "MarOpen" then
+                BenillaKartMarathon_Open(tonumber(line[3]) or 0, line[4])
+            elseif verb == "MarQ" then
+                BenillaKartMarathon_Queue(tonumber(line[3]) or 0, line[4] == "1")
+            elseif verb == "MarShut" then
+                BenillaKartMarathon_Shut()
+            elseif verb == "MarGo" then
+                BenillaKartMarathon_Go(tonumber(line[3]) or 0)
+            elseif verb == "MarDone" then
+                BenillaKartMarathon_Done(tonumber(line[3]), tonumber(line[4]), tonumber(line[5]))
+            elseif verb == "MarEnd" then
+                BenillaKartMarathon_End()
             elseif verb == "L" then
                 -- A roster with us in it: we are in a race, so the finder is done and closes.
                 local me = UnitName("player")
@@ -2072,14 +2091,17 @@
         -- has left the log (abandoned, the package with it).
         BenillaKartDelivery = {}
 
-        function BenillaKartDelivery_Start(to, par, gone)
+        -- `stop` of `stops` for a Marathon Delivery's leg, which no quest stands behind.
+        function BenillaKartDelivery_Start(to, par, gone, stop, stops)
             local d = BenillaKartDelivery
             d.to, d.par, d.since, d.check, d.shown = to or "", par, GetTime() - gone, 2, nil
+            d.stop, d.stops = stop, stops
             BenillaKartDeliveryFrame:Show()
             BenillaKartDelivery_Update(0)
         end
 
         function BenillaKartDelivery_Stop()
+            BenillaKartDelivery.stop, BenillaKartDelivery.stops = nil, nil
             BenillaKartDeliveryFrame:Hide()
         end
 
@@ -2097,7 +2119,7 @@
             d.check = d.check - elapsed
             if d.check <= 0 then
                 d.check = 2
-                if GetNumQuestLogEntries and not BenillaKartDelivery_InLog() then
+                if not d.stops and GetNumQuestLogEntries and not BenillaKartDelivery_InLog() then
                     BenillaKartDeliveryFrame:Hide()
                     return
                 end
@@ -2113,8 +2135,10 @@
             if gone > d.par then color = "|cffff6060" end
             local road = ""
             if yards then road = format("   |cffffc040%d yd|r", yards) end
-            BenillaKartDeliveryFrameText:SetText(format("Delivery to %s   %s%d:%02d|r / par %d:%02d%s",
-                d.to, color, floor(gone / 60), mod(gone, 60), floor(d.par / 60), mod(d.par, 60), road))
+            local label = "Delivery to " .. d.to
+            if d.stops then label = format("Marathon: to %s (%d/%d)", d.to, d.stop or 1, d.stops) end
+            BenillaKartDeliveryFrameText:SetText(format("%s   %s%d:%02d|r / par %d:%02d%s",
+                label, color, floor(gone / 60), mod(gone, 60), floor(d.par / 60), mod(d.par, 60), road))
         end
 
         -- ── The navigation window (/kartnav): each kind of guidance on or off, and the GPS's
@@ -2176,6 +2200,112 @@
                 getglobal("BenillaKartNavFrame" .. row[1]):SetChecked(BenillaKart_Flag(row[2]))
             end
             BenillaKartNavFrameColorSwatch:SetVertexColor(BenillaKartNav_Color())
+        end
+
+        -- ── The Marathon Delivery (the server's "MarOpen", "MarQ", "MarShut", "MarGo", "MarDone",
+        -- "MarEnd"): its popup while the queue is open, joined or left with its button or
+        -- /marathon, then its countdown at the start; its stops run on the delivery clock ("MDel").
+        BenillaKartMarathon = { stops = "", queued = 0 }
+
+        function BenillaKartMarathon_Route()
+            local route = string.gsub(BenillaKartMarathon.stops or "", ";", " > ")
+            return route
+        end
+
+        function BenillaKartMarathon_Open(secs, stops)
+            local m = BenillaKartMarathon
+            m.open, m.leaves, m.stops, m.goAt, m.shown = 1, GetTime() + (secs or 0), stops or "", nil, nil
+            BenillaKartMarathonFrameRoute:SetText(BenillaKartMarathon_Route())
+            BenillaKartMarathonFrame:Show()
+            BenillaKartMarathon_Update(0)
+        end
+
+        function BenillaKartMarathon_Queue(queued, joined)
+            local m = BenillaKartMarathon
+            m.queued, m.joined, m.shown = queued or 0, joined, nil
+            BenillaKartMarathon_Update(0)
+        end
+
+        -- The queue shut at the start: the popup goes, unless we are off (the countdown follows).
+        function BenillaKartMarathon_Shut()
+            local m = BenillaKartMarathon
+            m.open = nil
+            if not m.goAt then BenillaKartMarathonFrame:Hide() end
+        end
+
+        function BenillaKartMarathon_Go(secs)
+            local m = BenillaKartMarathon
+            m.open, m.goAt, m.shown = nil, GetTime() + (secs or 0), nil
+            BenillaKartMarathonFrame:Show()
+            BenillaKartMarathon_Update(0)
+        end
+
+        function BenillaKartMarathon_Done(place, ms, tokens)
+            local s = floor((ms or 0) / 1000)
+            BenillaKart_Say(format("Marathon Delivery: you came in %s in %d:%02d (%d tokens).",
+                BenillaKart_Ordinal(place or 0), floor(s / 60), mod(s, 60), tokens or 0))
+        end
+
+        function BenillaKartMarathon_End()
+            local m = BenillaKartMarathon
+            m.open, m.goAt, m.joined = nil, nil, nil
+            BenillaKartMarathonFrame:Hide()
+            if BenillaKartDelivery.stops then BenillaKartDelivery_Stop() end
+        end
+
+        function BenillaKart_Ordinal(n)
+            local tail = "th"
+            if mod(n, 100) < 11 or mod(n, 100) > 13 then
+                if mod(n, 10) == 1 then tail = "st" elseif mod(n, 10) == 2 then tail = "nd" elseif mod(n, 10) == 3 then tail = "rd" end
+            end
+            return n .. tail
+        end
+
+        -- The status line and the button, written when the shown second or the queue changes.
+        function BenillaKartMarathon_Update(elapsed)
+            local m = BenillaKartMarathon
+            local text, button
+            if m.goAt then
+                text = format("Off in %d...", math.max(0, math.ceil(m.goAt - GetTime())))
+            elseif m.open then
+                local left = math.max(0, floor(m.leaves - GetTime()))
+                text = format("Leaves in %d:%02d, %d queued", floor(left / 60), mod(left, 60), m.queued or 0)
+                if m.joined then
+                    text = text .. "\n|cff40ff40You're in: you'll be taken to the start.|r"
+                    button = "Leave queue"
+                else
+                    button = "Join"
+                end
+            else
+                return
+            end
+            local key = text .. (button or "")
+            if m.shown == key then return end
+            m.shown = key
+            BenillaKartMarathonFrameStatus:SetText(text)
+            if button then
+                BenillaKartMarathonFrameJoin:SetText(button)
+                BenillaKartMarathonFrameJoin:Show()
+            else
+                BenillaKartMarathonFrameJoin:Hide()
+            end
+        end
+
+        function BenillaKartMarathon_Join()
+            if BenillaKartMarathon.joined then BenillaKart_Send("Mar-") else BenillaKart_Send("Mar+") end
+        end
+
+        -- /marathon: the popup while a queue is open, and our place in it; else when they run.
+        function BenillaKartMarathon_Slash()
+            local m = BenillaKartMarathon
+            if m.open then
+                BenillaKartMarathonFrame:Show()
+                if not m.joined then BenillaKart_Send("Mar+") end
+            elseif m.goAt then
+                BenillaKartMarathonFrame:Show()
+            else
+                BenillaKart_Say("No Marathon Delivery is taking couriers now: they leave Saturdays and Sundays at 00:00, 08:00 and 16:00 (Vienna time).")
+            end
         end
 
         -- The yards left by road (BENILLA_KART_GPS), while the GPS has a way; none clears it.
@@ -3255,6 +3385,8 @@
             SlashCmdList["BENILLA_TRACKS"] = function() BenillaKartTrackBrowser_Toggle() end
             SLASH_BENILLA_UNSTUCK1 = "/unstuck"
             SlashCmdList["BENILLA_UNSTUCK"] = function() BenillaKart_Unstuck() end
+            SLASH_BENILLA_MARATHON1 = "/marathon"
+            SlashCmdList["BENILLA_MARATHON"] = function() BenillaKartMarathon_Slash() end
             SLASH_BENILLA_KARTNAV1 = "/kartnav"
             SlashCmdList["BENILLA_KARTNAV"] = function() BenillaKartNav_Toggle() end
             SLASH_BENILLA_GARAGE1 = "/garage"
@@ -4862,6 +4994,54 @@
                 BenillaKart_Movable(this)
             </OnLoad>
             <OnUpdate>BenillaKartDelivery_Update(arg1)</OnUpdate>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+
+    <!-- The Marathon Delivery's popup: its route, the time to the start and the queue, and the
+         button to join or leave it; at the start, its countdown. -->
+    <Frame name="BenillaKartMarathonFrame" parent="UIParent" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" frameStrata="HIGH">
+        <Size><AbsDimension x="360" y="110"/></Size>
+        <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-150"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+            <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>
+            <TileSize><AbsValue val="16"/></TileSize>
+            <EdgeSize><AbsValue val="16"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentTitle" inherits="GameFontNormal" text="Marathon Delivery">
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-10"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentRoute" inherits="GameFontHighlightSmall">
+                    <Size><AbsDimension x="340" y="14"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-28"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentStatus" inherits="GameFontHighlight">
+                    <Size><AbsDimension x="340" y="30"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-44"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <Button name="$parentJoin" inherits="UIPanelButtonTemplate" text="Join">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="-64" y="8"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMarathon_Join()</OnClick></Scripts>
+            </Button>
+            <Button name="$parentHide" inherits="UIPanelButtonTemplate" text="Not now">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="64" y="8"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMarathonFrame:Hide()</OnClick></Scripts>
+            </Button>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                this:SetBackdropColor(0, 0, 0, 0.85)
+                BenillaKart_Movable(this)
+            </OnLoad>
+            <OnUpdate>BenillaKartMarathon_Update(arg1)</OnUpdate>
             <OnDragStart>this:StartMoving()</OnDragStart>
             <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
         </Scripts>

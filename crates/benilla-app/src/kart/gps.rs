@@ -93,6 +93,8 @@ pub(crate) struct Gps {
     inbox: Vec<Vec<String>>,
     /// Since when the delivery's quest has been missing from the log (`QUEST_GONE`).
     quest_gone_since: Option<f32>,
+    /// The delivery is a Marathon Delivery's leg (`MDel`): no quest stands behind it.
+    marathon: bool,
     /// The town delivered to, an index into [`TOWNS`].
     target: Option<usize>,
     /// The way, WoW yards, from where it was found to the innkeeper, and the yards along it to
@@ -145,7 +147,7 @@ pub(crate) fn on_chat(In(ev): In<SessionEvent>, mut gps: ResMut<Gps>) {
         return;
     }
     if let Some(body) = m.text.strip_prefix("KARTCRAFT\tR\t") {
-        if body.starts_with("Del") {
+        if body.starts_with("Del") || body.starts_with("MDel") {
             gps.inbox
                 .push(body.split('\t').map(str::to_string).collect());
         }
@@ -204,11 +206,16 @@ pub(crate) fn update(
     }
     for line in std::mem::take(&mut gps.inbox) {
         match line.first().map(String::as_str) {
-            Some("Del") => {
+            Some(verb @ ("Del" | "MDel")) => {
                 let town = line.get(1).map_or("", String::as_str);
-                gps.target = TOWNS.iter().position(|t| t.name.eq_ignore_ascii_case(town));
-                gps.way.clear();
-                gps.routed_at = None;
+                let target = TOWNS.iter().position(|t| t.name.eq_ignore_ascii_case(town));
+                if target != gps.target {
+                    gps.way.clear();
+                    gps.routed_at = None;
+                }
+                gps.target = target;
+                gps.marathon = verb == "MDel";
+                gps.quest_gone_since = None;
             }
             Some("Del-") => {
                 gps.target = None;
@@ -220,7 +227,7 @@ pub(crate) fn update(
     let now = time.elapsed_secs();
     // An abandoned delivery (its quest gone from the log) ends as a delivered one does: the
     // server sends no line for it.
-    if gps.target.is_some() {
+    if gps.target.is_some() && !gps.marathon {
         let held = quest_log
             .as_ref()
             .is_none_or(|q| q.holds_any(DELIVERY_QUESTS.clone()));
@@ -513,6 +520,40 @@ mod tests {
             None,
             "gone a second: dropped"
         );
+    }
+
+    #[test]
+    fn a_marathon_leg_needs_no_quest_and_ends_with_its_line() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_millis(400),
+            ))
+            .init_resource::<Gps>()
+            .init_resource::<super::super::KartDrive>()
+            .init_resource::<super::super::settings::KartSettings>()
+            .init_resource::<crate::ui_quest_log::QuestLog>()
+            .add_systems(Update, update);
+        let gadgetzan = TOWNS.iter().position(|t| t.name == "Gadgetzan").unwrap();
+        app.world_mut().resource_mut::<Gps>().inbox.push(
+            ["MDel", "Gadgetzan", "1800", "0", "1", "3"]
+                .map(String::from)
+                .to_vec(),
+        );
+        for _ in 0..6 {
+            app.update();
+        }
+        assert_eq!(
+            app.world().resource::<Gps>().target,
+            Some(gadgetzan),
+            "no courier quest in the log, and none wanted"
+        );
+        app.world_mut()
+            .resource_mut::<Gps>()
+            .inbox
+            .push(vec!["Del-".into()]);
+        app.update();
+        assert_eq!(app.world().resource::<Gps>().target, None);
     }
 
     #[test]
