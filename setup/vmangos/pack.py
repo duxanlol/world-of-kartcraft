@@ -31,6 +31,7 @@ SHOWCASE_JSON = os.path.join(HERE, '..', '..', 'showcase', 'showcase.json')
 SHOWCASE_H = os.path.join(HERE, 'src', 'KartcraftShowcase.h')
 MARSHAL_SQL = os.path.join(HERE, 'sql', 'kartcraft.sql')
 DELIVERIES_JSON = os.path.join(HERE, '..', '..', 'deliveries', 'deliveries.json')
+PARS_JSON = os.path.join(HERE, '..', '..', 'deliveries', 'pars.json')
 DELIVERIES_H = os.path.join(HERE, 'src', 'KartcraftDeliveries.h')
 DELIVERIES_SQL = os.path.join(HERE, 'sql', 'kartcraft_deliveries.sql')
 GAME_DIR = 'src/game/'
@@ -306,8 +307,10 @@ def showcase_header():
 # deliveries/deliveries.json's towns make the routes: every town to every other on its continent
 # that one faction can use (a faction's town to its own faction's and the neutral ones, which
 # then only that faction takes), quest DELIVERY_QUEST + MAX_TOWNS x the from-town's place + the
-# to-town's, so a town added at the end leaves every route's quest as it was. Par: the straight line, half again for the roads, at 32
-# yards a second (the Balanced kart's top is 42), up to the next 30 s, at least 2 minutes.
+# to-town's, so a town added at the end leaves every route's quest as it was. Par: the route's
+# way by the GPS roads at the speed the CTR-physics bot drove them, from deliveries/pars.json
+# (`course-gen gps` writes it); a pair it lacks, the straight line, half again for the roads, at
+# 32 yards a second (the Balanced kart's top is 42), up to the next 30 s, at least 2 minutes.
 DELIVERY_QUEST = 190200
 DELIVERY_TOKEN = 190100
 DELIVERY_PACKAGE = 190101
@@ -358,7 +361,19 @@ def load_deliveries():
     return towns
 
 
+def load_pars():
+    try:
+        with open(PARS_JSON, encoding='utf-8') as f:
+            pars = json.load(f).get('pars', {})
+    except FileNotFoundError:
+        return {}
+    if not all(isinstance(v, int) and not isinstance(v, bool) and 60 <= v <= 36000 for v in pars.values()):
+        sys.exit('deliveries/pars.json: every par must be whole seconds, 60 to 36000')
+    return pars
+
+
 def delivery_routes(towns):
+    pars = load_pars()
     routes = []
     for i, a in enumerate(towns):
         for j, b in enumerate(towns):
@@ -369,7 +384,7 @@ def delivery_routes(towns):
                 continue
             faction = fa or fb
             distance = math.hypot(a['x'] - b['x'], a['y'] - b['y'])
-            par = max(120, int(math.ceil(distance * 1.5 / 32 / 30)) * 30)
+            par = pars.get(f"{a['key']}>{b['key']}") or max(120, int(math.ceil(distance * 1.5 / 32 / 30)) * 30)
             races, team = FACTIONS.get(faction, (0, 0))
             quest = DELIVERY_QUEST + MAX_TOWNS * i + j
             goods = CARGO[faction]

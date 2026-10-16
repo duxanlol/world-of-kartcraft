@@ -4002,13 +4002,25 @@ namespace Kartcraft
     }
 
     // The route's par: each leg's, as a delivery's (pack.py's delivery_routes).
+    // A leg's par is its delivery route's (the GPS way at the bot's pace, pack.py); a leg no
+    // route covers, the straight line's.
     static void MarathonPar(Marathon& m)
     {
         m.par = 0;
         for (size_t i = 1; i < m.stops.size(); ++i)
         {
-            float d = TownDistance(*m.stops[i - 1], *m.stops[i]);
-            m.par += std::max<uint32>(120, uint32(std::ceil(d * 1.5f / 32.f / 30.f)) * 30);
+            MarathonTown const& a = *m.stops[i - 1];
+            MarathonTown const& b = *m.stops[i];
+            uint32 leg = 0;
+            for (Delivery const& d : DELIVERIES)
+                if (std::string(d.from) == a.name && std::string(d.to) == b.name)
+                {
+                    leg = d.par;
+                    break;
+                }
+            if (!leg)
+                leg = std::max<uint32>(120, uint32(std::ceil(TownDistance(a, b) * 1.5f / 32.f / 30.f)) * 30);
+            m.par += leg;
         }
     }
 

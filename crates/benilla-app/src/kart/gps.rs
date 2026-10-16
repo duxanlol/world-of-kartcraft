@@ -432,15 +432,15 @@ mod tests {
 
     #[test]
     fn every_delivery_town_is_on_the_gps_roads_of_its_map() {
+        // To some other town of its map: the Eastern Kingdoms' north and south have no kart way
+        // between them (Dun Algaz), so not to every one.
         for t in TOWNS.iter() {
             let router = ROADS.get(&t.map).expect("the town's map has roads");
-            let other = TOWNS
+            let route = TOWNS
                 .iter()
-                .find(|o| o.map == t.map && o.name != t.name)
-                .unwrap();
-            let route = router
-                .route(t.at, other.at)
-                .unwrap_or_else(|| panic!("{} to {}", t.name, other.name));
+                .filter(|o| o.map == t.map && o.name != t.name)
+                .find_map(|o| router.route(t.at, o.at))
+                .unwrap_or_else(|| panic!("{} reaches no town", t.name));
             assert!(route.off_road < 400.0, "{} joins the road", t.name);
         }
     }
