@@ -70,7 +70,9 @@ namespace Kartcraft
     static SkillRaceClassInfoEntry s_raceClass;
 
     static std::unordered_map<uint32, uint32> s_lastLine; // player guid low -> ms
-    static std::unordered_map<uint32, uint32> s_lastState; // player guid low -> ms
+    static std::unordered_map<uint32, uint32> s_lastState; // player guid low -> ms, s_stateMutex
+    // RelayState's own: a state line is relayed outside s_mutex, the race lock.
+    static std::mutex s_stateMutex;
 
     // Kart state is relayed to players this close (yards), at most this often per driver (ms).
     // As far as Kartcraft's servers show the world (Visibility.Distance.Continents = 250), so a
@@ -317,10 +319,13 @@ namespace Kartcraft
         if (!player->HasAura(SPELL_SUMMON_KART) || message.size() > MAX_STATE_LENGTH)
             return;
         uint32 now = WorldTimer::getMSTime();
-        uint32& last = s_lastState[player->GetGUIDLow()];
-        if (last && WorldTimer::getMSTimeDiff(last, now) < STATE_INTERVAL)
-            return;
-        last = now;
+        {
+            std::lock_guard<std::mutex> lock(s_stateMutex);
+            uint32& last = s_lastState[player->GetGUIDLow()];
+            if (last && WorldTimer::getMSTimeDiff(last, now) < STATE_INTERVAL)
+                return;
+            last = now;
+        }
         WorldPacket data;
         ChatHandler::BuildChatPacket(data, CHAT_MSG_PARTY, message.c_str(), LANG_ADDON, CHAT_TAG_NONE,
             player->GetObjectGuid(), player->GetName());
@@ -4367,30 +4372,47 @@ namespace Kartcraft
         }
     }
 
+    // How often (ms) a kart state line, the many-a-second one, runs the races' time-based
+    // housekeeping; every other line runs it at once.
+    constexpr uint32 STATE_HOUSEKEEPING = 50;
+    static uint32 s_housekept = 0; // under s_mutex
+
     static void HandleLine(Player* player, std::string const& body, bool marshal)
     {
+        bool const state = body.compare(0, 2, "S\t") == 0;
+        // Relayed before the race lock: it reads no race, and every driver's lines wait on it.
+        if (state)
+            RelayState(player, PREFIX + body);
         std::lock_guard<std::mutex> lock(s_mutex);
         uint32 const now = WorldTimer::getMSTime();
         WitnessSender(player, now);
-        CloseLateRaces(now);
-        TickDoors();
-        TickWeapons(now);
+        // A state line says nothing of a race: its time-based checks at most every
+        // STATE_HOUSEKEEPING, with someone's lines still coming many times a second.
+        bool const housekeep = !state || !s_housekept || WorldTimer::getMSTimeDiff(s_housekept, now) >= STATE_HOUSEKEEPING;
+        if (housekeep)
+        {
+            s_housekept = now;
+            CloseLateRaces(now);
+            TickDoors();
+            TickWeapons(now);
+        }
         if (body.compare(0, 2, "L\t") == 0)
         {
             float points = float(std::atof(body.c_str() + 2));
             if (points > 0.f)
                 LandLine(player, points);
         }
-        else if (body.compare(0, 2, "S\t") == 0)
-            RelayState(player, PREFIX + body);
         else if (body.compare(0, 2, "R\t") == 0)
             HandleRace(player, body, marshal);
         else if (body.compare(0, 2, "W\t") == 0)
             HandleWeapon(player, body);
-        TickArrival(player, body.compare(0, 2, "S\t") == 0, now);
+        TickArrival(player, state, now);
         // After the line: a finish or a leave in it frees the racer at once.
-        TickShields(WorldTimer::getMSTime());
-        TickLayers();
+        if (housekeep)
+        {
+            TickShields(WorldTimer::getMSTime());
+            TickLayers();
+        }
     }
 
     bool HandleAddonMessage(Player* player, std::string const& message)
