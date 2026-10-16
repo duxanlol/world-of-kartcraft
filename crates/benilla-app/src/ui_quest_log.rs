@@ -57,6 +57,11 @@ impl crate::query_cache::AskOnce for QuestLog {
 }
 
 impl QuestLog {
+    /// Whether a quest in `ids` is in the log this frame, folded or not.
+    pub(crate) fn holds_any(&self, ids: std::ops::RangeInclusive<u32>) -> bool {
+        self.row_slots.iter().any(|(id, _)| ids.contains(id))
+    }
+
     /// The template, asked once: a miss sends `CMSG_QUEST_QUERY` (once while in flight); an id
     /// the server does not know stays `None` without a re-ask.
     pub(crate) fn template(&self, quest_id: u32, commands: &NetCommands) -> Option<&QuestTemplate> {

@@ -21,6 +21,11 @@ use kart_gps::{RoadFile, Router};
 const STRAY: f32 = 30.0;
 /// It is found again at most this often, seconds.
 const REROUTE_EVERY: f32 = 1.0;
+/// The courier deliveries' quests: `190200 + 64 × from + to` (`setup/vmangos/pack.py`).
+const DELIVERY_QUESTS: std::ops::RangeInclusive<u32> = 190_201..=190_200 + 64 * 64;
+/// How long (seconds) a delivery's quest may be missing from the log before the delivery is
+/// dropped: abandoned, it is gone, but at login the log can come a moment after the line.
+const QUEST_GONE: f32 = 1.0;
 /// Closer than this (yards) to the road's end, the arrow points at the town's innkeeper.
 const ARRIVE: f32 = 15.0;
 /// How far along the way (yards) the arrow points.
@@ -86,6 +91,8 @@ static TOWNS: LazyLock<Vec<Town>> = LazyLock::new(|| {
 pub(crate) struct Gps {
     /// Lines from the server not yet handled.
     inbox: Vec<Vec<String>>,
+    /// Since when the delivery's quest has been missing from the log (`QUEST_GONE`).
+    quest_gone_since: Option<f32>,
     /// The town delivered to, an index into [`TOWNS`].
     target: Option<usize>,
     /// The way, WoW yards, from where it was found to the innkeeper, and the yards along it to
@@ -188,6 +195,7 @@ pub(crate) fn update(
     drive: Res<super::KartDrive>,
     map: Option<Res<benilla_world::world_map::CurrentMap>>,
     settings: Res<super::settings::KartSettings>,
+    quest_log: Option<Res<crate::ui_quest_log::QuestLog>>,
     mut gps: ResMut<Gps>,
 ) {
     let minimap = settings.nav.gps_minimap.then_some(settings.nav.gps_color);
@@ -210,6 +218,23 @@ pub(crate) fn update(
         }
     }
     let now = time.elapsed_secs();
+    // An abandoned delivery (its quest gone from the log) ends as a delivered one does: the
+    // server sends no line for it.
+    if gps.target.is_some() {
+        let held = quest_log
+            .as_ref()
+            .is_none_or(|q| q.holds_any(DELIVERY_QUESTS.clone()));
+        match (held, gps.quest_gone_since) {
+            (true, _) => gps.quest_gone_since = None,
+            (false, None) => gps.quest_gone_since = Some(now),
+            (false, Some(since)) if now - since >= QUEST_GONE => {
+                gps.target = None;
+                gps.way.clear();
+                gps.quest_gone_since = None;
+            }
+            (false, Some(_)) => {}
+        }
+    }
     let on_map = map.as_ref().map(|m| m.0);
     let Some(town) = gps
         .target
@@ -452,6 +477,42 @@ mod tests {
         assert_eq!(dots.first(), Some(&32.0), "from the kart on");
         assert_eq!(dots.last(), Some(&96.0), "to the town");
         assert_eq!(dots.len(), 9);
+    }
+
+    #[test]
+    fn an_abandoned_delivery_is_dropped_once_its_quest_has_left_the_log() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_millis(400),
+            ))
+            .init_resource::<Gps>()
+            .init_resource::<super::super::KartDrive>()
+            .init_resource::<super::super::settings::KartSettings>()
+            // No courier quest in the log: abandoned.
+            .init_resource::<crate::ui_quest_log::QuestLog>()
+            .add_systems(Update, update);
+        app.world_mut().resource_mut::<Gps>().inbox.push(vec![
+            "Del".into(),
+            TOWNS[0].name.clone(),
+            "300".into(),
+            "0".into(),
+        ]);
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world().resource::<Gps>().target,
+            Some(0),
+            "a moment's absence is waited out: at login the log can come late"
+        );
+        for _ in 0..4 {
+            app.update();
+        }
+        assert_eq!(
+            app.world().resource::<Gps>().target,
+            None,
+            "gone a second: dropped"
+        );
     }
 
     #[test]
