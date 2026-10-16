@@ -31,8 +31,9 @@ pub struct SelectParams {
     pub drive: usize,
     /// How many finalists are kept.
     pub keep: usize,
-    /// On a map whose ground is its streets, the circuit's waypoints (WoW `x, y`), in driving
-    /// order ([`generate::street_circuit`]).
+    /// The circuit's waypoints (WoW `x, y`), in driving order: on a map whose ground is its
+    /// streets ([`generate::street_circuit`]), or a designed circuit on open ground
+    /// ([`generate::designed_circuit`]), the one candidate.
     pub via: Vec<Vec2>,
 }
 
@@ -155,6 +156,11 @@ pub fn run(t: &ZoneTerrain, roads: &RoadGraph, p: &SelectParams) -> Run {
             Ok(c) => (vec![c], HashMap::new()),
             Err(e) => (Vec::new(), HashMap::from([(e, 1)])),
         }
+    } else if !p.via.is_empty() {
+        match generate::designed_circuit(&planner, &p.via, &p.gen) {
+            Ok(c) => (vec![c], HashMap::new()),
+            Err(e) => (Vec::new(), HashMap::from([(e, 1)])),
+        }
     } else {
         generate::generate(&planner, &hubs, &p.gen)
     };
@@ -170,8 +176,8 @@ pub fn run(t: &ZoneTerrain, roads: &RoadGraph, p: &SelectParams) -> Run {
         generated: cands.len(),
         ..Default::default()
     };
-    // A street circuit starts at its first waypoint, where it was asked to.
-    if !t.wmo_ground {
+    // A circuit by waypoints starts at its first, where it was asked to.
+    if !t.wmo_ground && p.via.is_empty() {
         for c in &mut cands {
             generate::place_start(c, t, &field);
         }

@@ -88,7 +88,8 @@ enum Cmd {
         seed: u64,
         #[arg(long, default_value_t = 8)]
         threads: usize,
-        /// For an instance whose ground is its streets (Stratholme): the circuit's waypoints,
+        /// One designed circuit instead of generated ones, or the circuit of an instance whose
+        /// ground is its streets (Stratholme): its waypoints,
         /// WoW `x,y` in driving order, separated by `;`.
         #[arg(long, allow_hyphen_values = true)]
         via: Option<String>,
@@ -644,6 +645,11 @@ fn main() -> Result<()> {
             );
             let solid = terrain.obstacles.iter().filter(|o| o.solid).count();
             println!("obstacles: {} ({} solid)", terrain.obstacles.len(), solid);
+            // The render's frame, to turn a pixel on it into a `--via` waypoint.
+            println!(
+                "grid: north x {:.1}, west y {:.1}, {} yd/px, {}x{} px",
+                g.north_x, g.west_y, g.yards_per_px, g.width, g.height
+            );
 
             let mut landmarks = Vec::new();
             for &(name, x, y) in LANDMARKS {

@@ -842,11 +842,7 @@ fn finish(
     if raw.len() < 8 {
         return Err("degenerate");
     }
-    let ok = |q: Vec2| field.clearance_at(q.x, q.y) >= keep.clearance;
-    let mut pts = geom::resample(raw, closed, STEP);
-    elastic(&mut pts, closed, 80, &ok);
-    relax_turns(&mut pts, closed, p.min_turn_radius, &ok);
-    let pts = geom::resample(&pts, closed, STEP);
+    let pts = smoothed(field, raw, closed, p, keep);
     let tightest = geom::curvature(&pts, closed, 3)
         .iter()
         .fold(0.0f32, |m, k| m.max(k.abs()));
@@ -878,6 +874,21 @@ fn finish(
         return Err("runs alongside itself");
     }
     Ok(pts)
+}
+
+/// A raw grid path pulled taut, its turns opened to a kart's circle, and respaced.
+fn smoothed(
+    field: &CostField,
+    raw: &[Vec2],
+    closed: bool,
+    p: &GenParams,
+    keep: &Keep,
+) -> Vec<Vec2> {
+    let ok = |q: Vec2| field.clearance_at(q.x, q.y) >= keep.clearance;
+    let mut pts = geom::resample(raw, closed, STEP);
+    elastic(&mut pts, closed, 80, &ok);
+    relax_turns(&mut pts, closed, p.min_turn_radius, &ok);
+    geom::resample(&pts, closed, STEP)
 }
 
 /// Pull the line taut and smooth like an elastic band, `iters` rounds, never moving a point onto
@@ -1004,6 +1015,8 @@ pub fn place_start(c: &mut Candidate, t: &ZoneTerrain, field: &CostField) {
 const STREET_ANCHOR_EVERY: f32 = 30.0;
 /// The most yards of line a doubled-back leg can loop over before it meets itself again.
 const STREET_LOOP: f32 = 60.0;
+/// How many unreachable anchors in a row a waypoint circuit's leg passes over.
+const WAYPOINT_SKIP: usize = 2;
 
 /// A circuit through a city's streets by the waypoints `via` (WoW `x, y`, in driving order), for a
 /// map whose ground is its streets ([`ZoneTerrain::wmo_ground`]): too narrow for [`generate`]'s
@@ -1016,6 +1029,25 @@ pub fn street_circuit(
     planner: &Planner,
     via: &[Vec2],
     p: &GenParams,
+) -> Result<Candidate, &'static str> {
+    waypoint_circuit(planner, via, p, &STREETS)
+}
+
+/// A designed circuit on open ground by the waypoints `via` (WoW `x, y`, in driving order), routed
+/// and smoothed as [`street_circuit`]'s is, but keeping a generated line's room round trees.
+pub fn designed_circuit(
+    planner: &Planner,
+    via: &[Vec2],
+    p: &GenParams,
+) -> Result<Candidate, &'static str> {
+    waypoint_circuit(planner, via, p, &OPEN_GROUND)
+}
+
+fn waypoint_circuit(
+    planner: &Planner,
+    via: &[Vec2],
+    p: &GenParams,
+    keep: &Keep,
 ) -> Result<Candidate, &'static str> {
     if via.len() < 3 {
         return Err("too few anchors");
@@ -1031,16 +1063,51 @@ pub fn street_circuit(
     // smoothing after joins the legs.
     let extra = HashMap::new();
     let mut raw: Vec<Vec2> = Vec::new();
-    for i in 0..anchors.len() {
-        let (a, b) = (anchors[i], anchors[(i + 1) % anchors.len()]);
-        if a.distance(b) < 1.0 {
-            continue;
+    // An anchor snapped into a pocket no route reaches (open ground walled in by trees) is passed
+    // over: the leg goes on to the next one, up to [`WAYPOINT_SKIP`] of them.
+    let n = anchors.len();
+    let mut i = 0;
+    while i < n {
+        let a = anchors[i];
+        let mut j = i + 1;
+        loop {
+            let b = anchors[j % n];
+            if a.distance(b) < 1.0 {
+                break;
+            }
+            if let Some(leg) = planner.route(a, b, &extra, None, None) {
+                raw.extend_from_slice(&leg.points[..leg.points.len() - 1]);
+                break;
+            }
+            if j == n || j > i + WAYPOINT_SKIP {
+                return Err("no route");
+            }
+            j += 1;
         }
-        let leg = planner.route(a, b, &extra, None, None).ok_or("no route")?;
-        raw.extend_from_slice(&leg.points[..leg.points.len() - 1]);
+        i = j;
     }
     let raw = cut_loops(&raw, STREET_LOOP);
-    let mut pts = finish(planner.field, &raw, true, p, &STREETS)?;
+    let mut pts = match finish(planner.field, &raw, true, p, keep) {
+        Ok(pts) => pts,
+        Err(e) => {
+            // Where it went wrong, for whoever is laying the waypoints.
+            let pts = smoothed(planner.field, &raw, true, p, keep);
+            let curv = geom::curvature(&pts, true, 3);
+            if let Some((i, k)) = curv
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+            {
+                eprintln!(
+                    "waypoint circuit: {e}; tightest bend {:.1} yd radius at {:.0},{:.0}",
+                    1.0 / k.abs().max(1e-6),
+                    pts[i].x,
+                    pts[i].y
+                );
+            }
+            return Err(e);
+        }
+    };
     // The line starts at the first waypoint.
     if let Some(at) = pts
         .iter()
