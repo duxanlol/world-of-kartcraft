@@ -528,7 +528,12 @@ fn main() -> Result<()> {
             render,
             jobs,
         } => {
-            let (roads, report) = course_gen::gps::run(&deliveries, jobs, render.as_deref())?;
+            // The roads written before, audited against the new grid before they are replaced.
+            let previous = std::fs::read_to_string(&out)
+                .ok()
+                .and_then(|s| kart_gps::RoadFile::parse(&s).ok());
+            let (roads, report) =
+                course_gen::gps::run(&deliveries, jobs, render.as_deref(), previous.as_ref())?;
             if let Some(dir) = out.parent() {
                 std::fs::create_dir_all(dir)?;
             }

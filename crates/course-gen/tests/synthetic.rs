@@ -39,6 +39,7 @@ fn flat(size: usize) -> ZoneTerrain {
         probes: Vec::new(),
         wmo_ground: false,
         laid: vec![false; n],
+        walls: vec![false; n],
     }
 }
 

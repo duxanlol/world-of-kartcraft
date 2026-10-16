@@ -35,8 +35,13 @@ const FLOOR_ABOVE: f32 = 1.5;
 pub struct Floor {
     /// The ground's height, NaN where there is none.
     pub height: Vec<f32>,
-    /// A wall or an obstruction stands on the pixel's ground.
+    /// A wall or an obstruction stands on the pixel's ground, or the pixel is off the ground
+    /// beside it (an instance's walls).
     pub solid: Vec<bool>,
+    /// A WMO face stands in the kart's height band over the pixel's ground (or, off the ground,
+    /// over the terrain): a wall, and only a wall. On a continent, where the ground is the
+    /// terrain with WMO floors laid over it, the edges of the ground piece are no walls.
+    pub walls: Vec<bool>,
     /// The ground is a WMO face (a street), not the ADT terrain.
     pub paved: Vec<bool>,
     /// WMO doodads (MODD) of the placed sets, to stamp as obstacles.
@@ -331,13 +336,32 @@ pub fn walkable_floor(
         .max_by_key(|&(root, n)| (*n, std::cmp::Reverse(*root)))
         .map(|(root, _)| *root);
 
+    // With `prefer_paved` (a continent), a WMO floor joined to the terrain anywhere is driven
+    // on, not only the ground piece's: mountains split a continent's terrain into many pieces,
+    // and a tunnel joins only the slopes at its mouths. A roof joins no terrain.
+    let mut on_terrain: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    if prefer_paved {
+        for k in 0..nodes.len() {
+            if nodes[k].1 && !paved_node[k] {
+                on_terrain.insert(find(&mut parent, k as u32));
+            }
+        }
+    }
+
     let mut height = vec![f32::NAN; grid.len()];
     let mut solid = vec![false; grid.len()];
     let mut paved = vec![false; grid.len()];
     for i in 0..grid.len() {
         // The lowest floor of the ground on the pixel, a WMO's first when preferred.
         let paved_k = prefer_paved
-            .then(|| of(i).find(|&k| paved_node[k] && Some(find(&mut parent, k as u32)) == ground))
+            .then(|| {
+                of(i).find(|&k| {
+                    let root = find(&mut parent, k as u32);
+                    paved_node[k]
+                        && nodes[k].1
+                        && (Some(root) == ground || on_terrain.contains(&root))
+                })
+            })
             .flatten();
         if let Some(k) =
             paved_k.or_else(|| of(i).find(|&k| Some(find(&mut parent, k as u32)) == ground))
@@ -377,9 +401,23 @@ pub fn walkable_floor(
             }
         }
     }
+    let walls = (0..grid.len())
+        .map(|i| {
+            let z = if height[i].is_finite() && !solid[i] {
+                height[i]
+            } else {
+                terrain[i]
+            };
+            z.is_finite()
+                && cols.spans[i]
+                    .iter()
+                    .any(|&(lo, hi)| hi > z + BAND_LO && lo < z + BAND_HI)
+        })
+        .collect();
     Floor {
         height,
         solid,
+        walls,
         paved,
         doodads,
         triangles,

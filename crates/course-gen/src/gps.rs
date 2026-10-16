@@ -1,9 +1,10 @@
 //! The courier deliveries' GPS roads (`kart_gps`). Painted road alone does not join the towns:
 //! many zones (Desolace, Tanaris, the Barrens' south) drive on ground their dirt shares with the
 //! open country. So each continent is one drivability grid of [`CELL`]-yard cells, built from
-//! every zone's terrain: painted road is cheap, open ground dearer the steeper it is, buildings,
-//! doodads and water dearer still but crossable (a bridge stands on water, a gate in a wall), a
-//! cliff impassable. From each delivery town (`deliveries/deliveries.json`) the cheapest way to
+//! every zone's terrain and its WMOs' floors: painted road is cheap, open ground dearer the
+//! steeper it is, water dearer still but crossable (a ford), a cliff, a wall, a building or a
+//! doodad impassable; a bridge's deck, a tunnel's floor and a city's streets are laid over the
+//! ground and driven on. From each delivery town (`deliveries/deliveries.json`) the cheapest way to
 //! every other town on its map is found over the grid, and those ways, laid as trails that share
 //! the road they share, are the GPS's roads (`roads/roads.json`).
 
@@ -28,8 +29,11 @@ const CLIFF: f32 = 38.0;
 const SLOPE_DOUBLES: f32 = 25.0;
 /// What a fully painted road costs against open ground's 1.
 const ROAD: f32 = 0.3;
-/// A solid model's footprint and water: crossable, at this cost a yard.
-const SOLID: f32 = 6.0;
+/// Painted road at or over this weight is driven whatever stands on it (a signpost, a fence's
+/// end, an arch's foot) and up to [`ROAD_CLIFF`]: a road through a pass is the way, not a wall.
+const ROAD_HOLDS: f32 = 0.5;
+const ROAD_CLIFF: f32 = 50.0;
+/// Water: crossable (a ford), at this cost a yard.
 const WATER: f32 = 12.0;
 /// Road weight at or over which a cell counts as road in the report.
 const ON_ROAD: f32 = 0.3;
@@ -39,8 +43,21 @@ const MERGE: f32 = 6.0;
 /// groups of towns come this near, the grid has missed the way between (a lift, a tunnel's mouth,
 /// a ramp it reads as a cliff), and the nearest point of each is where it is.
 const MAX_LINK: f32 = 80.0;
+/// A tunnel the grid cannot hold (it runs under the ground the grid shows): its mouths at most
+/// this far apart (yards), about level (rise over run), and the ground over this share of the
+/// line between them by at least this many yards.
+const MAX_TUNNEL: f32 = 400.0;
+const TUNNEL_GRADE: f32 = 0.15;
+const TUNNEL_COVER: f32 = 0.7;
+const TUNNEL_ROOF: f32 = 3.0;
+/// The steepest a link climbs, rise over run: about 31°.
+const LINK_GRADE: f32 = 0.6;
 /// What a yard over a link costs.
 const LINK: f32 = 2.0;
+/// How far (yards) above or below a town's own height the ground it joins may be, where any is.
+const SNAP_RISE: f32 = 20.0;
+/// The fewest cells a piece of ground a town joins must hold: a pocket is no way out.
+const MIN_GROUND: usize = 5000;
 /// Douglas–Peucker tolerance (yards) for a way before it is laid.
 const SIMPLIFY: f32 = 2.0;
 
@@ -84,15 +101,25 @@ fn pixel_cost(t: &ZoneTerrain, i: usize) -> Option<f32> {
     if !t.height[i].is_finite() {
         return None;
     }
+    // A WMO's wall: never crossed, road or not.
+    if t.walls[i] {
+        return Some(f32::INFINITY);
+    }
     let slope = t.slope[i];
-    if slope > CLIFF {
+    let road = t.road[i].clamp(0.0, 1.0);
+    if road >= ROAD_HOLDS {
+        if slope > ROAD_CLIFF {
+            return Some(f32::INFINITY);
+        }
+        return Some((1.0 - (1.0 - ROAD) * road) * (1.0 + (slope / SLOPE_DOUBLES).powi(2)));
+    }
+    // A wall, a building or a doodad stands there, or a cliff: no way through. A laid floor (a
+    // bridge's deck, a gate's passage) is never solid.
+    if slope > CLIFF || t.solid[i] {
         return Some(f32::INFINITY);
     }
     if t.water[i] {
         return Some(WATER);
-    }
-    if t.solid[i] {
-        return Some(SOLID);
     }
     let paved = 1.0 - (1.0 - ROAD) * t.road[i].clamp(0.0, 1.0);
     Some(paved * (1.0 + (slope / SLOPE_DOUBLES).powi(2)))
@@ -112,6 +139,8 @@ pub struct Grid {
     pub road: Vec<f32>,
     /// A laid WMO floor (a tunnel, a bridge, a street) decides the cell.
     pub laid: Vec<bool>,
+    /// A WMO's wall shuts the cell: no link crosses it.
+    pub wall: Vec<bool>,
     /// Cells joined across a gap the grid could not drive ([`MAX_LINK`]), both ways.
     pub links: std::collections::HashMap<usize, Vec<usize>>,
 }
@@ -129,6 +158,8 @@ struct Sum {
     laid: u16,
     laid_cost: f32,
     laid_height: f32,
+    /// A WMO's wall stands on one of the cell's pixels: the cell is shut.
+    wall: bool,
 }
 
 impl Grid {
@@ -172,6 +203,7 @@ impl Grid {
             height: Vec::new(),
             road: Vec::new(),
             laid: Vec::new(),
+            wall: Vec::new(),
             links: Default::default(),
         };
         let sums = Mutex::new(vec![Sum::default(); w * h]);
@@ -219,6 +251,7 @@ impl Grid {
                             }
                             s.height += t.height[i];
                             s.road += t.road[i];
+                            s.wall |= t.walls[i];
                             if t.laid[i] && c.is_finite() {
                                 s.laid = s.laid.saturating_add(1);
                                 s.laid_cost += c;
@@ -237,10 +270,13 @@ impl Grid {
         let sums = sums.into_inner().unwrap();
         grid.cost = sums
             .iter()
+            // A wall shuts its cell; otherwise a cell is as passable as its best pixels: a narrow
+            // pass, a gate or a path a pixel wide stays a way through.
             .map(|s| match (s.n, s.cliff) {
                 _ if s.laid > 0 => s.laid_cost / f32::from(s.laid),
                 (0, _) => f32::NAN,
-                (n, cliff) if cliff * 2 > n => f32::INFINITY,
+                _ if s.wall => f32::INFINITY,
+                (n, cliff) if cliff >= n => f32::INFINITY,
                 (n, cliff) => s.cost / f32::from(n - cliff),
             })
             .collect();
@@ -255,6 +291,7 @@ impl Grid {
             })
             .collect();
         grid.laid = sums.iter().map(|s| s.laid > 0).collect();
+        grid.wall = sums.iter().map(|s| s.wall && s.laid == 0).collect();
         grid.road = sums
             .iter()
             .map(|s| s.road / f32::from(s.n.max(1)))
@@ -303,36 +340,120 @@ impl Grid {
             .with_context(|| format!("writing {}", file.display()))
     }
 
-    /// The cells of `from`'s piece of passable ground and `to`'s that come nearest each other,
-    /// and how far apart they are (yards): a breadth-first walk over every cell from all of
-    /// `from`'s piece at once, until it reaches `to`'s.
-    fn gap(&self, from: usize, to: usize) -> Option<(usize, usize, f32)> {
+    /// The cells of `from`'s piece of passable ground and `to`'s that come nearest each other
+    /// across a gap `ok` lets a link take, and how far apart they are (yards): a breadth-first
+    /// walk over every cell from all of `from`'s piece's cells `seed` keeps at once, out to
+    /// `reach` yards, its crossings tried nearest first. `None` when the pieces are one or no
+    /// gap within reach may be crossed.
+    fn gap(
+        &self,
+        from: usize,
+        to: usize,
+        reach: f32,
+        seed: impl Fn(usize) -> bool,
+        ok: impl Fn(usize, usize) -> bool,
+    ) -> Option<(usize, usize, f32)> {
         let (a, b) = (self.piece(from), self.piece(to));
         if a[to] {
             return None;
         }
+        self.gap_between(&a, |i| b[i], reach, seed, ok)
+    }
+
+    /// [`Grid::gap`] from the cells `a` holds to the first cells `is_b` keeps.
+    fn gap_between(
+        &self,
+        a: &[bool],
+        is_b: impl Fn(usize) -> bool,
+        reach: f32,
+        seed: impl Fn(usize) -> bool,
+        ok: impl Fn(usize, usize) -> bool,
+    ) -> Option<(usize, usize, f32)> {
+        let layers = (reach / CELL * 1.5).ceil() as u16;
         let mut origin = vec![u32::MAX; self.cost.len()];
+        let mut layer = vec![0u16; self.cost.len()];
         let mut queue = std::collections::VecDeque::new();
         for (i, &in_a) in a.iter().enumerate() {
-            if in_a {
+            if in_a && seed(i) {
                 origin[i] = i as u32;
                 queue.push_back(i);
             }
         }
+        let mut found: Vec<(f32, usize, usize)> = Vec::new();
         while let Some(i) = queue.pop_front() {
-            if b[i] {
+            if is_b(i) {
                 let o = origin[i] as usize;
                 let (p, q) = (self.centre(o), self.centre(i));
-                return Some((o, i, (p[0] - q[0]).hypot(p[1] - q[1])));
+                found.push(((p[0] - q[0]).hypot(p[1] - q[1]), o, i));
+                continue;
+            }
+            if layer[i] >= layers {
+                continue;
             }
             for j in self.neighbours(i) {
                 if origin[j] == u32::MAX {
                     origin[j] = origin[i];
+                    layer[j] = layer[i] + 1;
                     queue.push_back(j);
                 }
             }
         }
-        None
+        found.sort_by(|x, y| x.0.total_cmp(&y.0));
+        found
+            .into_iter()
+            .find(|&(d, o, i)| d <= reach && ok(o, i))
+            .map(|(d, o, i)| (o, i, d))
+    }
+
+    /// The mouth of a way under the ground: painted road or a laid WMO floor.
+    fn mouth(&self, i: usize) -> bool {
+        self.laid[i] || self.road[i] >= ON_ROAD
+    }
+
+    /// Whether cells `p` and `q`, both [`Grid::mouth`]s, are the ends of a tunnel the grid cannot
+    /// hold: about level with each other ([`TUNNEL_GRADE`]), the ground between standing over
+    /// the line joining them ([`TUNNEL_COVER`] of it at least [`TUNNEL_ROOF`] yards over), and
+    /// no WMO wall on the way.
+    fn tunnel(&self, p: usize, q: usize) -> bool {
+        if !self.mouth(p) || !self.mouth(q) {
+            return false;
+        }
+        let (a, b) = (self.centre(p), self.centre(q));
+        let level = (a[0] - b[0]).hypot(a[1] - b[1]);
+        if level < MAX_LINK * 0.25 || (a[2] - b[2]).abs() > level * TUNNEL_GRADE + 5.0 {
+            return false;
+        }
+        let steps = (level / CELL).ceil() as usize;
+        let mut covered = 0;
+        for s in 1..steps {
+            let t = s as f32 / steps as f32;
+            let Some(i) = self.cell(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t) else {
+                return false;
+            };
+            if self.wall[i] {
+                return false;
+            }
+            if self.height[i] >= a[2] + (b[2] - a[2]) * t + TUNNEL_ROOF {
+                covered += 1;
+            }
+        }
+        steps > 1 && covered as f32 >= (steps - 1) as f32 * TUNNEL_COVER
+    }
+
+    /// Whether a link may join cells `p` and `q`: no WMO wall on the way between, and no steeper
+    /// than [`LINK_GRADE`] (a cliff is no gap the grid missed).
+    fn crossable(&self, p: usize, q: usize) -> bool {
+        let (a, b) = (self.centre(p), self.centre(q));
+        let level = (a[0] - b[0]).hypot(a[1] - b[1]);
+        if (a[2] - b[2]).abs() > level * LINK_GRADE + 4.0 {
+            return false;
+        }
+        let steps = (level / (CELL * 0.5)).ceil().max(1.0) as usize;
+        (0..=steps).all(|s| {
+            let t = s as f32 / steps as f32;
+            self.cell(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+                .is_none_or(|i| !self.wall[i])
+        })
     }
 
     /// The cells `start`'s piece of passable ground holds, links crossed.
@@ -352,8 +473,9 @@ impl Grid {
         seen
     }
 
-    /// Links the towns' pieces of ground across their narrowest gaps, nearest first, while any
-    /// is under [`MAX_LINK`]; one line a link, for the report.
+    /// Links the towns' pieces of ground across their narrowest gaps, nearest first: a gap a
+    /// link may take ([`MAX_LINK`], [`Grid::crossable`]), else a tunnel ([`Grid::tunnel`]). One
+    /// line a link, for the report.
     fn link_towns(&mut self, cells: &[usize]) -> Vec<String> {
         let mut said = Vec::new();
         loop {
@@ -374,15 +496,36 @@ impl Grid {
                 .iter()
                 .enumerate()
                 .flat_map(|(k, &a)| firsts[k + 1..].iter().map(move |&b| (a, b)))
-                .filter_map(|(a, b)| self.gap(a, b))
-                .min_by(|x, y| x.2.total_cmp(&y.2));
+                .filter_map(|(a, b)| {
+                    self.gap(a, b, MAX_LINK, |_| true, |o, i| self.crossable(o, i))
+                })
+                .min_by(|x, y| x.2.total_cmp(&y.2))
+                .map(|g| (g, ""));
+            // No gap a link may take: a tunnel under the ground between, mouth to mouth.
+            let nearest = nearest.or_else(|| {
+                firsts
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(k, &a)| firsts[k + 1..].iter().map(move |&b| (a, b)))
+                    .filter_map(|(a, b)| {
+                        self.gap(
+                            a,
+                            b,
+                            MAX_TUNNEL,
+                            |i| self.mouth(i),
+                            |o, i| self.tunnel(o, i),
+                        )
+                    })
+                    .min_by(|x, y| x.2.total_cmp(&y.2))
+                    .map(|g| (g, " (a tunnel)"))
+            });
             match nearest {
-                Some((p, q, d)) if d <= MAX_LINK => {
+                Some(((p, q, d), kind)) => {
                     self.links.entry(p).or_default().push(q);
                     self.links.entry(q).or_default().push(p);
                     let (a, b) = (self.centre(p), self.centre(q));
                     said.push(format!(
-                        "linked {d:.0} yd from ({:.0}, {:.0}, {:.0}) to ({:.0}, {:.0}, {:.0})",
+                        "linked {d:.0} yd from ({:.0}, {:.0}, {:.0}) to ({:.0}, {:.0}, {:.0}){kind}",
                         a[0], a[1], a[2], b[0], b[1], b[2]
                     ));
                 }
@@ -412,19 +555,69 @@ impl Grid {
         })
     }
 
+    /// The grid with the ground each of `cells`' pieces holds in a colour of its own: where one
+    /// town group's reach ends and another's begins. Elsewhere grey, cliffs red, unknown black.
+    fn render_pieces(&self, file: &Path, cells: &[usize]) -> Result<()> {
+        const COLOURS: [[u8; 3]; 6] = [
+            [60, 120, 230],
+            [60, 200, 90],
+            [220, 120, 220],
+            [240, 150, 40],
+            [140, 90, 200],
+            [200, 200, 60],
+        ];
+        let mut label = vec![u8::MAX; self.cost.len()];
+        let mut next = 0u8;
+        for &c in cells {
+            if label[c] != u8::MAX {
+                continue;
+            }
+            for (i, inside) in self.piece(c).into_iter().enumerate() {
+                if inside {
+                    label[i] = next;
+                }
+            }
+            next = next.saturating_add(1);
+        }
+        let mut img = image::RgbImage::new(self.h as u32, self.w as u32);
+        for (i, &l) in label.iter().enumerate() {
+            let (cx, cy) = (i % self.w, i / self.w);
+            let (col, row) = ((self.h - 1 - cy) as u32, (self.w - 1 - cx) as u32);
+            let c = self.cost[i];
+            let px = if let Some(&k) = COLOURS.get(l as usize) {
+                k
+            } else if c.is_nan() {
+                [0, 0, 0]
+            } else if c.is_infinite() {
+                [170, 30, 30]
+            } else {
+                [120, 120, 120]
+            };
+            img.put_pixel(col, row, image::Rgb(px));
+        }
+        img.save(file)
+            .with_context(|| format!("writing {}", file.display()))
+    }
+
     fn passable(&self, i: usize) -> bool {
         self.cost[i].is_finite()
     }
 
-    /// The passable cell nearest `(x, y)`, within 30 cells.
-    fn nearest_passable(&self, x: f32, y: f32) -> Option<usize> {
+    /// The passable cell nearest `(x, y)`, within 30 cells, on ground that goes somewhere (a
+    /// pocket, painted road under a building or a ledge, is passed over for the open ground
+    /// beyond) and within [`SNAP_RISE`] yards of `z` where there is one: a town inside a
+    /// mountain (Ironforge) joins its own floor, not the hilltop over it.
+    fn nearest_passable(&self, x: f32, y: f32, z: f32) -> Option<usize> {
+        self.nearest_passable_within(x, y, Some(z))
+            .or_else(|| self.nearest_passable_within(x, y, None))
+    }
+
+    fn nearest_passable_within(&self, x: f32, y: f32, z: Option<f32>) -> Option<usize> {
         let at = self.cell(x, y)?;
-        if self.passable(at) {
-            return Some(at);
-        }
         let (cx, cy) = ((at % self.w) as i64, (at / self.w) as i64);
-        (1..30i64).find_map(|r| {
-            (-r..=r)
+        let mut pockets = std::collections::HashSet::new();
+        (0..30i64).find_map(|r| {
+            let mut ring: Vec<usize> = (-r..=r)
                 .flat_map(|d| [(d, -r), (d, r), (-r, d), (r, d)])
                 .filter_map(|(dx, dy)| {
                     let (x, y) = (cx + dx, cy + dy);
@@ -432,11 +625,45 @@ impl Grid {
                         .then(|| x as usize + y as usize * self.w)
                 })
                 .filter(|&i| self.passable(i))
-                .min_by_key(|&i| {
-                    let (x, y) = ((i % self.w) as i64 - cx, (i / self.w) as i64 - cy);
-                    x * x + y * y
-                })
+                .filter(|&i| z.is_none_or(|z| (self.height[i] - z).abs() <= SNAP_RISE))
+                .collect();
+            ring.sort_by_key(|&i| {
+                let (x, y) = ((i % self.w) as i64 - cx, (i / self.w) as i64 - cy);
+                (x * x + y * y, i)
+            });
+            ring.dedup();
+            ring.into_iter().find(|&i| {
+                if pockets.contains(&i) {
+                    return false;
+                }
+                match self.reach(i, MIN_GROUND) {
+                    Ok(()) => true,
+                    Err(pocket) => {
+                        pockets.extend(pocket);
+                        false
+                    }
+                }
+            })
         })
+    }
+
+    /// Whether `start`'s piece of passable ground holds at least `cells` cells; if not, its
+    /// cells (a pocket).
+    fn reach(&self, start: usize, cells: usize) -> Result<(), Vec<usize>> {
+        let mut seen = std::collections::HashSet::from([start]);
+        let mut stack = vec![start];
+        while let Some(i) = stack.pop() {
+            let linked = self.links.get(&i).into_iter().flatten().copied();
+            for j in self.neighbours(i).chain(linked) {
+                if self.passable(j) && seen.insert(j) {
+                    if seen.len() >= cells {
+                        return Ok(());
+                    }
+                    stack.push(j);
+                }
+            }
+        }
+        Err(seen.into_iter().collect())
     }
 
     /// The cheapest ways from `from` to each of `to` (cells), as each cell's predecessor: a
@@ -578,7 +805,7 @@ struct Way {
 fn ways(grid: &Grid, towns: &[&Town], jobs: usize) -> (Vec<Way>, Vec<String>) {
     let cells: Vec<Option<usize>> = towns
         .iter()
-        .map(|t| grid.nearest_passable(t.x, t.y))
+        .map(|t| grid.nearest_passable(t.x, t.y, t.z))
         .collect();
     let stranded = towns
         .iter()
@@ -648,7 +875,46 @@ fn ways(grid: &Grid, towns: &[&Town], jobs: usize) -> (Vec<Way>, Vec<String>) {
 
 /// Builds every continent's grid, the ways between its delivery towns and the GPS roads they
 /// make, and reports how the towns fared.
-pub fn run(deliveries: &Path, jobs: usize, render: Option<&Path>) -> Result<(RoadFile, String)> {
+/// How much of `roads` (the GPS roads a map was given before) crosses what `grid` holds
+/// impassable, yards, and the spots it does most, 100-yard squares by yards crossed.
+fn audit(grid: &Grid, roads: &kart_gps::RoadMap) -> (f32, Vec<([f32; 2], f32)>) {
+    let points: Vec<[f32; 3]> = roads
+        .points
+        .chunks(3)
+        .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
+        .collect();
+    let mut spots: std::collections::HashMap<(i32, i32), f32> = Default::default();
+    let mut total = 0.0;
+    for l in roads.links.chunks(2) {
+        let (a, b) = (points[l[0] as usize], points[l[1] as usize]);
+        let len = (a[0] - b[0]).hypot(a[1] - b[1]);
+        let steps = (len / 2.0).ceil().max(1.0) as usize;
+        for s in 0..steps {
+            let t = (s as f32 + 0.5) / steps as f32;
+            let (x, y) = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t);
+            if grid.cell(x, y).is_some_and(|i| grid.cost[i].is_infinite()) {
+                let d = len / steps as f32;
+                total += d;
+                *spots
+                    .entry(((x / 100.0).floor() as i32, (y / 100.0).floor() as i32))
+                    .or_default() += d;
+            }
+        }
+    }
+    let mut spots: Vec<([f32; 2], f32)> = spots
+        .into_iter()
+        .map(|((x, y), d)| ([x as f32 * 100.0 + 50.0, y as f32 * 100.0 + 50.0], d))
+        .collect();
+    spots.sort_by(|a, b| b.1.total_cmp(&a.1));
+    (total, spots)
+}
+
+pub fn run(
+    deliveries: &Path,
+    jobs: usize,
+    render: Option<&Path>,
+    previous: Option<&RoadFile>,
+) -> Result<(RoadFile, String)> {
     let zones = continent_zones(&mut open_install()?)?;
     let towns = read_towns(deliveries)?;
     let mut maps = Vec::new();
@@ -663,6 +929,13 @@ pub fn run(deliveries: &Path, jobs: usize, render: Option<&Path>) -> Result<(Roa
             grid.h,
             started.elapsed().as_secs_f32()
         );
+        if let Some(old) = previous.and_then(|p| p.map(map)) {
+            let (yards, spots) = audit(&grid, old);
+            out += &format!(
+                "  the previous roads cross impassable ground for {yards:.0} yd; most at: {:?}\n",
+                &spots[..spots.len().min(8)]
+            );
+        }
         let on_map: Vec<&Town> = towns.iter().filter(|t| t.map == map).collect();
         if let Some(dir) = render {
             let file = dir.join(format!("gps-map{map}.png"));
@@ -672,10 +945,14 @@ pub fn run(deliveries: &Path, jobs: usize, render: Option<&Path>) -> Result<(Roa
         let mut grid = grid;
         let cells: Vec<usize> = on_map
             .iter()
-            .filter_map(|t| grid.nearest_passable(t.x, t.y))
+            .filter_map(|t| grid.nearest_passable(t.x, t.y, t.z))
             .collect();
         for line in grid.link_towns(&cells) {
             out += &format!("  {line}\n");
+        }
+        if let Some(dir) = render {
+            let file = dir.join(format!("gps-map{map}-pieces.png"));
+            grid.render_pieces(&file, &cells)?;
         }
         let (ways, stranded) = ways(&grid, &on_map, jobs);
         let mut b = Builder::default();
@@ -683,6 +960,12 @@ pub fn run(deliveries: &Path, jobs: usize, render: Option<&Path>) -> Result<(Roa
             b.trail(&w.points, MERGE);
         }
         let roads = b.finish(map);
+        // The new roads against the same grid: only the links' spans may cross it.
+        let (yards, spots) = audit(&grid, &roads);
+        out += &format!(
+            "  these roads cross impassable ground for {yards:.0} yd (the links' spans); most at: {:?}\n",
+            &spots[..spots.len().min(6)]
+        );
         let router = Router::new(&roads);
         let pairs = on_map.len() * on_map.len().saturating_sub(1) / 2;
         out += &format!(
@@ -724,12 +1007,14 @@ pub fn run(deliveries: &Path, jobs: usize, render: Option<&Path>) -> Result<(Roa
         for (k, &a) in firsts.iter().enumerate() {
             for &b in &firsts[k + 1..] {
                 let (Some(ca), Some(cb)) = (
-                    grid.nearest_passable(on_map[a].x, on_map[a].y),
-                    grid.nearest_passable(on_map[b].x, on_map[b].y),
+                    grid.nearest_passable(on_map[a].x, on_map[a].y, on_map[a].z),
+                    grid.nearest_passable(on_map[b].x, on_map[b].y, on_map[b].z),
                 ) else {
                     continue;
                 };
-                if let Some((p, q, d)) = grid.gap(ca, cb) {
+                if let Some((p, q, d)) =
+                    grid.gap(ca, cb, 400.0, |_| true, |o, i| grid.crossable(o, i))
+                {
                     let (p, q) = (grid.centre(p), grid.centre(q));
                     out += &format!(
                         "  gap {} – {}: {d:.0} yd between ({:.0}, {:.0}, {:.0}) and ({:.0}, {:.0}, {:.0})\n",
@@ -817,6 +1102,7 @@ mod tests {
                 .map(|&c| if c == ROAD { 1.0 } else { 0.0 })
                 .collect(),
             laid: vec![false; cells.len()],
+            wall: vec![false; cells.len()],
             links: Default::default(),
             height: vec![0.0; cells.len()],
             cost: cells,

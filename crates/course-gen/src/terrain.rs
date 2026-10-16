@@ -186,6 +186,9 @@ pub struct ZoneTerrain {
     pub wmo_ground: bool,
     /// An open WMO floor is laid over the terrain on the pixel ([`TerrainParams::wmo_floors`]).
     pub laid: Vec<bool>,
+    /// A WMO's wall stands on the pixel's ground (continent zones with laid floors): part of
+    /// [`ZoneTerrain::solid`], kept apart for what must never be crossed.
+    pub walls: Vec<bool>,
 }
 
 impl ZoneTerrain {
@@ -528,10 +531,14 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
     let mut seen_doodad = HashSet::new();
     let mut seen_wmo = HashSet::new();
     let mut m2_hulls: HashMap<String, Option<Hull>> = HashMap::new();
-    let mut solid = floor
-        .as_ref()
-        .filter(|_| whole_map)
-        .map_or_else(|| vec![false; grid.len()], |f| f.solid.clone());
+    // The WMOs' walls: an instance's are its floor's solid (off its streets is a wall); a
+    // continent zone's, with WMO floors laid over its terrain, are where a WMO face stands in the
+    // kart's band over the ground (its buildings are then not stamped as discs below).
+    let mut solid = match &floor {
+        Some(f) if whole_map => f.solid.clone(),
+        Some(f) => f.walls.clone(),
+        None => vec![false; grid.len()],
+    };
     let inside = |x: f32, y: f32| {
         let (c, r) = grid.pixel_of(x, y);
         grid.index(c.floor() as i64, r.floor() as i64).is_some()
@@ -663,6 +670,10 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
     .data;
     // A laid floor is driven on, whatever footprint its own building stamped.
     let solid: Vec<bool> = solid.iter().zip(&laid).map(|(&s, &l)| s && !l).collect();
+    let walls: Vec<bool> = match &floor {
+        Some(f) if !whole_map => f.walls.iter().zip(&laid).map(|(&w, &l)| w && !l).collect(),
+        _ => vec![false; grid.len()],
+    };
     let area_names = area
         .iter()
         .copied()
@@ -690,6 +701,7 @@ pub fn load_zone(chain: &mut Chain, zone: &str, params: &TerrainParams) -> Resul
         probes,
         wmo_ground: whole_map,
         laid,
+        walls,
     })
 }
 
