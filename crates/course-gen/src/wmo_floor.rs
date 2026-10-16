@@ -20,8 +20,11 @@ use crate::terrain::Grid;
 
 /// The steepest face (degrees) that is a floor; WoW walks up 50°.
 pub const MAX_FLOOR_SLOPE: f32 = 50.0;
-/// The most two neighbouring floors (one pixel apart) may differ in height and still join, yards.
+/// The most two neighbouring floors (one pixel apart) may differ in height and still join, yards;
+/// on coarser pixels, a [`RAMP`] ramp's rise over one (a tunnel's floor climbs Dun Algaz at 28°,
+/// 1.1 to 1.5 yd a 2-yd pixel).
 pub const STEP: f32 = 1.2;
+pub const RAMP: f32 = 45.0;
 /// Floors closer together than this (yards) on one pixel are one floor.
 const MERGE: f32 = 0.6;
 /// The kart's height band over a floor that must be clear, yards: a kerb under its lower edge
@@ -299,6 +302,7 @@ pub fn walkable_floor(
 
     let mut parent: Vec<u32> = (0..nodes.len() as u32).collect();
     let (w, h) = (grid.width, grid.height);
+    let join = STEP.max(grid.yards_per_px * RAMP.to_radians().tan());
     for r in 0..h {
         for c in 0..w {
             let i = r * w + c;
@@ -311,7 +315,7 @@ pub fn walkable_floor(
                         continue;
                     }
                     for b in of(j) {
-                        if nodes[b].1 && (nodes[a].0 - nodes[b].0).abs() <= STEP {
+                        if nodes[b].1 && (nodes[a].0 - nodes[b].0).abs() <= join {
                             let (ra, rb) =
                                 (find(&mut parent, a as u32), find(&mut parent, b as u32));
                             if ra != rb {

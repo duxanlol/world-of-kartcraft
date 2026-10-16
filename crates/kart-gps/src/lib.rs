@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 
 /// The longest step (yards) between two neighbouring points of a road.
 pub const SPACING: f32 = 8.0;
+/// Two points join only this near in height too (yards): a road over a tunnel (Dun Algaz's upper
+/// road over its lower tunnel) is two roads, not one.
+pub const MERGE_RISE: f32 = 4.0;
 /// How far (yards) a place may be from the road and still join it; farther, there is no route.
 pub const MAX_SNAP: f32 = 400.0;
 /// The spatial index's cell, yards.
@@ -58,7 +61,9 @@ pub struct Builder {
 impl Builder {
     /// The point at `p`: one already laid within `merge` yards, else a new one.
     fn point(&mut self, p: [f32; 3], merge: f32) -> u32 {
-        if let Some((j, _)) = self.index.nearest(&self.pos, p, merge, |_| true) {
+        let pos = &self.pos;
+        let level = |j: u32| (pos[j as usize][2] - p[2]).abs() <= MERGE_RISE;
+        if let Some((j, _)) = self.index.nearest(pos, p, merge, level) {
             return j;
         }
         self.pos.push(p);
@@ -252,18 +257,27 @@ impl Router {
         &self.adj[self.start[i as usize] as usize..self.start[i as usize + 1] as usize]
     }
 
-    /// The nearest road point of each network within [`MAX_SNAP`] of `p`.
+    /// The nearest road point of each network within [`MAX_SNAP`] of `p`, nearest counting the
+    /// height (a kart in a tunnel joins the tunnel's road, not the road over it), and how far it
+    /// is on the level.
     fn joins(&self, p: [f32; 3]) -> HashMap<u32, (u32, f32)> {
-        let mut by_network: HashMap<u32, (u32, f32)> = HashMap::new();
+        let mut by_network: HashMap<u32, (u32, f32, f32)> = HashMap::new();
         self.index.nearest(&self.pos, p, MAX_SNAP, |j| {
-            let d = flat(p, self.pos[j as usize]);
-            let e = by_network.entry(self.network[j as usize]).or_insert((j, d));
-            if d < e.1 {
-                *e = (j, d);
+            let q = self.pos[j as usize];
+            let d = flat(p, q);
+            let near = d.hypot(p[2] - q[2]);
+            let e = by_network
+                .entry(self.network[j as usize])
+                .or_insert((j, d, near));
+            if near < e.2 {
+                *e = (j, d, near);
             }
             false
         });
         by_network
+            .into_iter()
+            .map(|(n, (j, d, _))| (n, (j, d)))
+            .collect()
     }
 
     /// The shortest road route from `from` to `to`: onto the network both reach with the least
@@ -357,6 +371,27 @@ mod tests {
             new_up_the_road, 25,
             "past the shared road, its own points: 200 yd / 8"
         );
+    }
+
+    #[test]
+    fn a_road_over_a_tunnel_stays_two_roads() {
+        let mut b = Builder::default();
+        b.trail(&[[0.0, -50.0, 100.0], [0.0, 50.0, 100.0]], 6.0);
+        b.trail(&[[-50.0, 0.0, 30.0], [50.0, 0.0, 30.0]], 6.0);
+        let m = b.finish(0);
+        let z: Vec<i32> = m.points.chunks(3).map(|p| p[2]).collect();
+        for l in m.links.chunks(2) {
+            assert_eq!(
+                z[l[0] as usize], z[l[1] as usize],
+                "no link between the levels"
+            );
+        }
+        // Crossing level, they share the crossing.
+        let mut b = Builder::default();
+        b.trail(&[[0.0, -50.0, 30.0], [0.0, 50.0, 30.0]], 6.0);
+        b.trail(&[[-50.0, 0.0, 30.0], [50.0, 0.0, 30.0]], 6.0);
+        let level = b.finish(0);
+        assert!(level.points.len() < m.points.len());
     }
 
     #[test]

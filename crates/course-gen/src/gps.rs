@@ -74,6 +74,15 @@ const MAX_TUNNEL: f32 = 400.0;
 const TUNNEL_GRADE: f32 = 0.15;
 const TUNNEL_COVER: f32 = 0.7;
 const TUNNEL_ROOF: f32 = 3.0;
+/// Seams: where two pieces of painted road or laid WMO floor, each of at least [`SEAM_PIECE`]
+/// cells, come within [`SEAM_REACH`] yards, the bot drives across on the world's real collision
+/// ([`crate::gps_drive::drivable`]), [`SEAM_RUN`] yards back into each, and a link joins them if
+/// it gets through. A grid of one height a cell cannot hold what a kart drives there: a road over
+/// a tunnel (Dun Algaz's lower tunnel under its upper road), a doorway's step, an arch's foot.
+const SEAM_PIECE: usize = 20;
+const SEAM_REACH: f32 = 30.0;
+const SEAM_RUN: f32 = 15.0;
+
 /// The steepest a link climbs, rise over run: about 31°.
 const LINK_GRADE: f32 = 0.6;
 /// What a yard over a link costs.
@@ -483,6 +492,118 @@ impl Grid {
             self.cell(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
                 .is_none_or(|i| !self.wall[i])
         })
+    }
+
+    /// Each passable cell's piece of ground (steps and links followed), `u32::MAX` where none,
+    /// and each piece's size in cells.
+    fn pieces(&self) -> (Vec<u32>, Vec<usize>) {
+        let mut label = vec![u32::MAX; self.cost.len()];
+        let mut sizes = Vec::new();
+        let mut stack = Vec::new();
+        for s in 0..self.cost.len() {
+            if label[s] != u32::MAX || !self.passable(s) {
+                continue;
+            }
+            let id = sizes.len() as u32;
+            let mut n = 0;
+            label[s] = id;
+            stack.push(s);
+            while let Some(i) = stack.pop() {
+                n += 1;
+                let linked = self.links.get(&i).into_iter().flatten().copied();
+                let stepped = self.neighbours(i).filter(|&j| self.step(i, j));
+                for j in stepped.chain(linked) {
+                    if label[j] == u32::MAX && self.passable(j) {
+                        label[j] = id;
+                        stack.push(j);
+                    }
+                }
+            }
+            sizes.push(n);
+        }
+        (label, sizes)
+    }
+
+    /// Joins pieces of road across the seams the bot drives over ([`SEAM_REACH`]); one line a
+    /// map for the report.
+    fn seam_links(&mut self, jobs: usize) -> String {
+        let (label, sizes) = self.pieces();
+        let big = |i: usize| label[i] != u32::MAX && sizes[label[i] as usize] >= SEAM_PIECE;
+        let k = (SEAM_REACH / CELL).ceil() as i64;
+        // The nearest pair of mouths of each two pieces.
+        let mut best: std::collections::HashMap<(u32, u32), (f32, usize, usize)> =
+            Default::default();
+        for i in 0..self.cost.len() {
+            if !big(i) || !self.mouth(i) {
+                continue;
+            }
+            // Only a piece's edge: a cell with a neighbour outside its piece.
+            if self.neighbours(i).all(|j| label[j] == label[i]) {
+                continue;
+            }
+            let (cx, cy) = ((i % self.w) as i64, (i / self.w) as i64);
+            let a = self.centre(i);
+            for dy in -k..=k {
+                for dx in -k..=k {
+                    let (x, y) = (cx + dx, cy + dy);
+                    if x < 0 || y < 0 || x as usize >= self.w || y as usize >= self.h {
+                        continue;
+                    }
+                    let j = x as usize + y as usize * self.w;
+                    if !big(j) || label[j] <= label[i] || !self.mouth(j) {
+                        continue;
+                    }
+                    let b = self.centre(j);
+                    let d = (a[0] - b[0]).hypot(a[1] - b[1]);
+                    if d > SEAM_REACH || (a[2] - b[2]).abs() > d * LINK_GRADE + 4.0 {
+                        continue;
+                    }
+                    let key = (label[i], label[j]);
+                    if best.get(&key).is_none_or(|e| d < e.0) {
+                        best.insert(key, (d, i, j));
+                    }
+                }
+            }
+        }
+        let tries: Vec<(usize, usize)> = best.values().map(|&(_, i, j)| (i, j)).collect();
+        // Each seam driven: from SEAM_RUN back in one piece, across, SEAM_RUN on into the other.
+        let joined = std::sync::Mutex::new(Vec::new());
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|s| {
+            for _ in 0..jobs.max(1) {
+                s.spawn(|| {
+                    let Ok(mut chain) = open_install() else {
+                        return;
+                    };
+                    loop {
+                        let n = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(&(i, j)) = tries.get(n) else {
+                            break;
+                        };
+                        let (a, b) = (self.centre(i), self.centre(j));
+                        let d = ((b[0] - a[0]).hypot(b[1] - a[1])).max(1.0);
+                        let (ux, uy) = ((b[0] - a[0]) / d, (b[1] - a[1]) / d);
+                        let back = [a[0] - ux * SEAM_RUN, a[1] - uy * SEAM_RUN, a[2]];
+                        let on = [b[0] + ux * SEAM_RUN, b[1] + uy * SEAM_RUN, b[2]];
+                        let line = [back, a, b, on];
+                        if crate::gps_drive::drivable(&mut chain, self.map, &line) {
+                            joined.lock().unwrap().push((i, j, d));
+                        }
+                    }
+                });
+            }
+        });
+        let joined = joined.into_inner().unwrap();
+        for &(i, j, _) in &joined {
+            self.links.entry(i).or_default().push(j);
+            self.links.entry(j).or_default().push(i);
+        }
+        format!(
+            "seams: {} pieces of {SEAM_PIECE}+ cells, {} seams within {SEAM_REACH} yd tried, {} driven and joined",
+            sizes.iter().filter(|&&n| n >= SEAM_PIECE).count(),
+            tries.len(),
+            joined.len()
+        )
     }
 
     /// The cells `start`'s piece of passable ground holds, links crossed.
@@ -1149,6 +1270,7 @@ pub fn run(
             .iter()
             .filter_map(|t| grid.nearest_passable(t.x, t.y, t.z))
             .collect();
+        out += &format!("  {}\n", grid.seam_links(jobs));
         for line in grid.link_towns(&cells) {
             out += &format!("  {line}\n");
         }

@@ -222,6 +222,26 @@ impl Stretch {
     }
 }
 
+/// Whether the bot drives `line` (WoW yards, the heights a guide) over the world's real
+/// collision round it.
+pub fn drivable(chain: &mut benilla_formats::Chain, map: u32, line: &[[f32; 3]]) -> bool {
+    let flat: Vec<Vec2> = line.iter().map(|q| Vec2::new(q[0], q[1])).collect();
+    let dense: Vec<[f32; 3]> = crate::geom::resample(&flat, false, 3.0)
+        .iter()
+        .map(|q| {
+            let z = line
+                .iter()
+                .min_by(|a, b| {
+                    let d = |r: &[f32; 3]| (r[0] - q.x).hypot(r[1] - q.y);
+                    d(a).total_cmp(&d(b))
+                })
+                .map_or(0.0, |r| r[2]);
+            [q.x, q.y, z]
+        })
+        .collect();
+    dense.len() >= 2 && drive_stretch(chain, map, &dense).is_ok_and(|s| s.ok)
+}
+
 /// One stretch driven over the world's faces round it.
 fn drive_stretch(chain: &mut benilla_formats::Chain, map: u32, p: &[[f32; 3]]) -> Result<Stretch> {
     let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
