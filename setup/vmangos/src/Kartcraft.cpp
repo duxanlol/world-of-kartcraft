@@ -487,6 +487,8 @@ namespace Kartcraft
         ObjectGuid host;
         uint32 created = 0;
         uint32 start = 0; // 0 until started
+        // When a warp orb was last rolled in the race (ms), for WARP_COOLDOWN; 0 none yet.
+        uint32 warpRolled = 0;
         uint8 finishers = 0;
         // When the first racer finished (ms), for the rest's DNF_WAIT; 0 none yet.
         uint32 firstFinish = 0;
@@ -1963,14 +1965,31 @@ namespace Kartcraft
     constexpr uint32 SEGMENT_FRUIT = 3;
     constexpr float FRUIT_SPACING = 4.f;
 
-    // The roulette tables (zGlobal_DATA.c:8108-8174). Race4 samples only its first 19 entries.
+    // The roulette tables (zGlobal_DATA.c:8108-8174; Race4 samples only its first 19 entries,
+    // which these are). Kartcraft's own: N. Tropy's clock (8) is taken out of every table and
+    // nothing takes its place, so each table rolls its other items in their own proportions.
     constexpr uint8 TABLE_RACE1[] = { 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 0, 6 };
     constexpr uint8 TABLE_RACE2[] = {
         4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1, 1, 1, 10, 10, 10,
-        0, 0, 0, 0, 0, 6, 6, 6, 2, 2, 2, 11, 11, 9, 9, 9, 9, 9, 7, 7, 7, 7, 7, 7, 7, 8 };
-    constexpr uint8 TABLE_RACE3[] = { 4, 3, 1, 10, 10, 0, 0, 6, 2, 2, 11, 9, 9, 9, 7, 7, 7, 7, 7, 8 };
-    constexpr uint8 TABLE_RACE4[] = { 0, 6, 2, 11, 9, 9, 9, 9, 9, 7, 7, 7, 7, 7, 7, 7, 7, 8, 8 };
-    constexpr uint8 TABLE_BOSS[] = { 4, 3, 1, 10, 10, 0, 0, 6, 2, 11, 9, 9, 9, 7, 7, 7, 7, 7, 8, 8 };
+        0, 0, 0, 0, 0, 6, 6, 6, 2, 2, 2, 11, 11, 9, 9, 9, 9, 9, 7, 7, 7, 7, 7, 7, 7 };
+    constexpr uint8 TABLE_RACE3[] = { 4, 3, 1, 10, 10, 0, 0, 6, 2, 2, 11, 9, 9, 9, 7, 7, 7, 7, 7 };
+    constexpr uint8 TABLE_RACE4[] = { 0, 6, 2, 11, 9, 9, 9, 9, 9, 7, 7, 7, 7, 7, 7, 7, 7 };
+    constexpr uint8 TABLE_BOSS[] = { 4, 3, 1, 10, 10, 0, 0, 6, 2, 11, 9, 9, 9, 7, 7, 7, 7, 7 };
+
+    // A table's item for a roll of 0-199: `item = table[rng * N / 200]` (VehPhysGeneral.c:1807-1841).
+    template <size_t N>
+    static uint8 Pick(uint8 const (&table)[N], uint32 rng)
+    {
+        return table[rng * N / 200];
+    }
+
+    // The strongest items wait and take turns, as Mario Kart's do (Kartcraft's own rule: CTR
+    // has none): no Missile x3 or mask in a race's first STRONG_DELAY, no warp orb in its first
+    // WARP_DELAY nor within WARP_COOLDOWN of the last one rolled in the race. A roll that comes
+    // to one of them too soon is a turbo, as Mario Kart Wii's is a mushroom.
+    constexpr uint32 STRONG_DELAY = 15 * IN_MILLISECONDS;
+    constexpr uint32 WARP_DELAY = 30 * IN_MILLISECONDS;
+    constexpr uint32 WARP_COOLDOWN = 30 * IN_MILLISECONDS;
 
     enum ItemSet { SET_RACE1, SET_RACE2, SET_RACE3, SET_RACE4, SET_BOSS, SET_FALLBACK };
 
@@ -2176,6 +2195,9 @@ namespace Kartcraft
         switch (mode)
         {
             case 8: set = rank == 1 ? SET_RACE2 : int(rank / 2); break;
+            // Seven, which CTR never fields (Kartcraft's own): its 8- and 6-driver pattern, the
+            // leader Race1, then two each to Race2, Race3 and Race4.
+            case 7: set = rank == 0 ? SET_RACE1 : int((rank - 1) / 2 + 1); break;
             case 6: set = rank == 0 ? SET_RACE1 : rank == 5 ? SET_RACE4 : int((rank - 1) / 2 + 1); break;
             case 5: set = rank >= 4 ? SET_RACE4 : int(rank); break;
             case 4: set = int(std::min<uint32>(rank, SET_RACE4)); break;
@@ -2188,6 +2210,8 @@ namespace Kartcraft
                     set = SET_RACE4;
                 break;
             case 2: set = rank == 0 ? SET_RACE1 : SET_BOSS; break;
+            // A race with one driver: the leader's.
+            case 1: set = SET_RACE1; break;
         }
         // Race4 on the first lap is downgraded to Race3. A sprint is all one lap, so there the
         // catch-up items come once the first third of its checkpoints is behind (Kartcraft's own
@@ -2201,12 +2225,11 @@ namespace Kartcraft
         uint8 item;
         switch (set)
         {
-            case SET_RACE1: item = TABLE_RACE1[rng * 20 / 200]; break;
-            case SET_RACE2: item = TABLE_RACE2[rng * 52 / 200]; break;
-            case SET_RACE3: item = TABLE_RACE3[rng * 20 / 200]; break;
-            case SET_RACE4: item = TABLE_RACE4[rng * 19 / 200]; break;
-            case SET_BOSS: item = TABLE_BOSS[rng * 20 / 200]; break;
-            default: item = uint8(Scramble(race) % 12); break;
+            case SET_RACE1: item = Pick(TABLE_RACE1, rng); break;
+            case SET_RACE2: item = Pick(TABLE_RACE2, rng); break;
+            case SET_RACE3: item = Pick(TABLE_RACE3, rng); break;
+            case SET_RACE4: item = Pick(TABLE_RACE4, rng); break;
+            default: item = Pick(TABLE_BOSS, rng); break;
         }
 
         if (item == ITEM_SPRING)
@@ -2231,6 +2254,15 @@ namespace Kartcraft
             if (holders >= 2)
                 item = ITEM_MISSILE;
         }
+        // The strongest items wait and take turns (STRONG_DELAY, WARP_DELAY, WARP_COOLDOWN).
+        uint32 const raced = race.start && int32(now - race.start) > 0 ? now - race.start : 0;
+        if (item == ITEM_WARP && (raced < WARP_DELAY ||
+            (race.warpRolled && WorldTimer::getMSTimeDiff(race.warpRolled, now) < WARP_COOLDOWN)))
+            item = ITEM_TURBO;
+        if ((item == ITEM_MISSILE_3 || item == ITEM_MASK) && raced < STRONG_DELAY)
+            item = ITEM_TURBO;
+        if (item == ITEM_WARP)
+            race.warpRolled = now;
         return item;
     }
 
