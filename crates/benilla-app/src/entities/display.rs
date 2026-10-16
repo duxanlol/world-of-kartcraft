@@ -201,21 +201,13 @@ impl DisplayModel {
     }
 
     /// The NPC look `net` wears as a whole, gear and all: a unit's own, or a player's through a
-    /// morph (a display other than `UNIT_FIELD_NATIVEDISPLAYID`; World of Kartcraft's skins), as
-    /// the morph already brings the NPC's skin ([`super::attach`]'s `resolve_char_look`).
-    pub(super) fn npc_outfit(
-        &self,
-        net: &NetEntity,
-        fields: Option<&benilla_protocol::messages::ObjectFields>,
-    ) -> Option<&NpcAppearance> {
-        let worn = match net.kind {
-            EntityKind::Unit => true,
-            EntityKind::Player => fields
-                .and_then(|f| f.unit_native_displayid())
-                .is_some_and(|native| net.display_id != u32::try_from(native).ok()),
-            _ => false,
-        };
-        self.npc_appearance.as_ref().filter(|_| worn)
+    /// morph or a worn Kartcraft skin, as [`super::attach`]'s `resolve_char_look` takes its skin.
+    /// It follows the display alone: a skin is the native display too, and a race's own body has
+    /// no CreatureDisplayInfoExtra row.
+    pub(super) fn npc_outfit(&self, net: &NetEntity) -> Option<&NpcAppearance> {
+        self.npc_appearance
+            .as_ref()
+            .filter(|_| matches!(net.kind, EntityKind::Unit | EntityKind::Player))
     }
 }
 
@@ -575,7 +567,7 @@ mod tests {
     use super::*;
 
     /// A character-model NPC's look is its gear too: worn by the NPC, and by a player morphed into
-    /// it (`.modify morph`, a Kartcraft skin), never by a player on their own body.
+    /// it (`.modify morph`) or wearing it as a Kartcraft skin, where it is the native display too.
     #[test]
     fn a_morph_into_a_humanoid_npc_wears_the_npcs_outfit() {
         let mut dm = empty_display();
@@ -590,22 +582,18 @@ mod tests {
             equipment: [0; 10],
             bake_name: None,
         });
-        let on = |kind, display| NetEntity {
+        let on = |kind| NetEntity {
             kind,
-            display_id: Some(display),
+            display_id: Some(2029),
             scale: 1.0,
         };
-        // `UNIT_FIELD_NATIVEDISPLAYID` (132): a human male's body.
-        let native = benilla_protocol::messages::ObjectFields::from_pairs(&[(132, 49)]);
-        assert!(dm.npc_outfit(&on(EntityKind::Unit, 2029), None).is_some());
-        assert!(dm
-            .npc_outfit(&on(EntityKind::Player, 2029), Some(&native))
-            .is_some());
-        assert!(dm
-            .npc_outfit(&on(EntityKind::Player, 49), Some(&native))
+        assert!(dm.npc_outfit(&on(EntityKind::Unit)).is_some());
+        assert!(dm.npc_outfit(&on(EntityKind::Player)).is_some());
+        assert!(dm.npc_outfit(&on(EntityKind::Corpse)).is_none());
+        // A race's own body has no extra row, so a player on it wears their gear.
+        assert!(empty_display()
+            .npc_outfit(&on(EntityKind::Player))
             .is_none());
-        // No descriptor, no morph to tell.
-        assert!(dm.npc_outfit(&on(EntityKind::Player, 2029), None).is_none());
     }
 
     /// Both kinds carry the same empty `parts` once built, so only the handle tells a display that

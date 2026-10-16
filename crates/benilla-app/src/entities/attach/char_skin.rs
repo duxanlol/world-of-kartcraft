@@ -120,12 +120,11 @@ pub(super) fn resolve_worn_equip(
     net: &NetEntity,
     equipment: Option<&super::super::Equipment>,
     dm: Option<&DisplayModel>,
-    fields: Option<&benilla_protocol::messages::ObjectFields>,
 ) -> WornEquip {
     // An NPC wears its CreatureDisplayInfoExtra columns, ItemDisplayInfo ids by bodyslot: 2 to 9
     // are the armor slots, 0 the helm, and there is no cloak column. So does a player morphed
     // into one.
-    if let Some(npc) = dm.and_then(|d| d.npc_outfit(net, fields)) {
+    if let Some(npc) = dm.and_then(|d| d.npc_outfit(net)) {
         return WornEquip {
             bodyslots: std::array::from_fn(|i| npc.equipment[i + 2]),
             cloak: 0,

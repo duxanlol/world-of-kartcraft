@@ -118,12 +118,7 @@ pub(in crate::entities) fn redress_player_looks(
             continue;
         };
 
-        let worn = resolve_worn_equip(
-            net,
-            Some(live),
-            Some(dm),
-            stores.get(entity).ok().map(|s| &s.0),
-        );
+        let worn = resolve_worn_equip(net, Some(live), Some(dm));
         let look = resolve_char_look(net, Some(dm), entity, &stores);
         // A re-dress is the reference's incremental composite (`0x47789c`–`0x4778c3`): the new
         // geosets apply at once and the atlas composites that frame when its sections are
@@ -330,7 +325,7 @@ fn idle_aabb(dm: &super::super::DisplayModel) -> Option<bevy::camera::primitives
 mod tests {
     use std::collections::HashMap;
 
-    use benilla_formats::{CharacterGeosets, ItemDisplay, ItemDisplayCatalog, NpcAppearance};
+    use benilla_formats::{CharacterGeosets, ItemDisplay, ItemDisplayCatalog};
 
     use super::super::super::display::{empty_display, EntityPart};
     use super::super::super::{BoneAttach, Creatures};
@@ -399,18 +394,7 @@ mod tests {
 
         let mut dm = empty_display();
         dm.parts = Some(geosets.iter().map(|g| part(*g)).collect());
-        // A look off the display (an NPC row) needs no `ObjectStore`.
-        dm.npc_appearance = Some(NpcAppearance {
-            race: 1,
-            sex: 0,
-            skin: 0,
-            face: 0,
-            hair_style: 0,
-            hair_color: 0,
-            facial_hair: 0,
-            equipment: [0; 10],
-            bake_name: None,
-        });
+        dm.is_character_body = true;
         app.insert_resource(Creatures {
             catalog: Default::default(),
             models: HashMap::from([(42u32, dm)]),
@@ -437,6 +421,10 @@ mod tests {
                     display_id: Some(42),
                     scale: 1.0,
                 },
+                // A human male's body (`UNIT_FIELD_BYTES_0`'s race byte).
+                crate::net::ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[(
+                    36, 1,
+                )])),
                 Equipment {
                     settled: true,
                     ..Default::default()

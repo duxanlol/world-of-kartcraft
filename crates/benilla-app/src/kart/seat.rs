@@ -490,6 +490,9 @@ mod tests {
         let cat = benilla_formats::load_creature_catalog(&mut chain).expect("creature catalog");
         println!("{HEADER}");
         for (display, label) in PLAYABLE {
+            // A player on their own body wears their own gear (`DisplayModel::npc_outfit`).
+            let npc = cat.model(display).and_then(|m| m.npc_appearance);
+            assert!(npc.is_none(), "{label}: an NPC look on a race's own body");
             assert_seated(label, &sit(&mut chain, &cat, display));
         }
     }
@@ -514,6 +517,12 @@ mod tests {
         assert!(!skins.is_empty(), "the server's SKINS");
         println!("{HEADER}");
         for (key, display) in skins {
+            // Worn, the skin is the native display too: its outfit comes with its look alone.
+            let npc = cat.model(display).and_then(|m| m.npc_appearance);
+            assert!(
+                npc.is_some_and(|n| n.equipment != [0; 10]),
+                "{key}: no NPC outfit"
+            );
             assert_seated(&key, &sit(&mut chain, &cat, display));
         }
     }

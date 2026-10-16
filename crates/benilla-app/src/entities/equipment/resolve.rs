@@ -97,6 +97,8 @@ fn resolve_glow(
 /// only while every other input of the rebuild is a store field or a catalog fixed after load.
 #[derive(Component, Clone, Copy, PartialEq)]
 pub(in crate::entities) struct ResolveKey {
+    /// The body dressed: a display swap moves it after this system, and no store field with it.
+    display_id: Option<u32>,
     committed_sheath: u8,
     visual_sheath: Option<[u8; 2]>,
     nocked: Option<u32>,
@@ -200,6 +202,7 @@ pub(in crate::entities) fn resolve_equipment(
             .or_else(|| s.unit_sheath_state())
             .unwrap_or(0);
         let key = ResolveKey {
+            display_id: net_entity.display_id,
             committed_sheath: committed,
             visual_sheath: visual_sheath.map(|v| v.0),
             nocked: nocked.map(|n| n.display_id),
@@ -485,7 +488,7 @@ pub(in crate::entities) fn resolve_equipment(
         let npc = net_entity
             .display_id
             .and_then(|disp| creatures.as_deref()?.models.get(&disp))
-            .and_then(|dm| dm.npc_outfit(net_entity, Some(s)));
+            .and_then(|dm| dm.npc_outfit(net_entity));
         let head_shoulder: Option<(u32, u32, u8, u8)> = match net_entity.kind {
             // A player morphed into a character-model NPC wears the NPC's, as the NPC does.
             EntityKind::Player | EntityKind::Unit if npc.is_some() => {
@@ -953,6 +956,73 @@ mod tests {
             901,
             "a marked store rebuilds — the gate opens"
         );
+        drop(rx);
+    }
+
+    /// A display swap (`refresh_live_display`, after this system in the frame) moves
+    /// `NetEntity::display_id` and no store field: the next frame must dress the new body, not
+    /// keep the old one's shoulders until some unrelated update lands.
+    #[test]
+    fn a_display_swap_dresses_the_new_npc_outfit() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
+        let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
+        app.insert_resource(Items::default());
+        app.init_resource::<crate::net::GuidIndex>();
+        app.insert_resource(NetCommands(tx));
+        app.insert_resource(ItemDisplays::icons_for_tests(
+            benilla_formats::ItemDisplayCatalog::from_displays(std::collections::HashMap::new()),
+        ));
+        // Two NPC looks, shoulders 501 and 502 (`CreatureDisplayInfoExtra` slot 1).
+        let npc = |shoulder| {
+            let mut dm = super::super::super::display::empty_display();
+            let mut equipment = [0; 10];
+            equipment[1] = shoulder;
+            dm.npc_appearance = Some(benilla_formats::NpcAppearance {
+                race: 3,
+                sex: 0,
+                skin: 0,
+                face: 0,
+                hair_style: 0,
+                hair_color: 0,
+                facial_hair: 0,
+                equipment,
+                bake_name: None,
+            });
+            dm
+        };
+        app.insert_resource(super::super::super::Creatures {
+            catalog: Default::default(),
+            models: std::collections::HashMap::from([(3597, npc(501)), (4527, npc(502))]),
+        });
+        let player = app
+            .world_mut()
+            .spawn((
+                NetEntity {
+                    kind: EntityKind::Player,
+                    display_id: Some(3597),
+                    scale: 1.0,
+                },
+                wearing(0, &[]),
+            ))
+            .id();
+        app.add_systems(Update, resolve_equipment);
+        app.update();
+        app.update();
+        let shoulder = |app: &App| {
+            app.world()
+                .get::<HeldItems>(player)
+                .and_then(|h| h.slots[4].as_ref())
+                .map(|s| s.display)
+        };
+        assert_eq!(shoulder(&app), Some(501));
+
+        app.world_mut()
+            .get_mut::<NetEntity>(player)
+            .unwrap()
+            .display_id = Some(4527);
+        app.update();
+        assert_eq!(shoulder(&app), Some(502), "the new body's shoulders");
         drop(rx);
     }
 
