@@ -253,6 +253,9 @@ namespace Kartcraft
 
     static void SkinLogin(Player* player);
 
+    // Key to Searing Gorge (item_template 5396), given to every character at login.
+    constexpr uint32 KEY_SEARING_GORGE = 5396;
+
     void OnLogin(Player* player)
     {
         // The whole map discovered, every zone's every area, as `.explorecheat 1` sets it
@@ -260,6 +263,15 @@ namespace Kartcraft
         // draws them on it. Saved with the character, so it holds offline too.
         for (uint8 i = 0; i < PLAYER_EXPLORED_ZONES_SIZE; ++i)
             player->SetFlag(PLAYER_EXPLORED_ZONES_1 + i, 0xFFFFFFFF);
+        // The Key to Searing Gorge for everyone: its gate is a way between Loch Modan and Searing
+        // Gorge that courses and deliveries drive, and the key is a long questline's reward.
+        if (!player->HasItemCount(KEY_SEARING_GORGE, 1, true))
+        {
+            ItemPosCountVec dest;
+            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, KEY_SEARING_GORGE, 1) == EQUIP_ERR_OK)
+                if (Item* item = player->StoreNewItem(dest, KEY_SEARING_GORGE, true))
+                    player->SendNewItem(item, 1, true, false);
+        }
         // A client logs in knowing of no race: it is out of any it was in, or a waiting race
         // would hold it (the marshal offers neither hosting nor joining) until it expired.
         LeaveRaces(player);
