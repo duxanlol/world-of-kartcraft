@@ -1863,6 +1863,44 @@ fn ground_at(collide: &WorldCollision, p: [f32; 2], fallback: f32) -> Vec3 {
     Vec3::new(column.x, y, column.z)
 }
 
+/// How long (seconds) a checkpoint spot with no ground found under it waits before it is probed
+/// again: the terrain there may not have streamed in yet.
+const REPROBE: f32 = 1.0;
+
+/// The ground under the race's checkpoint spots, probed once each: the ray down from 2000 yards
+/// is most of what drawing a race's gates costs, and the ground does not move. A miss is probed
+/// again after [`REPROBE`]; a new race starts afresh.
+#[derive(Default)]
+pub(crate) struct Grounds {
+    race: Option<u32>,
+    at: HashMap<[u32; 2], (Option<f32>, f32)>,
+}
+
+impl Grounds {
+    fn for_race(&mut self, race: u32) {
+        if self.race != Some(race) {
+            self.race = Some(race);
+            self.at.clear();
+        }
+    }
+
+    /// [`ground_at`], once a spot.
+    fn ground(&mut self, collide: &WorldCollision, p: [f32; 2], fallback: f32, now: f32) -> Vec3 {
+        let column = wow_to_bevy([p[0], p[1], 0.0]);
+        let (y, probed) = self
+            .at
+            .entry([p[0].to_bits(), p[1].to_bits()])
+            .or_insert((None, f32::NEG_INFINITY));
+        if y.is_none() && now - *probed >= REPROBE {
+            *probed = now;
+            *y = collide
+                .ray_body(Vec3::new(column.x, 2000.0, column.z), Dir3::NEG_Y, 4000.0)
+                .map(|hit| 2000.0 - hit.distance);
+        }
+        Vec3::new(column.x, y.unwrap_or(fallback), column.z)
+    }
+}
+
 /// Where a piece of checkpoint `i` stands: the sheet on the ground at the gate's centre, as wide
 /// as the gate, `sheet_height` tall and square to the course; a beam on the ground at its end.
 /// `was` is the piece's last height, kept where there is no ground under it.
@@ -1870,7 +1908,7 @@ fn gate_part_transform(
     race: &Active,
     i: usize,
     part: GatePart,
-    collide: &WorldCollision,
+    ground_of: &mut impl FnMut([f32; 2], f32) -> Vec3,
     was: f32,
     sheet_height: f32,
 ) -> Transform {
@@ -1878,7 +1916,7 @@ fn gate_part_transform(
         GatePart::Sheet => {
             let p = race.points[i];
             let h = race.heading(i);
-            let ground = ground_at(collide, p, was - sheet_height / 2.0);
+            let ground = ground_of(p, was - sheet_height / 2.0);
             let along =
                 wow_to_bevy([p[0] + h[0], p[1] + h[1], 0.0]) - wow_to_bevy([p[0], p[1], 0.0]);
             Transform::from_translation(ground + Vec3::Y * (sheet_height / 2.0))
@@ -1887,7 +1925,7 @@ fn gate_part_transform(
         }
         GatePart::End(k) => {
             let end = race.gate_ends(i)[k];
-            let ground = ground_at(collide, end, was - BEAM_HEIGHT / 2.0);
+            let ground = ground_of(end, was - BEAM_HEIGHT / 2.0);
             Transform::from_translation(ground + Vec3::Y * (BEAM_HEIGHT / 2.0))
         }
     }
@@ -1918,6 +1956,7 @@ pub(crate) fn beams(
     >,
     mut arrows: Query<(Entity, &mut CheckpointArrow, &mut Transform), Without<Beam>>,
     mut looks: Local<Option<Looks>>,
+    mut grounds: Local<Grounds>,
     settings: Res<super::settings::KartSettings>,
 ) {
     let race = races.race.as_ref().filter(|r| r.go_at.is_some() && !r.done);
@@ -1933,6 +1972,9 @@ pub(crate) fn beams(
     let looks = looks
         .get_or_insert_with(|| Looks::new(&mut meshes, &mut materials))
         .clone();
+    grounds.for_race(race.id);
+    let now = time.elapsed_secs();
+    let mut ground_of = |p: [f32; 2], fallback: f32| grounds.ground(&collide, p, fallback, now);
     let n = race.points.len();
     let mut have = vec![[false; GATE_PARTS.len()]; n];
     let part_index = |part: GatePart| match part {
@@ -1945,20 +1987,22 @@ pub(crate) fn beams(
             continue;
         }
         have[i][part_index(part)] = true;
-        *t = gate_part_transform(
+        // Written only when they change: a write marks them for the renderer again.
+        let placed = gate_part_transform(
             race,
             i,
             part,
-            &collide,
+            &mut ground_of,
             t.translation.y,
             settings.gate_height,
         );
-        material.0 = match (part, i == next) {
+        t.set_if_neq(placed);
+        material.set_if_neq(MeshMaterial3d(match (part, i == next) {
             (GatePart::Sheet, true) => looks.sheet_bright.clone(),
             (GatePart::Sheet, false) => looks.sheet_dim.clone(),
             (GatePart::End(_), true) => looks.bright.clone(),
             (GatePart::End(_), false) => looks.dim.clone(),
-        };
+        }));
     }
     for (i, had) in have.iter().enumerate() {
         for part in GATE_PARTS {
@@ -1973,7 +2017,7 @@ pub(crate) fn beams(
                 Beam(i, part),
                 Mesh3d(mesh),
                 MeshMaterial3d(material),
-                gate_part_transform(race, i, part, &collide, 0.0, settings.gate_height),
+                gate_part_transform(race, i, part, &mut ground_of, 0.0, settings.gate_height),
                 Name::new("race checkpoint"),
             ));
         }
@@ -1984,12 +2028,12 @@ pub(crate) fn beams(
     let legs = arrow_legs(race);
     let eye = camera.single().ok().map(GlobalTransform::translation);
     let phase = std::f32::consts::TAU * CP_ARROW_HZ * time.elapsed_secs();
-    let place = |slot: usize, fallback: f32| {
+    let mut place = |slot: usize, fallback: f32| {
         let (i, on) = *legs.get(slot)?;
         let eye = eye?;
-        let ground = ground_at(&collide, race.points[i], fallback);
+        let ground = ground_of(race.points[i], fallback);
         let at = ground + Vec3::Y * CP_ARROW_HEIGHT;
-        let to = ground_at(&collide, race.points[on], ground.y) + Vec3::Y * CP_ARROW_HEIGHT;
+        let to = ground_of(race.points[on], ground.y) + Vec3::Y * CP_ARROW_HEIGHT;
         let size = if slot == 0 {
             CP_ARROW_SIZE
         } else {
