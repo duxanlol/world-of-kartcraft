@@ -237,6 +237,11 @@ impl ZoneTerrain {
         self.bilinear(&self.slope, x, y)
     }
 
+    /// Whether a doodad's hull or a building stands on world `(x, y)`.
+    pub fn solid_at(&self, x: f32, y: f32) -> Option<bool> {
+        self.nearest(x, y).map(|i| self.solid[i])
+    }
+
     /// Whether liquid covers world `(x, y)`.
     pub fn water_at(&self, x: f32, y: f32) -> Option<bool> {
         self.nearest(x, y).map(|i| self.water[i])
