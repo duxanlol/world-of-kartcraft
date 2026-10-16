@@ -99,6 +99,24 @@ pub struct KartHud {
     /// The banners' canvas, its width in CTR's pixels, and its pixels.
     banner: Option<(Handle<Image>, usize)>,
     banner_pixels: Vec<u8>,
+    /// When the canvases were last drawn: CTR draws its HUD at 30 fps ([`HUD_HZ`]).
+    drawn_at: Option<f32>,
+}
+
+/// How often the HUD's canvases are drawn and uploaded, a second: CTR's own frame rate, at which
+/// its HUD moves; a faster display shows each drawing over several of its frames.
+const HUD_HZ: f32 = 30.0;
+
+/// `node`'s size and left edge, written only when they change: a write lays the UI out again.
+fn place(node: &mut Mut<Node>, width: f32, height: f32, left: Option<f32>) {
+    let (w, h) = (Val::Px(width), Val::Px(height));
+    if node.width != w || node.height != h || left.is_some_and(|l| node.left != Val::Px(l)) {
+        node.width = w;
+        node.height = h;
+        if let Some(l) = left {
+            node.left = Val::Px(l);
+        }
+    }
 }
 
 fn canvas_image(width: usize) -> Image {
@@ -198,16 +216,17 @@ pub fn draw(
     };
     let shown = view.active && !hidden.is_some_and(|h| h.0);
     for (_, _, mut vis) in &mut crops {
-        *vis = if shown {
+        vis.set_if_neq(if shown {
             Visibility::Inherited
         } else {
             Visibility::Hidden
-        };
+        });
     }
     if !shown {
         hud.jump = None;
+        hud.drawn_at = None;
         for (_, mut vis) in &mut banner {
-            *vis = Visibility::Hidden;
+            vis.set_if_neq(Visibility::Hidden);
         }
         return;
     }
@@ -245,10 +264,16 @@ pub fn draw(
         wrong_way: extras.wrong_way,
     };
     let hud = &mut *hud;
-    renderer.render(&state, &mut hud.pixels);
-    if let Some(image) = images.get_mut(&handle) {
-        if let Some(data) = image.data.as_mut() {
-            data.copy_from_slice(&hud.pixels);
+    let due = hud
+        .drawn_at
+        .is_none_or(|at| now - at >= 1.0 / HUD_HZ - 1e-4);
+    if due {
+        hud.drawn_at = Some(now);
+        renderer.render(&state, &mut hud.pixels);
+        if let Some(image) = images.get_mut(&handle) {
+            if let Some(data) = image.data.as_mut() {
+                data.copy_from_slice(&hud.pixels);
+            }
         }
     }
 
@@ -263,32 +288,32 @@ pub fn draw(
     let showing = banners.final_lap_frame.is_some_and(|f| f < 90) || banners.wrong_way;
     for (mut node, mut vis) in &mut banner {
         let Some((handle, w)) = hud.banner.as_mut().filter(|_| showing) else {
-            *vis = Visibility::Hidden;
+            vis.set_if_neq(Visibility::Hidden);
             continue;
         };
-        let Some(image) = images.get_mut(&*handle) else {
-            continue;
-        };
-        // The window's width changed: the same image, remade that wide.
+        // The window's width changed: the same image, remade that wide, and drawn now.
         let width = screen_width(window_width, height);
-        if *w != width {
-            *image = canvas_image(width);
-            *w = width;
-            hud.banner_pixels = vec![0; width * HEIGHT * 4];
+        let resized = *w != width;
+        if resized || due {
+            let Some(image) = images.get_mut(&*handle) else {
+                continue;
+            };
+            if resized {
+                *image = canvas_image(width);
+                *w = width;
+                hud.banner_pixels = vec![0; width * HEIGHT * 4];
+            }
+            renderer.render_banners(&banners, width, &mut hud.banner_pixels);
+            if let Some(data) = image.data.as_mut() {
+                data.copy_from_slice(&hud.banner_pixels);
+            }
         }
-        renderer.render_banners(&banners, width, &mut hud.banner_pixels);
-        if let Some(data) = image.data.as_mut() {
-            data.copy_from_slice(&hud.banner_pixels);
-        }
-        node.width = Val::Px(window_width);
-        node.height = Val::Px(height);
-        *vis = Visibility::Inherited;
+        place(&mut node, window_width, height, None);
+        vis.set_if_neq(Visibility::Inherited);
     }
     for (crop, mut node, _) in &mut crops {
         let w = width_of(crop.span);
-        node.width = Val::Px(w);
-        node.height = Val::Px(height);
-        node.left = Val::Px(match crop.anchor {
+        let left = match crop.anchor {
             Anchor::Left => 6.0 * PIXEL_ASPECT * scale,
             // A few of CTR's pixels in from the edge, as on a TV's safe area.
             Anchor::Right => window_width - w - 6.0 * PIXEL_ASPECT * scale,
@@ -297,7 +322,8 @@ pub fn draw(
                 let canvas = WIDTH as f32 * PIXEL_ASPECT * scale;
                 (window_width - canvas) / 2.0 + crop.span[0] as f32 * PIXEL_ASPECT * scale
             }
-        });
+        };
+        place(&mut node, w, height, Some(left));
     }
 }
 
