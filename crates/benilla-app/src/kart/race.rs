@@ -358,9 +358,12 @@ impl Active {
     }
 
     /// Checkpoint `next` passed at `now`: on to it; crossing the start finishes a lap, whose time
-    /// is kept, and may begin the final one (`PlayLevel.c:145-167`) or end the race.
-    fn pass(&mut self, next: usize, now: f32) {
+    /// is kept, and may begin the final one (`PlayLevel.c:145-167`) or end the race. The sound
+    /// it makes: a lap's, the finish's, or a checkpoint's.
+    fn pass(&mut self, next: usize, now: f32) -> kartcraft::sound::Cue {
+        use kartcraft::sound::Cue;
         self.checkpoint = next;
+        let lap = self.lap;
         if self.laps > 0 && next == 0 {
             self.lap += 1;
             self.lap_times.push(now - self.lap_began);
@@ -374,6 +377,11 @@ impl Active {
             }
         } else if self.laps == 0 && next + 1 == self.points.len() {
             self.crossed_finish = Some(now);
+        }
+        if self.lap != lap || self.crossed_finish == Some(now) {
+            Cue::Lap
+        } else {
+            Cue::Checkpoint
         }
     }
 
@@ -1230,7 +1238,8 @@ pub(crate) fn update(
         if race.passes(next, last_at, at) {
             info!("kart race: checkpoint {next}, lap {}", race.lap);
             profession.send(format!("KARTCRAFT\tR\tK\t{}\t{next}", race.id));
-            race.pass(next, now);
+            let cue = race.pass(next, now);
+            audio.cues.push(cue);
             race.progress
                 .insert(me.clone(), (race.lap, next as u8, now));
         }
@@ -1561,6 +1570,11 @@ pub(crate) struct Looks {
     dim: Handle<StandardMaterial>,
     sheet_bright: Handle<StandardMaterial>,
     sheet_dim: Handle<StandardMaterial>,
+    /// The finish line's gate, green where the others are amber, next and not.
+    line_bright: Handle<StandardMaterial>,
+    line_dim: Handle<StandardMaterial>,
+    line_sheet_bright: Handle<StandardMaterial>,
+    line_sheet_dim: Handle<StandardMaterial>,
     guide: Handle<StandardMaterial>,
     /// The guide arrow's outline: its shape grown a little, laid flat just under it.
     guide_outline: Handle<Mesh>,
@@ -1570,10 +1584,27 @@ pub(crate) struct Looks {
     cp_outline: Handle<Mesh>,
     cp_next: Handle<StandardMaterial>,
     cp_after: Handle<StandardMaterial>,
+    /// The arrows pointing at the finish line, in its green.
+    cp_line_next: Handle<StandardMaterial>,
+    cp_line_after: Handle<StandardMaterial>,
     cp_edge: Handle<StandardMaterial>,
 }
 
 impl Looks {
+    /// A gate part's look: bright for the next gate, and the finish line's green for it.
+    fn gate(&self, part: GatePart, next: bool, line: bool) -> Handle<StandardMaterial> {
+        match (part, next, line) {
+            (GatePart::Sheet, true, false) => self.sheet_bright.clone(),
+            (GatePart::Sheet, false, false) => self.sheet_dim.clone(),
+            (GatePart::End(_), true, false) => self.bright.clone(),
+            (GatePart::End(_), false, false) => self.dim.clone(),
+            (GatePart::Sheet, true, true) => self.line_sheet_bright.clone(),
+            (GatePart::Sheet, false, true) => self.line_sheet_dim.clone(),
+            (GatePart::End(_), true, true) => self.line_bright.clone(),
+            (GatePart::End(_), false, true) => self.line_dim.clone(),
+        }
+    }
+
     fn new(meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) -> Self {
         let glow = |c: Color| StandardMaterial {
             base_color: c,
@@ -1605,6 +1636,10 @@ impl Looks {
             dim: materials.add(glow(Color::srgb(0.09, 0.06, 0.02))),
             sheet_bright: materials.add(glow(Color::srgb(0.16, 0.13, 0.03))),
             sheet_dim: materials.add(glow(Color::srgb(0.03, 0.02, 0.007))),
+            line_bright: materials.add(glow(Color::srgb(0.12, 0.6, 0.22))),
+            line_dim: materials.add(glow(Color::srgb(0.02, 0.1, 0.04))),
+            line_sheet_bright: materials.add(glow(Color::srgb(0.035, 0.18, 0.065))),
+            line_sheet_dim: materials.add(glow(Color::srgb(0.007, 0.035, 0.013))),
             guide: materials.add(solid(Color::srgb(1.0, 0.6, 0.08))),
             guide_outline: meshes.add(guide_outline_mesh()),
             cp_face: meshes.add(face),
@@ -1612,6 +1647,8 @@ impl Looks {
             // See-through, as the gates are: the next arrow half there, the one after less.
             cp_next: materials.add(see_through(Color::srgba(1.0, 0.85, 0.1, 0.5))),
             cp_after: materials.add(see_through(Color::srgba(0.6, 0.5, 0.16, 0.3))),
+            cp_line_next: materials.add(see_through(Color::srgba(0.2, 1.0, 0.35, 0.5))),
+            cp_line_after: materials.add(see_through(Color::srgba(0.16, 0.6, 0.25, 0.3))),
             cp_edge: materials.add(see_through(Color::srgba(0.03, 0.02, 0.01, 0.45))),
         }
     }
@@ -1954,7 +1991,15 @@ pub(crate) fn beams(
         ),
         Without<CheckpointArrow>,
     >,
-    mut arrows: Query<(Entity, &mut CheckpointArrow, &mut Transform), Without<Beam>>,
+    mut arrows: Query<
+        (
+            Entity,
+            &mut CheckpointArrow,
+            &mut Transform,
+            &mut MeshMaterial3d<StandardMaterial>,
+        ),
+        Without<Beam>,
+    >,
     mut looks: Local<Option<Looks>>,
     mut grounds: Local<Grounds>,
     settings: Res<super::settings::KartSettings>,
@@ -1997,22 +2042,22 @@ pub(crate) fn beams(
             settings.gate_height,
         );
         t.set_if_neq(placed);
-        material.set_if_neq(MeshMaterial3d(match (part, i == next) {
-            (GatePart::Sheet, true) => looks.sheet_bright.clone(),
-            (GatePart::Sheet, false) => looks.sheet_dim.clone(),
-            (GatePart::End(_), true) => looks.bright.clone(),
-            (GatePart::End(_), false) => looks.dim.clone(),
-        }));
+        material.set_if_neq(MeshMaterial3d(looks.gate(
+            part,
+            i == next,
+            is_line(race, i),
+        )));
     }
     for (i, had) in have.iter().enumerate() {
         for part in GATE_PARTS {
             if had[part_index(part)] {
                 continue;
             }
-            let (mesh, material) = match part {
-                GatePart::Sheet => (looks.sheet.clone(), looks.sheet_dim.clone()),
-                GatePart::End(_) => (looks.beam.clone(), looks.dim.clone()),
+            let mesh = match part {
+                GatePart::Sheet => looks.sheet.clone(),
+                GatePart::End(_) => looks.beam.clone(),
             };
+            let material = looks.gate(part, false, is_line(race, i));
             commands.spawn((
                 Beam(i, part),
                 Mesh3d(mesh),
@@ -2033,6 +2078,15 @@ pub(crate) fn beams(
     };
     let eye = camera.single().ok().map(GlobalTransform::translation);
     let phase = std::f32::consts::TAU * CP_ARROW_HZ * time.elapsed_secs();
+    let face = |slot: usize| {
+        let line = legs.get(slot).is_some_and(|&(i, _)| is_line(race, i));
+        match (slot == 0, line) {
+            (true, false) => looks.cp_next.clone(),
+            (false, false) => looks.cp_after.clone(),
+            (true, true) => looks.cp_line_next.clone(),
+            (false, true) => looks.cp_line_after.clone(),
+        }
+    };
     let mut place = |slot: usize, fallback: f32| {
         let (i, on) = *legs.get(slot)?;
         let eye = eye?;
@@ -2052,7 +2106,7 @@ pub(crate) fn beams(
         Some((ground.y, placed))
     };
     let mut have_arrow = [false; 2];
-    for (e, mut arrow, mut t) in &mut arrows {
+    for (e, mut arrow, mut t, mut material) in &mut arrows {
         let placed = have_arrow
             .get(arrow.slot)
             .filter(|had| !**had)
@@ -2064,21 +2118,17 @@ pub(crate) fn beams(
         have_arrow[arrow.slot] = true;
         arrow.ground = ground;
         *t = placed;
+        material.set_if_neq(MeshMaterial3d(face(arrow.slot)));
     }
     for (slot, had) in have_arrow.into_iter().enumerate() {
         let Some((ground, placed)) = (!had).then(|| place(slot, 0.0)).flatten() else {
             continue;
         };
-        let face = if slot == 0 {
-            looks.cp_next.clone()
-        } else {
-            looks.cp_after.clone()
-        };
         commands
             .spawn((
                 CheckpointArrow { slot, ground },
                 Mesh3d(looks.cp_face.clone()),
-                MeshMaterial3d(face),
+                MeshMaterial3d(face(slot)),
                 placed,
                 Name::new("race checkpoint arrow"),
             ))
@@ -2088,6 +2138,16 @@ pub(crate) fn beams(
                 Transform::default(),
                 Name::new("race checkpoint arrow outline"),
             ));
+    }
+}
+
+/// Whether checkpoint `i` is the finish line, drawn in its own colour: a sprint's last, or a
+/// circuit's start, which ends each lap.
+fn is_line(race: &Active, i: usize) -> bool {
+    if race.laps == 0 {
+        i + 1 == race.points.len()
+    } else {
+        i == 0
     }
 }
 
@@ -2395,6 +2455,34 @@ mod tests {
         hear(&mut races, "C\t5\tsprint\t3\t0:0;100:0;200:0;200:100", 1.0);
         hear(&mut races, "G\t5\t9000\tRacer,Goblin", 1.0);
         races
+    }
+
+    #[test]
+    fn checkpoints_beep_laps_sound_and_the_finish_line_is_its_own_gate() {
+        use kartcraft::sound::Cue;
+        let mut circuit = Active {
+            points: vec![[0.0, 0.0], [100.0, 0.0], [200.0, 0.0], [200.0, 100.0]],
+            laps: 2,
+            ..Active::default()
+        };
+        assert_eq!(circuit.pass(1, 1.0), Cue::Checkpoint);
+        assert_eq!(circuit.pass(3, 2.0), Cue::Checkpoint);
+        assert_eq!(circuit.pass(0, 3.0), Cue::Lap, "a lap done");
+        assert_eq!(circuit.pass(1, 4.0), Cue::Checkpoint);
+        assert_eq!(circuit.pass(0, 5.0), Cue::Lap, "the finish");
+        assert!(is_line(&circuit, 0) && !is_line(&circuit, 3));
+
+        let mut sprint = Active {
+            points: circuit.points.clone(),
+            ..Active::default()
+        };
+        assert_eq!(sprint.pass(2, 1.0), Cue::Checkpoint);
+        assert_eq!(
+            sprint.pass(3, 2.0),
+            Cue::Lap,
+            "a sprint's last is its finish"
+        );
+        assert!(is_line(&sprint, 3) && !is_line(&sprint, 0));
     }
 
     #[test]

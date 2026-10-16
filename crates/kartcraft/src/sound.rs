@@ -44,6 +44,10 @@ pub enum Cue {
     Countdown(bool),
     /// A ready check pops (the Race Finder's; no CTR sound).
     Ready,
+    /// A checkpoint passed: the countdown beep, soft and pitched up (CTR has no checkpoint sound).
+    Checkpoint,
+    /// A lap done, or the finish crossed: the start's green sound (CTR plays none at the line).
+    Lap,
     /// A weapon sound at a gain (its distance from us).
     Sfx(Sfx, f32),
 }
@@ -1232,6 +1236,8 @@ impl Sounds {
                 Cue::Countdown(false) => (&bank.countdown, 1.0),
                 Cue::Countdown(true) => (&bank.go, 1.0),
                 Cue::Ready => (&bank.beep, 0.9),
+                Cue::Checkpoint => (&bank.countdown, 0.35),
+                Cue::Lap => (&bank.go, 0.8),
                 Cue::Sfx(sfx, gain) => match bank.sfx.get(&sfx) {
                     Some(data) => (data, gain.clamp(0.0, 1.0)),
                     None => continue,
@@ -1240,6 +1246,8 @@ impl Sounds {
             let mut data = data.clone().volume(db(gain * sfx));
             if cue == Cue::Ready {
                 data = data.playback_rate(2.0);
+            } else if cue == Cue::Checkpoint {
+                data = data.playback_rate(1.5);
             }
             let _ = play(data);
         }
