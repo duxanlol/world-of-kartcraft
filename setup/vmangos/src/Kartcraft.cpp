@@ -253,6 +253,8 @@ namespace Kartcraft
 
     static void SkinLogin(Player* player);
 
+    static void MarathonLogin(Player* player);
+
     // Key to Searing Gorge (item_template 5396), given to every character at login.
     constexpr uint32 KEY_SEARING_GORGE = 5396;
 
@@ -286,6 +288,7 @@ namespace Kartcraft
         LearnUnlocked(player);
         DeliveryLogin(player);
         SkinLogin(player);
+        MarathonLogin(player);
     }
 
     // Points a line needs to raise the skill at `skill`.
@@ -1352,6 +1355,13 @@ namespace Kartcraft
         float rx, ry;         // where the recipient stands
         uint32 distance;      // yards, the straight line
         char const* cargo;    // what Courier Jobs says the crate holds
+    };
+    // A Marathon Delivery's stop: a town no faction holds, at its courier's place.
+    struct MarathonTown
+    {
+        char const* name;
+        uint32 map;
+        float x, y, z, o;
     };
 #include "KartcraftDeliveries.h"
     constexpr size_t DELIVERIES_A_DAY = 10;
@@ -3751,6 +3761,493 @@ namespace Kartcraft
         s_jobTrips[player->GetGUIDLow()] = now;
     }
 
+    // ── Marathon Delivery ──────────────────────────────────────────────────────────────────────
+    //
+    // A weekend event, Kartcraft's own: at each start in `kartcraft_marathons` (the world
+    // database, unix time; setup/vmangos/marathons.py writes it), a delivery across a continent's
+    // towns no faction holds. Its queue opens MARATHON_OPEN before the start ("R\tMarOpen\t<secs>\t
+    // <stops>", to everyone, at login too); a player joins or leaves it ("R\tMar+", "R\tMar-",
+    // answered "R\tMarQ\t<queued>\t<in>"). At the start everyone queued who may go (in no race,
+    // CanBeRacedOff) is put in front of the first town's courier, out of the kart and back in, with
+    // the package; MARATHON_COUNTDOWN later ("R\tMarGo\t<secs>") the clock runs. The stops are
+    // driven to in order, MARATHON_ARRIVE yards of each courier, the GPS led to the next
+    // ("R\tMDel\t<town>\t<par>\t<gone>\t<stop>\t<stops>", the delivery's line without a quest);
+    // the first three to the last win MARATHON_PRIZES tokens, every other finisher MARATHON_FINISH
+    // ("R\tMarDone\t<place>\t<ms>\t<tokens>"). The package is a delivery's, so its carrier's rules
+    // hold (CarryingDelivery): no teleport, flight path or race. MARATHON_LIMIT after the go, or
+    // once everyone is in or out, it ends ("R\tMarEnd"), told to the world with its podium.
+    // Runs on the world thread (Update), under s_mutex then s_marathonMutex.
+
+    constexpr uint32 MARATHON_OPEN = 10 * MINUTE;         // seconds before the start
+    constexpr uint32 MARATHON_COUNTDOWN = 10 * IN_MILLISECONDS;
+    constexpr uint32 MARATHON_LIMIT = 90 * MINUTE * IN_MILLISECONDS;
+    constexpr uint32 MARATHON_TICK = IN_MILLISECONDS;
+    constexpr uint32 MARATHON_SCHEDULE_RECHECK = MINUTE * IN_MILLISECONDS;
+    constexpr float MARATHON_ARRIVE = 40.f;
+    constexpr uint32 MARATHON_STOPS = 4; // the start and three more, where the continent has them
+    // Placeholder prizes until the event's own: tokens to the first three, and to every finisher.
+    constexpr uint32 MARATHON_PRIZES[] = { 100, 50, 25 };
+    constexpr uint32 MARATHON_FINISH = 10;
+
+    struct MarathonRunner
+    {
+        ObjectGuid guid;
+        std::string name;
+        size_t stop = 1;     // the next stop's index
+        uint8 place = 0;     // 0 not in
+        uint32 ms = 0;       // the time in
+        bool out = false;    // dropped: the package gone
+    };
+
+    struct Marathon
+    {
+        enum Phase { NONE, OPEN, COUNTDOWN, RUNNING };
+        Phase phase = NONE;
+        uint32 starts = 0;   // unix time
+        uint32 map = 0;
+        std::vector<MarathonTown const*> stops;
+        uint32 par = 0;      // seconds, the whole route
+        std::vector<ObjectGuid> queue;
+        std::vector<MarathonRunner> runners;
+        uint32 goAt = 0;     // ms
+        uint8 finishers = 0;
+        uint32 reminded = 0; // the last reminder's minutes before the start
+    };
+
+    static std::mutex s_marathonMutex;
+    static Marathon s_marathon;
+    static uint32 s_marathonTicked = 0;
+    static uint32 s_scheduleChecked = 0;
+
+    static void CreateMarathons()
+    {
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_marathon_results` ("
+            "`starts` INT UNSIGNED NOT NULL COMMENT 'the marathon, unix time', "
+            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
+            "`place` TINYINT UNSIGNED NOT NULL, "
+            "`ms` INT UNSIGNED NOT NULL COMMENT 'from the go to the last stop', "
+            "`tokens` SMALLINT UNSIGNED NOT NULL, "
+            "PRIMARY KEY (`starts`, `guid`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+    }
+
+    static float TownDistance(MarathonTown const& a, MarathonTown const& b)
+    {
+        return std::hypot(a.x - b.x, a.y - b.y);
+    }
+
+    // The route for a start on `map`: up to MARATHON_STOPS of its towns, picked by the start's
+    // hash, the first of them first and each next the nearest left; the continents' towns differ,
+    // and so does each start's route.
+    static std::vector<MarathonTown const*> MarathonRoute(uint32 starts, uint32 map)
+    {
+        std::vector<MarathonTown const*> towns;
+        for (MarathonTown const& t : MARATHON_TOWNS)
+            if (t.map == map)
+                towns.push_back(&t);
+        uint32 h = Mix32(starts);
+        for (size_t i = towns.size(); i > 1; --i)
+        {
+            h = Mix32(h + uint32(i));
+            std::swap(towns[i - 1], towns[h % i]);
+        }
+        if (towns.size() > MARATHON_STOPS)
+            towns.resize(MARATHON_STOPS);
+        for (size_t i = 1; i + 1 < towns.size(); ++i)
+        {
+            size_t nearest = i;
+            for (size_t j = i + 1; j < towns.size(); ++j)
+                if (TownDistance(*towns[i - 1], *towns[j]) < TownDistance(*towns[i - 1], *towns[nearest]))
+                    nearest = j;
+            std::swap(towns[i], towns[nearest]);
+        }
+        return towns;
+    }
+
+    static std::string MarathonStops(Marathon const& m)
+    {
+        std::string out;
+        for (MarathonTown const* t : m.stops)
+            out += (out.empty() ? "" : ";") + std::string(t->name);
+        return out;
+    }
+
+    static std::string MarathonRouteText(Marathon const& m)
+    {
+        std::string out;
+        for (MarathonTown const* t : m.stops)
+            out += (out.empty() ? "" : " -> ") + std::string(t->name);
+        return out;
+    }
+
+    // A system line to every session in the world (World::SendGlobalMessage).
+    static void AnnounceAll(std::string const& text)
+    {
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_SYSTEM, text.c_str());
+        sWorld.SendGlobalMessage(&data);
+    }
+
+    // An addon line to every session in the world, as SendLine is to one.
+    static void SendLineToAll(std::string const& text)
+    {
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_PARTY, text.c_str(), LANG_ADDON, CHAT_TAG_NONE,
+            ObjectGuid(), "");
+        sWorld.SendGlobalMessage(&data);
+    }
+
+    static uint32 MarathonSecondsLeft(Marathon const& m)
+    {
+        uint32 now = uint32(std::time(nullptr));
+        return m.starts > now ? m.starts - now : 0;
+    }
+
+    static void SendMarathonOpen(Player* player, Marathon const& m)
+    {
+        SendLine(player, "KARTCRAFT\tR\tMarOpen\t" + std::to_string(MarathonSecondsLeft(m)) + "\t" +
+            MarathonStops(m));
+        bool in = std::find(m.queue.begin(), m.queue.end(), player->GetObjectGuid()) != m.queue.end();
+        SendLine(player, "KARTCRAFT\tR\tMarQ\t" + std::to_string(m.queue.size()) + "\t" + (in ? "1" : "0"));
+    }
+
+    static void SendMarathonLeg(Player* player, Marathon const& m, MarathonRunner const& r, uint32 now)
+    {
+        uint32 gone = m.phase == Marathon::RUNNING ? WorldTimer::getMSTimeDiff(m.goAt, now) / IN_MILLISECONDS : 0;
+        SendLine(player, std::string("KARTCRAFT\tR\tMDel\t") + m.stops[r.stop]->name + "\t" +
+            std::to_string(m.par) + "\t" + std::to_string(gone) + "\t" + std::to_string(r.stop) + "\t" +
+            std::to_string(m.stops.size() - 1));
+    }
+
+    static MarathonRunner* FindRunner(Marathon& m, ObjectGuid guid)
+    {
+        for (MarathonRunner& r : m.runners)
+            if (r.guid == guid)
+                return &r;
+        return nullptr;
+    }
+
+    static void GiveTokens(Player* player, uint32 count)
+    {
+        ItemPosCountVec dest;
+        if (count && player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, DELIVERY_TOKEN, count) == EQUIP_ERR_OK)
+        {
+            if (Item* item = player->StoreNewItem(dest, DELIVERY_TOKEN, true))
+                player->SendNewItem(item, count, true, false);
+        }
+        else if (count)
+            ChatHandler(player->GetSession()).SendSysMessage("Your bags had no room for the marathon's tokens.");
+    }
+
+    // The package off a runner, if they have it.
+    static void TakePackage(Player* player)
+    {
+        if (player->HasItemCount(DELIVERY_PACKAGE, 1))
+            player->DestroyItemCount(DELIVERY_PACKAGE, 1, true);
+    }
+
+    // The marathon over: everyone still out told, the podium to the world, the start marked run.
+    static void EndMarathon(Marathon& m)
+    {
+        for (MarathonRunner const& r : m.runners)
+            if (Player* p = ObjectAccessor::FindPlayer(r.guid))
+            {
+                if (!r.place)
+                    TakePackage(p);
+                SendLine(p, "KARTCRAFT\tR\tDel-");
+                SendLine(p, "KARTCRAFT\tR\tMarEnd");
+            }
+        if (m.phase == Marathon::OPEN)
+            SendLineToAll("KARTCRAFT\tR\tMarEnd");
+        std::vector<MarathonRunner const*> podium;
+        for (MarathonRunner const& r : m.runners)
+            if (r.place)
+                podium.push_back(&r);
+        std::sort(podium.begin(), podium.end(),
+            [](MarathonRunner const* a, MarathonRunner const* b) { return a->place < b->place; });
+        if (!m.runners.empty())
+        {
+            std::string text = "|cffffd100Marathon Delivery over.|r ";
+            if (podium.empty())
+                text += "Nobody made it to " + std::string(m.stops.back()->name) + ".";
+            for (size_t i = 0; i < podium.size() && i < 3; ++i)
+                text += (i ? ", " : "") + std::to_string(i + 1) + ". " + podium[i]->name + " (" +
+                    Clock(podium[i]->ms) + ")";
+            if (!podium.empty())
+                text += "; " + std::to_string(podium.size()) + " of " + std::to_string(m.runners.size()) +
+                    " finished.";
+            AnnounceAll(text);
+        }
+        WorldDatabase.PExecute("UPDATE `kartcraft_marathons` SET `done` = 1 WHERE `starts` = %u", m.starts);
+        m = Marathon();
+    }
+
+    // The next start not yet run, from the table, every MARATHON_SCHEDULE_RECHECK: one whose
+    // queue's window is past without it having opened (a restart, a pause) is marked run.
+    static void MarathonSchedule(Marathon& m, uint32 now)
+    {
+        if (m.phase != Marathon::NONE ||
+            (s_scheduleChecked && WorldTimer::getMSTimeDiff(s_scheduleChecked, now) < MARATHON_SCHEDULE_RECHECK))
+            return;
+        s_scheduleChecked = now;
+        uint32 const unixNow = uint32(std::time(nullptr));
+        WorldDatabase.PExecute("UPDATE `kartcraft_marathons` SET `done` = 1 WHERE `done` = 0 AND `starts` < %u", unixNow);
+        std::unique_ptr<QueryResult> result = WorldDatabase.PQuery(
+            "SELECT `starts`, `map` FROM `kartcraft_marathons` WHERE `done` = 0 AND `starts` >= %u "
+            "ORDER BY `starts` LIMIT 1", unixNow);
+        if (!result)
+            return;
+        Field* f = result->Fetch();
+        uint32 const starts = f[0].GetUInt32();
+        uint32 const map = f[1].GetUInt32();
+        if (starts > unixNow + MARATHON_OPEN)
+            return;
+        m.starts = starts;
+        m.map = map;
+        m.stops = MarathonRoute(starts, map);
+        if (m.stops.size() < 2)
+        {
+            WorldDatabase.PExecute("UPDATE `kartcraft_marathons` SET `done` = 1 WHERE `starts` = %u", starts);
+            m = Marathon();
+            return;
+        }
+        for (size_t i = 1; i < m.stops.size(); ++i)
+        {
+            float d = TownDistance(*m.stops[i - 1], *m.stops[i]);
+            m.par += std::max<uint32>(120, uint32(std::ceil(d * 1.5f / 32.f / 30.f)) * 30);
+        }
+        m.phase = Marathon::OPEN;
+        m.reminded = MarathonSecondsLeft(m) / MINUTE + 1;
+        SendLineToAll("KARTCRAFT\tR\tMarOpen\t" + std::to_string(MarathonSecondsLeft(m)) + "\t" + MarathonStops(m));
+        AnnounceAll("|cffffd100A Marathon Delivery leaves in " + std::to_string((MarathonSecondsLeft(m) + 59) / 60) +
+            " minutes:|r " + MarathonRouteText(m) + ". Join it from the popup, or /marathon. The first three in win!");
+    }
+
+    // The start: everyone queued who may go, to the first town with the package.
+    static void StartMarathon(Marathon& m, uint32 now)
+    {
+        // The queue is shut for everyone; those going hear their countdown next ("R\tMarGo").
+        SendLineToAll("KARTCRAFT\tR\tMarShut");
+        MarathonTown const& first = *m.stops.front();
+        for (ObjectGuid guid : m.queue)
+        {
+            Player* p = ObjectAccessor::FindPlayer(guid);
+            if (!p)
+                continue;
+            if (InAnyRace(guid) || !CanBeRacedOff(p))
+            {
+                ChatHandler(p->GetSession()).SendSysMessage(
+                    "The Marathon Delivery left without you: you were in a race, a fight, an instance or "
+                    "carrying a delivery.");
+                SendLine(p, "KARTCRAFT\tR\tMarEnd");
+                continue;
+            }
+            ItemPosCountVec dest;
+            if (p->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, DELIVERY_PACKAGE, 1) != EQUIP_ERR_OK)
+            {
+                ChatHandler(p->GetSession()).SendSysMessage("The Marathon Delivery left without you: no room for its package.");
+                SendLine(p, "KARTCRAFT\tR\tMarEnd");
+                continue;
+            }
+            if (Item* item = p->StoreNewItem(dest, DELIVERY_PACKAGE, true))
+                p->SendNewItem(item, 1, true, false);
+            float const x = first.x + std::cos(first.o) * JOB_GAP, y = first.y + std::sin(first.o) * JOB_GAP;
+            float facing = first.o + 3.14159265f;
+            if (facing > 6.2831853f)
+                facing -= 6.2831853f;
+            bool const kart = p->HasAura(SPELL_SUMMON_KART);
+            if (kart)
+                p->RemoveAurasDueToSpell(SPELL_SUMMON_KART);
+            p->TeleportTo(first.map, x, y, first.z + 0.5f, facing);
+            if (kart)
+                p->m_Events.AddEventAtOffset(new KartAgainEvent(p), KART_AGAIN_DELAY);
+            MarathonRunner r;
+            r.guid = guid;
+            r.name = p->GetName();
+            m.runners.push_back(r);
+            SendLine(p, "KARTCRAFT\tR\tMarGo\t" + std::to_string(MARATHON_COUNTDOWN / IN_MILLISECONDS));
+        }
+        m.queue.clear();
+        if (m.runners.empty())
+        {
+            SendLineToAll("KARTCRAFT\tR\tMarEnd");
+            EndMarathon(m);
+            return;
+        }
+        m.phase = Marathon::COUNTDOWN;
+        m.goAt = now + MARATHON_COUNTDOWN;
+        AnnounceAll("|cffffd100The Marathon Delivery is off|r with " + std::to_string(m.runners.size()) +
+            " couriers: " + MarathonRouteText(m) + ".");
+    }
+
+    // A runner at their next stop: on to the one after, or in.
+    static void MarathonArrive(Marathon& m, MarathonRunner& r, Player* p, uint32 now)
+    {
+        if (r.stop + 1 < m.stops.size())
+        {
+            ++r.stop;
+            ChatHandler(p->GetSession()).PSendSysMessage("Marathon: %s reached. On to %s.",
+                m.stops[r.stop - 1]->name, m.stops[r.stop]->name);
+            SendMarathonLeg(p, m, r, now);
+            return;
+        }
+        r.place = ++m.finishers;
+        r.ms = WorldTimer::getMSTimeDiff(m.goAt, now);
+        uint32 const tokens = r.place <= 3 ? MARATHON_PRIZES[r.place - 1] : MARATHON_FINISH;
+        TakePackage(p);
+        GiveTokens(p, tokens);
+        CharacterDatabase.PExecute("REPLACE INTO `kartcraft_marathon_results` (`starts`, `guid`, `place`, `ms`, `tokens`) "
+            "VALUES (%u, %u, %u, %u, %u)", m.starts, p->GetGUIDLow(), uint32(r.place), r.ms, tokens);
+        SendLine(p, "KARTCRAFT\tR\tDel-");
+        SendLine(p, "KARTCRAFT\tR\tMarDone\t" + std::to_string(r.place) + "\t" + std::to_string(r.ms) + "\t" +
+            std::to_string(tokens));
+        ChatHandler(p->GetSession()).PSendSysMessage("Marathon Delivery: in %u%s in %s, %u tokens!", uint32(r.place),
+            r.place == 1 ? "st" : r.place == 2 ? "nd" : r.place == 3 ? "rd" : "th", Clock(r.ms).c_str(), tokens);
+        if (r.place <= 3)
+            AnnounceAll("|cffffd100Marathon Delivery:|r " + r.name + " is in " + std::to_string(r.place) +
+                (r.place == 1 ? "st" : r.place == 2 ? "nd" : "rd") + ", in " + Clock(r.ms) + ".");
+    }
+
+    static void MarathonTick(Marathon& m, uint32 now)
+    {
+        MarathonSchedule(m, now);
+        switch (m.phase)
+        {
+            case Marathon::NONE:
+                return;
+            case Marathon::OPEN:
+            {
+                uint32 left = MarathonSecondsLeft(m);
+                if (!left)
+                {
+                    StartMarathon(m, now);
+                    return;
+                }
+                // Reminders at five minutes and one.
+                for (uint32 at : { 5u, 1u })
+                    if (left <= at * MINUTE && m.reminded > at)
+                    {
+                        m.reminded = at;
+                        SendLineToAll("KARTCRAFT\tR\tMarOpen\t" + std::to_string(left) + "\t" + MarathonStops(m));
+                        AnnounceAll("|cffffd100The Marathon Delivery leaves in " + std::to_string(at) +
+                            (at == 1 ? " minute" : " minutes") + "|r (" + std::to_string(m.queue.size()) +
+                            " queued). /marathon to join.");
+                    }
+                return;
+            }
+            case Marathon::COUNTDOWN:
+                if (int32(now - m.goAt) < 0)
+                    return;
+                m.phase = Marathon::RUNNING;
+                for (MarathonRunner const& r : m.runners)
+                    if (Player* p = ObjectAccessor::FindPlayer(r.guid))
+                        SendMarathonLeg(p, m, r, now);
+                return;
+            case Marathon::RUNNING:
+                break;
+        }
+        bool going = false;
+        for (MarathonRunner& r : m.runners)
+        {
+            if (r.place || r.out)
+                continue;
+            Player* p = ObjectAccessor::FindPlayer(r.guid);
+            if (!p)
+            {
+                going = true; // logged out: their package and the marathon wait for them
+                continue;
+            }
+            if (!p->IsInWorld() || p->IsBeingTeleported())
+            {
+                going = true;
+                continue;
+            }
+            if (!p->HasItemCount(DELIVERY_PACKAGE, 1))
+            {
+                r.out = true;
+                ChatHandler(p->GetSession()).SendSysMessage("Marathon Delivery: the package is gone, and you with it.");
+                SendLine(p, "KARTCRAFT\tR\tDel-");
+                SendLine(p, "KARTCRAFT\tR\tMarEnd");
+                continue;
+            }
+            going = true;
+            MarathonTown const& next = *m.stops[r.stop];
+            if (p->GetMapId() == next.map &&
+                std::hypot(p->GetPositionX() - next.x, p->GetPositionY() - next.y) <= MARATHON_ARRIVE)
+                MarathonArrive(m, r, p, now);
+        }
+        bool anyLeft = false;
+        for (MarathonRunner const& r : m.runners)
+            anyLeft |= !r.place && !r.out;
+        if (!going || !anyLeft || WorldTimer::getMSTimeDiff(m.goAt, now) >= MARATHON_LIMIT)
+            EndMarathon(m);
+    }
+
+    void Update(uint32 /*diff*/)
+    {
+        uint32 const now = WorldTimer::getMSTime();
+        if (s_marathonTicked && WorldTimer::getMSTimeDiff(s_marathonTicked, now) < MARATHON_TICK)
+            return;
+        s_marathonTicked = now;
+        std::lock_guard<std::mutex> races(s_mutex);
+        std::lock_guard<std::mutex> lock(s_marathonMutex);
+        MarathonTick(s_marathon, now);
+    }
+
+    // "R\tMar+", "R\tMar-": the queue joined or left while it is open. False when the line is
+    // not one of them. Under s_mutex (HandleLine).
+    static bool HandleMarathon(Player* player, std::vector<std::string> const& f)
+    {
+        std::string const& verb = f[1];
+        if (verb != "Mar+" && verb != "Mar-")
+            return false;
+        std::lock_guard<std::mutex> lock(s_marathonMutex);
+        Marathon& m = s_marathon;
+        if (m.phase != Marathon::OPEN)
+        {
+            ChatHandler(player->GetSession()).SendSysMessage("No Marathon Delivery is taking couriers now.");
+            return true;
+        }
+        ObjectGuid const guid = player->GetObjectGuid();
+        auto in = std::find(m.queue.begin(), m.queue.end(), guid);
+        if (verb == "Mar+" && in == m.queue.end())
+        {
+            if (CarryingDelivery(player))
+            {
+                ChatHandler(player->GetSession()).SendSysMessage("Deliver the package you're carrying first.");
+                return true;
+            }
+            m.queue.push_back(guid);
+        }
+        else if (verb == "Mar-" && in != m.queue.end())
+            m.queue.erase(in);
+        bool const queued = std::find(m.queue.begin(), m.queue.end(), guid) != m.queue.end();
+        SendLine(player, "KARTCRAFT\tR\tMarQ\t" + std::to_string(m.queue.size()) + "\t" + (queued ? "1" : "0"));
+        return true;
+    }
+
+    // At login: the open queue's popup, a runner's leg; and a package nothing explains taken (the
+    // marathon ended, or the server restarted, while its carrier was away).
+    static void MarathonLogin(Player* player)
+    {
+        std::lock_guard<std::mutex> lock(s_marathonMutex);
+        Marathon& m = s_marathon;
+        MarathonRunner const* r = FindRunner(m, player->GetObjectGuid());
+        bool const running = r && !r->place && !r->out && m.phase != Marathon::NONE;
+        if (m.phase == Marathon::OPEN)
+            SendMarathonOpen(player, m);
+        if (running && m.phase == Marathon::RUNNING)
+            SendMarathonLeg(player, m, *r, WorldTimer::getMSTime());
+        if (running || !player->HasItemCount(DELIVERY_PACKAGE, 1))
+            return;
+        // 1.12's quest log: 20 slots (PLAYER_QUEST_LOG_1_1, three fields each).
+        for (uint16 slot = 0; slot < 20; ++slot)
+            if (FindDelivery(player->GetQuestSlotQuestId(slot)))
+                return;
+        TakePackage(player);
+    }
+
     static bool HandleFinder(Player* player, std::vector<std::string> const& f, uint32 now)
     {
         std::string const& verb = f[1];
@@ -4180,6 +4677,8 @@ namespace Kartcraft
             return;
         // The finder's verbs work on foot; the rest need the kart, but for a marshal's and for
         // leaving: a racer the marshal put in on foot may leave before the kart's aura lands.
+        if (f.size() >= 2 && HandleMarathon(player, f))
+            return;
         if (f.size() < 2 || HandleFinder(player, f, now) ||
             (!marshal && f[1] != "Q" && !player->HasAura(SPELL_SUMMON_KART)))
             return;
@@ -4802,6 +5301,7 @@ namespace Kartcraft
         CreateCosmetics();
         CreateRatings();
         CreateDeliveries();
+        CreateMarathons();
         CreateSkins();
         LoadLadder();
         LoadRecords(s_raceBoard, "race");

@@ -37,6 +37,8 @@ namespace Kartcraft
     void LoadSpells();
     // On login: everyone can drive; abilities match the skill.
     void OnLogin(Player* player);
+    // Each world update (World::Update), on the world thread: the Marathon Delivery's clock.
+    void Update(uint32 diff);
     // The kart's aura on or off (Aura::HandleAuraMounted): a driver is friendly to everyone.
     void OnMounted(Unit* target, uint32 spell, bool apply);
     // Race layers: false when a and b are players in different races' layers (each race under

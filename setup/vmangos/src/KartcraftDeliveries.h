@@ -753,3 +753,17 @@
         { 193188, "Sun Rock Retreat", "Camp Mojache", 7731, 7737, 270, 2, "Innkeeper Jayka", "Innkeeper Greul", 1, 893.65f, 927.95f, 106.36f, 5.707f, -4460.1f, 242.72f, 5397, "Orcish Axes" },
         { 193189, "Sun Rock Retreat", "Shadowprey Village", 7731, 11106, 180, 2, "Innkeeper Jayka", "Innkeeper Sikewa", 1, 893.65f, 927.95f, 106.36f, 5.707f, -1592.84f, 3150.27f, 3335, "Mulgore Spice Bread" },
     };
+
+    static MarathonTown const MARATHON_TOWNS[] = {
+        { "Ratchet", 1, -985.6f, -3796.71f, 5.21f, 0.244f },
+        { "Gadgetzan", 1, -7193.42f, -3793.48f, 9.76f, 0.873f },
+        { "Cenarion Hold", 1, -6868.04f, 729.91f, 45.75f, 0.489f },
+        { "Everlook", 1, 6695.15f, -4673.04f, 721.65f, 0.541f },
+        { "Booty Bay", 0, -14439.f, 483.48f, 28.93f, 2.339f },
+        { "Thorium Point", 0, -6513.62f, -1183.78f, 309.34f, 2.182f },
+        { "Light's Hope Chapel", 0, 2151.72f, -5264.51f, 95.87f, 1.312f },
+        { "Steamwheedle Port", 1, -6974.01f, -4845.69f, 8.07f, 2.531f },
+        { "the Mirage Raceway", 1, -6233.24f, -3855.97f, -58.67f, 0.904f },
+        { "Marshal's Refuge", 1, -6142.71f, -1092.69f, -200.19f, 3.089f },
+        { "Nighthaven", 1, 7943.56f, -2417.24f, 494.05f, 4.852f },
+    };
