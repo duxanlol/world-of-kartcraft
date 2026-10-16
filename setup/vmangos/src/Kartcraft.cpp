@@ -32,6 +32,7 @@
 #include <random>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include "GridMap.h"
 
 extern SkillRaceClassInfoMap SkillRaceClassInfoBySkill;
@@ -1359,12 +1360,37 @@ namespace Kartcraft
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
     }
 
+    // The routes by quest, and the span their quests take: asked for every quest a quest giver
+    // has whenever the "!" and "?" over NPCs are worked out, most of them no route at all.
+    struct DeliveryIndex
+    {
+        std::unordered_map<uint32, Delivery const*> byQuest;
+        uint32 low = 0xFFFFFFFFu;
+        uint32 high = 0;
+    };
+
+    static DeliveryIndex const& Deliveries()
+    {
+        static DeliveryIndex const index = [] {
+            DeliveryIndex built;
+            for (Delivery const& d : DELIVERIES)
+            {
+                built.byQuest[d.quest] = &d;
+                built.low = std::min(built.low, d.quest);
+                built.high = std::max(built.high, d.quest);
+            }
+            return built;
+        }();
+        return index;
+    }
+
     static Delivery const* FindDelivery(uint32 quest)
     {
-        for (Delivery const& d : DELIVERIES)
-            if (d.quest == quest)
-                return &d;
-        return nullptr;
+        DeliveryIndex const& index = Deliveries();
+        if (quest < index.low || quest > index.high)
+            return nullptr;
+        auto it = index.byQuest.find(quest);
+        return it == index.byQuest.end() ? nullptr : it->second;
     }
 
     // murmur3's finalizer: FNV-1a alone moves little for a change in the last character, and a
@@ -1381,7 +1407,7 @@ namespace Kartcraft
 
     // Today's routes for a faction (`team` 1 the Alliance, 2 the Horde): the DELIVERIES_A_DAY of
     // its own and the neutral ones whose hash with the day is lowest, in that order.
-    static std::vector<Delivery const*> Today(std::string const& day, uint8 team)
+    static std::vector<Delivery const*> RankToday(std::string const& day, uint8 team)
     {
         std::vector<std::pair<uint32, Delivery const*>> ranked;
         for (Delivery const& d : DELIVERIES)
@@ -1395,12 +1421,41 @@ namespace Kartcraft
         return today;
     }
 
+    // RankToday, worked out once a day a faction: asked from every map thread whenever quest
+    // markers are, it built ~750 strings and sorted them each time.
+    struct TodaysRoutes
+    {
+        std::string day;
+        std::vector<Delivery const*> list;
+        std::unordered_set<uint32> quests;
+    };
+    static std::mutex s_todayMutex;
+    static TodaysRoutes s_today[3];
+
+    static TodaysRoutes const& TodayFor(std::string const& day, uint8 team)
+    {
+        TodaysRoutes& t = s_today[team < 3 ? team : 0];
+        if (t.day != day)
+        {
+            t.list = RankToday(day, team);
+            t.quests.clear();
+            for (Delivery const* d : t.list)
+                t.quests.insert(d->quest);
+            t.day = day;
+        }
+        return t;
+    }
+
+    static std::vector<Delivery const*> Today(std::string const& day, uint8 team)
+    {
+        std::lock_guard<std::mutex> lock(s_todayMutex);
+        return TodayFor(day, team).list;
+    }
+
     static bool OfferedOn(std::string const& day, uint32 quest, uint8 team)
     {
-        for (Delivery const* d : Today(day, team))
-            if (d->quest == quest)
-                return true;
-        return false;
+        std::lock_guard<std::mutex> lock(s_todayMutex);
+        return TodayFor(day, team).quests.count(quest) != 0;
     }
 
     static uint8 TeamOf(Player const* player)
