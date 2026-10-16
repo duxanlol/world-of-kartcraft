@@ -618,6 +618,7 @@ dependencies = [
  "image",
  "include_dir",
  "kart-driver",
+ "kart-gps",
  "kartcraft",
  "kira",
  "libc",

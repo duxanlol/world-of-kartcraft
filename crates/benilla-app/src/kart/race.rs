@@ -2132,13 +2132,15 @@ const GUIDE_SIZE: f32 = 0.7;
 
 /// In a race (or while it is being placed, race or not): the arrow towards the next checkpoint, a child of
 /// the camera so it holds its place on screen; and that checkpoint on the minimap, in the slot a
-/// guard's directions use (`crate::poi_marker`).
+/// guard's directions use (`crate::poi_marker`). Carrying a delivery with no race on, the arrow
+/// points along its way by road and the minimap marks its town (`super::gps`).
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn guide(
     mut commands: Commands,
     races: Res<Races>,
     drive: Res<super::KartDrive>,
     hud: Res<GuideHud>,
+    gps: Res<super::gps::Gps>,
     collide: WorldCollision,
     mut marker: ResMut<crate::poi_marker::PoiMarker>,
     current_map: Option<Res<benilla_world::world_map::CurrentMap>>,
@@ -2154,16 +2156,24 @@ pub(crate) fn guide(
     let target = race
         .and_then(|r| Some((r, r.next()?)))
         .filter(|_| drive.active);
+    let delivery = gps.town().filter(|_| target.is_none() && drive.active);
 
     // The minimap.
-    match target {
-        Some((race, next)) => {
-            let name = checkpoint_name(race, next);
+    let landmark = match (target, delivery) {
+        (Some((race, next)), _) => Some((
+            checkpoint_name(race, next),
+            race.points[next],
+            current_map.as_ref().map_or(0, |m| m.0),
+        )),
+        (None, Some((town, map, at))) => Some((format!("Deliver to {town}"), at, map)),
+        (None, None) => None,
+    };
+    match landmark {
+        Some((name, at, map)) => {
             if let Some(old) = shown.as_ref().filter(|old| **old != name) {
                 marker.clear_named(old);
             }
-            let map = current_map.as_ref().map_or(0, |m| m.0);
-            marker.set_landmark(&name, race.points[next], map, real.elapsed_secs_f64());
+            marker.set_landmark(&name, at, map, real.elapsed_secs_f64());
             *shown = Some(name);
         }
         None => {
@@ -2182,6 +2192,7 @@ pub(crate) fn guide(
         (Some((race, next)), _) if hud.shown && !hud.clean => {
             Some(ground_at(&collide, race.points[next], drive.pos.y))
         }
+        (None, _) if delivery.is_some() && hud.shown && !hud.clean => gps.ahead.map(wow_to_bevy),
         _ => None,
     };
     let (Some(towards), Some((cam, cam_at, projection))) = (towards, cam) else {

@@ -52,6 +52,8 @@ pub(crate) struct KartOverlay {
     pub(crate) pad: Option<PadView>,
     /// Leaving the kart in a race, held for: how far, in percent.
     pub(crate) leaving: Option<u8>,
+    /// A delivery's town and the yards left to it by road (`super::gps`).
+    pub(crate) gps: Option<(String, u32)>,
 }
 
 /// The pad the kart reads, as the controller test shows it: its name (empty with none), the
@@ -172,6 +174,7 @@ pub(super) fn publish(
     drive: Res<KartDrive>,
     remotes: Res<RemoteKarts>,
     names: Option<Res<crate::names::NameCache>>,
+    gps: Res<super::gps::Gps>,
     mut overlay: ResMut<KartOverlay>,
 ) {
     // The race map: the track once its course line is here, and every racer on it.
@@ -202,6 +205,11 @@ pub(super) fn publish(
     }
     if overlay.leaving != drive.leaving {
         overlay.leaving = drive.leaving;
+    }
+    // The yards left in steps of ten: the clock is not rewritten every frame the kart rolls.
+    let gps_left = gps.left.as_ref().map(|(t, y)| (t.clone(), y / 10 * 10));
+    if overlay.gps != gps_left {
+        overlay.gps = gps_left;
     }
     if overlay.skill != score.skill() {
         overlay.skill = score.skill();

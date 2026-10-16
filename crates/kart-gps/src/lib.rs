@@ -276,25 +276,27 @@ impl Router {
             .filter_map(|(net, s)| goals.get(net).map(|g| (s, g)))
             .min_by(|x, y| (x.0 .1 + x.1 .1).total_cmp(&(y.0 .1 + y.1 .1)))?;
         let goal = self.pos[b as usize];
-        let mut cost: HashMap<u32, f32> = HashMap::from([(a, 0.0)]);
-        let mut came: HashMap<u32, u32> = HashMap::new();
+        // Dense tables over the points: a search touches a good share of a continent's.
+        let mut cost = vec![f32::INFINITY; self.pos.len()];
+        cost[a as usize] = 0.0;
+        let mut came = vec![u32::MAX; self.pos.len()];
         let mut open = BinaryHeap::from([Open(flat(self.pos[a as usize], goal), a)]);
         while let Some(Open(_, i)) = open.pop() {
             if i == b {
                 break;
             }
-            let here = cost[&i];
+            let here = cost[i as usize];
             for &j in self.neighbours(i) {
                 let c = here + flat(self.pos[i as usize], self.pos[j as usize]);
-                if cost.get(&j).is_none_or(|&old| c < old) {
-                    cost.insert(j, c);
-                    came.insert(j, i);
+                if c < cost[j as usize] {
+                    cost[j as usize] = c;
+                    came[j as usize] = i;
                     open.push(Open(c + flat(self.pos[j as usize], goal), j));
                 }
             }
         }
         let mut path = vec![b];
-        while let Some(&p) = came.get(path.last()?) {
+        while let Some(&p) = came.get(*path.last()? as usize).filter(|&&p| p != u32::MAX) {
             path.push(p);
         }
         path.reverse();
@@ -303,7 +305,7 @@ impl Router {
         points.push(to);
         Some(Route {
             points,
-            road: *cost.get(&b)?,
+            road: Some(cost[b as usize]).filter(|c| c.is_finite())?,
             off_road: da + db,
         })
     }

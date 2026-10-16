@@ -2086,8 +2086,15 @@
             local gone = math.max(0, floor(GetTime() - d.since))
             local color = "|cff40ff40"
             if gone > d.par then color = "|cffff6060" end
-            BenillaKartDeliveryFrameText:SetText(format("Delivery to %s   %s%d:%02d|r / par %d:%02d",
-                d.to, color, floor(gone / 60), mod(gone, 60), floor(d.par / 60), mod(d.par, 60)))
+            local road = ""
+            if d.road then road = format("   |cffffc040%d yd|r", d.road) end
+            BenillaKartDeliveryFrameText:SetText(format("Delivery to %s   %s%d:%02d|r / par %d:%02d%s",
+                d.to, color, floor(gone / 60), mod(gone, 60), floor(d.par / 60), mod(d.par, 60), road))
+        end
+
+        -- The yards left by road (BENILLA_KART_GPS), while the GPS has a way; none clears it.
+        function BenillaKartDelivery_Road(town, yards)
+            BenillaKartDelivery.road = town and yards
         end
 
         -- Hidden for good (KartShortcuts), off its own right-click or the settings' box, which
@@ -2146,6 +2153,8 @@
                 BenillaKartSeated_Set(arg1 == 1)
             elseif event == "BENILLA_KART_LEAVE" then
                 BenillaKartLeave_Show(arg1)
+            elseif event == "BENILLA_KART_GPS" then
+                BenillaKartDelivery_Road(arg1, arg2)
             elseif event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_REGEN_ENABLED" then
                 BenillaKart_RaceModeRestore()
                 if event == "PLAYER_ENTERING_WORLD" then
@@ -4757,6 +4766,7 @@
                 this:RegisterEvent("BENILLA_KART_GARAGE")
                 this:RegisterEvent("BENILLA_KART_SEATED")
                 this:RegisterEvent("BENILLA_KART_LEAVE")
+                this:RegisterEvent("BENILLA_KART_GPS")
                 this:RegisterEvent("PLAYER_ENTERING_WORLD")
                 this:RegisterEvent("PLAYER_REGEN_ENABLED")
                 this:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")

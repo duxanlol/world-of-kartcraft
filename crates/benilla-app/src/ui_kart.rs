@@ -23,6 +23,8 @@
 //! - `BENILLA_KART_SEATED(seated)`: 1 when we climb into the kart, 0 when we climb out.
 //! - `BENILLA_KART_LEAVE(percent)`: leaving the kart in a race, held for, how far; no arguments
 //!   when let go or done.
+//! - `BENILLA_KART_GPS(town, yards)`: a delivery's town and the yards left to it by road, in
+//!   steps of ten; no arguments off its map, out of the kart or delivered.
 //! - `BENILLA_KART_PAD(name, held, lx, ly, rx, ry, l2, r2)`: the controller test's pad while it
 //!   is open (`KartPadTest`), when it changes: its name (empty with none), the buttons held as
 //!   space-separated tokens, the sticks -1 to 1 and the triggers 0 to 1.
@@ -47,6 +49,7 @@ pub(crate) struct Sent {
     courses: bool,
     seated: Option<bool>,
     leaving: Option<Option<u8>>,
+    gps: Option<Option<(String, u32)>>,
     /// The skill the garage was last sent at.
     garage: Option<Option<u16>>,
     /// The race map's track and racers as last sent, and when the racers were.
@@ -131,6 +134,22 @@ pub(crate) fn feed(
                 .unwrap_or_default(),
         );
         sent.leaving = Some(overlay.leaving);
+    }
+    if sent.gps.as_ref() != Some(&overlay.gps) {
+        script.fire_event(
+            "BENILLA_KART_GPS",
+            overlay
+                .gps
+                .as_ref()
+                .map(|(town, yards)| {
+                    vec![
+                        ScriptValue::Str(town.clone()),
+                        ScriptValue::Number(f64::from(*yards)),
+                    ]
+                })
+                .unwrap_or_default(),
+        );
+        sent.gps = Some(overlay.gps.clone());
     }
     if sent.pad.as_ref() != Some(&overlay.pad) {
         if let Some(pad) = &overlay.pad {

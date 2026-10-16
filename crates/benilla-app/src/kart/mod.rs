@@ -17,6 +17,7 @@ mod bindings;
 pub(crate) mod freecam;
 mod garage;
 mod ghost;
+mod gps;
 mod ground;
 pub(crate) mod marshals;
 mod pad_choice;
@@ -664,6 +665,8 @@ pub(crate) fn plugin(app: &mut App) {
         )
         .net_handler(benilla_protocol::SessionEventKind::Chat, remote::on_chat)
         .net_handler(benilla_protocol::SessionEventKind::Chat, race::on_chat)
+        .net_handler(benilla_protocol::SessionEventKind::Chat, gps::on_chat)
+        .init_resource::<gps::Gps>()
         .net_handler(benilla_protocol::SessionEventKind::Chat, weapons::on_chat)
         .net_handler(benilla_protocol::SessionEventKind::Chat, showcase::on_chat)
         .init_resource::<showcase::Showcase>()
@@ -697,6 +700,7 @@ pub(crate) fn plugin(app: &mut App) {
             Startup,
             (kartcraft::hud::spawn, |_: Commands| {
                 model::preload();
+                gps::preload();
                 kartcraft::weapons::look::preload();
             }),
         )
@@ -718,7 +722,8 @@ pub(crate) fn plugin(app: &mut App) {
                 (ghost::update, replay::update).chain(),
                 weapons::update,
                 race::beams,
-                race::guide,
+                // The delivery's way after the drive, then its chevrons and the arrow along it.
+                (gps::update, gps::chevrons, race::guide).chain(),
                 model::update,
                 (sound::update, sound::wow_voices).chain(),
                 kartcraft::rumble::send,
