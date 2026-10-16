@@ -21,7 +21,7 @@ const DELAY: f32 = 0.15;
 /// How long past its last sample a kart may coast before it holds (s).
 const MAX_COAST: f32 = 0.25;
 /// A relayed state this old no longer applies (s).
-const STATE_TTL: f32 = 0.5;
+pub(super) const STATE_TTL: f32 = 0.5;
 /// The model's wheel radius, meters.
 pub(super) const WHEEL_RADIUS: f32 = 0.25;
 

@@ -48,8 +48,11 @@ use kartcraft::{input, model, KartView, Modifiers, Session, State};
 
 use crate::net::NetHandlerApp;
 
-/// How often our kart's state is relayed (s).
+/// How often our kart's state is relayed when it changes (s), and at least how often when it
+/// does not (a parked kart): under the receiver's `remote::STATE_TTL`, with room for the wire.
 const STATE_PERIOD: f32 = 0.1;
+const STATE_KEEPALIVE: f32 = 0.3;
+const _: () = assert!(STATE_KEEPALIVE < remote::STATE_TTL);
 /// Other karts this close (yards) are checked for bumps.
 const BUMP_RANGE: f32 = 20.0;
 /// Below this speed (yd/s) the kart counts as standing still on the wire.
@@ -111,8 +114,9 @@ struct Host {
     backing_until: f32,
     /// The `WOW_KART_CRATE_TEST` hook's aim (`autotest`).
     crate_test: autotest::CrateTest,
-    /// When our kart's state was last relayed to the players around us.
+    /// When our kart's state was last relayed to the players around us, and the line.
     state_sent: f32,
+    state_line: String,
     /// The body's last teleport settle we saw begin (`Player::settle_since`).
     settle_seen: f32,
     /// The engine class the kart drives with.
@@ -532,9 +536,15 @@ fn update(
         );
     }
     // Our kart's state for the players around us (a Kartcraft server relays it).
+    // A line that says nothing new waits for the keepalive: a parked kart's would fill the
+    // server's relay ten times a second for everyone around it.
     if server_kart && now - host.state_sent >= STATE_PERIOD {
-        host.state_sent = now;
-        profession.send(remote::state_line(&view));
+        let line = remote::state_line(&view);
+        if line != host.state_line || now - host.state_sent >= STATE_KEEPALIVE {
+            host.state_sent = now;
+            profession.send(line.clone());
+            host.state_line = line;
+        }
     }
     drive.pos = view.transform.translation;
     drive.yaw = view.yaw;
