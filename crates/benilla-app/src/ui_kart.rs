@@ -183,14 +183,14 @@ fn garage_args(skill: Option<u16>) -> Vec<ScriptValue> {
     ]
 }
 
-/// The finder's list: each zone with courses, by its place (`z3`, as the server reads it) and
-/// its name with how many courses it holds.
+/// The finder's list: each zone (or series) with courses, by its place (`z3`, as the server
+/// reads it) and its name with how many courses it holds.
 fn zone_list() -> String {
     ZONES
         .iter()
         .enumerate()
         .map(|(i, zone)| {
-            let n = COURSES.iter().filter(|c| c.zone == *zone).count();
+            let n = COURSES.iter().filter(|c| c.finder_group() == zone).count();
             format!("z{i}\t{zone} ({n})")
         })
         .collect::<Vec<_>>()

@@ -33,6 +33,8 @@ client's list are both made from it; nothing else holds course data.
   Race Finder's queue list).
 - `name`: shown to players. ASCII, no tabs, quotes or backslashes.
 - `zone`, `note`: optional, for people; the note becomes the comment above the C++ entry.
+- `series`: optional, the hand-made set a course belongs to (`"Grand Prix"`). The Race Finder
+  offers it under its series instead of its zone, and the track browser names both.
 - `map`: the map id (0 Eastern Kingdoms, 1 Kalimdor). Any other map is a dungeon's: the course
   is a party course (below).
 - `laps`: 0 for a sprint from the first checkpoint to the last; else laps back through the first.
@@ -56,9 +58,10 @@ client's list are both made from it; nothing else holds course data.
   starts, if it is closed, and it closes again once the race is over (at the latest after the
   race's 20 minutes). For a door across the course that the dungeon keeps locked: the Stratholme
   Street Circuit's `[175352, 175353]`, the King's Square gates.
-- Up to 1000 courses. The Race Finder offers them by zone, in the order the file first names each
-  zone; a queue line names a zone by that place (`z3`), so keep zones' first appearances in order
-  when adding courses (the exporter appends).
+- Up to 1000 courses. The Race Finder offers them by zone (or series), in the order the file
+  first names each; a queue line names one by that place (`z3`), so keep first appearances in
+  order when adding courses (the exporter appends). The Grand Prix leads the file, so it heads
+  the finder.
 
 ## Regenerating
 

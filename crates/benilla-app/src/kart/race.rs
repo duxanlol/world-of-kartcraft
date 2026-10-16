@@ -45,9 +45,13 @@ use kartcraft::hud::RaceClock;
 pub(crate) struct Course {
     pub(crate) key: String,
     pub(crate) name: String,
-    /// The zone it is in, as the Race Finder offers courses; may be empty.
+    /// The zone it is in; may be empty.
     #[serde(default)]
     pub(crate) zone: String,
+    /// The hand-made set it belongs to ("Grand Prix"), which the Race Finder offers in place of
+    /// its zone; empty for most.
+    #[serde(default)]
+    pub(crate) series: String,
     /// Its map, and where its Race Marshal stands.
     #[serde(default)]
     pub(crate) map: u32,
@@ -88,6 +92,16 @@ impl Course {
         self.map > 1
     }
 
+    /// What the Race Finder offers it under: its series, else its zone (`pack.py` gives the
+    /// server the same).
+    pub(crate) fn finder_group(&self) -> &str {
+        if self.series.is_empty() {
+            &self.zone
+        } else {
+            &self.series
+        }
+    }
+
     /// The first checkpoint, WoW x, y.
     pub(crate) fn start(&self) -> [f32; 2] {
         self.checkpoints.first().map_or([0.0; 2], |c| [c.x, c.y])
@@ -116,10 +130,15 @@ impl Course {
         } else {
             format!(" in {}", self.zone)
         };
+        let series = if self.series.is_empty() {
+            String::new()
+        } else {
+            format!("{} ", self.series)
+        };
         let mut text = match self.laps {
-            0 => format!("A sprint{place}, {km:.2} km from start to finish"),
-            1 => format!("A one-lap circuit{place}, {km:.2} km"),
-            n => format!("A {n}-lap circuit{place}, {km:.2} km a lap"),
+            0 => format!("A {series}sprint{place}, {km:.2} km from start to finish"),
+            1 => format!("A {series}one-lap circuit{place}, {km:.2} km"),
+            n => format!("A {series}{n}-lap circuit{place}, {km:.2} km a lap"),
         };
         text += &format!(" through {} checkpoints.", route.len());
         if self.party() {
@@ -187,8 +206,9 @@ pub(crate) static COURSES: std::sync::LazyLock<Vec<Course>> = std::sync::LazyLoc
 pub(crate) static ZONES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
     let mut zones: Vec<String> = Vec::new();
     for c in COURSES.iter() {
-        if !c.zone.is_empty() && !c.party() && !zones.contains(&c.zone) {
-            zones.push(c.zone.clone());
+        let group = c.finder_group();
+        if !group.is_empty() && !c.party() && !zones.iter().any(|z| z == group) {
+            zones.push(group.to_string());
         }
     }
     zones
@@ -2379,11 +2399,32 @@ mod tests {
         for c in COURSES.iter() {
             assert!(c.checkpoints.len() >= 2, "{} has a course", c.key);
             assert_eq!(
-                ZONES.contains(&c.zone),
+                ZONES.iter().any(|z| z == c.finder_group()),
                 !c.party(),
                 "{} is in a Race Finder zone unless it is a party course",
                 c.key
             );
+        }
+    }
+
+    #[test]
+    fn the_grand_prix_heads_the_finder_with_its_ten_circuits() {
+        assert_eq!(ZONES[0], "Grand Prix");
+        let gp: Vec<&Course> = COURSES
+            .iter()
+            .filter(|c| c.series == "Grand Prix")
+            .collect();
+        assert_eq!(gp.len(), 10);
+        for c in gp {
+            assert_eq!(c.finder_group(), "Grand Prix");
+            assert!(
+                c.laps == 3 && !c.zone.is_empty(),
+                "{}: a 3-lap circuit in a zone",
+                c.key
+            );
+            assert!(c
+                .description()
+                .starts_with("A Grand Prix 3-lap circuit in "));
         }
     }
 

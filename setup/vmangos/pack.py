@@ -113,7 +113,8 @@ def courses_header(data):
             fail(f'course {key}: key used twice')
         keys.add(key)
         name = cstring(c.get('name'), f'course {key}: name')
-        zone = c.get('zone', '')
+        # The server's zone is only the Race Finder's group: a series ("Grand Prix") in its stead.
+        zone = c.get('series') or c.get('zone', '')
         zone_c = cstring(zone, f'course {key}: zone') if zone else '""'
         cmap = c.get('map')
         laps = c.get('laps')
@@ -155,7 +156,7 @@ def courses_header(data):
             return ',\n            '.join(', '.join(items[i:i + per]) for i in range(0, len(items), per))
 
         note = c.get('note')
-        title = f'{c["name"]}' + (f' ({zone})' if zone else '') + (f': {note}' if note else '')
+        title = f'{c["name"]}' + (f' ({c.get("zone")})' if c.get("zone") else '') + (f': {note}' if note else '')
         out += textwrap.wrap(title, 100, initial_indent='        // ', subsequent_indent='        // ')
         out.append(f'        {{ "{key}", {name}, {zone_c}, {cmap}, {laps},')
         out.append(f'          {{ {rows(xy, 4)} }},')

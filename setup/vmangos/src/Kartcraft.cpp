@@ -369,7 +369,8 @@ namespace Kartcraft
     {
         char const* key;
         char const* name;
-        // The zone it is in, as the Race Finder groups courses; may be empty.
+        // The zone it is in, or its series ("Grand Prix"), as the Race Finder groups courses;
+        // may be empty.
         char const* zone;
         uint32 map;
         // 0: a sprint from the first checkpoint to the last; else laps back through the first.

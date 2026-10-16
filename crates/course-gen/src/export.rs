@@ -430,6 +430,7 @@ const ORDER: &[&str] = &[
     "key",
     "name",
     "zone",
+    "series",
     "map",
     "laps",
     "note",
