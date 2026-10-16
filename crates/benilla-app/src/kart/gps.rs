@@ -21,6 +21,8 @@ use kart_gps::{RoadFile, Router};
 const STRAY: f32 = 30.0;
 /// It is found again at most this often, seconds.
 const REROUTE_EVERY: f32 = 1.0;
+/// Closer than this (yards) to the road's end, the arrow points at the town's innkeeper.
+const ARRIVE: f32 = 15.0;
 /// How far along the way (yards) the arrow points.
 const LOOKAHEAD: f32 = 40.0;
 /// A chevron every this many yards along the way, this far ahead of the kart.
@@ -223,11 +225,13 @@ pub(crate) fn update(
     let may = gps.routed_at.is_none_or(|t| now - t >= REROUTE_EVERY);
     if strayed && may {
         gps.routed_at = Some(now);
-        let way = ROADS
+        // The way ends on the road: the last step, into the town's inn, crosses its wall.
+        let mut way = ROADS
             .get(&town.map)
             .and_then(|r| r.route(at, town.at))
             .map(|r| r.points)
             .unwrap_or_default();
+        way.pop();
         gps.along = lengths(&way);
         gps.way = way;
         gps.generation = gps.generation.wrapping_add(1);
@@ -241,9 +245,16 @@ pub(crate) fn update(
     }
     let (s, off) = project(&gps.way, &gps.along, at);
     let total = *gps.along.last().unwrap();
+    let end = gps.way[gps.way.len() - 1];
+    let walk_in = (end[0] - town.at[0]).hypot(end[1] - town.at[1]);
     gps.progress = s;
-    gps.ahead = Some(point_at(&gps.way, &gps.along, s + LOOKAHEAD));
-    gps.left = Some((name, (total - s + off).round() as u32));
+    // Near the road's end, the arrow points at the town itself.
+    gps.ahead = Some(if total - s < ARRIVE {
+        town.at
+    } else {
+        point_at(&gps.way, &gps.along, s + LOOKAHEAD)
+    });
+    gps.left = Some((name, (total - s + off + walk_in).round() as u32));
 }
 
 /// A chevron on the way.

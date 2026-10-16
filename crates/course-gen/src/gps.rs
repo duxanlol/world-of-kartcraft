@@ -849,13 +849,12 @@ fn ways(grid: &Grid, towns: &[&Town], jobs: usize) -> (Vec<Way>, Vec<String>) {
                             on_road += d;
                         }
                     }
-                    let (a, b) = (towns[i], towns[j]);
-                    let mut points = vec![[a.x, a.y, a.z]];
-                    points.extend(simplify(
+                    // From the ground each town joins to the other's: an innkeeper stands in
+                    // the inn, and the way in from the street is no road (the client walks it).
+                    let points = simplify(
                         &path.iter().map(|&c| grid.centre(c)).collect::<Vec<_>>(),
                         SIMPLIFY,
-                    ));
-                    points.push([b.x, b.y, b.z]);
+                    );
                     out.lock().unwrap().push(Way {
                         from: i,
                         to: j,
@@ -976,6 +975,29 @@ pub fn run(
         );
         if !stranded.is_empty() {
             out += &format!("  towns off the grid: {stranded:?}\n");
+        }
+        // Each town's leg from its innkeeper to the ground it joins, where that crosses ground
+        // the grid holds shut.
+        for t in &on_map {
+            let Some(c) = grid.nearest_passable(t.x, t.y, t.z) else {
+                continue;
+            };
+            let at = grid.centre(c);
+            let leg = (at[0] - t.x).hypot(at[1] - t.y);
+            let steps = (leg / 2.0).ceil().max(1.0) as usize;
+            let shut = (0..=steps)
+                .filter(|&s| {
+                    let f = s as f32 / steps as f32;
+                    grid.cell(t.x + (at[0] - t.x) * f, t.y + (at[1] - t.y) * f)
+                        .is_some_and(|i| grid.cost[i].is_infinite())
+                })
+                .count();
+            if shut > 0 {
+                out += &format!(
+                    "  {}'s leg: {leg:.0} yd from the innkeeper ({:.0}, {:.0}, {:.0}) to ({:.0}, {:.0}, {:.0}), {} yd shut\n",
+                    t.name, t.x, t.y, t.z, at[0], at[1], at[2], shut * 2
+                );
+            }
         }
         // The towns in the groups the ways join.
         let mut group: Vec<usize> = (0..on_map.len()).collect();
