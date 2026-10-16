@@ -99,6 +99,8 @@ pub(crate) struct Gps {
     pub(crate) ahead: Option<[f32; 3]>,
     /// The town and the yards left to it by road, while the kart is on its map.
     pub(crate) left: Option<(String, u32)>,
+    /// The way on the minimap, in this colour (sRGB), unless switched off (`KartNavGpsMinimap`).
+    pub(crate) minimap: Option<[f32; 3]>,
 }
 
 impl Gps {
@@ -107,6 +109,22 @@ impl Gps {
         self.left.as_ref()?;
         let t = &TOWNS[self.target?];
         Some((t.name.as_str(), t.map, [t.at[0], t.at[1]]))
+    }
+}
+
+impl Gps {
+    /// The way ahead of the kart, a point every `step` yards from where it is to the town,
+    /// while a delivery shows: what the minimap draws.
+    pub(crate) fn ahead_of_kart(&self, step: f32) -> impl Iterator<Item = [f32; 3]> + '_ {
+        let total = self.along.last().copied().unwrap_or(0.0);
+        let shown = self.left.is_some() && self.minimap.is_some() && self.way.len() >= 2;
+        let first = (self.progress / step).ceil() as i32;
+        let last = if shown {
+            (total / step).floor() as i32
+        } else {
+            first - 1
+        };
+        (first..=last).map(move |k| point_at(&self.way, &self.along, k as f32 * step))
     }
 }
 
@@ -167,8 +185,13 @@ pub(crate) fn update(
     time: Res<Time>,
     drive: Res<super::KartDrive>,
     map: Option<Res<benilla_world::world_map::CurrentMap>>,
+    settings: Res<super::settings::KartSettings>,
     mut gps: ResMut<Gps>,
 ) {
+    let minimap = settings.nav.gps_minimap.then_some(settings.nav.gps_color);
+    if gps.minimap != minimap {
+        gps.minimap = minimap;
+    }
     for line in std::mem::take(&mut gps.inbox) {
         match line.first().map(String::as_str) {
             Some("Del") => {
@@ -254,20 +277,38 @@ fn chevron_mesh() -> Mesh {
     .with_inserted_indices(Indices::U32(indices))
 }
 
+/// The chevrons' mesh and material, and the colour the material was last given.
+type ChevronLook = (Handle<Mesh>, Handle<StandardMaterial>, [f32; 3]);
+
+/// The chevrons' look: unlit, a little see-through, in the GPS's colour (sRGB).
+fn chevron_material(c: [f32; 3]) -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::srgba(c[0], c[1], c[2], 0.85),
+        unlit: true,
+        alpha_mode: AlphaMode::Blend,
+        double_sided: true,
+        cull_mode: None,
+        ..default()
+    }
+}
+
 /// The chevrons on the way ahead: one every [`CHEVRON_EVERY`] yards for [`CHEVRONS_AHEAD`],
 /// fixed to the way, each laid once on the ground under it and taken up once passed; a new way
 /// takes them all up.
 pub(crate) fn chevrons(
     mut commands: Commands,
     gps: Res<Gps>,
+    settings: Res<super::settings::KartSettings>,
     collide: WorldCollision,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut look: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
+    // The chevrons' mesh and material, and the colour the material was last given.
+    mut look: Local<Option<ChevronLook>>,
     // The way's generation they were laid on, and each laid chevron by its slot along it.
     mut laid: Local<(u32, HashMap<i32, Entity>)>,
 ) {
-    let wanted = if gps.left.is_some() && gps.way.len() >= 2 {
+    // Switched off (`KartNavGpsChevrons`): none wanted, all taken up.
+    let wanted = if settings.nav.gps_chevrons && gps.left.is_some() && gps.way.len() >= 2 {
         let total = *gps.along.last().unwrap();
         let first = (gps.progress / CHEVRON_EVERY).ceil() as i32;
         let last =
@@ -292,6 +333,22 @@ pub(crate) fn chevrons(
         }
         keep
     });
+    // One mesh and material for every chevron, the material recoloured when `KartNavGpsColor`
+    // moves.
+    let color = settings.nav.gps_color;
+    let (mesh, material, made) = look.get_or_insert_with(|| {
+        (
+            meshes.add(chevron_mesh()),
+            materials.add(chevron_material(color)),
+            color,
+        )
+    });
+    if *made != color {
+        if let Some(m) = materials.get_mut(&*material) {
+            *m = chevron_material(color);
+        }
+        *made = color;
+    }
     for k in wanted {
         if laid.1.contains_key(&k) {
             continue;
@@ -313,20 +370,6 @@ pub(crate) fn chevrons(
         let towards = (wow_to_bevy(b) - wow_to_bevy(a)).with_y(0.0);
         let place = Transform::from_translation(Vec3::new(column.x, y + CHEVRON_LIFT, column.z))
             .looking_to(towards.try_normalize().unwrap_or(Vec3::NEG_Z), Vec3::Y);
-        let (mesh, material) = look.get_or_insert_with(|| {
-            (
-                meshes.add(chevron_mesh()),
-                materials.add(StandardMaterial {
-                    base_color: Color::srgba(1.0, 0.75, 0.15, 0.85),
-                    emissive: LinearRgba::rgb(1.6, 1.0, 0.2),
-                    unlit: true,
-                    alpha_mode: AlphaMode::Blend,
-                    double_sided: true,
-                    cull_mode: None,
-                    ..default()
-                }),
-            )
-        });
         let e = commands
             .spawn((
                 GpsChevron,
@@ -378,11 +421,35 @@ mod tests {
     }
 
     #[test]
+    fn the_minimap_gets_the_way_ahead_of_the_kart_only_while_it_shows() {
+        let way = vec![[0.0, 0.0, 0.0], [100.0, 0.0, 0.0]];
+        let mut gps = Gps {
+            along: lengths(&way),
+            way,
+            progress: 30.0,
+            ..default()
+        };
+        assert_eq!(gps.ahead_of_kart(8.0).count(), 0, "no delivery shown");
+        gps.left = Some(("Goldshire".into(), 70));
+        assert_eq!(
+            gps.ahead_of_kart(8.0).count(),
+            0,
+            "the minimap way switched off"
+        );
+        gps.minimap = Some(super::super::settings::GPS_COLOR);
+        let dots: Vec<f32> = gps.ahead_of_kart(8.0).map(|p| p[0]).collect();
+        assert_eq!(dots.first(), Some(&32.0), "from the kart on");
+        assert_eq!(dots.last(), Some(&96.0), "to the town");
+        assert_eq!(dots.len(), 9);
+    }
+
+    #[test]
     fn a_delivery_line_names_its_town_and_its_end_clears_it() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<Gps>()
             .init_resource::<super::super::KartDrive>()
+            .init_resource::<super::super::settings::KartSettings>()
             .add_systems(Update, update);
         let town = &TOWNS[0];
         app.world_mut().resource_mut::<Gps>().inbox.push(vec![

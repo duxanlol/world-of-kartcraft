@@ -17,7 +17,7 @@ mod bindings;
 pub(crate) mod freecam;
 mod garage;
 mod ghost;
-mod gps;
+pub(crate) mod gps;
 mod ground;
 pub(crate) mod marshals;
 mod pad_choice;

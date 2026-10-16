@@ -92,6 +92,10 @@ pub(crate) const INTERIOR_TILE_ALPHA_REF: f32 = f32::from_bits(0x3F60_E0E2);
 /// The corpse blip's edge as a fraction of the widget side (the POIIcons cell's 16 px on a 140 px
 /// minimap); an estimate, the reference's in-range corpse blip size being untraced.
 const CORPSE_BLIP_FRACTION: f32 = 0.11;
+/// Kartcraft's delivery way on the minimap: a dot this many px on the 140.8-px basis, every this
+/// many yards along the way.
+const GPS_DOT_PX: f32 = 3.0;
+const GPS_DOT_EVERY: f32 = 8.0;
 
 /// The day-night tint the reference modulates outdoor tiles by (tile draw `0x4eccdd`–`0x4ecd69`),
 /// from `color_a`, the Direct band (`LightIntBand` 0), and `color_b`, the Ambient band (1):
@@ -358,7 +362,7 @@ fn emit_minimap(
         names,
         go_templates,
         locks,
-        (poi_marker, marshals),
+        (poi_marker, marshals, gps),
         pois,
         mut ping,
         script,
@@ -676,6 +680,24 @@ fn emit_minimap(
                 &assets.rim_arrows,
                 &mut quads,
             );
+        }
+    }
+
+    // Kartcraft: a courier delivery's way by road, amber dots ahead of the kart to the view's
+    // edge, under the player arrow and the dots.
+    if let (Some(ctx), Some([r, g, b])) = (&blip_ctx, gps.minimap) {
+        let dot = side * (GPS_DOT_PX / blips::BLIP_BASIS_PX);
+        for p in gps.ahead_of_kart(GPS_DOT_EVERY) {
+            let off = ctx.offset(p);
+            if off.length() > side * 0.5 * 0.92 {
+                continue;
+            }
+            quads.overlays.push(UiQuad {
+                rect: Rect::from_center_size(center + off, Vec2::splat(dot)),
+                z_key: slot.z,
+                color: [r, g, b, slot.alpha],
+                ..default()
+            });
         }
     }
 

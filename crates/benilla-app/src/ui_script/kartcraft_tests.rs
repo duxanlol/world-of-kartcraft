@@ -2937,6 +2937,81 @@ fn a_courier_delivery_shows_its_clock_against_par_until_delivered() {
 }
 
 #[test]
+fn the_navigation_window_switches_each_guide_and_colours_the_gps() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let eval_bool = |s: &UiScript, lua: &str| -> bool { s.eval(&format!("return {lua}")).unwrap() };
+    // /kartnav opens it, every box ticked as every guide starts on.
+    s.run("SlashCmdList['BENILLA_KARTNAV']('')").unwrap();
+    assert!(eval_bool(&s, "BenillaKartNavFrame:IsVisible() == 1"));
+    for (frame, cvar) in [
+        ("RaceArrow", "KartArrowShow"),
+        ("RaceMinimap", "KartNavRaceMinimap"),
+        ("CheckpointArrows", "KartNavCheckpointArrows"),
+        ("GpsArrow", "KartNavGpsArrow"),
+        ("GpsChevrons", "KartNavGpsChevrons"),
+        ("GpsMinimap", "KartNavGpsMinimap"),
+        ("GpsMarker", "KartNavGpsMarker"),
+        ("GpsDistance", "KartNavGpsDistance"),
+        ("Marshals", "KartRaceMarshals"),
+    ] {
+        let box_ = format!("BenillaKartNavFrame{frame}");
+        assert!(
+            eval_bool(&s, &format!("{box_}:GetChecked() == 1")),
+            "{box_} on"
+        );
+        s.run(&format!("{box_}:Click()")).unwrap();
+        assert_eq!(
+            s.cvar(cvar).as_deref(),
+            Some("0"),
+            "{box_} switches {cvar} off"
+        );
+        s.run(&format!("{box_}:Click()")).unwrap();
+        assert_eq!(s.cvar(cvar).as_deref(), Some("1"));
+    }
+    // The colour: the stock picker opens on the GPS's own, moving it moves the CVar, and a
+    // cancel puts it back; Reset is the amber it starts as.
+    s.run("BenillaKartNavFrameColor:Click()").unwrap();
+    assert!(eval_bool(&s, "ColorPickerFrame:IsVisible() == 1"));
+    s.run("ColorPickerFrame:SetColorRGB(0, 1, 0) ColorPickerFrame.func()")
+        .unwrap();
+    assert_eq!(s.cvar("KartNavGpsColor").as_deref(), Some("00ff00"));
+    s.run("ColorPickerFrame.cancelFunc(ColorPickerFrame.previousValues)")
+        .unwrap();
+    assert_eq!(s.cvar("KartNavGpsColor").as_deref(), Some("ffbf26"));
+    s.run("BenillaKartNav_SetColor(0.2, 0.4, 1)").unwrap();
+    assert_eq!(s.cvar("KartNavGpsColor").as_deref(), Some("3366ff"));
+    s.run("BenillaKartNavFrameColorReset:Click()").unwrap();
+    assert_eq!(s.cvar("KartNavGpsColor").as_deref(), Some("ffbf26"));
+    // The yards on the delivery clock go with their box.
+    from_server(&mut s, "R	Del	Gadgetzan	300	0");
+    s.fire_event(
+        "BENILLA_KART_GPS",
+        vec![
+            ScriptValue::Str("Gadgetzan".into()),
+            ScriptValue::Number(1240.0),
+        ],
+    );
+    s.tick(0.1);
+    let clock = |s: &UiScript| -> String {
+        s.eval("return BenillaKartDeliveryFrameText:GetText() or ''")
+            .unwrap()
+    };
+    assert!(clock(&s).contains("1240 yd"), "{}", clock(&s));
+    s.run("BenillaKartNavFrameGpsDistance:Click()").unwrap();
+    s.tick(0.1);
+    assert!(!clock(&s).contains(" yd"), "{}", clock(&s));
+    // The settings window's button opens it too.
+    s.run("BenillaKartNavFrame:Hide() BenillaKartSettingsFrameNavigation:Click()")
+        .unwrap();
+    assert!(eval_bool(&s, "BenillaKartNavFrame:IsVisible() == 1"));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+#[test]
 fn the_kart_s_shortcuts_show_in_the_kart_out_of_a_race_and_open_their_windows() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK

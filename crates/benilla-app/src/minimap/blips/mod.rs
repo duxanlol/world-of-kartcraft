@@ -167,10 +167,12 @@ pub(super) type BlipInputs<'w, 's> = (
     Res<'w, NameCache>,
     Res<'w, GameObjectTemplates>,
     Option<Res<'w, crate::go_templates::Locks>>,
-    // The guard's directions and the Race Marshals, the landmarks the DBC rows do not hold.
+    // The guard's directions and the Race Marshals, the landmarks the DBC rows do not hold, and
+    // a courier delivery's way by road (Kartcraft's GPS).
     (
         Res<'w, crate::poi_marker::PoiMarker>,
         Res<'w, crate::kart::marshals::RaceMarshals>,
+        Res<'w, crate::kart::gps::Gps>,
     ),
     Option<Res<'w, crate::area_poi::AreaPoiRes>>,
     ResMut<'w, super::MinimapPing>,

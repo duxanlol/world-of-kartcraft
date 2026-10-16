@@ -30,7 +30,10 @@
 //! - `KartCam*`: the chase camera's shape, the camera window's (`/kartcam`), one CVar a
 //!   [`kartcraft::camera::CameraTuning`] field ([`CAMERA_KNOBS`]), read every tick while driving.
 //!
-//! `KartMinimapButton` and `KartMinimapAngle` are the layer's alone.
+//! - `KartNav*`: which navigation shows, the navigation window's switches ([`Navigation`]), and
+//!   the delivery GPS's colour (`KartNavGpsColor`, `rrggbb`).
+//!
+//! `KartMinimapButton`, `KartMinimapAngle` and `KartNavGpsDistance` are the layer's alone.
 
 use bevy::prelude::*;
 use kartcraft::camera::CameraTuning;
@@ -127,6 +130,55 @@ pub(crate) struct KartSettings {
     pub(crate) pad_test: bool,
     /// The chase camera's shape.
     pub(crate) camera: CameraTuning,
+    /// Which navigation shows.
+    pub(crate) nav: Navigation,
+}
+
+/// Which navigation shows, each on unless switched off (`KartNav*`): a race's next checkpoint on
+/// the minimap and the arrows floating over its checkpoints (its guide arrow is `KartArrowShow`);
+/// a delivery's guide arrow, its chevrons on the road, its way and its town on the minimap, and
+/// the colour of its chevrons and way.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Navigation {
+    pub(crate) race_minimap: bool,
+    pub(crate) checkpoint_arrows: bool,
+    pub(crate) gps_arrow: bool,
+    pub(crate) gps_chevrons: bool,
+    pub(crate) gps_minimap: bool,
+    pub(crate) gps_marker: bool,
+    /// sRGB, 0 to 1.
+    pub(crate) gps_color: [f32; 3],
+}
+
+/// The GPS's colour by default: amber, apart from the pads' green and the gates' blue.
+pub(crate) const GPS_COLOR: [f32; 3] = [1.0, 0.75, 0.15];
+
+impl Default for Navigation {
+    fn default() -> Self {
+        Self {
+            race_minimap: true,
+            checkpoint_arrows: true,
+            gps_arrow: true,
+            gps_chevrons: true,
+            gps_minimap: true,
+            gps_marker: true,
+            gps_color: GPS_COLOR,
+        }
+    }
+}
+
+/// An `rrggbb` colour (a leading `#` allowed), sRGB 0 to 1.
+fn hex_color(s: &str) -> Option<[f32; 3]> {
+    let s = s.trim().trim_start_matches('#');
+    if s.len() != 6 {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(s.get(i..i + 2)?, 16).ok();
+    Some([
+        f32::from(byte(0)?) / 255.0,
+        f32::from(byte(2)?) / 255.0,
+        f32::from(byte(4)?) / 255.0,
+    ])
 }
 
 impl Default for KartSettings {
@@ -143,6 +195,7 @@ impl Default for KartSettings {
             wow_voices: true,
             gate_height: GATE_HEIGHT_DEFAULT,
             pad_test: false,
+            nav: Navigation::default(),
             // CTR classic, everyone's to start with: the camera CTR's players know.
             camera: CameraTuning::CTR,
         }
@@ -201,6 +254,13 @@ pub(crate) fn on_cvar(
         "kartfreecam" => free.set(super::freecam::FreeMode::named(&ev.new)),
         "kartgateheight" => settings.gate_height = ev.num().clamp(0.0, GATE_HEIGHT_MAX),
         "kartpadtest" => settings.pad_test = ev.flag(),
+        "kartnavraceminimap" => settings.nav.race_minimap = ev.flag(),
+        "kartnavcheckpointarrows" => settings.nav.checkpoint_arrows = ev.flag(),
+        "kartnavgpsarrow" => settings.nav.gps_arrow = ev.flag(),
+        "kartnavgpschevrons" => settings.nav.gps_chevrons = ev.flag(),
+        "kartnavgpsminimap" => settings.nav.gps_minimap = ev.flag(),
+        "kartnavgpsmarker" => settings.nav.gps_marker = ev.flag(),
+        "kartnavgpscolor" => settings.nav.gps_color = hex_color(&ev.new).unwrap_or(GPS_COLOR),
         "kartpadrumble" => {
             let (strong, weak) = match ev.new.as_str() {
                 "strong" => (1.0, 0.0),

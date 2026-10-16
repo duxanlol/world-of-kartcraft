@@ -1043,6 +1043,49 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "220",
         "Kartcraft's own — the shop's minimap button; 1.12 has no kart",
     ),
+    // The navigation window's switches (`/kartnav`, `kart::settings::Navigation`): a race's next
+    // checkpoint on the minimap and its floating arrows; a delivery's guide arrow, road chevrons,
+    // minimap way and town, and yards on its clock; and the GPS's colour, `rrggbb`.
+    ours(
+        "KartNavRaceMinimap",
+        "1",
+        "Kartcraft's own — the race's checkpoint on the minimap; 1.12 has no kart",
+    ),
+    ours(
+        "KartNavCheckpointArrows",
+        "1",
+        "Kartcraft's own — the race's checkpoint arrows; 1.12 has no kart",
+    ),
+    ours(
+        "KartNavGpsArrow",
+        "1",
+        "Kartcraft's own — the delivery GPS's arrow; 1.12 has no kart",
+    ),
+    ours(
+        "KartNavGpsChevrons",
+        "1",
+        "Kartcraft's own — the delivery GPS's chevrons; 1.12 has no kart",
+    ),
+    ours(
+        "KartNavGpsMinimap",
+        "1",
+        "Kartcraft's own — the delivery GPS on the minimap; 1.12 has no kart",
+    ),
+    ours(
+        "KartNavGpsMarker",
+        "1",
+        "Kartcraft's own — the delivery town on the minimap; 1.12 has no kart",
+    ),
+    ours(
+        "KartNavGpsDistance",
+        "1",
+        "Kartcraft's own — the delivery's yards left; 1.12 has no kart",
+    ),
+    ours(
+        "KartNavGpsColor",
+        "ffbf26",
+        "Kartcraft's own — the delivery GPS's colour; 1.12 has no kart",
+    ),
     // The Race Marshals as landmarks on the minimap and the world map (`kart::marshals`).
     ours(
         "KartRaceMarshals",

@@ -2087,9 +2087,72 @@
             local color = "|cff40ff40"
             if gone > d.par then color = "|cffff6060" end
             local road = ""
-            if d.road then road = format("   |cffffc040%d yd|r", d.road) end
+            if d.road and GetCVar("KartNavGpsDistance") ~= "0" then
+                road = format("   |cffffc040%d yd|r", d.road)
+            end
             BenillaKartDeliveryFrameText:SetText(format("Delivery to %s   %s%d:%02d|r / par %d:%02d%s",
                 d.to, color, floor(gone / 60), mod(gone, 60), floor(d.par / 60), mod(d.par, 60), road))
+        end
+
+        -- ── The navigation window (/kartnav): each kind of guidance on or off, and the GPS's
+        -- colour, a CVar each (kart::settings::Navigation) ──
+        BENILLA_KART_NAV_BOXES = {
+            { "RaceArrow", "KartArrowShow", "Guide arrow" },
+            { "RaceMinimap", "KartNavRaceMinimap", "Next checkpoint on the minimap" },
+            { "CheckpointArrows", "KartNavCheckpointArrows", "Arrows over the checkpoints" },
+            { "GpsArrow", "KartNavGpsArrow", "Guide arrow along the road" },
+            { "GpsChevrons", "KartNavGpsChevrons", "Chevrons on the road" },
+            { "GpsMinimap", "KartNavGpsMinimap", "The way on the minimap" },
+            { "GpsMarker", "KartNavGpsMarker", "The town on the minimap" },
+            { "GpsDistance", "KartNavGpsDistance", "Yards left on the delivery clock" },
+            { "Marshals", "KartRaceMarshals", "Race Marshals on the maps" },
+        }
+        BENILLA_KART_GPS_COLOR = "ffbf26"
+
+        function BenillaKartNav_Toggle()
+            if BenillaKartNavFrame:IsVisible() then
+                BenillaKartNavFrame:Hide()
+            else
+                BenillaKart_Open(BenillaKartNavFrame)
+            end
+        end
+
+        -- The GPS's colour, r, g, b 0 to 1, from KartNavGpsColor (rrggbb).
+        function BenillaKartNav_Color()
+            local hex = GetCVar("KartNavGpsColor") or ""
+            local n = tonumber(hex, 16)
+            if not n or string.len(hex) ~= 6 then n = tonumber(BENILLA_KART_GPS_COLOR, 16) end
+            return floor(n / 65536) / 255, mod(floor(n / 256), 256) / 255, mod(n, 256) / 255
+        end
+
+        function BenillaKartNav_SetColor(r, g, b)
+            local byte = function(v) return floor(math.max(0, math.min(1, v)) * 255 + 0.5) end
+            SetCVar("KartNavGpsColor", format("%02x%02x%02x", byte(r), byte(g), byte(b)))
+            BenillaKartNav_Refresh()
+        end
+
+        -- The stock colour picker, as the chat colours use it: live as it moves, back to the
+        -- colour it opened on when cancelled.
+        function BenillaKartNav_PickColor()
+            local r, g, b = BenillaKartNav_Color()
+            ColorPickerFrame.hasOpacity = nil
+            ColorPickerFrame.opacityFunc = nil
+            ColorPickerFrame.previousValues = { r = r, g = g, b = b }
+            ColorPickerFrame.func = function() BenillaKartNav_SetColor(ColorPickerFrame:GetColorRGB()) end
+            ColorPickerFrame.cancelFunc = function(prev)
+                prev = prev or ColorPickerFrame.previousValues
+                BenillaKartNav_SetColor(prev.r, prev.g, prev.b)
+            end
+            ColorPickerFrame:SetColorRGB(r, g, b)
+            ShowUIPanel(ColorPickerFrame)
+        end
+
+        function BenillaKartNav_Refresh()
+            for i = 1, table.getn(BENILLA_KART_NAV_BOXES) do
+                local row = BENILLA_KART_NAV_BOXES[i]
+                getglobal("BenillaKartNavFrame" .. row[1]):SetChecked(BenillaKart_Flag(row[2]))
+            end
+            BenillaKartNavFrameColorSwatch:SetVertexColor(BenillaKartNav_Color())
         end
 
         -- The yards left by road (BENILLA_KART_GPS), while the GPS has a way; none clears it.
@@ -3169,6 +3232,8 @@
             SlashCmdList["BENILLA_TRACKS"] = function() BenillaKartTrackBrowser_Toggle() end
             SLASH_BENILLA_UNSTUCK1 = "/unstuck"
             SlashCmdList["BENILLA_UNSTUCK"] = function() BenillaKart_Unstuck() end
+            SLASH_BENILLA_KARTNAV1 = "/kartnav"
+            SlashCmdList["BENILLA_KARTNAV"] = function() BenillaKartNav_Toggle() end
             SLASH_BENILLA_GARAGE1 = "/garage"
             SlashCmdList["BENILLA_GARAGE"] = function() BenillaKartGarage_Toggle() end
             SLASH_BENILLA_KARTSHOP1 = "/kartshop"
@@ -3603,9 +3668,15 @@
             <CheckButton name="$parentShortcuts" inherits="BenillaKartSettingsCheckTemplate">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-680"/></Offset></Anchor></Anchors>
             </CheckButton>
+            <!-- Every kind of guidance on or off, in a window of its own. -->
+            <Button name="$parentNavigation" inherits="UIPanelButtonTemplate" text="Navigation...">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="18"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartNav_Toggle()</OnClick></Scripts>
+            </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>
-                <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-24" y="18"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartSettingsFrame:Hide()</OnClick></Scripts>
             </Button>
         </Frames>
@@ -3641,6 +3712,133 @@
             <OnShow>
                 PlaySound("igMainMenuOpen")
                 BenillaKartSettings_Refresh()
+            </OnShow>
+            <OnHide>PlaySound("igMainMenuClose")</OnHide>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+
+    <!-- The navigation window (/kartnav, and Kartcraft settings' Navigation button): each kind of
+         guidance on or off, and the delivery GPS's colour. -->
+    <Frame name="BenillaKartNavFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
+        <Size><AbsDimension x="320" y="430"/></Size>
+        <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
+            <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
+            <TileSize><AbsValue val="32"/></TileSize>
+            <EdgeSize><AbsValue val="32"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="BACKGROUND">
+                <Texture name="$parentGroundDim">
+                    <Anchors>
+                        <Anchor point="TOPLEFT"><Offset><AbsDimension x="15" y="-15"/></Offset></Anchor>
+                        <Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-15" y="15"/></Offset></Anchor>
+                    </Anchors>
+                    <Color r="0" g="0" b="0" a="0.7"/>
+                </Texture>
+            </Layer>
+            <Layer level="ARTWORK">
+                <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
+                    <Size><AbsDimension x="256" y="64"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
+                </Texture>
+                <FontString inherits="GameFontNormal" text="Navigation">
+                    <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString inherits="GameFontNormal" text="Races">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-34"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString inherits="GameFontNormal" text="Deliveries">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-142"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString inherits="GameFontHighlightSmall" text="GPS colour">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="30" y="-318"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString inherits="GameFontNormal" text="Maps">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-342"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <CheckButton name="$parentRaceArrow" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-50"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRaceMinimap" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-76"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentCheckpointArrows" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-102"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentGpsArrow" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-158"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentGpsChevrons" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-184"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentGpsMinimap" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-210"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentGpsMarker" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-236"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentGpsDistance" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-262"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <!-- The GPS's colour: a swatch that opens the stock colour picker, and its reset. -->
+            <Button name="$parentColor">
+                <Size><AbsDimension x="22" y="22"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="110" y="-312"/></Offset></Anchor></Anchors>
+                <Layers>
+                    <Layer level="BACKGROUND">
+                        <Texture file="Interface\ChatFrame\ChatFrameColorSwatch">
+                            <Size><AbsDimension x="22" y="22"/></Size>
+                            <Anchors><Anchor point="CENTER"/></Anchors>
+                        </Texture>
+                    </Layer>
+                    <Layer level="ARTWORK">
+                        <Texture name="$parentSwatch" file="Interface\ChatFrame\ChatFrameColorSwatch">
+                            <Size><AbsDimension x="18" y="18"/></Size>
+                            <Anchors><Anchor point="CENTER"/></Anchors>
+                        </Texture>
+                    </Layer>
+                </Layers>
+                <Scripts><OnClick>BenillaKartNav_PickColor()</OnClick></Scripts>
+            </Button>
+            <Button name="$parentColorReset" inherits="UIPanelButtonTemplate" text="Reset">
+                <Size><AbsDimension x="70" y="20"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentColor" relativePoint="RIGHT"><Offset><AbsDimension x="10" y="0"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnClick>
+                        SetCVar("KartNavGpsColor", BENILLA_KART_GPS_COLOR)
+                        BenillaKartNav_Refresh()
+                    </OnClick>
+                </Scripts>
+            </Button>
+            <CheckButton name="$parentMarshals" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-358"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartNavFrame:Hide()</OnClick></Scripts>
+            </Button>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                for i = 1, table.getn(BENILLA_KART_NAV_BOXES) do
+                    local row = BENILLA_KART_NAV_BOXES[i]
+                    local box = getglobal(this:GetName() .. row[1])
+                    box.cvar = row[2]
+                    getglobal(box:GetName() .. "Text"):SetText(row[3])
+                end
+                if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
+                BenillaKart_Movable(this)
+            </OnLoad>
+            <OnShow>
+                PlaySound("igMainMenuOpen")
+                BenillaKartNav_Refresh()
             </OnShow>
             <OnHide>PlaySound("igMainMenuClose")</OnHide>
             <OnDragStart>this:StartMoving()</OnDragStart>

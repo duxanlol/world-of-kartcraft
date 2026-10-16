@@ -1990,6 +1990,7 @@ mod tests {
             vec![
                 "KartClass",
                 "KartFreeCam",
+                "KartNavGpsColor",
                 "KartPad",
                 "KartPads",
                 "KartRacer",
@@ -2010,6 +2011,7 @@ mod tests {
         };
         assert_eq!(default_of("realmName"), "");
         assert_eq!(default_of("gxApi"), "");
+        assert_eq!(default_of("KartNavGpsColor"), "ffbf26");
         assert_eq!(default_of("KartPad"), "");
         assert_eq!(default_of("KartPads"), "");
         assert_eq!(default_of("KartReplay"), "");
@@ -2300,6 +2302,10 @@ mod tests {
             (
                 "KartMinimapButton",
                 "the layer's KartcraftFrames.xml shows or hides its minimap button by it",
+            ),
+            (
+                "KartNavGpsDistance",
+                "KartcraftFrames.xml's delivery clock (BenillaKartDelivery_Update)",
             ),
             (
                 "KartShortcuts",

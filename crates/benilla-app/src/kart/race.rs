@@ -2025,7 +2025,12 @@ pub(crate) fn beams(
 
     // The arrows: turned to face the camera, so none without one. An arrow not wanted is gone
     // rather than hidden, and one wanted again is spawned where it goes.
-    let legs = arrow_legs(race);
+    // The floating arrows, unless switched off (`KartNavCheckpointArrows`): none wanted, none kept.
+    let legs = if settings.nav.checkpoint_arrows {
+        arrow_legs(race)
+    } else {
+        Vec::new()
+    };
     let eye = camera.single().ok().map(GlobalTransform::translation);
     let phase = std::f32::consts::TAU * CP_ARROW_HZ * time.elapsed_secs();
     let mut place = |slot: usize, fallback: f32| {
@@ -2185,6 +2190,7 @@ pub(crate) fn guide(
     drive: Res<super::KartDrive>,
     hud: Res<GuideHud>,
     gps: Res<super::gps::Gps>,
+    settings: Res<super::settings::KartSettings>,
     collide: WorldCollision,
     mut marker: ResMut<crate::poi_marker::PoiMarker>,
     current_map: Option<Res<benilla_world::world_map::CurrentMap>>,
@@ -2204,13 +2210,15 @@ pub(crate) fn guide(
 
     // The minimap.
     let landmark = match (target, delivery) {
-        (Some((race, next)), _) => Some((
+        (Some((race, next)), _) if settings.nav.race_minimap => Some((
             checkpoint_name(race, next),
             race.points[next],
             current_map.as_ref().map_or(0, |m| m.0),
         )),
-        (None, Some((town, map, at))) => Some((format!("Deliver to {town}"), at, map)),
-        (None, None) => None,
+        (None, Some((town, map, at))) if settings.nav.gps_marker => {
+            Some((format!("Deliver to {town}"), at, map))
+        }
+        _ => None,
     };
     match landmark {
         Some((name, at, map)) => {
@@ -2236,7 +2244,9 @@ pub(crate) fn guide(
         (Some((race, next)), _) if hud.shown && !hud.clean => {
             Some(ground_at(&collide, race.points[next], drive.pos.y))
         }
-        (None, _) if delivery.is_some() && hud.shown && !hud.clean => gps.ahead.map(wow_to_bevy),
+        (None, _) if delivery.is_some() && settings.nav.gps_arrow && !hud.clean => {
+            gps.ahead.map(wow_to_bevy)
+        }
         _ => None,
     };
     let (Some(towards), Some((cam, cam_at, projection))) = (towards, cam) else {
