@@ -104,6 +104,25 @@
             SendAddonMessage(BENILLA_KART_PREFIX, "R\t" .. body, "PARTY")
         end
 
+        -- Our time trial under way, its race id: the race we are on the roster of (L), a time
+        -- trial (TT), while the kart races (BenillaKartMap_SetTrack).
+        function BenillaKart_TrialRace()
+            local race = BenillaKartRaceNow
+            if race and BenillaKartRaceTrial[race] and BenillaKartShortcuts.racing then return race end
+        end
+
+        -- Our time trial over from its line, as the Restart binding has it ("TR").
+        function BenillaKart_RestartTrial()
+            local race = BenillaKart_TrialRace()
+            if race then BenillaKart_Send("TR\t" .. race) end
+        end
+
+        -- Another go at the time trial just over (the way out's Retry), its spot to go back to kept.
+        function BenillaKart_Retry()
+            local course = BenillaKartRetryButton.course
+            if course then BenillaKart_Send("TA\t" .. course) end
+        end
+
         -- Out of every race and the queue, whatever the kart or the server thinks.
         function BenillaKart_LeaveRace()
             BenillaKart_Send("X")
@@ -1252,8 +1271,16 @@
             elseif verb == "F" then
                 BenillaKart_Finished(line[3], line[4], tonumber(line[6]), line[7])
             elseif verb == "Ret" then
-                -- Our Race Finder race is over: back to where it took us from?
-                if StaticPopup_Show then StaticPopup_Show("BENILLA_KART_RETURN") end
+                -- Our Race Finder race or track browser time trial is over: back to where it took
+                -- us from? After a time trial (its course named), or another go at it.
+                BenillaKartRetryButton.course = line[3]
+                if StaticPopup_Show then
+                    StaticPopup_Show(line[3] and "BENILLA_KART_RETURN_TRIAL" or "BENILLA_KART_RETURN")
+                end
+            elseif verb == "Again" then
+                -- A time trial with no spot to go back to (the Race Marshal's) is over.
+                BenillaKartRetryButton.course = line[3]
+                if StaticPopup_Show then StaticPopup_Show("BENILLA_KART_AGAIN") end
             elseif verb == "Jobs" then
                 BenillaKartJobs_Begin(tonumber(line[3]) or 0)
             elseif verb == "Job" then
@@ -1288,6 +1315,7 @@
                 -- A roster with us in it: we are in a race, so the finder is done and closes.
                 local me = UnitName("player")
                 if me and string.find("," .. (line[4] or "") .. ",", "," .. me .. ",", 1, 1) then
+                    BenillaKartRaceNow = line[3]
                     f.check, f.queued, f.waiting, f.waited = nil, nil, nil, nil
                     if StaticPopup_Hide then StaticPopup_Hide("BENILLA_KART_READY") end
                     BenillaKartFinderFrame:Hide()
@@ -1527,6 +1555,8 @@
         BENILLA_PAD_POPUPS = {
             { name = "BENILLA_KART_READY", accept = "PAD1", cancel = "PAD2" },
             { name = "BENILLA_KART_RETURN", accept = "PAD4", cancel = "PAD3" },
+            { name = "BENILLA_KART_RETURN_TRIAL", accept = "PAD4", cancel = "PAD3", retry = "PADFORWARD" },
+            { name = "BENILLA_KART_AGAIN", accept = "PADFORWARD", cancel = "PAD3" },
         }
         BenillaPad = { window = nil, focus = nil }
 
@@ -1635,6 +1665,7 @@
                     if dialog then
                         if key == p.accept then getglobal(dialog .. "Button1"):Click() return true end
                         if key == p.cancel then getglobal(dialog .. "Button2"):Click() return true end
+                        if key == p.retry then BenillaKartRetryButton:Click() return true end
                     end
                 end
             end
@@ -1696,7 +1727,9 @@
             if StaticPopup_Visible then
                 for i = 1, table.getn(BENILLA_PAD_POPUPS) do
                     local p = BENILLA_PAD_POPUPS[i]
-                    if StaticPopup_Visible(p.name) then return p.accept .. " " .. p.cancel end
+                    if StaticPopup_Visible(p.name) then
+                        return p.accept .. " " .. p.cancel .. (p.retry and " " .. p.retry or "")
+                    end
                 end
             end
             return ""
@@ -1735,6 +1768,8 @@
             { function() return BenillaKartRaceMode and "Race mode: on" or "Race mode: off" end,
               function() BenillaKart_RaceModeToggle() end },
             { "Leave race", function() BenillaKart_LeaveRace() end },
+            -- As the Restart binding does; only in a time trial under way.
+            { "Restart time trial", function() BenillaKart_RestartTrial() end, function() return BenillaKart_TrialRace() end },
             { "Unstuck", function() BenillaKart_Unstuck() end },
             { "Kart garage", function() BenillaKartGarage_Toggle() end },
             { "Skin shop", function() BenillaKartShop_Toggle() end },
@@ -1756,6 +1791,9 @@
                 if type(label) == "function" then label = label() end
                 local entry = getglobal("BenillaKartMenuFrameEntry" .. i)
                 entry:SetText(label)
+                -- An entry with a third field is there only while it says so.
+                local enabled = BENILLA_KART_MENU[i][3]
+                if not enabled or enabled() then entry:Enable() else entry:Disable() end
                 widest = math.max(widest, entry:GetTextWidth() + BENILLA_KART_MENU_PADDING)
             end
             for i = 1, table.getn(BENILLA_KART_MENU) do
@@ -3386,6 +3424,28 @@
                 hideOnEscape = 1,
                 OnAccept = function() BenillaKart_Send("Back") end,
                 OnCancel = function() BenillaKart_Send("Stay") end,
+            }
+            -- After a track browser time trial: the same, and Retry under it (a popup has two
+            -- buttons), which runs the trial again and keeps the spot to return to.
+            local trial = {}
+            for k, v in pairs(StaticPopupDialogs["BENILLA_KART_RETURN"]) do trial[k] = v end
+            trial.text = "Return to where you were before the time trial?\n\n|cff999999Controller: Triangle / Y to return, Square / X to stay, Options / Menu to retry|r"
+            trial.OnShow = function()
+                BenillaKartRetryButton:ClearAllPoints()
+                BenillaKartRetryButton:SetPoint("TOP", this, "BOTTOM", 0, 2)
+                BenillaKartRetryButton:Show()
+            end
+            trial.OnHide = function() BenillaKartRetryButton:Hide() end
+            StaticPopupDialogs["BENILLA_KART_RETURN_TRIAL"] = trial
+            -- After any other time trial: another go, or not.
+            StaticPopupDialogs["BENILLA_KART_AGAIN"] = {
+                text = "Run the time trial again?\n\n|cff999999Controller: Options / Menu to retry, Square / X to close|r",
+                button1 = "Retry",
+                button2 = CLOSE,
+                timeout = 0,
+                whileDead = 1,
+                hideOnEscape = 1,
+                OnAccept = function() BenillaKart_Retry() end,
             }
         end
         if SlashCmdList then
@@ -5203,7 +5263,7 @@
     <!-- The Kartcraft menu (Options on the controller, KARTCRAFT_MENU): what racing needs, one
          entry each, for a player on the controller alone. -->
     <Frame name="BenillaKartMenuFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="280" y="474"/></Size>
+        <Size><AbsDimension x="280" y="500"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -5298,6 +5358,11 @@
             <Button name="$parentEntry15" inherits="UIPanelButtonTemplate" id="15">
                 <Size><AbsDimension x="220" y="22"/></Size>
                 <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-398"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry16" inherits="UIPanelButtonTemplate" id="16">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-424"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
             </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
@@ -5502,6 +5567,16 @@
 
     <!-- The controller's highlight: an arrow at the focused control's left (BenillaPad_Show). -->
     <!-- The controller's guide under the window it drives (BenillaPadLegend_Update). -->
+    <!-- Retry under the way back after a time trial (BENILLA_KART_RETURN_TRIAL). -->
+    <Button name="BenillaKartRetryButton" inherits="UIPanelButtonTemplate" parent="UIParent" hidden="true" frameStrata="DIALOG" text="Retry">
+        <Size><AbsDimension x="128" y="21"/></Size>
+        <Scripts>
+            <OnClick>
+                StaticPopup_Hide("BENILLA_KART_RETURN_TRIAL")
+                BenillaKart_Retry()
+            </OnClick>
+        </Scripts>
+    </Button>
     <Frame name="BenillaPadLegendFrame" parent="UIParent" hidden="true" frameStrata="DIALOG">
         <Size><AbsDimension x="320" y="40"/></Size>
         <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">

@@ -3314,19 +3314,35 @@ namespace Kartcraft
         return false;
     }
 
-    // Out of every race with a spot to go back to: the client asks whether to.
+    // Each racer's time trial just finished, its course's key: the way out of it offers another
+    // go ("R\tRet\t<course>", or "R\tAgain\t<course>" with no spot to go back to), answered
+    // "R\tTA\t<course>". A finished trial is closed at once, so the course is kept here until
+    // they leave it (or log in again).
+    static std::unordered_map<uint32, std::string> s_lastTrial; // guid low -> course key
+
+    // Out of every race: the client asks whether to go back to the spot the Race Finder or the
+    // track browser took them from, and after a time trial offers it again.
     static void OfferReturn(Player* player, uint32 now)
     {
+        std::string trial;
+        auto last = s_lastTrial.find(player->GetGUIDLow());
+        if (last != s_lastTrial.end())
+        {
+            trial = last->second;
+            s_lastTrial.erase(last);
+        }
         auto found = s_origins.find(player->GetGUIDLow());
-        if (found == s_origins.end())
-            return;
-        if (WorldTimer::getMSTimeDiff(found->second.at, now) > RETURN_KEEP)
+        if (found != s_origins.end() && WorldTimer::getMSTimeDiff(found->second.at, now) > RETURN_KEEP)
         {
             s_origins.erase(found);
-            return;
+            found = s_origins.end();
         }
-        if (!InAnyRace(player->GetObjectGuid()))
-            SendLine(player, "KARTCRAFT\tR\tRet");
+        if (InAnyRace(player->GetObjectGuid()))
+            return;
+        if (found != s_origins.end())
+            SendLine(player, "KARTCRAFT\tR\tRet" + (trial.empty() ? std::string() : "\t" + trial));
+        else if (!trial.empty())
+            SendLine(player, "KARTCRAFT\tR\tAgain\t" + trial);
     }
 
     static void EndPop(uint32 id, Pop& pop, uint32 now)
@@ -4620,6 +4636,25 @@ namespace Kartcraft
                 r.awaitSince = now;
             }
         }
+        else if (verb == "TA" && f.size() > 2)
+        {
+            // Another go at the time trial just over ("R\tTA\t<course>", the way out's Retry):
+            // its grid again from wherever they are, as "TB" goes, inside its dungeon for a party
+            // course. A spot a track browser trial took them from stays theirs; none is taken now.
+            Course const* course = FindCourse(f[2]);
+            if (!course || InAnyRace(guid) || !CanBeRacedOff(player) || RefuseOff(player, *course))
+                return true;
+            bool const party = PartyCourse(*course);
+            if (party && player->GetMapId() != course->map)
+                return true;
+            uint32 const instance = party ? player->GetInstanceId() : 0;
+            uint32 raceId = OpenTimeTrial(player, *course, instance, now);
+            TeleportToGrid(player, *course, 0, instance);
+            // The countdown waits for them on the grid, however long the teleport takes.
+            Race& r = s_races[raceId];
+            r.awaiting = guid;
+            r.awaitSince = now;
+        }
         else if (verb == "MT" && f.size() > 2)
         {
             if (Course const* course = FindCourse(f[2]))
@@ -4740,8 +4775,9 @@ namespace Kartcraft
         s_raceMode.erase(guid);
         if (s_shielded.erase(guid))
             player->RemoveFlag(UNIT_FIELD_FLAGS, RACE_MODE_FLAGS);
-        // A spot to go back to does not outlive the session.
+        // A spot to go back to does not outlive the session, nor another go at a time trial.
         s_origins.erase(guid.GetCounter());
+        s_lastTrial.erase(guid.GetCounter());
         // Out of any race's layer, back with everyone.
         TickLayers();
     }
@@ -4860,7 +4896,7 @@ namespace Kartcraft
             SendJobs(player);
             return;
         }
-        static std::set<std::string> const TELEPORTS = { "TB", "TR", "MT", "LJ", "Q+", "Y", "Back", "JT" };
+        static std::set<std::string> const TELEPORTS = { "TB", "TR", "TA", "MT", "LJ", "Q+", "Y", "Back", "JT" };
         if (f.size() >= 2 && TELEPORTS.count(f[1]) && CarryingDelivery(player))
         {
             ChatHandler(player->GetSession()).SendSysMessage(
@@ -5059,7 +5095,10 @@ namespace Kartcraft
                 uint32 ms = WorldTimer::getMSTimeDiff(r.start, now);
                 RecordResult(r, *me, place, ms);
                 if (r.timeTrial)
+                {
                     ChallengeFinish(player->GetGUIDLow(), me->name, c.key, ms);
+                    s_lastTrial[player->GetGUIDLow()] = c.key;
+                }
                 std::string const best = RecordFinish(BoardOf(r), player->GetGUIDLow(), me->name, c, ms);
                 SendRace(r, "KARTCRAFT\tR\tF\t" + std::to_string(id) + "\t" + me->name + "\t" +
                     std::to_string(place) + "\t" + std::to_string(ms) + "\t" + best);

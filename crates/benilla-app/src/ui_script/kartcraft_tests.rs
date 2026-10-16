@@ -610,6 +610,148 @@ fn a_finder_race_offers_the_way_back_and_new_bests_reach_the_chat() {
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tStay"]);
 }
 
+/// After a time trial the way out offers another go, by mouse or by Options / Menu ("TA"): beside
+/// Return and Stay when the track browser took us there ("Ret" naming the course), alone when
+/// nothing did ("Again"). After a Race Finder race only the way back is offered.
+#[test]
+fn the_way_out_of_a_time_trial_offers_a_retry() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 3);
+    let visible = |s: &UiScript, frame: &str| -> bool {
+        s.eval::<bool>(&format!("return {frame}:IsVisible() == 1"))
+            .unwrap()
+    };
+    let text = |s: &UiScript| -> String { s.eval("return StaticPopup1Text:GetText()").unwrap() };
+    let owns = |s: &UiScript| -> String { s.eval("return BenillaPad_Owns()").unwrap() };
+
+    // The track browser's: Return, Stay and Retry, which neither returns nor stays.
+    from_server(&mut s, "R\tRet\tstormwind");
+    assert!(visible(&s, "StaticPopup1"));
+    assert_eq!(
+        text(&s),
+        "Return to where you were before the time trial?\n\n|cff999999Controller: Triangle / Y to \
+         return, Square / X to stay, Options / Menu to retry|r"
+    );
+    assert_eq!(
+        s.eval::<String>(
+            "return StaticPopup1Button1:GetText() .. '/' .. StaticPopup1Button2:GetText()"
+        )
+        .unwrap(),
+        "Return/Stay"
+    );
+    assert!(visible(&s, "BenillaKartRetryButton"));
+    sent(&mut s);
+    s.run("BenillaKartRetryButton:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tTA\tstormwind"]);
+    assert!(!visible(&s, "StaticPopup1"));
+    assert!(!visible(&s, "BenillaKartRetryButton"));
+
+    // Options / Menu retries while it is up, as Triangle and Square answer.
+    from_server(&mut s, "R\tRet\tstormwind");
+    assert_eq!(owns(&s), "PAD4 PAD3 PADFORWARD");
+    assert!(s
+        .eval::<bool>("return BenillaPad_OnButton('PADFORWARD') == true")
+        .unwrap());
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tTA\tstormwind"]);
+    assert!(!visible(&s, "BenillaKartRetryButton"));
+    // Return still returns, and takes Retry with it.
+    from_server(&mut s, "R\tRet\tstormwind");
+    s.run("StaticPopup1Button1:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tBack"]);
+    assert!(!visible(&s, "BenillaKartRetryButton"));
+
+    // The Race Marshal's, with nowhere to go back to: Retry or Close.
+    from_server(&mut s, "R\tAgain\tstormwind");
+    assert_eq!(
+        text(&s),
+        "Run the time trial again?\n\n|cff999999Controller: Options / Menu to retry, Square / X to \
+         close|r"
+    );
+    assert!(!visible(&s, "BenillaKartRetryButton"));
+    assert_eq!(owns(&s), "PADFORWARD PAD3");
+    s.run("StaticPopup1Button1:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tTA\tstormwind"]);
+    from_server(&mut s, "R\tAgain\tstormwind");
+    s.run("StaticPopup1Button2:Click()").unwrap();
+    assert!(sent(&mut s).is_empty(), "Close says nothing");
+    assert!(!visible(&s, "StaticPopup1"));
+
+    // A Race Finder race: the plain way back, no Retry.
+    from_server(&mut s, "R\tRet");
+    assert_eq!(
+        text(&s),
+        "Return to where you were before the race?\n\n|cff999999Controller: Triangle / Y to return, \
+         Square / X to stay|r"
+    );
+    assert!(!visible(&s, "BenillaKartRetryButton"));
+    assert_eq!(owns(&s), "PAD4 PAD3");
+}
+
+/// In a time trial under way the Kartcraft menu (Options on the controller) restarts it, as the
+/// Restart binding does ("TR"); out of one its entry is greyed and does nothing.
+#[test]
+fn the_kartcraft_menu_restarts_a_time_trial_under_way() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 3);
+    let me: String = s.eval("return UnitName('player')").unwrap();
+    let entry: String = s
+        .eval(
+            "for i = 1, table.getn(BENILLA_KART_MENU) do \
+             if BENILLA_KART_MENU[i][1] == 'Restart time trial' then return 'BenillaKartMenuFrameEntry' .. i end end",
+        )
+        .unwrap();
+    let enabled = |s: &mut UiScript| -> bool {
+        s.run("BenillaKartMenuFrame:Hide() BenillaKart_Open(BenillaKartMenuFrame)")
+            .unwrap();
+        s.eval(&format!("return {entry}:IsEnabled() == 1")).unwrap()
+    };
+    assert!(!enabled(&mut s), "no race: greyed");
+
+    // On the roster of time trial 7, the kart racing it.
+    from_server(&mut s, &format!("R\tL\t7\t{me}"));
+    from_server(&mut s, "R\tTT\t7");
+    s.fire_event(
+        "BENILLA_KART_TRACKMAP",
+        vec![
+            ScriptValue::Str("Road to Stormwind".into()),
+            ScriptValue::Str("3".into()),
+            ScriptValue::Str("".into()),
+        ],
+    );
+    assert!(enabled(&mut s));
+    sent(&mut s);
+    s.run(&format!("{entry}:Click()")).unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tTR\t7"]);
+    assert!(!s
+        .eval::<bool>("return BenillaKartMenuFrame:IsVisible() == 1")
+        .unwrap());
+
+    // A race that is not a time trial: greyed again.
+    from_server(&mut s, &format!("R\tL\t8\t{me}"));
+    assert!(!enabled(&mut s));
+    // The race over: greyed.
+    from_server(&mut s, &format!("R\tL\t9\t{me}"));
+    from_server(&mut s, "R\tTT\t9");
+    s.fire_event(
+        "BENILLA_KART_TRACKMAP",
+        vec![
+            ScriptValue::Str("".into()),
+            ScriptValue::Str("0".into()),
+            ScriptValue::Str("".into()),
+        ],
+    );
+    assert!(!enabled(&mut s));
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
 #[test]
 fn a_time_trial_s_new_bests_are_told_as_time_trial_bests() {
     benilla_formats::wow_data_or_skip!();
