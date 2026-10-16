@@ -2826,7 +2826,7 @@
         end
 
         -- ── The skin shop ──
-        -- Famous NPCs' looks, bought with Kartcraft Tokens (courier deliveries pay them) and worn as
+        -- Famous NPCs' looks, bought with Kartcraft Tokens (Kartcraft's currency) and worn as
         -- our own body, on foot and in the kart. The keys, displays and prices are the server's
         -- SKINS (Kartcraft.cpp; kartcraft_tests holds the two alike), and the server says what we
         -- own and wear ("R<TAB>Skins"). The engine turns the picked one in the window's model pane:
@@ -4068,7 +4068,7 @@
                 <FontString name="$parentTokens" inherits="GameFontHighlight" justifyH="LEFT">
                     <Anchors><Anchor point="LEFT" relativeTo="$parentTokenIcon" relativePoint="RIGHT"><Offset><AbsDimension x="6" y="0"/></Offset></Anchor></Anchors>
                 </FontString>
-                <FontString inherits="GameFontDisableSmall" justifyH="LEFT" text="Courier deliveries pay Kartcraft Tokens: see the innkeepers and the neutral towns' couriers.">
+                <FontString inherits="GameFontDisableSmall" justifyH="LEFT" text="Kartcraft Tokens are earned on the road. Courier deliveries pay them: see the innkeepers and the neutral towns' couriers.">
                     <Size><AbsDimension x="336" y="28"/></Size>
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-306"/></Offset></Anchor></Anchors>
                 </FontString>

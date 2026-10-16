@@ -13,11 +13,12 @@ DELETE FROM `quest_template` WHERE `entry` BETWEEN 190200 AND 194296;
 DELETE FROM `creature_questrelation` WHERE `quest` BETWEEN 190200 AND 194296;
 DELETE FROM `creature_involvedrelation` WHERE `quest` BETWEEN 190200 AND 194296;
 
--- The token (the Darkmoon Faire ticket's look), bound to who earns it, 250 a stack; what it
--- buys is to come. The package (the sealed crate's look), a quest item, one at a time.
+-- The token (the Darkmoon Faire ticket's look), Kartcraft's currency (a delivery pays it,
+-- the skin shop takes it), bound to who earns it, 250 a stack. The package (the sealed
+-- crate's look), a quest item, one at a time.
 INSERT INTO `item_template` (`entry`, `patch`, `class`, `subclass`, `name`, `description`,
   `display_id`, `quality`, `flags`, `buy_price`, `sell_price`, `bonding`, `max_count`, `stackable`) VALUES
-(190100, 0, 15, 0, 'Kartcraft Token', 'Paid for a courier delivery. Keep them: what they buy is on its way.', 31745, 2, 0, 0, 0, 1, 0, 250),
+(190100, 0, 15, 0, 'Kartcraft Token', 'Kartcraft''s currency, earned on the road. Spend it in the Skin Shop: /kartshop.', 31745, 2, 0, 0, 0, 1, 0, 250),
 (190101, 0, 12, 0, 'Courier''s Package', 'By kart only: no flights, no hearthstones, no portals.', 8928, 1, 0, 0, 0, 4, 1, 1);
 
 -- The routes: the package handed over on accepting and taken back on delivering, 10 tokens
