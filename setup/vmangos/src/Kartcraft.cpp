@@ -3934,7 +3934,7 @@ namespace Kartcraft
         ItemPosCountVec dest;
         if (count && player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, DELIVERY_TOKEN, count) == EQUIP_ERR_OK)
         {
-            if (Item* item = player->StoreNewItem(dest, DELIVERY_TOKEN, true))
+            if (::Item* item = player->StoreNewItem(dest, DELIVERY_TOKEN, true))
                 player->SendNewItem(item, count, true, false);
         }
         else if (count)
@@ -4070,7 +4070,7 @@ namespace Kartcraft
                 SendLine(p, "KARTCRAFT\tR\tMarEnd");
                 continue;
             }
-            if (Item* item = p->StoreNewItem(dest, DELIVERY_PACKAGE, true))
+            if (::Item* item = p->StoreNewItem(dest, DELIVERY_PACKAGE, true))
                 p->SendNewItem(item, 1, true, false);
             float const x = first.x + std::cos(first.o) * JOB_GAP, y = first.y + std::sin(first.o) * JOB_GAP;
             float facing = first.o + 3.14159265f;
@@ -4472,9 +4472,9 @@ namespace Kartcraft
             SendMarathonLeg(player, m, *r, WorldTimer::getMSTime());
         if (running || !player->HasItemCount(DELIVERY_PACKAGE, 1))
             return;
-        // 1.12's quest log: 20 slots (PLAYER_QUEST_LOG_1_1, three fields each).
-        for (uint16 slot = 0; slot < 20; ++slot)
-            if (FindDelivery(player->GetQuestSlotQuestId(slot)))
+        // A courier delivery's own package: one of its quests in the log.
+        for (Delivery const& d : DELIVERIES)
+            if (player->GetQuestStatus(d.quest) != QUEST_STATUS_NONE)
                 return;
         TakePackage(player);
     }
