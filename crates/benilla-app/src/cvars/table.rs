@@ -815,6 +815,13 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "0",
         "Kartcraft's own — the kart's boost trail; 1.12 has no kart",
     ),
+    // The flag it flies (`kartcraft::goods`), a key, empty none; a string, so a key is not
+    // refused as an unparseable number.
+    ours(
+        "KartFlag",
+        "",
+        "Kartcraft's own — the kart's flag; 1.12 has no kart",
+    ),
     // The skin shop's picked skin, a `CreatureDisplayInfo` id the shop's model pane shows
     // (`kart::skins`), `0` while the shop is closed; for the session only.
     ours(

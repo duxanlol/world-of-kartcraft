@@ -61,7 +61,8 @@ pub(crate) fn class_list() -> String {
         .join("\n")
 }
 
-/// A racer's name by the key of their kart (`ctr-extract`'s names).
+/// A racer's name by the key of their kart (`ctr-extract`'s names), or a built-in kart's own
+/// (`kartcraft::goods`).
 fn racer_name(key: &str) -> String {
     match key {
         "crash" => "Crash Bandicoot",
@@ -75,7 +76,10 @@ fn racer_name(key: &str) -> String {
         "joe" => "Komodo Joe",
         "pen" => "Penta Penguin",
         "fake" => "Fake Crash",
-        other => return other.to_string(),
+        other => {
+            return kartcraft::goods::good(other)
+                .map_or_else(|| other.to_string(), |g| g.name.into())
+        }
     }
     .to_string()
 }

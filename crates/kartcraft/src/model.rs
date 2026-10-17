@@ -151,6 +151,7 @@ pub fn racers() -> Vec<&'static str> {
     KARTS
         .into_iter()
         .filter(|k| root.join(format!("kart-{k}.json")).is_file())
+        .chain(crate::goods::karts().map(|g| g.key))
         .collect()
 }
 
@@ -165,6 +166,16 @@ pub fn model_named(name: &str) -> Option<&'static Model> {
         return *m;
     }
     let loaded = (|| {
+        // Our own karts are built in (crate::goods), the CTR racers' read off the disc's data.
+        if let Some(good) = crate::goods::good(&name).filter(|g| g.kind == crate::goods::Kind::Kart)
+        {
+            let bytes = crate::goods::json(good)?;
+            let model: Model = serde_json::from_slice(&bytes)
+                .map_err(|e| warn!("kart: {}: {e}", good.key))
+                .ok()?;
+            info!("kart: {}'s kart, built in", model.kart);
+            return Some(&*Box::leak(Box::new(model)));
+        }
         let root = data_root()?;
         let file = if name.is_empty() {
             root.join("kart.json")
@@ -439,20 +450,31 @@ pub struct KartModel {
     local_paint: u8,
 }
 
-fn build_assets(
-    model: &Model,
+/// Each of `surfaces` as a mesh and its unlit material over `textures` (a kart's, or a flag's),
+/// under `paint`.
+pub(crate) fn build_parts(
+    textures: &[Texture],
+    surfaces: &[Surface],
     paint: Option<Paint>,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     images: &mut Assets<Image>,
-) -> KartAssets {
-    let textures: Vec<Handle<Image>> = model
-        .textures
+) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>)> {
+    let textures: Vec<Handle<Image>> = textures
         .iter()
         .map(|t| images.add(image(t, paint)))
         .collect();
-    let parts = model
-        .surfaces
+    parts_of(&textures, surfaces, paint, meshes, materials)
+}
+
+fn parts_of(
+    textures: &[Handle<Image>],
+    surfaces: &[Surface],
+    paint: Option<Paint>,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>)> {
+    surfaces
         .iter()
         .map(|s| {
             let material = materials.add(StandardMaterial {
@@ -473,7 +495,22 @@ fn build_assets(
             });
             (meshes.add(surface_mesh(s, paint)), material)
         })
+        .collect()
+}
+
+fn build_assets(
+    model: &Model,
+    paint: Option<Paint>,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+) -> KartAssets {
+    let textures: Vec<Handle<Image>> = model
+        .textures
+        .iter()
+        .map(|t| images.add(image(t, paint)))
         .collect();
+    let parts = parts_of(&textures, &model.surfaces, paint, meshes, materials);
     let sprites = model.wheel_sprites.as_ref().map(|w| w.textures.as_slice());
     let sprite = |i: Option<&usize>| i.and_then(|&t| textures.get(t).cloned());
     let disc_material = materials.add(StandardMaterial {
@@ -541,7 +578,9 @@ impl KartSpawner<'_, '_> {
 
     fn spawn_as(&mut self, racer: &str, ghost: bool, paint: u8) -> Option<Entity> {
         let model = model_named(racer).or_else(model)?;
-        let painted = crate::cosmetic::paint(paint);
+        // A built-in kart (crate::goods) wears its own livery: a paint is for CTR's karts.
+        let painted =
+            crate::cosmetic::paint(paint).filter(|_| crate::goods::good(&model.kart).is_none());
         let key = (
             model.kart.clone(),
             ghost,
@@ -577,6 +616,7 @@ impl KartSpawner<'_, '_> {
                 KartRoot,
                 KartWheels::default(),
                 KartStatus::default(),
+                crate::goods::KartFlag::default(),
                 Transform::default(),
                 Visibility::Hidden,
                 Name::new("kart"),
@@ -670,6 +710,7 @@ pub fn update(
             &mut Visibility,
             &mut KartWheels,
             &mut KartStatus,
+            &mut crate::goods::KartFlag,
         ),
         With<LocalKart>,
     >,
@@ -680,7 +721,7 @@ pub fn update(
     if spawner.local().is_none() {
         return;
     }
-    let Ok((mut t, mut visibility, mut wheels, mut status)) = root.single_mut() else {
+    let Ok((mut t, mut visibility, mut wheels, mut status, mut flag)) = root.single_mut() else {
         return;
     };
     if !view.active {
@@ -710,6 +751,7 @@ pub fn update(
         feedback: view.feedback,
         trail: crate::cosmetic::ours().1,
     };
+    flag.set_if_neq(crate::goods::KartFlag(crate::goods::our_flag()));
 }
 
 /// CTR's "boost now" cue: the drift meter between 129 and `(TurboLowRoomWarning + 2)·32` CTR-ms

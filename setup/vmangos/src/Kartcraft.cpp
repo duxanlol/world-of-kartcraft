@@ -32,6 +32,7 @@
 #include <shared_mutex>
 #include <random>
 #include <set>
+#include <sstream>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
@@ -75,6 +76,55 @@ namespace Kartcraft
     static std::unordered_map<uint32, uint32> s_lastState; // player guid low -> ms, s_stateMutex
     // RelayState's own: a state line is relayed outside s_mutex, the race lock.
     static std::mutex s_stateMutex;
+
+    // World of Kartcraft's own cosmetics (Goods, below): the catalogue, ahead of the relay that
+    // holds what a driver shows to it.
+    struct Good
+    {
+        char const* key;
+        char kind;    // 'K' a kart, 'F' a flag
+        uint32 price; // tokens
+    };
+
+    static Good const GOODS[] = {
+        { "student", 'F', 100 },
+        { "fel", 'K', 400 },
+        { "alliance", 'K', 250 },
+        { "wok", 'K', 500 },
+    };
+
+    static Good const* FindGood(std::string const& key)
+    {
+        for (Good const& g : GOODS)
+            if (key == g.key)
+                return &g;
+        return nullptr;
+    }
+
+    // A flag's wire index (the client's FLAGS: the flags in GOODS' order, from 1); 0 none.
+    static uint32 FlagIndex(std::string const& key)
+    {
+        uint32 i = 0;
+        for (Good const& g : GOODS)
+            if (g.kind == 'F')
+            {
+                ++i;
+                if (key == g.key)
+                    return i;
+            }
+        return 0;
+    }
+
+    // What a driver may show on the relay: the custom karts they own, the flag they fly, and the
+    // paint and trail the server last found earned (SendCosmetics). By guid, s_stateMutex.
+    struct Shown
+    {
+        std::set<std::string> karts;
+        uint32 flag = 0;
+        uint32 paint = 0;
+        uint32 trail = 0;
+    };
+    static std::unordered_map<uint32, Shown> s_shown;
 
     // Kart state is relayed to players this close (yards), at most this often per driver (ms).
     // As far as Kartcraft's servers show the world (Visibility.Distance.Continents = 250), so a
@@ -290,6 +340,7 @@ namespace Kartcraft
         LearnUnlocked(player);
         DeliveryLogin(player);
         SkinLogin(player);
+        GoodsLogin(player);
         MarathonLogin(player);
     }
 
@@ -331,20 +382,55 @@ namespace Kartcraft
 
     // A driver's kart state (steer, drift, turbo, engine), relayed to the players around them as
     // the same addon line, so their clients can draw and hear this kart as it is driven.
+    // The state line's comma fields: 6 the racer (a kart), 8 the paint, 9 the trail, 10 the flag.
+    constexpr size_t STATE_RACER = 6, STATE_PAINT = 8, STATE_TRAIL = 9, STATE_FLAG = 10;
+
+    // `line` ("KARTCRAFT\tS\t<fields>") with what it shows held to what the driver has (`shown`):
+    // a custom kart not theirs is Crash's, and the paint, trail and flag are the ones on file. A
+    // CTR racer is the player's own disc's, and passes.
+    static std::string HeldToShown(std::string const& line, Shown const& shown)
+    {
+        size_t const head = line.find("\tS\t");
+        if (head == std::string::npos)
+            return line;
+        std::vector<std::string> fields;
+        std::string field;
+        std::istringstream body(line.substr(head + 3));
+        while (std::getline(body, field, ','))
+            fields.push_back(field);
+        if (fields.size() > STATE_RACER)
+            if (Good const* g = FindGood(fields[STATE_RACER]))
+                if (g->kind == 'K' && !shown.karts.count(g->key))
+                    fields[STATE_RACER] = "crash";
+        if (fields.size() > STATE_TRAIL)
+        {
+            fields[STATE_PAINT] = std::to_string(shown.paint);
+            fields[STATE_TRAIL] = std::to_string(shown.trail);
+        }
+        if (fields.size() > STATE_FLAG)
+            fields[STATE_FLAG] = std::to_string(shown.flag);
+        std::string out = line.substr(0, head + 3);
+        for (size_t i = 0; i < fields.size(); ++i)
+            out += (i ? "," : "") + fields[i];
+        return out;
+    }
+
     static void RelayState(Player* player, std::string const& message)
     {
         if (!player->HasAura(SPELL_SUMMON_KART) || message.size() > MAX_STATE_LENGTH)
             return;
         uint32 now = WorldTimer::getMSTime();
+        std::string held;
         {
             std::lock_guard<std::mutex> lock(s_stateMutex);
             uint32& last = s_lastState[player->GetGUIDLow()];
             if (last && WorldTimer::getMSTimeDiff(last, now) < STATE_INTERVAL)
                 return;
             last = now;
+            held = HeldToShown(message, s_shown[player->GetGUIDLow()]);
         }
         WorldPacket data;
-        ChatHandler::BuildChatPacket(data, CHAT_MSG_PARTY, message.c_str(), LANG_ADDON, CHAT_TAG_NONE,
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_PARTY, held.c_str(), LANG_ADDON, CHAT_TAG_NONE,
             player->GetObjectGuid(), player->GetName());
         player->SendMessageToSetInRange(&data, STATE_RANGE, false);
     }
@@ -1321,6 +1407,12 @@ namespace Kartcraft
             worn.first = 0;
         if (!Earned(TRAILS, worn.second, stats))
             worn.second = 0;
+        {
+            std::lock_guard<std::mutex> lock(s_stateMutex);
+            Shown& shown = s_shown[guid];
+            shown.paint = worn.first;
+            shown.trail = worn.second;
+        }
         SendLine(player, "KARTCRAFT\tR\tCC\tP\t" + Catalogue(PAINTS));
         SendLine(player, "KARTCRAFT\tR\tCC\tT\t" + Catalogue(TRAILS));
         std::string numbers;
@@ -1896,6 +1988,112 @@ namespace Kartcraft
             }
         }
         SendSkins(player);
+    }
+
+    // ── Goods ──────────────────────────────────────────────────────────────────────────────────
+    //
+    // World of Kartcraft's own cosmetics, bought with Kartcraft Tokens in the client's shop: custom
+    // karts (racer keys the client has built in, crates/kartcraft/src/goods.rs, whose catalogue
+    // kartcraft_tests holds to this one) and flags flown on any kart. Owned in kartcraft_goods,
+    // the flag worn there too. A kart is driven by the client's own pick (KartRacer); the relay
+    // holds the karts, flags, paints and trails a driver shows to what is theirs (Shown).
+
+    static void CreateGoods()
+    {
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_goods` ("
+            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
+            "`good` VARCHAR(16) NOT NULL COMMENT 'Kartcraft.cpp GOODS key', "
+            "`worn` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'a flag flown', "
+            "`at` INT UNSIGNED NOT NULL COMMENT 'when bought, unix time', "
+            "PRIMARY KEY (`guid`, `good`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+    }
+
+    // The goods a character owns, and the flag it flies ("" none).
+    static std::pair<std::set<std::string>, std::string> OwnedGoods(uint32 guid)
+    {
+        std::pair<std::set<std::string>, std::string> out;
+        std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
+            "SELECT `good`, `worn` FROM `kartcraft_goods` WHERE `guid` = %u", guid);
+        if (result)
+            do
+            {
+                Field* f = result->Fetch();
+                std::string const key = f[0].GetCppString();
+                Good const* good = FindGood(key);
+                if (!good)
+                    continue;
+                out.first.insert(key);
+                if (good->kind == 'F' && f[1].GetUInt8())
+                    out.second = key;
+            } while (result->NextRow());
+        return out;
+    }
+
+    static void ShowGoods(uint32 guid, std::pair<std::set<std::string>, std::string> const& owned)
+    {
+        std::lock_guard<std::mutex> lock(s_stateMutex);
+        Shown& shown = s_shown[guid];
+        shown.karts.clear();
+        for (std::string const& key : owned.first)
+            if (Good const* g = FindGood(key))
+                if (g->kind == 'K')
+                    shown.karts.insert(key);
+        shown.flag = FlagIndex(owned.second);
+    }
+
+    // "KARTCRAFT\tR\tGoods\t<tokens>\t<flag flown>\t<owned,...>": the shop's purse, the garage's
+    // flag, and what is ours.
+    static void SendGoods(Player* player)
+    {
+        std::pair<std::set<std::string>, std::string> owned = OwnedGoods(player->GetGUIDLow());
+        ShowGoods(player->GetGUIDLow(), owned);
+        std::string list;
+        for (std::string const& key : owned.first)
+            list += (list.empty() ? "" : ",") + key;
+        SendLine(player, "KARTCRAFT\tR\tGoods\t" + std::to_string(player->GetItemCount(DELIVERY_TOKEN)) +
+            "\t" + owned.second + "\t" + list);
+    }
+
+    static void GoodsLogin(Player* player)
+    {
+        ShowGoods(player->GetGUIDLow(), OwnedGoods(player->GetGUIDLow()));
+    }
+
+    // "R\tGoods" asks; "R\tGoodBuy\t<key>" buys with tokens; "R\tFlagWear\t<key>" flies an owned
+    // flag, an empty key none. Each is answered with "Goods". On the world thread: it takes tokens
+    // out of the bags.
+    static void HandleGoods(Player* player, std::string const& verb, std::string const& key)
+    {
+        ChatHandler chat(player->GetSession());
+        uint32 const guid = player->GetGUIDLow();
+        Good const* good = FindGood(key);
+        if (verb == "GoodBuy" && good)
+        {
+            uint32 const tokens = player->GetItemCount(DELIVERY_TOKEN);
+            if (OwnedGoods(guid).first.count(good->key))
+                chat.SendSysMessage("That is already yours.");
+            else if (tokens < good->price)
+                chat.PSendSysMessage("That costs %u Kartcraft Tokens; you have %u. Courier deliveries pay them.",
+                    good->price, tokens);
+            else
+            {
+                player->DestroyItemCount(DELIVERY_TOKEN, good->price, true);
+                CharacterDatabase.DirectPExecute("INSERT INTO `kartcraft_goods` (`guid`, `good`, `worn`, `at`) "
+                    "VALUES (%u, '%s', 0, %u)", guid, good->key, uint32(std::time(nullptr)));
+                chat.PSendSysMessage("Bought for %u Kartcraft Tokens.", good->price);
+            }
+        }
+        else if (verb == "FlagWear" && ((good && good->kind == 'F') || key.empty()))
+        {
+            if (good && !OwnedGoods(guid).first.count(good->key))
+                chat.SendSysMessage("Buy that flag first.");
+            else
+                CharacterDatabase.DirectPExecute("UPDATE `kartcraft_goods` SET `worn` = (`good` = '%s') WHERE `guid` = %u",
+                    good ? good->key : "", guid);
+        }
+        SendGoods(player);
     }
 
     static bool HasRated(uint32 guid, char const* course)
@@ -5300,6 +5498,17 @@ namespace Kartcraft
             EquipCosmetic(player, f[2], f[3]);
             return;
         }
+        if (f.size() >= 2 && (f[1] == "Goods" || f[1] == "GoodBuy" || f[1] == "FlagWear"))
+        {
+            ObjectGuid const guid = player->GetObjectGuid();
+            std::string const verb = f[1], key = f.size() > 2 ? f[2] : std::string();
+            sWorld.GetMessager().AddMessage([guid, verb, key](World*)
+            {
+                if (Player* p = ObjectAccessor::FindPlayer(guid))
+                    HandleGoods(p, verb, key);
+            });
+            return;
+        }
         if (f.size() >= 2 && (f[1] == "Skins" || f[1] == "SkinBuy" || f[1] == "SkinWear"))
         {
             ObjectGuid const guid = player->GetObjectGuid();
@@ -5955,6 +6164,7 @@ namespace Kartcraft
         CreateDeliveries();
         CreateMarathons();
         CreateSkins();
+        CreateGoods();
         LoadLadder();
         LoadRecords(s_raceBoard, "race");
         LoadRecords(s_trialBoard, "time trial");

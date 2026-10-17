@@ -2318,8 +2318,8 @@ fn the_garage_shows_the_look_and_wears_only_what_is_earned() {
     };
     sent(&mut s);
     s.run("BenillaKartGarage_Toggle()").unwrap();
-    // Opening the garage asks for our numbers.
-    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tCO"]);
+    // Opening the garage asks for our numbers, and our goods.
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tCO", "KARTCRAFT\tR\tGoods"]);
     from_server(&mut s, "R\tCC\tP\tStock:0:0;Copper:0:10;Gold:1:25");
     from_server(&mut s, "R\tCC\tT\tNone:0:0;Sparks:0:25");
     from_server(&mut s, "R\tCO\t12,3,0,0,0,0\t0\t0");
@@ -3648,13 +3648,18 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     sent(&mut s);
     s.run("BenillaKartShop_Toggle()").unwrap();
     // Opening asks for our purse, and the first skin turns in the pane.
-    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tSkins"]);
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tSkins", "KARTCRAFT\tR\tGoods"]);
     assert_eq!(preview(&mut s), "3597");
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin1Name"), "Magni");
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin10Name"), "VanCleef");
-    // Ten skins: the grid's last two cells stay empty.
+    // Ten skins, then the four goods: the grid's last two cells stay empty.
+    assert_eq!(
+        text(&mut s, "BenillaKartShopFrameSkin11Name"),
+        "Student Flag"
+    );
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin12Name"), "Fel Kart");
     assert!(!s
-        .eval::<bool>("return BenillaKartShopFrameSkin11:IsVisible() == 1")
+        .eval::<bool>("return BenillaKartShopFrameSkin15:IsVisible() == 1")
         .unwrap());
     assert_eq!(
         text(&mut s, "BenillaKartShopFrameTokens"),
@@ -3689,6 +3694,46 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     assert_eq!(text(&mut s, "BenillaKartShopFrameWear"), "Take off");
     s.run("BenillaKartShopFrameWear:Click()").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tSkinWear\t"]);
+
+    // A flag: no unit in the pane, its words instead; bought, worn, flown on the kart.
+    s.run("BenillaKartShopFrameSkin11:Click()").unwrap();
+    assert_eq!(preview(&mut s), "0");
+    assert!(!s
+        .eval::<bool>("return BenillaKartShopFrameModel:IsVisible() == 1")
+        .unwrap());
+    assert!(text(&mut s, "BenillaKartShopFrameAbout").contains("any kart"));
+    from_server(&mut s, "R\tGoods\t150\t\t");
+    assert!(enabled(&mut s, "BenillaKartShopFrameBuy"));
+    s.run("BenillaKartShopFrameBuy:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tGoodBuy\tstudent"]);
+    from_server(&mut s, "R\tGoods\t50\t\tstudent");
+    s.run("BenillaKartShopFrameWear:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tFlagWear\tstudent"]);
+    from_server(&mut s, "R\tGoods\t50\tstudent\tstudent");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin11Price"), "Worn");
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartFlag')").unwrap(),
+        "student"
+    );
+    // A kart: not ours, it cannot be driven; picked anyway (another character's pick), the
+    // server's word puts us back in Crash's.
+    s.run("BenillaKartShopFrameSkin12:Click()").unwrap();
+    assert_eq!(text(&mut s, "BenillaKartShopFrameWear"), "Drive");
+    assert!(!enabled(&mut s, "BenillaKartShopFrameWear"));
+    s.run("SetCVar('KartRacer', 'fel')").unwrap();
+    from_server(&mut s, "R\tGoods\t50\tstudent\tstudent");
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartRacer')").unwrap(),
+        "crash"
+    );
+    // Ours: Drive picks it.
+    from_server(&mut s, "R\tGoods\t50\tstudent\tfel,student");
+    s.run("BenillaKartShopFrameWear:Click()").unwrap();
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartRacer')").unwrap(),
+        "fel"
+    );
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin12Price"), "Driven");
 
     // Closed, the pane's unit goes.
     s.run("BenillaKartShopFrame:Hide()").unwrap();
@@ -3732,6 +3777,69 @@ fn the_skin_shop_sells_what_the_server_sells() {
         .collect();
     assert_eq!(client.len(), 10, "the shop's ten skins");
     assert_eq!(client, server);
+}
+
+/// The shop's goods are the server's and the client's: every key, kind and price in
+/// `BENILLA_KART_GOODS` as `Kartcraft.cpp`'s `GOODS` has them, in its order, each one a model
+/// built into the client (`kartcraft::goods`) of that kind, the flags in the wire's order.
+#[test]
+fn the_shop_sells_the_goods_the_server_sells_and_the_client_draws() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let cpp = std::fs::read_to_string(root.join("setup/vmangos/src/Kartcraft.cpp")).unwrap();
+    let xml =
+        std::fs::read_to_string(root.join("crates/benilla-app/assets/ui/KartcraftFrames.xml"))
+            .unwrap();
+    // `{ "fel", 'K', 400 },`
+    let server: Vec<(String, String, u32)> = cpp
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim().strip_prefix("{ \"")?.strip_suffix(" },")?;
+            let (key, rest) = l.split_once("\", '")?;
+            let (kind, price) = rest.split_once("', ")?;
+            let kind = match kind {
+                "K" => "kart",
+                "F" => "flag",
+                _ => return None,
+            };
+            Some((key.into(), kind.into(), price.parse().ok()?))
+        })
+        .collect();
+    let field = |l: &str, name: &str| -> Option<String> {
+        let at = l.find(&format!("{name} = "))? + name.len() + 3;
+        let v = l[at..].split(',').next()?;
+        Some(v.trim().trim_matches('"').to_string())
+    };
+    let client: Vec<(String, String, u32)> = xml
+        .lines()
+        .filter(|l| l.trim_start().starts_with("{ key = ") && l.contains("kind = "))
+        .filter_map(|l| {
+            Some((
+                field(l, "key")?,
+                field(l, "kind")?,
+                field(l, "price")?.parse().ok()?,
+            ))
+        })
+        .collect();
+    assert_eq!(
+        client.len(),
+        kartcraft::goods::GOODS.len(),
+        "every good in the shop"
+    );
+    assert_eq!(client, server);
+    for (key, kind, _) in &client {
+        let good = kartcraft::goods::good(key).unwrap_or_else(|| panic!("{key} built in"));
+        let built = match good.kind {
+            kartcraft::goods::Kind::Kart => "kart",
+            kartcraft::goods::Kind::Flag => "flag",
+        };
+        assert_eq!(built, kind, "{key}");
+    }
+    let flags: Vec<&str> = client
+        .iter()
+        .filter(|(_, kind, _)| kind == "flag")
+        .map(|(key, _, _)| key.as_str())
+        .collect();
+    assert_eq!(flags, kartcraft::goods::FLAGS, "the flags' wire order");
 }
 
 /// Every entry of the Kartcraft menu has its button: two branches each adding an entry and the

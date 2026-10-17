@@ -299,6 +299,7 @@ pub(crate) fn on_cvar(
                 kartcraft::cosmetic::set_ours(paint, n);
             }
         }
+        "kartflag" => kartcraft::goods::set_our_flag(ev.new.trim()),
         "kartracer" if !kartcraft::model::set_our_kart(ev.new.trim()) => {
             warn!("kart: no kart for racer {:?} in the kart data", ev.new);
         }

@@ -4479,6 +4479,7 @@ dependencies = [
  "ctr-assets",
  "ctr-kart",
  "ctr-weapons",
+ "flate2",
  "kira",
  "serde",
  "serde_json",

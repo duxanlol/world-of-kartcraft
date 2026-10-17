@@ -672,6 +672,7 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<kartcraft::hud::KartHud>()
         .init_resource::<kartcraft::hud::HudExtras>()
         .init_resource::<kartcraft::effects::KartEffects>()
+        .init_resource::<kartcraft::goods::FlagAssets>()
         .init_resource::<kartcraft::pads::PadField>()
         .init_resource::<kartcraft::weapons::Weapons>()
         .init_resource::<kartcraft::weapons::look::WeaponLook>()
@@ -767,6 +768,7 @@ pub(crate) fn plugin(app: &mut App) {
                 remote::update,
                 model::animate_wheels,
                 kartcraft::effects::attach,
+                kartcraft::goods::attach,
                 kartcraft::effects::tick,
                 kartcraft::effects::draw,
                 kartcraft::weapons::look::draw,

@@ -21,5 +21,7 @@ ctr-weapons = { path = "../ctr-weapons" }
 ctr-assets = { path = "../ctr-assets" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The built-in cosmetics (`cosmetics/`) are gzipped JSON.
+flate2 = "1"
 # The kart's sounds (the vendored kira, as the client's); the host supplies the output.
 kira = { version = "0.12", default-features = false, features = ["wav", "pcm"] }

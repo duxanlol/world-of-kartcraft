@@ -649,6 +649,7 @@ fn load_config(world: &mut World) {
         // The paint and trail come from the server at each login.
         cvars.own_for_session("KartPaint", None);
         cvars.own_for_session("KartTrail", None);
+        cvars.own_for_session("KartFlag", None);
         // The skin shop's preview is the open window's.
         cvars.own_for_session("KartSkinPreview", None);
         match stored {

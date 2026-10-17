@@ -7,6 +7,7 @@ pub mod camera;
 pub mod chain;
 pub mod cosmetic;
 pub mod effects;
+pub mod goods;
 pub mod hud;
 pub mod input;
 pub mod model;

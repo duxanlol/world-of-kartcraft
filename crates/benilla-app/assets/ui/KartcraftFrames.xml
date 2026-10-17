@@ -1522,6 +1522,19 @@
                 SetCVar("KartPaint", look.worn.P)
                 SetCVar("KartTrail", look.worn.T)
                 if BenillaKartGarageFrame:IsVisible() then BenillaKartGarage_Refresh() end
+            elseif verb == "Goods" then
+                -- Our own cosmetics: tokens, the flag we fly, the goods we own. A custom kart picked
+                -- but not ours (another character's pick) goes back to the CTR one.
+                local goods = BenillaKartGoods
+                BenillaKartShop.tokens = tonumber(line[3])
+                goods.flag = line[4] or ""
+                goods.owned = {}
+                for key in string.gfind(line[5] or "", "[^,]+") do goods.owned[key] = 1 end
+                SetCVar("KartFlag", goods.flag)
+                local racer = BenillaKartGoods_Find(GetCVar("KartRacer"))
+                if racer and not goods.owned[racer.key] then SetCVar("KartRacer", "crash") end
+                if BenillaKartShopFrame:IsVisible() then BenillaKartShop_Refresh() end
+                if BenillaKartGarageFrame:IsVisible() then BenillaKartGarage_Refresh() end
             elseif verb == "Skins" then
                 -- The skin shop's purse and what is ours: tokens, the skin worn, the skins owned.
                 local shop = BenillaKartShop
@@ -3660,7 +3673,7 @@
         -- the order the skill opens them, and the racers { key, name } we have a kart for.
         BenillaKartGarage = { skill = 0, classes = {}, racers = {} }
         BENILLA_KART_GARAGE_CLASSES = 4
-        BENILLA_KART_GARAGE_RACERS = 12
+        BENILLA_KART_GARAGE_RACERS = 16
         BENILLA_KART_LOCKED_COLOR = { r = 0.5, g = 0.5, b = 0.5 }
 
         -- `list`'s lines, each cut at its TABs.
@@ -3735,11 +3748,56 @@
             { key = "mekkatorque", name = "High Tinker Mekkatorque", short = "Mekkatorque", display = 7006, price = 200, icon = "INV_Misc_Head_Gnome_01" },
             { key = "vancleef", name = "Edwin VanCleef", short = "VanCleef", display = 2029, price = 200, icon = "INV_Misc_Bandana_03" },
         }
+        -- World of Kartcraft's own cosmetics, after the skins: custom karts and flags (the
+        -- server's GOODS, Kartcraft.cpp, and the client's built-in models, kartcraft goods.rs;
+        -- kartcraft_tests holds the three alike). A kart, once ours, is picked in the garage; a
+        -- flag is flown from here or the garage's Flag row ("R<TAB>FlagWear").
+        BENILLA_KART_GOODS = {
+            { key = "student", kind = "flag", name = "Student Flag", short = "Student Flag", price = 100, icon = "INV_BannerPVP_01", about = "A banner on a pole at the back of any kart you drive." },
+            { key = "fel", kind = "kart", name = "Fel Kart", short = "Fel Kart", price = 400, icon = "Spell_Shadow_SummonFelHunter", about = "Dark armour, a horned skull and fel crystals." },
+            { key = "alliance", kind = "kart", name = "Alliance Kart", short = "Alliance", price = 250, icon = "INV_BannerPVP_02", about = "The lion and Ashbringer, in blue and gold." },
+            { key = "wok", kind = "kart", name = "WoK Kart", short = "WoK Kart", price = 500, icon = "INV_Gizmo_01", about = "A blue and silver race car in the WoK livery." },
+        }
+        -- The goods by key.
+        function BenillaKartGoods_Find(key)
+            for _, g in ipairs(BENILLA_KART_GOODS) do
+                if g.key == key then return g end
+            end
+        end
+        -- The server's word on the goods: the ones we own (by key) and the flag we fly ("" none).
+        BenillaKartGoods = { owned = {}, flag = "" }
+
         -- The picked cell, and the server's word: our tokens (nil before it answers), the skins we
         -- own (by key) and the one we wear ("" our own body).
         BenillaKartShop = { selected = 1, owned = {}, worn = "" }
         -- The grid's cells (BenillaKartShopFrameSkin1..).
-        BENILLA_KART_SHOP_CELLS = 12
+        BENILLA_KART_SHOP_CELLS = 16
+
+        -- The shop's `i`th item: a skin, then a good.
+        function BenillaKartShop_Item(i)
+            local n = table.getn(BENILLA_KART_SKINS)
+            if i <= n then
+                local skin = BENILLA_KART_SKINS[i]
+                return { kind = "skin", key = skin.key, name = skin.name, short = skin.short, price = skin.price, icon = skin.icon, display = skin.display }
+            end
+            return BENILLA_KART_GOODS[i - n]
+        end
+
+        function BenillaKartShop_Count()
+            return table.getn(BENILLA_KART_SKINS) + table.getn(BENILLA_KART_GOODS)
+        end
+
+        -- Whether an item is ours, and whether it is worn (a skin, a flag) or driven (a kart).
+        function BenillaKartShop_Owned(item)
+            if item.kind == "skin" then return BenillaKartShop.owned[item.key] end
+            return BenillaKartGoods.owned[item.key]
+        end
+
+        function BenillaKartShop_Worn(item)
+            if item.kind == "skin" then return BenillaKartShop.worn == item.key end
+            if item.kind == "flag" then return BenillaKartGoods.flag == item.key end
+            return GetCVar("KartRacer") == item.key
+        end
 
         function BenillaKartShop_Toggle()
             if BenillaKartShopFrame:IsVisible() then
@@ -3751,63 +3809,128 @@
 
         function BenillaKartShop_Select(i)
             BenillaKartShop.selected = i
-            SetCVar("KartSkinPreview", BENILLA_KART_SKINS[i].display)
+            local item = BenillaKartShop_Item(i)
+            -- The pane turns a skin; a kart or a flag shows in the garage, and on the kart.
+            SetCVar("KartSkinPreview", item.display or 0)
             BenillaKartShop_Refresh()
         end
 
         function BenillaKartShop_Refresh()
             local shop = BenillaKartShop
             BenillaKartShopFrameTokens:SetText("Kartcraft Tokens: " .. (shop.tokens or "?"))
-            -- The grid has room for more skins than are sold: the rest of it stays empty.
-            for i = table.getn(BENILLA_KART_SKINS) + 1, BENILLA_KART_SHOP_CELLS do
+            local count = BenillaKartShop_Count()
+            -- The grid has room for more than are sold: the rest of it stays empty.
+            for i = count + 1, BENILLA_KART_SHOP_CELLS do
                 getglobal("BenillaKartShopFrameSkin" .. i):Hide()
             end
-            for i = 1, table.getn(BENILLA_KART_SKINS) do
-                local skin = BENILLA_KART_SKINS[i]
+            for i = 1, math.min(count, BENILLA_KART_SHOP_CELLS) do
+                local item = BenillaKartShop_Item(i)
                 local cell = "BenillaKartShopFrameSkin" .. i
-                getglobal(cell .. "Icon"):SetTexture("Interface\\Icons\\" .. skin.icon)
-                getglobal(cell .. "Name"):SetText(skin.short)
+                getglobal(cell):Show()
+                getglobal(cell .. "Icon"):SetTexture("Interface\\Icons\\" .. item.icon)
+                getglobal(cell .. "Name"):SetText(item.short)
                 local price = getglobal(cell .. "Price")
-                if shop.worn == skin.key then
-                    price:SetText("Worn")
+                if BenillaKartShop_Owned(item) and BenillaKartShop_Worn(item) then
+                    price:SetText(item.kind == "kart" and "Driven" or "Worn")
                     price:SetTextColor(0.1, 1, 0.1)
-                elseif shop.owned[skin.key] then
+                elseif BenillaKartShop_Owned(item) then
                     price:SetText("Owned")
                     price:SetTextColor(0.1, 1, 0.1)
                 else
-                    price:SetText(skin.price .. " tokens")
+                    price:SetText(item.price .. " tokens")
                     price:SetTextColor(1, 0.82, 0)
                 end
                 if i == shop.selected then getglobal(cell):LockHighlight() else getglobal(cell):UnlockHighlight() end
             end
-            local skin = BENILLA_KART_SKINS[shop.selected]
+            local item = BenillaKartShop_Item(shop.selected)
             local buy, wear = BenillaKartShopFrameBuy, BenillaKartShopFrameWear
-            BenillaKartShopFrameSkinName:SetText(skin.name)
-            if shop.owned[skin.key] then
-                BenillaKartShopFrameSkinInfo:SetText(shop.worn == skin.key and "Yours, and worn" or "Yours")
+            BenillaKartShopFrameSkinName:SetText(item.name)
+            if item.kind == "skin" then
+                BenillaKartShopFrameModel:Show()
+                BenillaKartShopFrameAbout:SetText("")
+            else
+                BenillaKartShopFrameModel:Hide()
+                BenillaKartShopFrameAbout:SetText(item.about .. "\n\n" .. (item.kind == "kart"
+                    and "Yours to drive once bought: pick it in the garage (/garage)."
+                    or "Flown on your kart once bought: pick it here or in the garage's Flag row."))
+            end
+            local verb = item.kind == "kart" and "Drive" or "Wear"
+            if BenillaKartShop_Owned(item) then
+                local worn = BenillaKartShop_Worn(item)
+                BenillaKartShopFrameSkinInfo:SetText(worn and (item.kind == "kart" and "Yours, and driven" or "Yours, and worn") or "Yours")
                 buy:SetText("Owned")
                 buy:Disable()
-                wear:SetText(shop.worn == skin.key and "Take off" or "Wear")
-                wear:Enable()
+                if item.kind == "kart" then
+                    wear:SetText("Drive")
+                    if worn then wear:Disable() else wear:Enable() end
+                else
+                    wear:SetText(worn and "Take off" or "Wear")
+                    wear:Enable()
+                end
             else
-                BenillaKartShopFrameSkinInfo:SetText(skin.price .. " Kartcraft Tokens")
+                BenillaKartShopFrameSkinInfo:SetText(item.price .. " Kartcraft Tokens")
                 buy:SetText("Buy")
                 -- The server says what is short; the button only knows once it has answered.
-                if shop.tokens and shop.tokens < skin.price then buy:Disable() else buy:Enable() end
-                wear:SetText("Wear")
+                if shop.tokens and shop.tokens < item.price then buy:Disable() else buy:Enable() end
+                wear:SetText(verb)
                 wear:Disable()
             end
         end
 
         function BenillaKartShop_Buy()
-            BenillaKart_Send("SkinBuy\t" .. BENILLA_KART_SKINS[BenillaKartShop.selected].key)
+            local item = BenillaKartShop_Item(BenillaKartShop.selected)
+            if item.kind == "skin" then
+                BenillaKart_Send("SkinBuy\t" .. item.key)
+            else
+                BenillaKart_Send("GoodBuy\t" .. item.key)
+            end
         end
 
-        -- Wear the picked skin, or take it off (back to our own body) if it is the one worn.
+        -- Wear the picked skin or flag, or take it off if it is the one worn; drive the picked kart.
         function BenillaKartShop_Wear()
-            local key = BENILLA_KART_SKINS[BenillaKartShop.selected].key
-            if BenillaKartShop.worn == key then key = "" end
-            BenillaKart_Send("SkinWear\t" .. key)
+            local item = BenillaKartShop_Item(BenillaKartShop.selected)
+            local key = item.key
+            if item.kind == "skin" then
+                if BenillaKartShop.worn == key then key = "" end
+                BenillaKart_Send("SkinWear\t" .. key)
+            elseif item.kind == "flag" then
+                if BenillaKartGoods.flag == key then key = "" end
+                BenillaKart_Send("FlagWear\t" .. key)
+            else
+                SetCVar("KartRacer", key)
+                PlaySound("igMainMenuOptionCheckBoxOn")
+                BenillaKartShop_Refresh()
+                if BenillaKartGarageFrame:IsVisible() then BenillaKartGarage_Refresh() end
+            end
+        end
+
+        -- The garage's Flag row: none, then the flags we own, stepped by its arrows and flown.
+        function BenillaKartFlag_List()
+            local list = { "" }
+            for _, g in ipairs(BENILLA_KART_GOODS) do
+                if g.kind == "flag" and BenillaKartGoods.owned[g.key] then table.insert(list, g.key) end
+            end
+            return list
+        end
+
+        function BenillaKartFlag_Step(dir)
+            local list, at = BenillaKartFlag_List(), 1
+            for i, key in ipairs(list) do
+                if key == BenillaKartGoods.flag then at = i end
+            end
+            local n = table.getn(list)
+            local key = list[mod(at - 1 + dir + n, n) + 1]
+            if key ~= BenillaKartGoods.flag then
+                BenillaKart_Send("FlagWear\t" .. key)
+                PlaySound("igMainMenuOptionCheckBoxOn")
+            end
+        end
+
+        function BenillaKartFlag_Row()
+            local g = BenillaKartGoods_Find(BenillaKartGoods.flag)
+            BenillaKartGarageFrameFlagName:SetText(g and g.name or "None")
+            local any = table.getn(BenillaKartFlag_List()) > 1
+            BenillaKartGarageFrameFlagNeed:SetText(any and "" or "Flags are sold in the shop (/kartshop).")
         end
 
         function BenillaKartGarage_Toggle()
@@ -3853,8 +3976,15 @@
                 local r = g.racers[i]
                 if r then
                     box:Show()
-                    getglobal(box:GetName() .. "Text"):SetText(r.name)
+                    local text = getglobal(box:GetName() .. "Text")
                     box:SetChecked(BenillaKart_Tick(r.key == GetCVar("KartRacer")))
+                    if BenillaKartGoods_Find(r.key) and not BenillaKartGoods.owned[r.key] then
+                        text:SetText(r.name .. " (shop)")
+                        text:SetTextColor(BENILLA_KART_LOCKED_COLOR.r, BENILLA_KART_LOCKED_COLOR.g, BENILLA_KART_LOCKED_COLOR.b)
+                    else
+                        text:SetText(r.name)
+                        text:SetTextColor(NORMAL_FONT_COLOR.r, NORMAL_FONT_COLOR.g, NORMAL_FONT_COLOR.b)
+                    end
                 else
                     box:Hide()
                 end
@@ -3866,6 +3996,7 @@
             end
             BenillaKartLook_Row("P", "Paint")
             BenillaKartLook_Row("T", "Trail")
+            BenillaKartFlag_Row()
         end
 
         -- A class row clicked: picked if the skill has opened it.
@@ -3948,7 +4079,9 @@
 
         function BenillaKartGarage_PickRacer(i)
             local r = BenillaKartGarage.racers[i]
-            if r then
+            if r and BenillaKartGoods_Find(r.key) and not BenillaKartGoods.owned[r.key] then
+                BenillaKart_Say(BenillaKartGoods_Find(r.key).name .. " is sold in the shop (/kartshop).")
+            elseif r then
                 SetCVar("KartRacer", r.key)
                 PlaySound("igMainMenuOptionCheckBoxOn")
             end
@@ -5047,7 +5180,7 @@
     <!-- The kart garage: the engine class, as the Karting skill opens them, and whose kart we
          drive, each a CVar set as it is clicked. -->
     <Frame name="BenillaKartGarageFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="340" y="540"/></Size>
+        <Size><AbsDimension x="340" y="630"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -5089,29 +5222,41 @@
                 </FontString>
                 <!-- The Look: a paint and a boost trail, earned by racing (the server's catalogues). -->
                 <FontString name="$parentLookTitle" inherits="GameFontNormal" text="Look">
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-390"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-438"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentPaintLabel" inherits="GameFontHighlight" text="Paint">
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-414"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-462"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentPaintName" inherits="GameFontNormal" justifyH="CENTER">
                     <Size><AbsDimension x="160" y="14"/></Size>
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="118" y="-414"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="118" y="-462"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentPaintNeed" inherits="GameFontHighlightSmall" justifyH="CENTER">
                     <Size><AbsDimension x="260" y="12"/></Size>
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="40" y="-432"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="40" y="-480"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentTrailLabel" inherits="GameFontHighlight" text="Trail">
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-456"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-504"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentTrailName" inherits="GameFontNormal" justifyH="CENTER">
                     <Size><AbsDimension x="160" y="14"/></Size>
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="118" y="-456"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="118" y="-504"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentTrailNeed" inherits="GameFontHighlightSmall" justifyH="CENTER">
                     <Size><AbsDimension x="260" y="12"/></Size>
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="40" y="-474"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="40" y="-522"/></Offset></Anchor></Anchors>
+                </FontString>
+                <!-- The Flag: one of ours flown at the back of the kart (the shop's goods). -->
+                <FontString name="$parentFlagLabel" inherits="GameFontHighlight" text="Flag">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-546"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentFlagName" inherits="GameFontNormal" justifyH="CENTER">
+                    <Size><AbsDimension x="160" y="14"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="118" y="-546"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentFlagNeed" inherits="GameFontHighlightSmall" justifyH="CENTER">
+                    <Size><AbsDimension x="260" y="12"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="40" y="-564"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
@@ -5165,25 +5310,47 @@
             <CheckButton name="$parentRacer12" inherits="BenillaKartGarageRacerTemplate" id="12">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="176" y="-358"/></Offset></Anchor></Anchors>
             </CheckButton>
+            <CheckButton name="$parentRacer13" inherits="BenillaKartGarageRacerTemplate" id="13">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-382"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRacer14" inherits="BenillaKartGarageRacerTemplate" id="14">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="176" y="-382"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRacer15" inherits="BenillaKartGarageRacerTemplate" id="15">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-406"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRacer16" inherits="BenillaKartGarageRacerTemplate" id="16">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="176" y="-406"/></Offset></Anchor></Anchors>
+            </CheckButton>
             <Button name="$parentPaintPrev" inherits="UIPanelButtonTemplate" text="&lt;">
                 <Size><AbsDimension x="26" y="20"/></Size>
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="88" y="-410"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="88" y="-458"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartLook_Step("P", -1)</OnClick></Scripts>
             </Button>
             <Button name="$parentPaintNext" inherits="UIPanelButtonTemplate" text="&gt;">
                 <Size><AbsDimension x="26" y="20"/></Size>
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="282" y="-410"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="282" y="-458"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartLook_Step("P", 1)</OnClick></Scripts>
             </Button>
             <Button name="$parentTrailPrev" inherits="UIPanelButtonTemplate" text="&lt;">
                 <Size><AbsDimension x="26" y="20"/></Size>
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="88" y="-452"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="88" y="-500"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartLook_Step("T", -1)</OnClick></Scripts>
             </Button>
             <Button name="$parentTrailNext" inherits="UIPanelButtonTemplate" text="&gt;">
                 <Size><AbsDimension x="26" y="20"/></Size>
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="282" y="-452"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="282" y="-500"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartLook_Step("T", 1)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentFlagPrev" inherits="UIPanelButtonTemplate" text="&lt;">
+                <Size><AbsDimension x="26" y="20"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="88" y="-542"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartFlag_Step(-1)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentFlagNext" inherits="UIPanelButtonTemplate" text="&gt;">
+                <Size><AbsDimension x="26" y="20"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="282" y="-542"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartFlag_Step(1)</OnClick></Scripts>
             </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>
@@ -5199,6 +5366,7 @@
             <OnShow>
                 PlaySound("igMainMenuOpen")
                 BenillaKart_Send("CO")
+                BenillaKart_Send("Goods")
                 BenillaKartGarage_Refresh()
             </OnShow>
             <OnHide>PlaySound("igMainMenuClose")</OnHide>
@@ -5235,7 +5403,7 @@
     <!-- The skin shop (/kartshop): the skins on the left, the picked one turning on the right,
          bought and worn with the buttons under it. -->
     <Frame name="BenillaKartShopFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="620" y="440"/></Size>
+        <Size><AbsDimension x="620" y="520"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -5258,7 +5426,7 @@
                     <Size><AbsDimension x="256" y="64"/></Size>
                     <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
                 </Texture>
-                <FontString inherits="GameFontNormal" text="Skin Shop">
+                <FontString inherits="GameFontNormal" text="Kartcraft Shop">
                     <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
                 </FontString>
                 <Texture name="$parentTokenIcon" file="Interface\Icons\INV_Misc_Ticket_Darkmoon_01">
@@ -5270,11 +5438,16 @@
                 </FontString>
                 <FontString inherits="GameFontDisableSmall" justifyH="LEFT" text="Kartcraft Tokens are earned on the road. Courier deliveries pay them: see the innkeepers and the neutral towns' couriers.">
                     <Size><AbsDimension x="336" y="28"/></Size>
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-306"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-392"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentSkinName" inherits="GameFontNormalLarge">
                     <Size><AbsDimension x="230" y="20"/></Size>
                     <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-330"/></Offset></Anchor></Anchors>
+                </FontString>
+                <!-- A kart's or a flag's words, where a skin turns in the pane. -->
+                <FontString name="$parentAbout" inherits="GameFontHighlight" justifyH="LEFT" justifyV="TOP">
+                    <Size><AbsDimension x="210" y="200"/></Size>
+                    <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-34" y="-60"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentSkinInfo" inherits="GameFontHighlightSmall">
                     <Size><AbsDimension x="230" y="14"/></Size>
@@ -5318,6 +5491,18 @@
             </Button>
             <Button name="$parentSkin12" inherits="BenillaKartShopSkinTemplate" id="12">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="272" y="-220"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentSkin13" inherits="BenillaKartShopSkinTemplate" id="13">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="20" y="-302"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentSkin14" inherits="BenillaKartShopSkinTemplate" id="14">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="104" y="-302"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentSkin15" inherits="BenillaKartShopSkinTemplate" id="15">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="188" y="-302"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentSkin16" inherits="BenillaKartShopSkinTemplate" id="16">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="272" y="-302"/></Offset></Anchor></Anchors>
             </Button>
             <!-- The picked skin, drawn by the engine (kart/skins.rs, KartSkinPreview). -->
             <PlayerModel name="$parentModel">
@@ -5376,6 +5561,7 @@
             <OnShow>
                 PlaySound("igMainMenuOpen")
                 BenillaKart_Send("Skins")
+                BenillaKart_Send("Goods")
                 BenillaKartShop_Select(BenillaKartShop.selected)
             </OnShow>
             <OnHide>
