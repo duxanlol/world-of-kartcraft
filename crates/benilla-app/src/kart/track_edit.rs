@@ -506,9 +506,8 @@ pub(crate) fn on_cvar(
                         edit.say(why);
                         return;
                     }
+                    // Opened from the editor, the lap's end goes back to it, the draft as it was.
                     races.race = race;
-                    edit.on = false;
-                    edit.clear();
                     free.set(FreeMode::Off);
                 }
                 // A saved track gone from the browser: its file deleted, the list read again.
@@ -541,8 +540,6 @@ pub(crate) fn on_cvar(
                     let grid = grid.or_else(|| grid_spot(None, &points));
                     let race = Active::practice(&clean(name), laps, points, grid, &races.me);
                     races.race = Some(race.with_facings(facings));
-                    edit.on = false;
-                    edit.clear();
                     free.set(FreeMode::Off);
                 }
                 ["restart", ..] => {
@@ -591,8 +588,9 @@ pub(crate) fn update(
     let fired = overlay.pad_just_pressed(super::bindings::FIRE);
     let practice = races.race.as_ref().filter(|r| r.practice);
     edit.testing = practice.is_some();
-    // `KartTrackEdit` may stay "1": the button sets "0" before its "1".
-    if edit.on && !drive.active {
+    // `KartTrackEdit` may stay "1": the button sets "0" before its "1". A test lap's trip to its
+    // grid takes the kart away for the teleport, which closes nothing: the lap ends back here.
+    if edit.on && !edit.testing && !drive.active {
         edit.on = false;
         free.set(FreeMode::Off);
         edit.say("The track editor needs your kart: summon it (J) first.");

@@ -3756,7 +3756,10 @@ fn the_track_editor_s_button_and_bar_drive_the_kart_s_editor() {
     // Editing: the name, the count, the editor's buttons, each a numbered press.
     tell(&mut s, "edit", 2.0, 0.0);
     assert!(shown(&s, "BenillaKartEditorBarPlace") && shown(&s, "BenillaKartEditorBarName"));
-    assert!(!shown(&s, "BenillaKartEditorBarBack"));
+    assert!(
+        !shown(&s, "BenillaKartEditorLap"),
+        "no lap panel while editing"
+    );
     assert_eq!(
         text(&s, "BenillaKartEditorBarCount"),
         "Start + 1 checkpoints"
@@ -3791,17 +3794,17 @@ fn the_track_editor_s_button_and_bar_drive_the_kart_s_editor() {
         !shown(&s, "BenillaKartEditorKeys"),
         "no keys card in a test lap"
     );
-    assert!(shown(&s, "BenillaKartEditorBarBack") && shown(&s, "BenillaKartEditorBarRestart"));
-    assert!(!shown(&s, "BenillaKartEditorBarPlace") && !shown(&s, "BenillaKartEditorBarName"));
-    assert_eq!(text(&s, "BenillaKartEditorBarBack"), "Back to editor");
-    s.run("BenillaKartEditorBarRestart:Click()").unwrap();
+    // Only the lap's small panel: the editor's bar is out of the way.
+    assert!(shown(&s, "BenillaKartEditorLap") && !shown(&s, "BenillaKartEditorBar"));
+    assert_eq!(text(&s, "BenillaKartEditorLapBack"), "Back to editor");
+    s.run("BenillaKartEditorLapRestart:Click()").unwrap();
     assert_eq!(cmd(&s), "8\trestart");
-    s.run("BenillaKartEditorBarBack:Click()").unwrap();
+    s.run("BenillaKartEditorLapBack:Click()").unwrap();
     assert_eq!(cmd(&s), "9\tback");
     // A saved track's lap from the browser: its way out is the lap's end.
     tell(&mut s, "run", 0.0, 3.0);
-    assert!(shown(&s, "BenillaKartEditorBarBack"));
-    assert_eq!(text(&s, "BenillaKartEditorBarBack"), "End test lap");
+    assert!(shown(&s, "BenillaKartEditorLapBack"));
+    assert_eq!(text(&s, "BenillaKartEditorLapBack"), "End test lap");
 
     // Closed, the bar goes; the button opens it again even after a refused open.
     tell(&mut s, "edit", 2.0, 1.0);

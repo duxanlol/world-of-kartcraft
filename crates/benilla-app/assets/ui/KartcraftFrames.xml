@@ -2791,8 +2791,6 @@
             BenillaKartEditor_Refresh()
         end
 
-        BENILLA_KART_EDITOR_EDITING = { "Name", "Count", "GridText", "Tool", "Start", "Place", "Grid",
-            "Undo", "Type", "Sprint", "Lap1", "Lap3", "Test", "Save", "Close" }
 
         -- The tools' buttons, and what the bar says a left click places with each.
         BENILLA_KART_EDITOR_TOOLS = {
@@ -2831,32 +2829,32 @@
             table.insert(lines, "|cff999999The start goes first; drag this card to move it.|r")
             BenillaKartEditorKeysText:SetText(table.concat(lines, "\n"))
         end
-        BENILLA_KART_EDITOR_TESTING = { "Back", "Restart", "TestHint" }
 
         -- The bar as the state has it: the editor's buttons, or a test lap's two.
         function BenillaKartEditor_Refresh()
             local e = BenillaKartEditor
             local bar = BenillaKartEditorBar
-            if e.state == "" then
+            -- A lap under way has only its small panel, out of the way and draggable.
+            local lapping = e.state == "test" or e.state == "run"
+            if lapping then
+                if e.state == "run" then
+                    BenillaKartEditorLapBack:SetText("End test lap")
+                else
+                    BenillaKartEditorLapBack:SetText("Back to editor")
+                end
+                BenillaKartEditorLap:Show()
+            else
+                BenillaKartEditorLap:Hide()
+            end
+            if e.state ~= "edit" then
                 bar:Hide()
                 BenillaKartEditorKeys:Hide()
                 return
             end
             bar:Show()
-            local editing = e.state == "edit"
-            if editing and not BenillaKartEditorKeys:IsShown() then
+            if not BenillaKartEditorKeys:IsShown() then
                 BenillaKartEditorKeys_Refresh()
                 BenillaKartEditorKeys:Show()
-            elseif not editing then
-                BenillaKartEditorKeys:Hide()
-            end
-            for _, part in ipairs(BENILLA_KART_EDITOR_EDITING) do
-                local f = getglobal("BenillaKartEditorBar" .. part)
-                if editing then f:Show() else f:Hide() end
-            end
-            for _, part in ipairs(BENILLA_KART_EDITOR_TESTING) do
-                local f = getglobal("BenillaKartEditorBar" .. part)
-                if editing then f:Hide() else f:Show() end
             end
             if e.count == 0 then
                 BenillaKartEditorBarCount:SetText("|cffff8040No start yet|r")
@@ -2874,11 +2872,6 @@
                 BenillaKartEditorBarGridText:SetText("Grid placed")
             else
                 BenillaKartEditorBarGridText:SetText("|cff999999No grid: a flying start|r")
-            end
-            if e.state == "run" then
-                BenillaKartEditorBarBack:SetText("End test lap")
-            else
-                BenillaKartEditorBarBack:SetText("Back to editor")
             end
             -- The tool picked shows lit, and the bar says what a click places.
             for tool, row in pairs(BENILLA_KART_EDITOR_TOOLS) do
@@ -6235,9 +6228,6 @@
                 <FontString name="$parentType" inherits="GameFontNormalSmall" text="Race type">
                     <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="18" y="20"/></Offset></Anchor></Anchors>
                 </FontString>
-                <FontString name="$parentTestHint" inherits="GameFontHighlight" text="Test lap: to the starting grid, then the lights">
-                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-24"/></Offset></Anchor></Anchors>
-                </FontString>
             </Layer>
         </Layers>
         <Frames>
@@ -6307,16 +6297,6 @@
                 <Anchors><Anchor point="LEFT" relativeTo="$parentTest" relativePoint="RIGHT"><Offset><AbsDimension x="8" y="0"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartEditor_Save()</OnClick></Scripts>
             </Button>
-            <Button name="$parentBack" inherits="UIPanelButtonTemplate" text="Back to editor">
-                <Size><AbsDimension x="140" y="24"/></Size>
-                <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="-50" y="24"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartEditor_Send("back")</OnClick></Scripts>
-            </Button>
-            <Button name="$parentRestart" inherits="UIPanelButtonTemplate" text="Restart">
-                <Size><AbsDimension x="90" y="24"/></Size>
-                <Anchors><Anchor point="LEFT" relativeTo="$parentBack" relativePoint="RIGHT"><Offset><AbsDimension x="8" y="0"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartEditor_Send("restart")</OnClick></Scripts>
-            </Button>
         </Frames>
     </Frame>
     <!-- The track editor's keys card, on the left while editing: the keys the free camera flies
@@ -6340,6 +6320,42 @@
                 </FontString>
             </Layer>
         </Layers>
+        <Scripts>
+            <OnLoad>this:RegisterForDrag("LeftButton")</OnLoad>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+    <!-- A test lap's panel, small and out of the way on the left, dragged anywhere: back to the
+         editor (or out of a saved track's lap) and the lap again. BENILLA_KART_TRACKEDIT shows it
+         for a lap under way. -->
+    <Frame name="BenillaKartEditorLap" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="MEDIUM">
+        <Size><AbsDimension x="236" y="62"/></Size>
+        <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="20" y="80"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+            <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>
+            <TileSize><AbsValue val="16"/></TileSize>
+            <EdgeSize><AbsValue val="16"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString inherits="GameFontNormalSmall" text="Test lap">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="12" y="-10"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <Button name="$parentBack" inherits="UIPanelButtonTemplate" text="Back to editor">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="10" y="10"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartEditor_Send("back")</OnClick></Scripts>
+            </Button>
+            <Button name="$parentRestart" inherits="UIPanelButtonTemplate" text="Restart">
+                <Size><AbsDimension x="90" y="22"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentBack" relativePoint="RIGHT"><Offset><AbsDimension x="6" y="0"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartEditor_Send("restart")</OnClick></Scripts>
+            </Button>
+        </Frames>
         <Scripts>
             <OnLoad>this:RegisterForDrag("LeftButton")</OnLoad>
             <OnDragStart>this:StartMoving()</OnDragStart>
