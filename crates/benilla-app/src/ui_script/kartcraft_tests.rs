@@ -3842,6 +3842,25 @@ fn the_shop_sells_the_goods_the_server_sells_and_the_client_draws() {
     assert_eq!(flags, kartcraft::goods::FLAGS, "the flags' wire order");
 }
 
+/// A claimed cache's line from the server is said in gold, silver and copper, with its tokens.
+#[test]
+fn a_claimed_cache_says_what_it_held() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let money = |s: &mut UiScript, c: u32| -> String {
+        s.eval(&format!("return BenillaKart_Money({c})")).unwrap()
+    };
+    assert_eq!(money(&mut s, 18_000), "1g 80s");
+    assert_eq!(money(&mut s, 6_005), "60s 5c");
+    assert_eq!(money(&mut s, 0), "0c");
+    from_server(&mut s, "R@ACGot@18000@12@1".replace('@', "	").as_str());
+    from_server(&mut s, "R@ACGot@600@0@0".replace('@', "	").as_str());
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 /// Every entry of the Kartcraft menu has its button: two branches each adding an entry and the
 /// same next button merge into one button short.
 #[test]

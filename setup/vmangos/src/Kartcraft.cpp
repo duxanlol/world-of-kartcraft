@@ -16,6 +16,7 @@
 #include "Group.h"
 #include "MapManager.h"
 #include "QuestDef.h"
+#include "Utilities/Random.h"
 
 #include <cmath>
 #include <ctime>
@@ -304,6 +305,7 @@ namespace Kartcraft
     static void DeliveryLogin(Player* player);
 
     static void SkinLogin(Player* player);
+    static void GoodsLogin(Player* player);
 
     static void MarathonLogin(Player* player);
 
@@ -2094,6 +2096,185 @@ namespace Kartcraft
                     good ? good->key : "", guid);
         }
         SendGoods(player);
+    }
+
+    // ── Caches ─────────────────────────────────────────────────────────────────────────────────
+    //
+    // The Astral and Wumpa Caches: chests on spots along the drivable roads (sql/kartcraft_caches.sql,
+    // generated from roads/roads.json), pooled one live a square, coming back somewhere else in it
+    // two to five minutes after one is claimed, as a looted chest does (GameObject::Update). A
+    // driver claims one by driving through it (the client's "R\tAC\t<guid>", near it in the kart)
+    // or anyone by opening it (go_kartcraft_cache); the first claim wins. A cache pays gold by the
+    // claimer's level and Kartcraft Tokens; the Astral more. Not in a race, at most one claim every
+    // CACHE_INTERVAL, and past CACHE_DAILY claims a day only a quarter of the gold. Each claim is
+    // kept in kartcraft_cache_claims.
+
+    constexpr uint32 CACHE_ASTRAL = 190200;
+    constexpr uint32 CACHE_WUMPA = 190201;
+    // How near (yards) a claim may be made from, the time between two (ms), and claims a day.
+    constexpr float CACHE_RADIUS = 12.f;
+    constexpr uint32 CACHE_INTERVAL = 20 * IN_MILLISECONDS;
+    constexpr uint32 CACHE_DAILY = 20;
+
+    static std::unordered_map<uint32, uint32> s_lastClaim; // player guid low -> ms, world thread
+
+    static bool InRace(Unit const* u);
+    static void GiveTokens(Player* player, uint32 count);
+    static bool CanBeRacedOff(Player* player);
+    static bool TeleportOnto(Player* player, uint32 map, float x, float y, float o, bool kart);
+
+    static void CreateCacheClaims()
+    {
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_cache_claims` ("
+            "`id` INT UNSIGNED NOT NULL AUTO_INCREMENT, "
+            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
+            "`cache` INT UNSIGNED NOT NULL COMMENT 'gameobject spawn guid', "
+            "`entry` INT UNSIGNED NOT NULL, "
+            "`gold` INT UNSIGNED NOT NULL COMMENT 'copper', "
+            "`tokens` INT UNSIGNED NOT NULL, "
+            "`at` INT UNSIGNED NOT NULL COMMENT 'unix time', "
+            "PRIMARY KEY (`id`), KEY `guid_at` (`guid`, `at`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+    }
+
+    static bool IsCache(GameObject const* go)
+    {
+        return go && (go->GetEntry() == CACHE_ASTRAL || go->GetEntry() == CACHE_WUMPA);
+    }
+
+    // `player` claims `go`, if it is a cache still there and theirs to claim: the gold and tokens,
+    // the chest gone (to come back elsewhere in its square), and the client told
+    // ("KARTCRAFT\tR\tACGot\t<copper>\t<tokens>\t<1 astral, 0 wumpa>"). On the world thread.
+    static void CacheClaim(Player* player, GameObject* go)
+    {
+        ChatHandler chat(player->GetSession());
+        if (!IsCache(go) || !go->isSpawned() || go->getLootState() != GO_READY)
+            return;
+        if (!player->IsWithinDistInMap(go, CACHE_RADIUS))
+            return;
+        if (InRace(player))
+        {
+            chat.SendSysMessage("Caches wait for you outside a race.");
+            return;
+        }
+        uint32 const guid = player->GetGUIDLow();
+        uint32 const now = WorldTimer::getMSTime();
+        uint32& last = s_lastClaim[guid];
+        if (last && WorldTimer::getMSTimeDiff(last, now) < CACHE_INTERVAL)
+            return;
+        last = now;
+        bool const astral = go->GetEntry() == CACHE_ASTRAL;
+        uint32 const today = uint32(std::time(nullptr)) - uint32(std::time(nullptr)) % DAY;
+        char sql[256];
+        std::snprintf(sql, sizeof(sql),
+            "SELECT COUNT(*) FROM `kartcraft_cache_claims` WHERE `guid` = %u AND `at` >= %u", guid, today);
+        uint32 const claimed = CountOf(sql);
+        // About a silver a level from a Wumpa Cache, three from an Astral one (60: 60 s, 1 g 80 s).
+        uint32 gold = player->GetLevel() * (astral ? 300 : 100) + urand(0, player->GetLevel() * 20);
+        uint32 tokens = astral ? urand(10, 25) : urand(3, 8);
+        if (claimed >= CACHE_DAILY)
+        {
+            gold /= 4;
+            tokens = 0;
+        }
+        go->SetLootState(GO_JUST_DEACTIVATED);
+        player->ModifyMoney(int32(gold));
+        GiveTokens(player, tokens);
+        CharacterDatabase.PExecute("INSERT INTO `kartcraft_cache_claims` (`guid`, `cache`, `entry`, `gold`, `tokens`, `at`) "
+            "VALUES (%u, %u, %u, %u, %u, %u)", guid, go->GetGUIDLow(), go->GetEntry(), gold, tokens,
+            uint32(std::time(nullptr)));
+        SendLine(player, "KARTCRAFT\tR\tACGot\t" + std::to_string(gold) + "\t" + std::to_string(tokens) + "\t" +
+            (astral ? "1" : "0"));
+        if (claimed >= CACHE_DAILY)
+            chat.SendSysMessage("You have claimed many caches today: the rest pay little until tomorrow.");
+    }
+
+    // Opened on foot (or clicked from the kart): claimed, and no loot window.
+    static bool CacheHello(Player* player, GameObject* go)
+    {
+        CacheClaim(player, go);
+        return true;
+    }
+
+    // "R\tAC\t<guid>": a driver's kart touched the cache with this full guid. On the world thread.
+    static void CacheTouched(Player* player, uint64 raw)
+    {
+        ObjectGuid const guid(raw);
+        if (!guid.IsGameObject() || (guid.GetEntry() != CACHE_ASTRAL && guid.GetEntry() != CACHE_WUMPA))
+            return;
+        if (!player->HasAura(SPELL_SUMMON_KART))
+            return;
+        CacheClaim(player, player->GetMap()->GetGameObject(guid));
+    }
+
+    // ── Hub ────────────────────────────────────────────────────────────────────────────────────
+    //
+    // The Mirage Raceway, World of Kartcraft's meeting place: neutral ground on the Shimmering
+    // Flats with marshals for its courses, and the Quartermaster (sql/kartcraft.sql, its menu
+    // here) for the garage, the shop, the tracks and the Race Finder. "R\tHub" (/hub) goes there
+    // from the open world, in the kart if in it, at most once every HUB_COOLDOWN.
+
+    constexpr uint32 HUB_TEXT = 190020;
+    constexpr uint32 HUB_MAP = 1;
+    constexpr float HUB_X = -6214.f, HUB_Y = -3894.f, HUB_O = 0.f;
+    constexpr uint32 HUB_COOLDOWN = 10 * MINUTE * IN_MILLISECONDS;
+    enum HubAction : uint32 { HUB_GARAGE = 1, HUB_SHOP, HUB_TRACKS, HUB_FINDER };
+
+    static std::unordered_map<uint32, uint32> s_hubAt; // player guid low -> ms, world thread
+
+    static bool HubHello(Player* player, Creature* quartermaster)
+    {
+        PlayerMenu* talk = player->PlayerTalkClass;
+        talk->ClearMenus();
+        GossipMenu& menu = talk->GetGossipMenu();
+        menu.AddMenuItem(GOSSIP_ICON_VENDOR, "Open the garage (karts, paints, trails, flags)", 0, HUB_GARAGE, "", false);
+        menu.AddMenuItem(GOSSIP_ICON_VENDOR, "Open the Kartcraft Shop", 0, HUB_SHOP, "", false);
+        menu.AddMenuItem(GOSSIP_ICON_TAXI, "Browse the tracks", 0, HUB_TRACKS, "", false);
+        menu.AddMenuItem(GOSSIP_ICON_BATTLE, "Open the Race Finder", 0, HUB_FINDER, "", false);
+        talk->SendGossipMenu(HUB_TEXT, quartermaster->GetObjectGuid());
+        return true;
+    }
+
+    // The client opens the window the line names: "Finder" and "Tracks" as from a marshal, and
+    // "Open\tgarage" or "Open\tshop".
+    static bool HubSelect(Player* player, Creature* /*quartermaster*/, uint32 /*sender*/, uint32 action)
+    {
+        player->PlayerTalkClass->CloseGossip();
+        switch (action)
+        {
+            case HUB_GARAGE: SendLine(player, "KARTCRAFT\tR\tOpen\tgarage"); break;
+            case HUB_SHOP: SendLine(player, "KARTCRAFT\tR\tOpen\tshop"); break;
+            case HUB_TRACKS: SendLine(player, "KARTCRAFT\tR\tTracks"); break;
+            case HUB_FINDER: SendLine(player, "KARTCRAFT\tR\tFinder"); break;
+            default: break;
+        }
+        return true;
+    }
+
+    // "R\tHub": to the Raceway, from the open world (not a race, a battleground, a dungeon or a
+    // delivery's road). On the world thread.
+    static void HubTeleport(Player* player)
+    {
+        ChatHandler chat(player->GetSession());
+        if (InRace(player) || !CanBeRacedOff(player))
+        {
+            chat.SendSysMessage("The hub is reached from the open world, out of a race and not carrying a delivery.");
+            return;
+        }
+        uint32 const now = WorldTimer::getMSTime();
+        uint32& last = s_hubAt[player->GetGUIDLow()];
+        if (last && WorldTimer::getMSTimeDiff(last, now) < HUB_COOLDOWN)
+        {
+            uint32 const left = (HUB_COOLDOWN - WorldTimer::getMSTimeDiff(last, now)) / IN_MILLISECONDS;
+            chat.PSendSysMessage("You can go to the hub again in %u min %u s.", left / 60, left % 60);
+            return;
+        }
+        if (TeleportOnto(player, HUB_MAP, HUB_X, HUB_Y, HUB_O, player->HasAura(SPELL_SUMMON_KART)))
+        {
+            last = now;
+            chat.SendSysMessage("Off to the Mirage Raceway, the racers' hub.");
+        }
     }
 
     static bool HasRated(uint32 guid, char const* course)
@@ -4297,7 +4478,7 @@ namespace Kartcraft
                 player->SendNewItem(item, count, true, false);
         }
         else if (count)
-            ChatHandler(player->GetSession()).SendSysMessage("Your bags had no room for the marathon's tokens.");
+            ChatHandler(player->GetSession()).SendSysMessage("Your bags had no room for the Kartcraft Tokens.");
     }
 
     // The package off a runner, if they have it.
@@ -5476,7 +5657,7 @@ namespace Kartcraft
             SendJobs(player);
             return;
         }
-        static std::set<std::string> const TELEPORTS = { "TB", "TR", "TA", "TG", "MT", "LJ", "Q+", "Y", "Back", "JT" };
+        static std::set<std::string> const TELEPORTS = { "TB", "TR", "TA", "TG", "MT", "LJ", "Q+", "Y", "Back", "JT", "Hub" };
         if (f.size() >= 2 && TELEPORTS.count(f[1]) && CarryingDelivery(player))
         {
             ChatHandler(player->GetSession()).SendSysMessage(
@@ -5496,6 +5677,27 @@ namespace Kartcraft
         if (f.size() >= 4 && f[1] == "CE" && (f[2] == "P" || f[2] == "T"))
         {
             EquipCosmetic(player, f[2], f[3]);
+            return;
+        }
+        if (f.size() >= 2 && f[1] == "Hub")
+        {
+            ObjectGuid const guid = player->GetObjectGuid();
+            sWorld.GetMessager().AddMessage([guid](World*)
+            {
+                if (Player* p = ObjectAccessor::FindPlayer(guid))
+                    HubTeleport(p);
+            });
+            return;
+        }
+        if (f.size() >= 3 && f[1] == "AC")
+        {
+            ObjectGuid const guid = player->GetObjectGuid();
+            uint64 const cache = std::strtoull(f[2].c_str(), nullptr, 10);
+            sWorld.GetMessager().AddMessage([guid, cache](World*)
+            {
+                if (Player* p = ObjectAccessor::FindPlayer(guid))
+                    CacheTouched(p, cache);
+            });
             return;
         }
         if (f.size() >= 2 && (f[1] == "Goods" || f[1] == "GoodBuy" || f[1] == "FlagWear"))
@@ -6157,6 +6359,18 @@ namespace Kartcraft
         marshal->pGossipHello = &MarshalHello;
         marshal->pGossipSelect = &MarshalSelect;
         marshal->RegisterSelf(true);
+        // The hub's Quartermaster (sql/kartcraft.sql).
+        Script* hub = new Script;
+        hub->Name = "npc_kartcraft_hub";
+        hub->pGossipHello = &HubHello;
+        hub->pGossipSelect = &HubSelect;
+        hub->RegisterSelf(true);
+        // The caches' chests (sql/kartcraft_caches.sql).
+        Script* cache = new Script;
+        cache->Name = "go_kartcraft_cache";
+        cache->pGOHello = &CacheHello;
+        cache->RegisterSelf(true);
+        CreateCacheClaims();
         CreateResults();
         CreateChallenges();
         CreateCosmetics();

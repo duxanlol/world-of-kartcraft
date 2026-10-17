@@ -14,6 +14,7 @@
 
 mod autotest;
 mod bindings;
+mod caches;
 pub(crate) mod freecam;
 mod garage;
 mod ghost;
@@ -704,6 +705,9 @@ pub(crate) fn plugin(app: &mut App) {
         .add_observer(settings::on_cvar)
         .init_resource::<pad_choice::PadChoice>()
         .add_observer(pad_choice::on_cvar)
+        .init_resource::<caches::Touched>()
+        // The caches the kart drives through, once the wire's objects have landed.
+        .add_systems(Update, caches::touch.after(crate::net::apply_net_updates))
         .init_resource::<skins::SkinPreview>()
         .add_observer(skins::on_cvar)
         // The shop's preview unit stood up (after the wire's own units land), then the pane's yaw

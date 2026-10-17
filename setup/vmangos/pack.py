@@ -11,7 +11,9 @@ src/KartcraftShowcase.h from showcase/showcase.json (the showcase runs' starts),
 sql/kartcraft.sql, the world-database rows of the Race Marshals: one spawn per distinct
 "marshal" spot in courses.json (written there by `course-gen marshals`). From
 deliveries/deliveries.json, src/KartcraftDeliveries.h and sql/kartcraft_deliveries.sql: the
-courier routes, every town to every other on its continent, a repeatable quest each. A file in src/ the
+courier routes, every town to every other on its continent, a repeatable quest each. From
+roads/roads.json (the GPS roads, driven by the bot on the real collision), sql/kartcraft_caches.sql:
+the Astral and Wumpa Caches, spots along the roads in pools of one live cache a square. A file in src/ the
 patch does not carry yet is added as a new file beside Kartcraft.h. The other hunks (the hooks
 into vmangos's own files) are kept as they are.
 """
@@ -34,6 +36,26 @@ DELIVERIES_JSON = os.path.join(HERE, '..', '..', 'deliveries', 'deliveries.json'
 PARS_JSON = os.path.join(HERE, '..', '..', 'deliveries', 'pars.json')
 DELIVERIES_H = os.path.join(HERE, 'src', 'KartcraftDeliveries.h')
 DELIVERIES_SQL = os.path.join(HERE, 'sql', 'kartcraft_deliveries.sql')
+ROADS_JSON = os.path.join(HERE, '..', '..', 'roads', 'roads.json')
+CACHES_SQL = os.path.join(HERE, 'sql', 'kartcraft_caches.sql')
+# The caches (Kartcraft.cpp "Caches"): the Astral Cache, rare, Ahn'Qiraj's Scarab Coffer (display
+# 6502, seen nowhere else in the open world), and the Wumpa Cache, common, the Titan chest of
+# Gordok Tribute (1387); neither the plain chest.
+CACHE_ASTRAL, CACHE_WUMPA = 190200, 190201
+CACHE_SCRIPT = 'go_kartcraft_cache'
+# Spawn guids and pool entries reserved for them (the world's gameobject guids end near 4.0 M, its
+# pool entries near 44 k).
+CACHE_GUIDS = (4100000, 4109999)
+CACHE_POOLS = (60000, 61999)
+# Spots at least this far apart (yards) along the roads; one cache live at a time in each square
+# this wide (yards); a spot this far (yards) from any course's start or marshal stays clear of it.
+CACHE_SPACING = 250.0
+CACHE_SQUARE = 3000.0
+CACHE_CLEAR = 80.0
+# One spot in this many is an Astral Cache.
+CACHE_ASTRAL_SHARE = 7
+# A claimed cache comes back somewhere in its square between these (s).
+CACHE_RESPAWN = (120, 300)
 GAME_DIR = 'src/game/'
 KEY = re.compile(r'^[a-z0-9_-]{1,32}$')
 CRATE_KINDS = 'FQW'
@@ -180,6 +202,16 @@ MARSHAL_TEXT = 190000          # its greeting; MARSHAL_TEXT + 1 answers "How do 
                                # time trial leaderboard, MARSHAL_TEXT + 4 hosting's ground types
 MARSHAL_GUIDS = (400000, 400999)
 MARSHAL_SCRIPT = 'npc_kartcraft_marshal'
+# The hub's Quartermaster (Kartcraft.cpp "Hub"): at the Mirage Raceway, between its pit crews, in
+# the Goblin Pit Boss's look (display 7191); its menu opens the garage, the shop, the tracks and
+# the Race Finder.
+HUB_ENTRY = 190011
+HUB_GUID = 401000
+HUB_TEXT = 190020
+HUB_SCRIPT = 'npc_kartcraft_hub'
+HUB_SPOT = (1, -6206.0, -3896.0, -58.67, 3.1)
+HUB_GREETING = ("The Mirage Raceway: every racer's meeting place. Pick your kart and its look, spend "
+                "your tokens, or find a race from here.")
 # NO_XP | NO_LOOT | UNKILLABLE | IMMUNE_TO_PC | IMMUNE_TO_NPC | AMPHIBIOUS | IGNORE_COMBAT
 # (CreatureDefines.h): nobody fights the marshal.
 MARSHAL_STATIC_FLAGS = 0x2 | 0x4 | 0x8 | 0x20 | 0x40 | 0x80000 | 0x2000000
@@ -265,6 +297,29 @@ def marshal_sql(data):
     rows = [f'({lo + i}, {MARSHAL_ENTRY}, {m}, {sql_num(x)}, {sql_num(y)}, {sql_num(z)}, {sql_num(o)}, 300, 300, 0, 0)'
             for i, (m, x, y, z, o) in enumerate(spots)]
     out.append(',\n'.join(rows) + ';')
+    m, x, y, z, o = HUB_SPOT
+    out += [
+        '',
+        "-- The hub's Quartermaster at the Mirage Raceway (Kartcraft.cpp \"Hub\"): a gossip NPC whose",
+        f'-- menu is the core\'s script {HUB_SCRIPT}.',
+        f'DELETE FROM `creature` WHERE `guid` = {HUB_GUID} OR `id` = {HUB_ENTRY};',
+        f'DELETE FROM `creature_template` WHERE `entry` = {HUB_ENTRY};',
+        f'DELETE FROM `npc_text` WHERE `ID` = {HUB_TEXT};',
+        f'DELETE FROM `broadcast_text` WHERE `entry` = {HUB_TEXT};',
+        'INSERT INTO `broadcast_text` (`entry`, `male_text`, `female_text`) VALUES',
+        f'({HUB_TEXT}, {sql_str(HUB_GREETING)}, {sql_str(HUB_GREETING)});',
+        'INSERT INTO `npc_text` (`ID`, `BroadcastTextID0`, `Probability0`) VALUES',
+        f'({HUB_TEXT}, {HUB_TEXT}, 1);',
+        'INSERT INTO `creature_template` (`entry`, `patch`, `name`, `subname`, `level_min`, `level_max`,',
+        '  `faction`, `npc_flags`, `display_id1`, `display_scale1`, `display_probability1`,',
+        '  `display_total_probability`, `type`, `unit_class`, `inhabit_type`, `civilian`,',
+        '  `static_flags1`, `flags_extra`, `script_name`) VALUES',
+        f"({HUB_ENTRY}, 0, 'Kartcraft Quartermaster', 'World of Kartcraft', 60, 60, 35, 1, 7191, 1, 100, 100, 7, 1, 3, 1,",
+        f"  {MARSHAL_STATIC_FLAGS}, 2, '{HUB_SCRIPT}');",
+        'INSERT INTO `creature` (`guid`, `id`, `map`, `position_x`, `position_y`, `position_z`,',
+        '  `orientation`, `spawntimesecsmin`, `spawntimesecsmax`, `wander_distance`, `movement_type`) VALUES',
+        f'({HUB_GUID}, {HUB_ENTRY}, {m}, {sql_num(x)}, {sql_num(y)}, {sql_num(z)}, {sql_num(o)}, 300, 300, 0, 0);',
+    ]
     out += ['', 'COMMIT;']
     return '\n'.join(out) + '\n'
 
@@ -479,6 +534,94 @@ def deliveries_sql(towns, routes):
     return '\n'.join(out) + '\n'
 
 
+def caches_sql(data):
+    """sql/kartcraft_caches.sql: the caches' templates, a spot every CACHE_SPACING along the GPS
+    roads (each map's points, in a fixed pseudo-random order, the first of any cluster kept), and
+    a pool per CACHE_SQUARE of them, one live at a time."""
+    with open(ROADS_JSON, encoding='utf-8') as f:
+        roads = json.load(f)
+    starts = []
+    for c in data['courses']:
+        cps = c.get('checkpoints') or []
+        if cps:
+            starts.append((c['map'], cps[0]['x'], cps[0]['y']))
+        if c.get('marshal'):
+            starts.append((c['map'], c['marshal']['x'], c['marshal']['y']))
+    spots = []
+    for m in roads['maps']:
+        p = m['points']
+        pts = [(p[i], p[i + 1], p[i + 2]) for i in range(0, len(p), 3)]
+        order = sorted(range(len(pts)), key=lambda i: hashlib.sha256(
+            f"{m['map']}:{pts[i][0]:.1f}:{pts[i][1]:.1f}".encode()).hexdigest())
+        cell = CACHE_SPACING
+        grid = {}
+        for i in order:
+            x, y, z = pts[i]
+            gx, gy = int(math.floor(x / cell)), int(math.floor(y / cell))
+            near = any(math.hypot(x - qx, y - qy) < CACHE_SPACING
+                       for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                       for (qx, qy) in grid.get((gx + dx, gy + dy), []))
+            if near or any(sm == m['map'] and math.hypot(x - sx, y - sy) < CACHE_CLEAR for sm, sx, sy in starts):
+                continue
+            grid.setdefault((gx, gy), []).append((x, y))
+            spots.append((m['map'], x, y, z))
+    lo, hi = CACHE_GUIDS
+    if len(spots) > hi - lo + 1:
+        fail(f'{len(spots)} cache spots, more than the {hi - lo + 1} guids reserved')
+    squares = {}
+    for s in spots:
+        squares.setdefault((s[0], int(math.floor(s[1] / CACHE_SQUARE)), int(math.floor(s[2] / CACHE_SQUARE))), [])
+    keys = sorted(squares)
+    plo, phi = CACHE_POOLS
+    if len(keys) > phi - plo + 1:
+        fail(f'{len(keys)} cache squares, more than the {phi - plo + 1} pool entries reserved')
+    pool_of = {k: plo + i for i, k in enumerate(keys)}
+    out = [
+        '-- Generated by setup/vmangos/pack.py from roads/roads.json: edit that file (course-gen gps) or',
+        '-- pack.py, and rerun it. The Astral and Wumpa Caches of World of Kartcraft (Kartcraft.cpp',
+        '-- "Caches"), for the world database (mangos): chests on spots along the drivable roads, one',
+        '-- live at a time in each square, claimed by driving through (or opening) one. vmangos-deploy',
+        '-- runs it from storage/database/custom-sql/ on every database start, so it replaces its own',
+        '-- rows, and only those.',
+        '',
+        'START TRANSACTION;',
+        '',
+        f'DELETE FROM `pool_gameobject` WHERE `guid` BETWEEN {lo} AND {hi};',
+        f'DELETE FROM `pool_template` WHERE `entry` BETWEEN {plo} AND {phi};',
+        f'DELETE FROM `gameobject` WHERE `guid` BETWEEN {lo} AND {hi} OR `id` IN ({CACHE_ASTRAL}, {CACHE_WUMPA});',
+        f'DELETE FROM `gameobject_template` WHERE `entry` IN ({CACHE_ASTRAL}, {CACHE_WUMPA});',
+        '',
+        '-- Chests (type 3) with no lock and no loot of their own, consumed when claimed (data3), the',
+        f'-- claim being the core\'s script {CACHE_SCRIPT}.',
+        'INSERT INTO `gameobject_template` (`entry`, `patch`, `type`, `displayId`, `name`, `size`,',
+        '  `data0`, `data1`, `data3`, `script_name`) VALUES',
+        f"({CACHE_ASTRAL}, 0, 3, 6502, 'Astral Cache', 0.8, 0, 0, 1, '{CACHE_SCRIPT}'),",
+        f"({CACHE_WUMPA}, 0, 3, 1387, 'Wumpa Cache', 0.5, 0, 0, 1, '{CACHE_SCRIPT}');",
+        '',
+        f'-- A pool a {int(CACHE_SQUARE)}-yard square, one cache live in it at a time.',
+        'INSERT INTO `pool_template` (`entry`, `max_limit`, `description`) VALUES',
+        ',\n'.join(f"({pool_of[k]}, 1, 'Kartcraft caches, map {k[0]} square {k[1]},{k[2]}')" for k in keys) + ';',
+        '',
+        f'-- A spot every {int(CACHE_SPACING)} yards along the roads; one in {CACHE_ASTRAL_SHARE} an Astral Cache.',
+        'INSERT INTO `gameobject` (`guid`, `id`, `map`, `position_x`, `position_y`, `position_z`,',
+        '  `orientation`, `rotation0`, `rotation1`, `rotation2`, `rotation3`, `spawntimesecsmin`,',
+        '  `spawntimesecsmax`, `animprogress`, `state`) VALUES',
+    ]
+    rows, pools = [], []
+    for i, (m, x, y, z) in enumerate(spots):
+        guid = lo + i
+        astral = int(hashlib.sha256(f'{m}:{x}:{y}'.encode()).hexdigest(), 16) % CACHE_ASTRAL_SHARE == 0
+        entry = CACHE_ASTRAL if astral else CACHE_WUMPA
+        rows.append(f'({guid}, {entry}, {m}, {sql_num(round(x, 1))}, {sql_num(round(y, 1))}, '
+                    f'{sql_num(round(z, 1))}, 0, 0, 0, 0, 1, {CACHE_RESPAWN[0]}, {CACHE_RESPAWN[1]}, 100, 1)')
+        square = (m, int(math.floor(x / CACHE_SQUARE)), int(math.floor(y / CACHE_SQUARE)))
+        pools.append(f"({guid}, {pool_of[square]}, 0, 'Kartcraft cache')")
+    out.append(',\n'.join(rows) + ';')
+    out += ['', 'INSERT INTO `pool_gameobject` (`guid`, `pool_entry`, `chance`, `description`) VALUES',
+            ',\n'.join(pools) + ';', '', 'COMMIT;']
+    return '\n'.join(out) + '\n'
+
+
 def refresh(path, text, name, check, stale):
     # A checkout may have turned the line ends to CRLF; the file is compared as made.
     old = open(path, newline='').read().replace('\r\n', '\n') if os.path.isfile(path) else None
@@ -504,6 +647,7 @@ def main():
     refresh(DELIVERIES_H, deliveries, 'setup/vmangos/src/KartcraftDeliveries.h', check, stale)
     refresh(DELIVERIES_SQL, deliveries_sql(towns, routes), 'setup/vmangos/sql/kartcraft_deliveries.sql',
             check, stale)
+    refresh(CACHES_SQL, caches_sql(data), 'setup/vmangos/sql/kartcraft_caches.sql', check, stale)
     made = {COURSES_H: header, SHOWCASE_H: show, DELIVERIES_H: deliveries}
 
     patch = open(PATCH, newline='').read()

@@ -1522,6 +1522,22 @@
                 SetCVar("KartPaint", look.worn.P)
                 SetCVar("KartTrail", look.worn.T)
                 if BenillaKartGarageFrame:IsVisible() then BenillaKartGarage_Refresh() end
+            elseif verb == "Open" then
+                -- The hub's Quartermaster opens a window: the garage or the shop.
+                if line[3] == "garage" then
+                    BenillaKart_Open(BenillaKartGarageFrame)
+                elseif line[3] == "shop" then
+                    BenillaKart_Open(BenillaKartShopFrame)
+                end
+            elseif verb == "ACGot" then
+                -- A cache claimed (Kartcraft.cpp "Caches"): what it held, said and sounded.
+                local copper, tokens = tonumber(line[3]) or 0, tonumber(line[4]) or 0
+                local name = line[5] == "1" and "an Astral Cache" or "a Wumpa Cache"
+                local text = "You found " .. name .. ": " .. BenillaKart_Money(copper)
+                if tokens > 0 then text = text .. " and " .. tokens .. " Kartcraft Tokens" end
+                UIErrorsFrame:AddMessage(text .. "!", 1, 0.82, 0, 1, 4)
+                BenillaKart_Say(text .. ".")
+                PlaySound("LOOTWINDOWCOINSOUND")
             elseif verb == "Goods" then
                 -- Our own cosmetics: tokens, the flag we fly, the goods we own. A custom kart picked
                 -- but not ours (another character's pick) goes back to the CTR one.
@@ -3767,6 +3783,16 @@
         -- The server's word on the goods: the ones we own (by key) and the flag we fly ("" none).
         BenillaKartGoods = { owned = {}, flag = "" }
 
+        -- `copper` as gold, silver and copper ("1g 20s 5c"), the parts there are.
+        function BenillaKart_Money(copper)
+            local g, s, c = math.floor(copper / 10000), math.floor(mod(copper, 10000) / 100), mod(copper, 100)
+            local out = {}
+            if g > 0 then table.insert(out, g .. "g") end
+            if s > 0 then table.insert(out, s .. "s") end
+            if c > 0 or table.getn(out) == 0 then table.insert(out, c .. "c") end
+            return table.concat(out, " ")
+        end
+
         -- The picked cell, and the server's word: our tokens (nil before it answers), the skins we
         -- own (by key) and the one we wear ("" our own body).
         BenillaKartShop = { selected = 1, owned = {}, worn = "" }
@@ -4234,6 +4260,8 @@
             SlashCmdList["BENILLA_MARATHON"] = function(msg) BenillaKartMarathon_Slash(msg) end
             SLASH_BENILLA_KARTNAV1 = "/kartnav"
             SlashCmdList["BENILLA_KARTNAV"] = function() BenillaKartNav_Toggle() end
+            SLASH_BENILLA_HUB1 = "/hub"
+            SlashCmdList["BENILLA_HUB"] = function() BenillaKart_Send("Hub") end
             SLASH_BENILLA_GARAGE1 = "/garage"
             SlashCmdList["BENILLA_GARAGE"] = function() BenillaKartGarage_Toggle() end
             SLASH_BENILLA_KARTSHOP1 = "/kartshop"

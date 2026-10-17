@@ -203,4 +203,24 @@ INSERT INTO `creature` (`guid`, `id`, `map`, `position_x`, `position_y`, `positi
 (400164, 190000, 0, 1948, -1505.8, 64.7, 1.064, 300, 300, 0, 0),
 (400165, 190000, 0, -7139.7, -1397.3, 240.3, 2.959, 300, 300, 0, 0);
 
+-- The hub's Quartermaster at the Mirage Raceway (Kartcraft.cpp "Hub"): a gossip NPC whose
+-- menu is the core's script npc_kartcraft_hub.
+DELETE FROM `creature` WHERE `guid` = 401000 OR `id` = 190011;
+DELETE FROM `creature_template` WHERE `entry` = 190011;
+DELETE FROM `npc_text` WHERE `ID` = 190020;
+DELETE FROM `broadcast_text` WHERE `entry` = 190020;
+INSERT INTO `broadcast_text` (`entry`, `male_text`, `female_text`) VALUES
+(190020, 'The Mirage Raceway: every racer''s meeting place. Pick your kart and its look, spend your tokens, or find a race from here.', 'The Mirage Raceway: every racer''s meeting place. Pick your kart and its look, spend your tokens, or find a race from here.');
+INSERT INTO `npc_text` (`ID`, `BroadcastTextID0`, `Probability0`) VALUES
+(190020, 190020, 1);
+INSERT INTO `creature_template` (`entry`, `patch`, `name`, `subname`, `level_min`, `level_max`,
+  `faction`, `npc_flags`, `display_id1`, `display_scale1`, `display_probability1`,
+  `display_total_probability`, `type`, `unit_class`, `inhabit_type`, `civilian`,
+  `static_flags1`, `flags_extra`, `script_name`) VALUES
+(190011, 0, 'Kartcraft Quartermaster', 'World of Kartcraft', 60, 60, 35, 1, 7191, 1, 100, 100, 7, 1, 3, 1,
+  34078830, 2, 'npc_kartcraft_hub');
+INSERT INTO `creature` (`guid`, `id`, `map`, `position_x`, `position_y`, `position_z`,
+  `orientation`, `spawntimesecsmin`, `spawntimesecsmax`, `wander_distance`, `movement_type`) VALUES
+(401000, 190011, 1, -6206, -3896, -58.67, 3.1, 300, 300, 0, 0);
+
 COMMIT;
