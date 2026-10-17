@@ -932,11 +932,21 @@ mod tests {
     #[test]
     fn a_replay_is_labelled_by_its_course_and_our_result() {
         let mut r = replay();
-        assert_eq!(r.label(), "Goldshire & Crystal Lake: 2nd of 3, 1:23.45");
+        r.course = "elwynn-maclure-crystal".into();
+        assert_eq!(
+            r.label(),
+            "The Maclure Vineyards & Crystal Lake: 2nd of 3, 1:23.45"
+        );
         r.place = 0;
-        assert_eq!(r.label(), "Goldshire & Crystal Lake: did not finish");
+        assert_eq!(
+            r.label(),
+            "The Maclure Vineyards & Crystal Lake: did not finish"
+        );
         r.time_trial = true;
-        assert_eq!(r.label(), "Goldshire & Crystal Lake: time trial, 1:23.45");
+        assert_eq!(
+            r.label(),
+            "The Maclure Vineyards & Crystal Lake: time trial, 1:23.45"
+        );
         assert_eq!(
             [1, 2, 3, 4, 11, 12, 13, 21, 22].map(ordinal),
             ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd"]

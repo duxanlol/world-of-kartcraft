@@ -305,7 +305,7 @@ mod tests {
             assert!(name.starts_with(&ZONES[i]) && name.ends_with(')'), "{line}");
         }
         assert_eq!(course_names().lines().count(), COURSES.len());
-        assert!(course_names().contains("sprint\tNorthshire Sprint"));
+        assert!(course_names().contains("gp-azora\tAzora Hill Climb"));
         let tracks = track_list();
         assert_eq!(tracks.lines().count(), COURSES.len());
         for line in tracks.lines() {

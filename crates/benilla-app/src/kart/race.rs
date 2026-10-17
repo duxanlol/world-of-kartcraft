@@ -2385,13 +2385,14 @@ mod tests {
     #[test]
     fn the_courses_file_holds_the_courses_and_their_starts() {
         let course = |key: &str| COURSES.iter().find(|c| c.key == key).unwrap();
-        assert_eq!(course("sprint").name, "Northshire Sprint");
-        assert_eq!(course("sprint").start(), [-8930.0, -118.0]);
-        assert_eq!(course("stormwind").start(), [-9436.0, 59.0]);
-        assert!(course("stormwind")
-            .gates()
-            .iter()
-            .all(|&g| g == GATE_HALF_WIDTH));
+        let sprint = course("elwynn-brackwell-wilds-sprint");
+        assert_eq!(sprint.name, "Brackwell Pumpkin Patch to Elwynn Forest");
+        assert_eq!(sprint.start(), [-9802.0, -875.3]);
+        assert_eq!(
+            course("gp-azora").gates()[0],
+            15.0,
+            "a gate's own half-width"
+        );
         let mut keys: Vec<&str> = COURSES.iter().map(|c| c.key.as_str()).collect();
         keys.sort_unstable();
         keys.dedup();
@@ -2436,7 +2437,8 @@ mod tests {
             .unwrap();
         assert_eq!(strat.map, 329);
         assert!(strat.party());
-        assert_eq!(strat.laps, 3);
+        // Its only loop is King's Square's ring, 18 s a lap: six make a race.
+        assert_eq!(strat.laps, 6);
         assert!(strat.marshal.is_some(), "a marshal inside the instance");
         assert!(!ZONES.contains(&strat.zone));
         assert!(strat.description().contains("A party race"));
@@ -2835,13 +2837,18 @@ mod tests {
         );
         let sprint = COURSES
             .iter()
-            .find(|c| c.key == "sprint")
+            .find(|c| c.key == "elwynn-brackwell-wilds-sprint")
             .expect("the sprint");
         let text = sprint.description();
         assert!(
             text.starts_with("A sprint") && text.contains("from start to finish"),
             "{text}"
         );
+        let strat = COURSES
+            .iter()
+            .find(|c| c.key == "stratholme-streets")
+            .expect("the street circuit");
+        let text = strat.description();
         assert!(
             !text.contains("takes about"),
             "no test lap in its note: {text}"
@@ -3347,17 +3354,17 @@ mod tests {
         let course = |key: &str| COURSES.iter().find(|c| c.key == key).unwrap();
         assert_eq!(start_banner(&[]), "");
         assert_eq!(
-            start_banner(&[course("sprint")]),
-            "Northshire Sprint starts here — talk to the Race Marshal to race"
+            start_banner(&[course("gp-azora")]),
+            "Azora Hill Climb starts here — talk to the Race Marshal to race"
         );
         assert_eq!(
             start_banner(&[
-                course("sprint"),
-                course("stormwind"),
-                course("elwynn-goldshire-crystal")
+                course("gp-azora"),
+                course("elwynn-crystal-azora"),
+                course("elwynn-brackwell-azora")
             ]),
-            "Northshire Sprint, Road to Stormwind and Goldshire & Crystal Lake start here — talk \
-             to the Race Marshal to race"
+            "Azora Hill Climb, Crystal Lake & Tower of Azora and Brackwell Pumpkin Patch & Tower \
+             of Azora start here — talk to the Race Marshal to race"
         );
     }
 

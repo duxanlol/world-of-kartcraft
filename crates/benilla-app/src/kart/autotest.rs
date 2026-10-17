@@ -131,7 +131,7 @@ fn parse(spec: &str) -> Option<Plan> {
             return None;
         }
     };
-    let key = parts.next().unwrap_or("sprint");
+    let key = parts.next().unwrap_or("gp-azora");
     let Some(course) = COURSES.iter().find(|c| c.key == key) else {
         error!("kart autotest: no course {key:?}");
         return None;
