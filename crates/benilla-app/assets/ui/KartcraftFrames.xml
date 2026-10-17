@@ -2670,7 +2670,134 @@
             end
         end
 
+        -- ── The kart's ability bar ──
+        -- In the kart the action bars step aside (BENILLA_KART_HIDDEN_FRAMES), and the abilities'
+        -- buttons and cooldowns with them; this bar shows the four while we drive, in the D-pad's
+        -- order (kart/bindings.rs ABILITIES): each one's icon and key, its cooldown, a glow while
+        -- its aura is on us, and the Karting skill it unlocks at (Kartcraft.cpp UNLOCKS) until then.
+        -- The icons are the server's (SpellIcon.dbc 230, 136, 516, 46), for the ones not learned.
+        BENILLA_KART_ABILITIES = {
+            { name = "Wumpa Juice", binding = "KARTCRAFT_ABILITY1", skill = 75, icon = "Interface\\Icons\\INV_Boots_03" },
+            { name = "Turbo Boost", binding = "KARTCRAFT_ABILITY2", skill = 150, icon = "Interface\\Icons\\Spell_Fire_Flare" },
+            { name = "Super Engine", binding = "KARTCRAFT_ABILITY3", skill = 225, icon = "Interface\\Icons\\Ability_Rogue_Sprint" },
+            { name = "Aku Aku", binding = "KARTCRAFT_ABILITY4", skill = 300, icon = "Interface\\Icons\\Spell_Nature_MoonGlow" },
+        }
+        -- Each ability's spellbook slot (nil until learned), and the seconds since the last tick.
+        BenillaKartAbilities = { slots = {}, since = 0 }
+
+        function BenillaKartAbilities_Find()
+            local slots, i = {}, 1
+            while true do
+                local name = GetSpellName(i, BOOKTYPE_SPELL)
+                if not name then break end
+                for k, a in ipairs(BENILLA_KART_ABILITIES) do
+                    if name == a.name then slots[k] = i end
+                end
+                i = i + 1
+            end
+            BenillaKartAbilities.slots = slots
+        end
+
+        -- Whether a buff on us wears `texture` (1.12's UnitBuff names its icon alone).
+        function BenillaKartAbilities_On(texture)
+            local i = 1
+            while UnitBuff("player", i) do
+                if UnitBuff("player", i) == texture then return true end
+                i = i + 1
+            end
+            return false
+        end
+
+        function BenillaKartAbilities_Refresh()
+            local slots = BenillaKartAbilities.slots
+            for k, a in ipairs(BENILLA_KART_ABILITIES) do
+                local button = "BenillaKartAbilityFrameButton" .. k
+                local icon, slot = getglobal(button .. "Icon"), slots[k]
+                local key = GetBindingKey(a.binding)
+                getglobal(button .. "HotKey"):SetText(key and GetBindingText(key, "KEY_") or "")
+                local cooldown = getglobal(button .. "Cooldown")
+                if slot then
+                    local texture = GetSpellTexture(slot, BOOKTYPE_SPELL) or a.icon
+                    icon:SetTexture(texture)
+                    icon:SetVertexColor(1, 1, 1)
+                    getglobal(button .. "Lock"):SetText("")
+                    local start, duration, enable = GetSpellCooldown(slot, BOOKTYPE_SPELL)
+                    CooldownFrame_SetTimer(cooldown, start, duration, enable)
+                    if BenillaKartAbilities_On(texture) then
+                        getglobal(button .. "Glow"):Show()
+                    else
+                        getglobal(button .. "Glow"):Hide()
+                    end
+                else
+                    icon:SetTexture(a.icon)
+                    icon:SetVertexColor(0.3, 0.3, 0.3)
+                    getglobal(button .. "Lock"):SetText(a.skill)
+                    getglobal(button .. "Glow"):Hide()
+                    cooldown:Hide()
+                end
+            end
+            BenillaKartAbilities_Tick()
+        end
+
+        -- The seconds left on each cooldown, over the sweep.
+        function BenillaKartAbilities_Tick()
+            local slots, now = BenillaKartAbilities.slots, GetTime()
+            for k = 1, table.getn(BENILLA_KART_ABILITIES) do
+                local text, left = getglobal("BenillaKartAbilityFrameButton" .. k .. "FrontTime"), 0
+                if slots[k] then
+                    local start, duration = GetSpellCooldown(slots[k], BOOKTYPE_SPELL)
+                    -- A global cooldown (1.5 s or less) is no wait worth a number.
+                    if start and start > 0 and duration > 1.5 then left = start + duration - now end
+                end
+                if left > 0 then
+                    text:SetText(left >= 60 and (math.ceil(left / 60) .. "m") or math.ceil(left))
+                else
+                    text:SetText("")
+                end
+            end
+        end
+
+        function BenillaKartAbilities_OnUpdate(elapsed)
+            local a = BenillaKartAbilities
+            a.since = a.since + elapsed
+            if a.since < 0.2 then return end
+            a.since = 0
+            BenillaKartAbilities_Tick()
+        end
+
+        function BenillaKartAbilities_Show(seated)
+            if seated then
+                BenillaKartAbilities_Find()
+                BenillaKartAbilityFrame:Show()
+                BenillaKartAbilities_Refresh()
+            else
+                BenillaKartAbilityFrame:Hide()
+            end
+        end
+
+        function BenillaKartAbilities_Click(k)
+            local a = BENILLA_KART_ABILITIES[k]
+            if BenillaKartAbilities.slots[k] then
+                CastSpellByName(a.name)
+            else
+                BenillaKart_Say(a.name .. " unlocks at Karting " .. a.skill .. ".")
+            end
+        end
+
+        function BenillaKartAbilities_Tooltip(k)
+            local a, slot = BENILLA_KART_ABILITIES[k], BenillaKartAbilities.slots[k]
+            GameTooltip:SetOwner(this, "ANCHOR_TOP")
+            if slot then
+                GameTooltip:SetSpell(slot, BOOKTYPE_SPELL)
+            else
+                GameTooltip:SetText(a.name)
+                GameTooltip:AddLine("Unlocks at Karting " .. a.skill .. ".", 1, 0.82, 0)
+            end
+            GameTooltip:Show()
+        end
+
         function BenillaKartSeated_Set(seated)
+            BenillaKartAbilities_Show(seated)
             BenillaKartShortcuts.seated = seated
             BenillaKartShortcuts_Update()
             if seated then BenillaKartGuide_FirstDrive() end
@@ -5762,6 +5889,97 @@
                 BenillaKart_Movable(this)
             </OnLoad>
             <OnUpdate>BenillaKartMarathon_Update(arg1)</OnUpdate>
+            <OnDragStart>this:StartMoving()</OnDragStart>
+            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
+        </Scripts>
+    </Frame>
+
+    <!-- One of the kart's abilities: its icon, key, cooldown, the seconds left, a glow while its
+         aura is on, and the skill it waits for. -->
+    <Button name="BenillaKartAbilityTemplate" virtual="true">
+        <Size><AbsDimension x="40" y="40"/></Size>
+        <Layers>
+            <Layer level="BACKGROUND">
+                <Texture name="$parentIcon"/>
+            </Layer>
+            <Layer level="OVERLAY">
+                <Texture name="$parentGlow" file="Interface\Buttons\CheckButtonHilight" alphaMode="ADD" hidden="true">
+                    <Size><AbsDimension x="40" y="40"/></Size>
+                    <Anchors><Anchor point="CENTER"/></Anchors>
+                </Texture>
+                <FontString name="$parentHotKey" inherits="NumberFontNormalSmallGray" justifyH="RIGHT">
+                    <Size><AbsDimension x="36" y="10"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="2" y="-2"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentLock" inherits="GameFontDisableSmall">
+                    <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="3"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Frames>
+            <Model name="$parentCooldown" inherits="CooldownFrameTemplate"/>
+            <Frame name="$parentFront" setAllPoints="true">
+                <Layers>
+                    <Layer level="OVERLAY">
+                        <FontString name="$parentTime" inherits="NumberFontNormalLarge">
+                            <Anchors><Anchor point="CENTER"/></Anchors>
+                        </FontString>
+                    </Layer>
+                </Layers>
+                <Scripts><OnLoad>this:SetFrameLevel(this:GetFrameLevel() + 2)</OnLoad></Scripts>
+            </Frame>
+        </Frames>
+        <NormalTexture file="Interface\Buttons\UI-Quickslot2">
+            <Size><AbsDimension x="66" y="66"/></Size>
+            <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="-1"/></Offset></Anchor></Anchors>
+        </NormalTexture>
+        <PushedTexture file="Interface\Buttons\UI-Quickslot-Depress"/>
+        <HighlightTexture file="Interface\Buttons\ButtonHilight-Square" alphaMode="ADD"/>
+        <Scripts>
+            <OnLoad>
+                this:RegisterForClicks("LeftButtonUp")
+                getglobal(this:GetName() .. "Icon"):SetAllPoints(this)
+            </OnLoad>
+            <OnClick>BenillaKartAbilities_Click(this:GetID())</OnClick>
+            <OnEnter>BenillaKartAbilities_Tooltip(this:GetID())</OnEnter>
+            <OnLeave>GameTooltip:Hide()</OnLeave>
+        </Scripts>
+    </Button>
+
+    <!-- The kart's abilities while we drive (BenillaKartAbilities_Show): above the screen's
+         bottom edge and the shortcuts, dragged to where it suits. -->
+    <Frame name="BenillaKartAbilityFrame" parent="UIParent" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" frameStrata="MEDIUM">
+        <Size><AbsDimension x="196" y="52"/></Size>
+        <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="64"/></Offset></Anchor></Anchors>
+        <Frames>
+            <Button name="$parentButton1" inherits="BenillaKartAbilityTemplate" id="1">
+                <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="6" y="0"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentButton2" inherits="BenillaKartAbilityTemplate" id="2">
+                <Anchors><Anchor point="LEFT" relativeTo="$parentButton1" relativePoint="RIGHT"><Offset><AbsDimension x="8" y="0"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentButton3" inherits="BenillaKartAbilityTemplate" id="3">
+                <Anchors><Anchor point="LEFT" relativeTo="$parentButton2" relativePoint="RIGHT"><Offset><AbsDimension x="8" y="0"/></Offset></Anchor></Anchors>
+            </Button>
+            <Button name="$parentButton4" inherits="BenillaKartAbilityTemplate" id="4">
+                <Anchors><Anchor point="LEFT" relativeTo="$parentButton3" relativePoint="RIGHT"><Offset><AbsDimension x="8" y="0"/></Offset></Anchor></Anchors>
+            </Button>
+        </Frames>
+        <Scripts>
+            <OnLoad>
+                this:RegisterEvent("SPELLS_CHANGED")
+                this:RegisterEvent("LEARNED_SPELL_IN_TAB")
+                this:RegisterEvent("SPELL_UPDATE_COOLDOWN")
+                this:RegisterEvent("PLAYER_AURAS_CHANGED")
+                this:RegisterEvent("UPDATE_BINDINGS")
+                BenillaKart_Movable(this)
+            </OnLoad>
+            <OnEvent>
+                if not this:IsVisible() then return end
+                if event == "SPELLS_CHANGED" or event == "LEARNED_SPELL_IN_TAB" then BenillaKartAbilities_Find() end
+                BenillaKartAbilities_Refresh()
+            </OnEvent>
+            <OnUpdate>BenillaKartAbilities_OnUpdate(arg1)</OnUpdate>
             <OnDragStart>this:StartMoving()</OnDragStart>
             <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
         </Scripts>

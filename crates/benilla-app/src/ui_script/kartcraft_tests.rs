@@ -264,6 +264,60 @@ fn in_the_kart_the_bars_and_unit_frames_step_aside_and_come_back() {
     );
 }
 
+/// In the kart the ability bar stands where the action bars stepped aside: the four abilities in
+/// the D-pad's order, each with its key, and one not learned yet dimmed with the Karting skill it
+/// waits for; out of the kart it goes.
+#[test]
+fn in_the_kart_the_ability_bar_shows_the_four_with_their_keys_and_locks() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let seated = |s: &mut UiScript, on: bool| {
+        s.fire_event(
+            "BENILLA_KART_SEATED",
+            vec![ScriptValue::Number(f64::from(u8::from(on)))],
+        );
+        s.tick(0.0);
+    };
+    let text = |s: &mut UiScript, name: &str| {
+        s.eval::<String>(&format!("return {name}:GetText() or ''"))
+            .unwrap()
+    };
+    s.tick(0.0);
+    assert!(!s
+        .eval::<bool>("return BenillaKartAbilityFrame:IsVisible() == 1")
+        .unwrap());
+    seated(&mut s, true);
+    assert!(s
+        .eval::<bool>("return BenillaKartAbilityFrame:IsVisible() == 1")
+        .unwrap());
+    // A character without the Karting skill: every ability waits for its level.
+    let locks: Vec<String> = (1..=4)
+        .map(|k| text(&mut s, &format!("BenillaKartAbilityFrameButton{k}Lock")))
+        .collect();
+    assert_eq!(locks, ["75", "150", "225", "300"]);
+    // The engine binds the kart's default keys at startup (kart/bindings.rs DEFAULTS); here, as it
+    // does.
+    s.run("for k = 1, 4 do SetBinding(tostring(k), 'KARTCRAFT_ABILITY' .. k) end")
+        .unwrap();
+    s.fire_event("UPDATE_BINDINGS", Vec::new());
+    s.tick(0.0);
+    let keys: Vec<String> = (1..=4)
+        .map(|k| text(&mut s, &format!("BenillaKartAbilityFrameButton{k}HotKey")))
+        .collect();
+    assert_eq!(keys, ["1", "2", "3", "4"], "the default keys");
+    assert!(s
+        .eval::<String>("return BenillaKartAbilityFrameButton2Icon:GetTexture() or ''")
+        .unwrap()
+        .eq_ignore_ascii_case(r"Interface\Icons\Spell_Fire_Flare"));
+    seated(&mut s, false);
+    assert!(!s
+        .eval::<bool>("return BenillaKartAbilityFrame:IsVisible() == 1")
+        .unwrap());
+}
+
 #[test]
 fn forty_courses_scroll_and_a_tick_follows_its_course() {
     benilla_formats::wow_data_or_skip!();

@@ -32,6 +32,9 @@ const SKILL_CATEGORY_SECONDARY: u32 = 9;
 /// SkillTiers 181: one tier up to 300.
 const SKILL_TIER_300: u32 = 181;
 
+/// `Attributes` bit 24, castable while mounted.
+const ATTR_CASTABLE_WHILE_MOUNTED: u32 = 0x0100_0000;
+
 const SPELL_EFFECT_APPLY_AURA: u32 = 6;
 const SPELL_AURA_DUMMY: u32 = 4;
 const TARGET_UNIT_CASTER: u32 = 1;
@@ -158,6 +161,12 @@ fn spell_rows() -> Vec<Row> {
             // Spell.dbc 5875, 173 fields; columns as `spells::COL_*` and vmangos `SpellEntry`.
             let mut f = vec![0u32; 173];
             f[0] = s.id;
+            // The abilities are used from the kart, a mount: castable while mounted, as the
+            // server's (`SPELL_ATTR_ALLOW_WHILE_MOUNTED`), or the client's cast check refuses a
+            // click on one ("You are mounted").
+            if s.id != SPELL_SUMMON_KART {
+                f[6] = ATTR_CASTABLE_WHILE_MOUNTED;
+            }
             f[18] = s.cast_time;
             f[19] = s.cooldown_ms;
             f[21] = if s.cast_time > 1 { 0x0F } else { 0 };
@@ -306,5 +315,20 @@ mod tests {
         assert_eq!(patch("DBFilesClient\\Map.dbc", other.clone()), other);
         let narrow = table(4, &[1]);
         assert_eq!(patch("DBFilesClient\\Spell.dbc", narrow.clone()), narrow);
+    }
+
+    /// The abilities are castable while mounted (the kart is one), as on the server; Summon Kart
+    /// is not.
+    #[test]
+    fn the_abilities_cast_from_the_kart() {
+        for row in spell_rows() {
+            let mounted = row.fields[6] & ATTR_CASTABLE_WHILE_MOUNTED != 0;
+            assert_eq!(
+                mounted,
+                row.fields[0] != SPELL_SUMMON_KART,
+                "{}",
+                row.fields[0]
+            );
+        }
     }
 }
