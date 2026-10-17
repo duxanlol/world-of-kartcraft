@@ -4,7 +4,8 @@
 //! animated pose, in the pose post-pass: the upper arm (KeyBoneID 1 right, 0 left) and the
 //! forearm turn so the palm lands on the rim at ten to two. A driver whose arms fall short of the
 //! ring leans in from the lower spine (KeyBoneID 4), the head kept level, then slides the grips
-//! down the rim's near side, and past both reaches as far as the arm goes. The fingers close as
+//! down the rim's near side, then slides forward in the seat, and past all three reaches as far
+//! as the arm goes. The fingers close as
 //! on a weapon's grip.
 
 use benilla_world::rig_anim::RigPose;
@@ -30,12 +31,27 @@ const LOCK: f32 = std::f32::consts::FRAC_PI_8;
 /// search's step.
 const MAX_LEAN: f32 = 0.5;
 const LEAN_STEP: f32 = 0.05;
-/// The palm's centre, this share of the way from the wrist to the fingers.
+/// The furthest a driver still short of the ring slides forward in the seat, a share of the
+/// ring's radius: CTR sits its small drivers nearer the wheel, and ours is drawn where it is.
+const MAX_SLIDE: f32 = 1.0;
+/// The palm's centre, this share of the way from the wrist to the knuckles.
 const PALM: f32 = 0.5;
+/// The hand on the rim points forward and this much in toward the wheel's centre, its knuckles
+/// along the rim; the wrist bends at most this far (radians), the forearm's roll taking the rest.
+const HAND_IN: f32 = 0.3;
+const WRIST_BEND: f32 = 1.4;
 /// The elbow's lean: out from the body, down, and back toward the driver, per unit of each.
 const POLE_OUT: f32 = 0.6;
 const POLE_DOWN: f32 = 1.0;
 const POLE_BACK: f32 = 0.3;
+
+/// `KeyBoneID`s of the right hand's fingers (the left's are 5 on): most models key only the ring
+/// finger and the thumb, a few all five, a tauren's three (index, middle and thumb).
+const KEY_INDEX: i16 = 8;
+const KEY_MIDDLE: i16 = 9;
+const KEY_PINKY: i16 = 10;
+const KEY_RING: i16 = 11;
+const KEY_THUMB: i16 = 12;
 
 /// `KeyBoneID` 4 `SpineLow` and 6 `Head`.
 const KEY_SPINE_LOW: i16 = 4;
@@ -69,6 +85,18 @@ impl Ring {
     /// The face toward the driver.
     fn facing(&self) -> Vec3 {
         self.right.cross(self.up)
+    }
+
+    /// How a hand holds the rim at `grip`: pointing forward and in toward the centre, its
+    /// knuckles along the rim toward the top.
+    pub(crate) fn hold(&self, grip: Vec3) -> [Vec3; 2] {
+        let out = (grip - self.centre).normalize_or(self.up);
+        let mut along = self.facing().cross(out);
+        if along.dot(self.up) < 0.0 {
+            along = -along;
+        }
+        let point = (-self.facing() - out * HAND_IN).normalize_or(-self.facing());
+        [point, along]
     }
 
     /// The grips (right, left) on the rim, `grip` radians either side of the top, turned by
@@ -128,20 +156,26 @@ impl Held {
     }
 }
 
-/// One arm: the upper arm, the forearm, the wrist and its palm's reach past the wrist.
+/// One arm: the upper arm, the forearm, the hand (its bone at the wrist), the finger roots that
+/// set which way the hand faces (the one it points to, the middle finger or else the ring
+/// finger; the thumb side's, index or thumb; the far side's, pinky, ring or middle) and its palm's reach
+/// past the wrist.
 #[derive(Clone, Copy)]
 struct Arm {
     upper: Held,
     fore: Held,
-    hand: usize,
+    hand: Held,
+    fingers: [usize; 3],
     palm: f32,
 }
 
 /// The bones the solve turns: the arms, right then left, and the lower spine and head it leans.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Bones {
     arms: [Arm; 2],
     lean: Option<[Held; 2]>,
+    /// The skeleton's roots, which a slide moves, and their animated and last-written places.
+    roots: Vec<(usize, Vec3, Vec3)>,
 }
 
 impl Bones {
@@ -150,9 +184,17 @@ impl Bones {
         for h in self.lean.iter_mut().flatten() {
             h.restore(rig);
         }
+        for (bone, base, last) in &mut self.roots {
+            let cur = rig.locals[*bone].translation;
+            if cur != *last {
+                *base = cur;
+            }
+            rig.locals[*bone].translation = *base;
+        }
         for arm in &mut self.arms {
             arm.upper.restore(rig);
             arm.fore.restore(rig);
+            arm.hand.restore(rig);
         }
     }
 }
@@ -177,14 +219,17 @@ fn key(rig: &RigPose, k: i16) -> Option<usize> {
     rig.key_bones.iter().position(|&b| b == k)
 }
 
-/// The arm whose upper bone has KeyBoneID `arm_key`: the upper arm, its child toward the fingers
-/// (KeyBoneIDs `fingers`) and that one's child.
-fn find_arm(rig: &RigPose, arm_key: i16, fingers: std::ops::RangeInclusive<i16>) -> Option<Arm> {
+/// The arm whose upper bone has KeyBoneID `arm_key`, its fingers' KeyBoneIDs `shift` past the
+/// right hand's: the upper arm, its child toward the index finger and that one's child.
+fn find_arm(rig: &RigPose, arm_key: i16, shift: i16) -> Option<Arm> {
     let upper = key(rig, arm_key)?;
-    let finger = fingers.clone().find_map(|k| key(rig, k))?;
+    let finger = |keys: &[i16]| keys.iter().find_map(|&k| key(rig, k + shift));
+    let point = finger(&[KEY_MIDDLE, KEY_RING, KEY_PINKY, KEY_INDEX])?;
+    let inner = finger(&[KEY_INDEX, KEY_THUMB])?;
+    let outer = finger(&[KEY_PINKY, KEY_RING, KEY_MIDDLE])?;
     // The finger's ancestors, up to the upper arm.
-    let mut path = vec![finger];
-    let mut i = finger;
+    let mut path = vec![point];
+    let mut i = point;
     while i != upper {
         i = usize::try_from(*rig.parents.get(i)?).ok()?;
         path.push(i);
@@ -198,19 +243,24 @@ fn find_arm(rig: &RigPose, arm_key: i16, fingers: std::ops::RangeInclusive<i16>)
     Some(Arm {
         upper: Held::new(upper),
         fore: Held::new(path[n - 2]),
-        hand,
-        palm: PALM * at(rig, hand).distance(at(rig, finger)),
+        hand: Held::new(hand),
+        fingers: [point, inner, outer],
+        palm: PALM * at(rig, hand).distance(at(rig, point)),
     })
 }
 
 fn find_bones(rig: &RigPose) -> Option<Bones> {
-    let arms = find_arm(rig, 1, 8..=12)
-        .zip(find_arm(rig, 0, 13..=17))
+    let arms = find_arm(rig, 1, 0)
+        .zip(find_arm(rig, 0, 5))
         .map(|(r, l)| [r, l])?;
     let lean = key(rig, KEY_SPINE_LOW)
         .zip(key(rig, KEY_HEAD))
         .map(|(s, h)| [Held::new(s), Held::new(h)]);
-    Some(Bones { arms, lean })
+    let roots = (0..rig.parents.len())
+        .filter(|&i| rig.parents[i] < 0)
+        .map(|i| (i, Vec3::ZERO, Vec3::NAN))
+        .collect();
+    Some(Bones { arms, lean, roots })
 }
 
 /// Bone `i`'s model-space affine from the locals.
@@ -283,20 +333,59 @@ pub(crate) fn grip_wheel(
     }
 }
 
-/// How far the arms of `rig` fall short of their grips, the worse of the two (model frame; ≤ 0
-/// in reach).
-fn shortfall(rig: &RigPose, arms: &[Arm; 2], grips: &[Vec3; 2]) -> f32 {
+/// Where an arm's wrist goes to hold `ring` at `grip`: a palm back from the rim, along the hand.
+fn wrist_at(ring: &Ring, arm: &Arm, grip: Vec3) -> Vec3 {
+    grip - ring.hold(grip)[0] * arm.palm
+}
+
+/// How far an arm of `rig` falls short of its wrist's place at `grip` (model frame; ≤ 0 in
+/// reach).
+fn short_of(rig: &RigPose, ring: &Ring, arm: &Arm, grip: Vec3) -> f32 {
+    let (a, b, c) = (
+        at(rig, arm.upper.bone),
+        at(rig, arm.fore.bone),
+        at(rig, arm.hand.bone),
+    );
+    a.distance(wrist_at(ring, arm, grip)) - a.distance(b) - b.distance(c)
+}
+
+/// The worse of the two arms' [`short_of`].
+fn shortfall(rig: &RigPose, ring: &Ring, arms: &[Arm; 2], grips: &[Vec3; 2]) -> f32 {
     arms.iter()
         .zip(grips)
-        .map(|(arm, &g)| {
-            let (a, b, c) = (
-                at(rig, arm.upper.bone),
-                at(rig, arm.fore.bone),
-                at(rig, arm.hand),
-            );
-            a.distance(g) - arm.palm - a.distance(b) - b.distance(c)
-        })
+        .map(|(arm, &g)| short_of(rig, ring, arm, g))
         .fold(f32::NEG_INFINITY, f32::max)
+}
+
+/// Which way an arm's hand faces: from the wrist to the finger it points by, and across from
+/// its far side to its thumb side.
+fn hand_faces(rig: &RigPose, arm: &Arm) -> [Vec3; 2] {
+    let wrist = at(rig, arm.hand.bone);
+    let [point, inner, outer] = arm.fingers.map(|i| at(rig, i));
+    [
+        (point - wrist).normalize_or(Vec3::NEG_Z),
+        (inner - outer).normalize_or(Vec3::Y),
+    ]
+}
+
+/// The rotation whose frame has `forward` its first axis and `across`, made square to it, its
+/// second.
+fn frame([forward, across]: [Vec3; 2]) -> Quat {
+    let x = forward.normalize_or(Vec3::X);
+    let y = (across - x * across.dot(x)).normalize_or(x.any_orthonormal_vector());
+    Quat::from_mat3(&Mat3::from_cols(x, y, x.cross(y)))
+}
+
+/// `r` split into its twist about `axis` and the swing after it: `r = swing * twist`.
+fn swing_twist(r: Quat, axis: Vec3) -> (Quat, Quat) {
+    let along = axis * Vec3::new(r.x, r.y, r.z).dot(axis);
+    let twist = Quat::from_xyzw(along.x, along.y, along.z, r.w);
+    let twist = if twist.length_squared() < 1e-12 {
+        Quat::IDENTITY
+    } else {
+        twist.normalize()
+    };
+    (twist, (r * twist.inverse()).normalize())
 }
 
 /// Each arm of `rig` (its animated pose in the locals) onto `ring`'s grips, turned by `steer`,
@@ -307,7 +396,7 @@ fn reach_wheel(rig: &mut RigPose, bones: &mut Bones, ring: &Ring, steer: f32) ->
     let mut lean = 0.0;
     if let Some([spine, head]) = bones.lean.as_mut() {
         let base = rig.locals[spine.bone].rotation;
-        while lean < MAX_LEAN && shortfall(rig, &bones.arms, &grips) > 0.0 {
+        while lean < MAX_LEAN && shortfall(rig, ring, &bones.arms, &grips) > 0.0 {
             lean = (lean + LEAN_STEP).min(MAX_LEAN);
             rig.locals[spine.bone].rotation = base;
             spine.turn(rig, Quat::from_axis_angle(ring.right, -lean));
@@ -318,9 +407,20 @@ fn reach_wheel(rig: &mut RigPose, bones: &mut Bones, ring: &Ring, steer: f32) ->
         }
     }
     let mut grip = GRIP;
-    while grip < LOW_GRIP && shortfall(rig, &bones.arms, &grips) > 0.0 {
+    while grip < LOW_GRIP && shortfall(rig, ring, &bones.arms, &grips) > 0.0 {
         grip = (grip + GRIP_STEP).min(LOW_GRIP);
         grips = ring.grips(grip, steer);
+    }
+    // Still short: the whole body slides forward along the seat toward the wheel.
+    let short = shortfall(rig, ring, &bones.arms, &grips);
+    if short > 0.0 {
+        let ahead = -ring.facing();
+        let ahead = Vec3::new(ahead.x, 0.0, ahead.z).normalize_or(Vec3::NEG_Z);
+        let slide = ahead * short.min(MAX_SLIDE * ring.radius);
+        for (bone, _, last) in &mut bones.roots {
+            rig.locals[*bone].translation += slide;
+            *last = rig.locals[*bone].translation;
+        }
     }
     for (k, arm) in bones.arms.iter_mut().enumerate() {
         let out = if k == 0 { ring.right } else { -ring.right };
@@ -328,11 +428,11 @@ fn reach_wheel(rig: &mut RigPose, bones: &mut Bones, ring: &Ring, steer: f32) ->
         let (a, b, c) = (
             at(rig, arm.upper.bone),
             at(rig, arm.fore.bone),
-            at(rig, arm.hand),
+            at(rig, arm.hand.bone),
         );
-        // The wrist short of the rim by the palm, along the reach.
-        let target = grips[k] - (grips[k] - a).normalize_or_zero() * arm.palm;
-        let (b2, c2) = two_bone(a, b, c, target, pole);
+        // The palm on the rim: the wrist a palm back from the grip, along the hand.
+        let [point, along] = ring.hold(grips[k]);
+        let (b2, c2) = two_bone(a, b, c, wrist_at(ring, arm, grips[k]), pole);
         // The upper arm turns by `r1` in the model frame, the forearm by `r2` after it.
         let r1 = Quat::from_rotation_arc((b - a).normalize_or_zero(), (b2 - a).normalize_or_zero());
         let c1 = a + r1 * (c - a);
@@ -340,6 +440,15 @@ fn reach_wheel(rig: &mut RigPose, bones: &mut Bones, ring: &Ring, steer: f32) ->
             Quat::from_rotation_arc((c1 - b2).normalize_or_zero(), (c2 - b2).normalize_or_zero());
         arm.upper.turn(rig, r1);
         arm.fore.turn(rig, r2);
+        // Then the hand onto the rim: the turn from where it faces to the grip's, its roll about
+        // the forearm taken by the forearm (the wrist stays put), the rest by the wrist.
+        let r = frame([point, along]) * frame(hand_faces(rig, arm)).inverse();
+        let axis = (c2 - b2).normalize_or_zero();
+        let (twist, swing) = swing_twist(r, axis);
+        arm.fore.turn(rig, twist);
+        let bend = swing.to_axis_angle();
+        let swing = Quat::from_axis_angle(bend.0, bend.1.min(WRIST_BEND));
+        arm.hand.turn(rig, swing);
     }
     (lean, grips)
 }
@@ -417,7 +526,9 @@ mod tests {
         ));
         let meters = 1.0 / kart.scale.x;
         let mut held = 0;
-        println!("display  lean°  grip°  wrist→target r / l  wrist→centre  lap→centre");
+        println!(
+            "display  lean°  grip°  wrist→target r / l  wrist→centre  lap→centre               facing (point, along)"
+        );
         for display in [
             49u32, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 1563, 1564, 1478, 1479,
         ] {
@@ -475,38 +586,50 @@ mod tests {
                 let body = Transform::from_translation(at_).with_rotation(rot);
                 let ring = Ring::of(&kart, &body, kartcraft::model::MEDIAN_STEERING_WHEEL);
                 rig.locals.clone_from(&posed);
-                let lap = at(&rig, bones.arms[0].hand).distance(ring.centre);
+                let lap = at(&rig, bones.arms[0].hand.bone).distance(ring.centre);
                 let (lean, grips) = reach_wheel(&mut rig, &mut bones, &ring, steer);
                 let mut off = [0.0; 2];
+                let mut face = [[0.0; 2]; 2];
                 for (k, arm) in bones.arms.iter().enumerate() {
                     let (a, b, c) = (
                         at(&rig, arm.upper.bone),
                         at(&rig, arm.fore.bone),
-                        at(&rig, arm.hand),
+                        at(&rig, arm.hand.bone),
                     );
-                    // The wrist a palm short of the rim, toward the shoulder.
-                    let target = grips[k] - (grips[k] - a).normalize_or_zero() * arm.palm;
-                    off[k] = c.distance(target);
-                    let short =
-                        (a.distance(grips[k]) - arm.palm - a.distance(b) - b.distance(c)).max(0.0);
-                    // On the rim; or, short of it, leaning in all the way at full stretch.
+                    // The wrist a palm back from the rim, along the hand.
+                    let [point, along] = ring.hold(grips[k]);
+                    off[k] = c.distance(wrist_at(&ring, arm, grips[k]));
+                    // The hand faces the rim: pointing forward and in, its knuckles along it,
+                    // the index finger toward the top (the wrist's bend can leave it a little
+                    // short).
+                    let [f, x] = hand_faces(&rig, arm);
+                    let x = (x - f * x.dot(f)).normalize_or_zero();
+                    face[k] = [f.dot(point), x.dot(along)];
+                    assert!(
+                        f.dot(point) > 0.7 && x.dot(along) > 0.6,
+                        "{display} steer {steer} arm {k}: the hand faces {f} across {x}, not {point} along {along}"
+                    );
+                    let short = short_of(&rig, &ring, arm, grips[k]).max(0.0);
+                    // On the rim; or, short of it, leaning in all the way, on the low grips and
+                    // slid forward, at full stretch.
                     let low = grips[k].distance(ring.grips(LOW_GRIP, steer)[k]) < 1e-5;
                     assert!(
                         off[k] < 0.01 || (lean >= MAX_LEAN - 1e-4 && low && off[k] < short + 0.02),
                         "{display} steer {steer} arm {k}: palm {off:?} off its grip, short \
                          {short:.3}, lean {lean:.2}"
                     );
-                    // A held wheel hangs the elbows; an arm at full stretch is straight.
+                    // The elbow hangs: below the higher of the shoulder and the wrist (a
+                    // gnome's wheel is above its shoulders); an arm at full stretch is straight.
                     assert!(
-                        b.y < a.y || off[k] >= 0.01,
-                        "{display}: the elbow below the shoulder"
+                        b.y < a.y.max(c.y) || off[k] >= 0.01,
+                        "{display}: the elbow above both ends of the arm"
                     );
                 }
                 if steer == 0.0 {
                     held += usize::from(off.iter().all(|&d| d < 0.01));
-                    let wrist = at(&rig, bones.arms[0].hand).distance(ring.centre);
+                    let wrist = at(&rig, bones.arms[0].hand.bone).distance(ring.centre);
                     println!(
-                        "{display:>7} {:>5.0}  {:>5.0}  {:>7.3} / {:<7.3}  {:>8.3}  {:>10.3}",
+                        "{display:>7} {:>5.0}  {:>5.0}  {:>7.3} / {:<7.3}  {:>8.3}  {:>10.3}                           {:.2?}",
                         lean.to_degrees(),
                         ((grips[0] - ring.centre).dot(ring.up) / ring.radius)
                             .clamp(-1.0, 1.0)
@@ -516,12 +639,13 @@ mod tests {
                         off[1] * meters,
                         wrist * meters,
                         lap * meters,
+                        face,
                     );
                 }
             }
         }
-        // All but the shortest arms hold it: the gnomes' (a third of the reach to the ring) and the
-        // dwarf woman's.
-        assert!(held >= 13, "{held} of 16 hold the wheel");
+        // All but the gnomes hold it; theirs, a third of the reach to the ring, end a few
+        // centimetres short after the lean and the slide.
+        assert!(held >= 14, "{held} of 16 hold the wheel");
     }
 }
