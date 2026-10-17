@@ -176,9 +176,13 @@ pub(super) fn publish(
     names: Option<Res<crate::names::NameCache>>,
     gps: Res<super::gps::Gps>,
     mut overlay: ResMut<KartOverlay>,
+    edit: Res<super::track_edit::TrackEdit>,
 ) {
-    // The race map: the track once its course line is here, and every racer on it.
-    let track = races.map();
+    // The race map: the track once its course line is here (else the track editor's draft), and
+    // every racer on it.
+    let track = races
+        .map()
+        .or_else(|| edit.preview(&races.me).as_ref()?.map());
     let racers = track.as_ref().map_or_else(Vec::new, |map| {
         let to_wow = |p: Vec3| {
             let w = bevy_to_wow(p);

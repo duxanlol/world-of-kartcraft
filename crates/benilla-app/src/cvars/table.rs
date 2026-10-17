@@ -887,6 +887,18 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "off",
         "Kartcraft's own — the kart's free camera; 1.12 has no kart",
     ),
+    // The track editor (`kart::track_edit`): open, and its bar's last button, `<n>\t<verb>...`;
+    // both for the session only (`load_config`).
+    ours(
+        "KartTrackEdit",
+        "0",
+        "Kartcraft's own — the track editor; 1.12 has no kart",
+    ),
+    ours(
+        "KartTrackCmd",
+        "",
+        "Kartcraft's own — the track editor's bar; 1.12 has no kart",
+    ),
     // How tall a race checkpoint's sheet of light stands, yards (`kart::race`); looks only.
     ours(
         "KartGateHeight",
@@ -1042,6 +1054,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "KartShopMinimapAngle",
         "220",
         "Kartcraft's own — the shop's minimap button; 1.12 has no kart",
+    ),
+    // The track editor's own minimap button's place on the ring.
+    ours(
+        "KartTrackMinimapAngle",
+        "250",
+        "Kartcraft's own — the track editor's minimap button; 1.12 has no kart",
     ),
     // The navigation window's switches (`/kartnav`, `kart::settings::Navigation`): a race's next
     // checkpoint on the minimap and its floating arrows; a delivery's guide arrow, road chevrons,

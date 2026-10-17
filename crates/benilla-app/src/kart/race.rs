@@ -82,6 +82,11 @@ struct CourseCheckpoint {
     /// The gate's half-width (yards); absent or 0 for `GATE_HALF_WIDTH`.
     #[serde(default)]
     gate: f32,
+    /// The way the course runs through it (radians, WoW's facing), turned in the track editor;
+    /// absent for halfway between the legs in and out. The client's alone: the server takes a
+    /// checkpoint by distance.
+    #[serde(default)]
+    o: Option<f32>,
 }
 
 impl Course {
@@ -168,6 +173,11 @@ impl Course {
         text
     }
 
+    /// Each checkpoint's facing, where one is set.
+    pub(crate) fn facings(&self) -> Vec<Option<f32>> {
+        self.checkpoints.iter().map(|c| c.o).collect()
+    }
+
     /// Each checkpoint's gate half-width.
     fn gates(&self) -> Vec<f32> {
         self.checkpoints
@@ -217,7 +227,7 @@ pub(crate) static ZONES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock:
 const START_RADIUS: f32 = 55.0;
 /// A checkpoint is a gate: passed on crossing the line through it across the course, within
 /// this many yards of its centre, or on coming this near it (the server allows 45).
-const GATE_HALF_WIDTH: f32 = 20.0;
+pub(crate) const GATE_HALF_WIDTH: f32 = 20.0;
 const CHECKPOINT_RADIUS: f32 = 8.0;
 /// How far past a gate's posts a crossing still counts (yards): the post's own thickness, half a
 /// kart and a little more, so driving through a post counts.
@@ -296,6 +306,9 @@ pub(crate) struct Active {
     points: Vec<[f32; 2]>,
     /// Each checkpoint's gate half-width, from our copy of the course; empty for the default.
     gates: Vec<f32>,
+    /// Each checkpoint's facing where one is set (radians, WoW's), from our copy of the course;
+    /// empty for none.
+    facings: Vec<Option<f32>>,
     /// When GO falls, local seconds; `None` until the countdown arrives.
     go_at: Option<f32>,
     roster: Vec<String>,
@@ -322,6 +335,13 @@ pub(crate) struct Active {
     before: Option<(u32, u32)>,
     /// A time trial (`TT`): us alone, no crates or items, and our ghost to race.
     time_trial: bool,
+    /// The track editor's test lap ([`Active::practice`]): ours alone, the server told nothing.
+    pub(crate) practice: bool,
+    /// A test lap's starting grid (WoW x, y, facing): the server takes us there (`TG`), and the
+    /// countdown runs once we are on it; without one the lap starts on the move.
+    grid: Option<[f32; 3]>,
+    /// The trip onto the grid is still to ask for.
+    grid_trip: bool,
     /// The race's ground types (`GT`), the host's choice: every racer drives off-road as CTR's
     /// grounds hold it, or on asphalt everywhere, whatever their own `KartTerrain`.
     ground_types: bool,
@@ -353,7 +373,140 @@ pub(crate) struct Active {
     backwards: f32,
 }
 
+/// How near (yards) the kart must come to a test lap's grid for its countdown.
+const GRID_REACH: f32 = 6.0;
+/// A test lap's countdown on its grid (ms): the lights' four seconds and a moment to settle.
+const GRID_COUNTDOWN_MS: f32 = 5000.0;
+
+/// The test lap's race id, and the editor's draft's: no server race has either.
+pub(crate) const PRACTICE_ID: u32 = u32::MAX;
+pub(crate) const PREVIEW_ID: u32 = u32::MAX - 1;
+
 impl Active {
+    /// A test lap of a track editor's track, `me` alone on it: a time trial the client runs
+    /// itself, from its `grid` once we drive onto it (the client cannot put us there), else on
+    /// the move through the first gate, to a finish timed here; nothing reported nor left.
+    pub(crate) fn practice(
+        name: &str,
+        laps: u8,
+        points: Vec<[f32; 2]>,
+        grid: Option<[f32; 3]>,
+        me: &str,
+    ) -> Self {
+        Active {
+            id: PRACTICE_ID,
+            course: name.to_string(),
+            laps,
+            points,
+            grid,
+            grid_trip: grid.is_some(),
+            roster: vec![me.to_string()],
+            time_trial: true,
+            practice: true,
+            ..Default::default()
+        }
+    }
+
+    /// The track editor's draft as a race not under way, for its gates and the race map.
+    pub(crate) fn draft(laps: u8, points: Vec<[f32; 2]>, me: &str) -> Self {
+        Active {
+            id: PREVIEW_ID,
+            ..Active::practice("Track editor", laps, points, None, me)
+        }
+    }
+
+    /// A test lap's start, as we go from `from` to `to`: on its grid the countdown, else GO
+    /// through the start gate; whether it began.
+    fn practice_start(&mut self, from: Option<[f32; 2]>, to: [f32; 2], now: f32) -> bool {
+        let ms = match self.grid {
+            Some(g) if (g[0] - to[0]).hypot(g[1] - to[1]) <= GRID_REACH => GRID_COUNTDOWN_MS,
+            Some(_) => return false,
+            None if self.passes(0, from, to) => 0.0,
+            None => return false,
+        };
+        self.count_down(now, ms);
+        true
+    }
+
+    /// A test lap's grid (WoW x, y) until its countdown.
+    pub(crate) fn grid(&self) -> Option<[f32; 2]> {
+        self.grid
+            .filter(|_| self.go_at.is_none())
+            .map(|g| [g[0], g[1]])
+    }
+
+    /// A test lap's trip onto its grid, once: the server's line, the kart's grace through the
+    /// teleport (the kart goes for it and comes back after) starting `now`.
+    fn grid_trip(&mut self, now: f32) -> Option<String> {
+        let g = self.grid.filter(|_| self.practice && self.grid_trip)?;
+        self.grid_trip = false;
+        self.grace_until = self.grace_until.max(now + KART_GRACE_SECS);
+        Some(format!(
+            "KARTCRAFT\tR\tTG\t{:.1}\t{:.1}\t{:.3}",
+            g[0], g[1], g[2]
+        ))
+    }
+
+    /// A test lap over the finish: done, on our own clock, there being no server's.
+    fn finish_practice(&mut self, me: &str) {
+        let (Some(at), Some(go)) = (self.crossed_finish, self.go_at) else {
+            return;
+        };
+        if self.practice && !self.done {
+            let ms = ((at - go) * 1000.0).round() as u32;
+            info!("kart race: test lap finished in {ms} ms");
+            self.done = true;
+            self.our_ms = Some(ms);
+            self.finished.push((me.to_string(), 1, ms));
+        }
+    }
+
+    /// The checkpoints' facings, where set ([`CourseCheckpoint::o`]).
+    pub(crate) fn with_facings(mut self, facings: Vec<Option<f32>>) -> Self {
+        self.facings = facings;
+        self
+    }
+
+    /// The test lap from its flying start again.
+    pub(crate) fn restart_practice(&mut self) {
+        let me = self.roster.first().map_or("", String::as_str);
+        *self = Active {
+            id: self.id,
+            facings: std::mem::take(&mut self.facings),
+            ..Active::practice(
+                &self.course,
+                self.laps,
+                std::mem::take(&mut self.points),
+                self.grid,
+                me,
+            )
+        };
+    }
+
+    /// Its track for the race map, once its course is here (or the draft has two gates).
+    pub(crate) fn map(&self) -> Option<RaceMap> {
+        if self.points.len() < 2 {
+            return None;
+        }
+        let name = COURSES
+            .iter()
+            .find(|c| c.key == self.course)
+            .map_or_else(|| self.course.clone(), |c| c.name.clone());
+        // Each racer at the last checkpoint the server has them past (the start before any).
+        let n = self.points.len();
+        let at = |name: &String| {
+            let cp = self.progress.get(name).map_or(0, |p| usize::from(p.1));
+            self.points[cp.min(n - 1)]
+        };
+        Some(RaceMap {
+            name,
+            laps: self.laps,
+            points: self.points.clone(),
+            order: self.order.clone(),
+            checkpoints: self.roster.iter().map(|r| (r.clone(), at(r))).collect(),
+        })
+    }
+
     /// The countdown's line (`G`): GO `ms` from `now`, the race from scratch. The server sends it
     /// as it teleports everyone to the grid, taking a driver out of the kart for the teleport and
     /// putting them back after it: the grace a kart being summoned gets starts again, or a race
@@ -623,6 +776,10 @@ impl Active {
     /// is passed (its result is on its way: the finish is reported once).
     fn next(&self) -> Option<usize> {
         let n = self.points.len();
+        // A test lap before its start, and the editor's draft: the start gate.
+        if self.practice && self.go_at.is_none() {
+            return (n > 0).then_some(0);
+        }
         if n < 2 {
             None
         } else if self.laps > 0 {
@@ -645,6 +802,9 @@ impl Active {
     /// The direction the course runs through checkpoint `i` (WoW x, y, unit): halfway between
     /// the way in and the way out, so its gate stands square across a bend.
     fn heading(&self, i: usize) -> [f32; 2] {
+        if let Some(o) = self.facings.get(i).copied().flatten() {
+            return [o.cos(), o.sin()];
+        }
         let n = self.points.len();
         let p = self.points[i];
         let unit = |a: [f32; 2], b: [f32; 2]| {
@@ -743,10 +903,15 @@ impl Races {
     /// The next checkpoint of a race under way, Bevy world (ground height unknown: y 0).
     pub(crate) fn next_target(&self, now: f32) -> Option<Vec3> {
         let race = self.race.as_ref()?;
-        if race.done || race.go_at.is_none_or(|go| now < go) || race.points.len() < 2 {
+        // A test lap's start too: the way to its flying start.
+        let waiting = !race.practice && race.go_at.is_none_or(|go| now < go);
+        if race.done || waiting || race.points.len() < 2 {
             return None;
         }
-        let p = race.points[race.next()?];
+        let p = match race.grid.filter(|_| race.practice && race.go_at.is_none()) {
+            Some(grid) => [grid[0], grid[1]],
+            None => race.points[race.next()?],
+        };
         Some(wow_to_bevy([p[0], p[1], 0.0]))
     }
 
@@ -766,24 +931,7 @@ impl Races {
 
     /// The race's track for the race map: once its course line has come.
     pub(crate) fn map(&self) -> Option<RaceMap> {
-        let race = self.race.as_ref().filter(|r| r.points.len() >= 2)?;
-        let name = COURSES
-            .iter()
-            .find(|c| c.key == race.course)
-            .map_or_else(|| race.course.clone(), |c| c.name.clone());
-        // Each racer at the last checkpoint the server has them past (the start before any).
-        let n = race.points.len();
-        let at = |name: &String| {
-            let cp = race.progress.get(name).map_or(0, |p| usize::from(p.1));
-            race.points[cp.min(n - 1)]
-        };
-        Some(RaceMap {
-            name,
-            laps: race.laps,
-            points: race.points.clone(),
-            order: race.order.clone(),
-            checkpoints: race.roster.iter().map(|r| (r.clone(), at(r))).collect(),
-        })
+        self.race.as_ref()?.map()
     }
 
     /// The racers by name, leader first.
@@ -801,7 +949,8 @@ impl Races {
     /// The race we are in, for its ghost ([`super::ghost`]): its id, course, when GO falls, and
     /// our finish time (ms) once the server has it.
     pub(crate) fn run(&self) -> Option<Run<'_>> {
-        let r = self.race.as_ref()?;
+        // A test lap keeps no ghost: its draft may change under it.
+        let r = self.race.as_ref().filter(|r| !r.practice)?;
         Some(Run {
             id: r.id,
             course: &r.course,
@@ -845,7 +994,8 @@ impl Races {
     pub(crate) fn holding(&self, now: f32) -> bool {
         self.race.as_ref().is_some_and(|r| match r.go_at {
             Some(go) => now < go,
-            None => r.time_trial,
+            // A test lap starts on the move.
+            None => r.time_trial && !r.practice,
         })
     }
 }
@@ -927,10 +1077,11 @@ impl Races {
                             Some([x.parse().ok()?, y.parse().ok()?])
                         })
                         .collect();
-                    race.gates = COURSES
+                    let ours = COURSES
                         .iter()
-                        .find(|c| c.key == f[2] && c.checkpoints.len() == race.points.len())
-                        .map_or_else(Vec::new, Course::gates);
+                        .find(|c| c.key == f[2] && c.checkpoints.len() == race.points.len());
+                    race.gates = ours.map_or_else(Vec::new, Course::gates);
+                    race.facings = ours.map_or_else(Vec::new, Course::facings);
                     info!(
                         "kart race: course {} — {} checkpoints, {} laps",
                         f[2],
@@ -1095,7 +1246,10 @@ pub(crate) struct RaceText {
 /// The server's restart of our time trial (its `TR`), while we are in one, its run under way or
 /// its results still up; nothing in a race with others, nor out of every race.
 pub(super) fn restart_line(races: &Races) -> Option<String> {
-    let race = races.race.as_ref().filter(|r| r.time_trial)?;
+    let race = races
+        .race
+        .as_ref()
+        .filter(|r| r.time_trial && !r.practice)?;
     Some(format!("KARTCRAFT\tR\tTR\t{}", race.id))
 }
 
@@ -1118,7 +1272,9 @@ pub(crate) fn update(
     let me = races.me.clone();
     // The restart binding: our time trial over from its line, the lights once the kart is back.
     if binds.ran(super::bindings::RESTART) {
-        if let Some(line) = restart_line(races) {
+        if let Some(race) = races.race.as_mut().filter(|r| r.practice) {
+            race.restart_practice();
+        } else if let Some(line) = restart_line(races) {
             info!("kart race: restarting the time trial");
             profession.send(line);
         }
@@ -1142,6 +1298,12 @@ pub(crate) fn update(
     *text = RaceText::default();
     extras.start_timer = None;
 
+    // A test lap's trip onto its grid, as a time trial's (`Kartcraft.cpp` `ToEditorGrid`).
+    if let Some(line) = races.race.as_mut().and_then(|r| r.grid_trip(now)) {
+        info!("kart race: to the test lap's grid");
+        profession.send(line);
+    }
+
     // Out of the kart, out of the race; but not while the kart aura stays on us, as it does
     // through the Race Finder's teleport to the start.
     if !drive.active {
@@ -1151,7 +1313,7 @@ pub(crate) fn update(
         }
         let grace_until = races.race.as_ref().map_or(0.0, |r| r.grace_until);
         if left_without_kart(kart_aura, now, grace_until) {
-            if let Some(race) = races.race.take() {
+            if let Some(race) = races.race.take().filter(|r| !r.practice) {
                 profession.send(format!("KARTCRAFT\tR\tQ\t{}", race.id));
             }
         }
@@ -1210,6 +1372,19 @@ pub(crate) fn update(
         };
         return;
     };
+    // A test lap's flying start: GO as the kart goes through the start gate.
+    if race.practice && race.go_at.is_none() {
+        let last_at = race.last_at.replace(at);
+        if !race.practice_start(last_at, at, now) {
+            text.banner = if race.grid.is_some() {
+                "Test lap: getting to the starting grid...".into()
+            } else {
+                "Test lap: drive through the start gate to begin".into()
+            };
+            extras.clock = None;
+            return;
+        }
+    }
     let Some(go) = race.go_at else {
         text.banner = format!(
             "Waiting to race: {}{}",
@@ -1257,15 +1432,22 @@ pub(crate) fn update(
         }
         if race.passes(next, last_at, at) {
             info!("kart race: checkpoint {next}, lap {}", race.lap);
-            profession.send(format!("KARTCRAFT\tR\tK\t{}\t{next}", race.id));
+            if !race.practice {
+                profession.send(format!("KARTCRAFT\tR\tK\t{}\t{next}", race.id));
+            }
             let cue = race.pass(next, now);
             audio.cues.push(cue);
             race.progress
                 .insert(me.clone(), (race.lap, next as u8, now));
         }
     }
+    race.finish_practice(&me);
     // Checkpoints the server has not taken from us: reported again, in order, until it has.
-    let missing = race.resend(now);
+    let missing = if race.practice {
+        Vec::new()
+    } else {
+        race.resend(now)
+    };
     if !missing.is_empty() {
         warn!(
             "kart race: the server has us {} checkpoints behind — reporting {missing:?} again",
@@ -1310,7 +1492,9 @@ pub(crate) fn update(
                     Some(false) => " — New personal best!",
                     None => "",
                 };
-                if race.time_trial {
+                if race.practice {
+                    format!("Test lap — {}", clock(*ms))
+                } else if race.time_trial {
                     format!("Time trial — {}{news}", clock(*ms))
                 } else {
                     format!("{} — {}{news}", ordinal(*place), clock(*ms))
@@ -1322,8 +1506,8 @@ pub(crate) fn update(
     text.lines = board(race);
 
     // Over: once everyone is in (or the stragglers have had their minute), the results stay up a
-    // while and then we leave the race.
-    if race.done {
+    // while and then we leave the race; a test lap's stay until the editor takes them down.
+    if race.done && !race.practice {
         let finished_at = *race.finished_at.get_or_insert(now);
         let everyone = race
             .roster
@@ -2023,8 +2207,15 @@ pub(crate) fn beams(
     mut looks: Local<Option<Looks>>,
     mut grounds: Local<Grounds>,
     settings: Res<super::settings::KartSettings>,
+    edit: Res<super::track_edit::TrackEdit>,
 ) {
-    let race = races.race.as_ref().filter(|r| r.go_at.is_some() && !r.done);
+    // The race under way (a test lap from before its start), else the track editor's draft.
+    let preview = edit.preview(&races.me);
+    let race = races
+        .race
+        .as_ref()
+        .filter(|r| !r.done && (r.go_at.is_some() || r.practice))
+        .or(preview.as_ref());
     let Some((race, next)) = race.and_then(|r| Some((r, r.next()?))) else {
         for (e, ..) in &beams {
             commands.entity(e).despawn();
@@ -3116,6 +3307,21 @@ mod tests {
     }
 
     #[test]
+    fn a_turned_gate_faces_its_own_way_and_counts_crossed_that_way() {
+        let race = Active {
+            points: vec![[0.0, 0.0], [100.0, 0.0], [100.0, 100.0]],
+            laps: 1,
+            ..Default::default()
+        }
+        .with_facings(vec![None, Some(std::f32::consts::FRAC_PI_2), None]);
+        let h = race.heading(1);
+        assert!(h[0].abs() < 1e-5 && (h[1] - 1.0).abs() < 1e-5, "{h:?}");
+        // Crossed northward through it, not eastward along it.
+        assert!(!race.passes(1, Some([95.0, -30.0]), [95.0, -25.0]));
+        assert!(race.passes(1, Some([110.0, -1.0]), [110.0, 1.0]));
+    }
+
+    #[test]
     fn a_gate_at_a_bend_stands_square_to_both_legs() {
         let race = course();
         let h = race.heading(2);
@@ -3496,6 +3702,62 @@ mod tests {
                 Cue::Countdown(true)
             ]
         );
+    }
+
+    #[test]
+    fn a_test_lap_starts_through_the_start_gate_and_finishes_on_our_clock() {
+        let points = vec![[0.0, 0.0], [100.0, 0.0], [100.0, 100.0]];
+        let mut races = Races {
+            race: Some(Active::practice("Loop", 1, points.clone(), None, "Me")),
+            ..Default::default()
+        };
+        // Not held at the line, no ghost, and nothing for the server's restart.
+        assert!(!races.holding(0.0));
+        assert!(races.run().is_none());
+        assert!(restart_line(&races).is_none());
+        let race = races.race.as_mut().unwrap();
+        assert_eq!(race.next(), Some(0), "the start gate first");
+        assert!(!race.practice_start(Some([-50.0, 30.0]), [-40.0, 30.0], 1.0));
+        assert!(race.go_at.is_none());
+        assert!(race.practice_start(Some([-1.0, 0.0]), [1.0, 0.0], 2.0));
+        assert_eq!(race.go_at, Some(2.0));
+        race.pass(1, 5.0);
+        race.pass(2, 8.0);
+        race.finish_practice("Me");
+        assert!(!race.done);
+        race.pass(0, 12.5);
+        race.finish_practice("Me");
+        assert!(race.done);
+        assert_eq!(race.our_ms, Some(10_500));
+        assert_eq!(race.finished, vec![("Me".to_string(), 1, 10_500)]);
+        // Restart: the flying start again, the draft kept.
+        race.restart_practice();
+        assert!(race.practice && !race.done && race.go_at.is_none());
+        assert_eq!(race.points, points);
+        assert_eq!(race.roster, vec!["Me".to_string()]);
+        assert_eq!(race.id, PRACTICE_ID);
+        // With a grid: through the start gate is nothing; on the grid the lights count down.
+        let mut gridded =
+            Active::practice("Loop", 1, points.clone(), Some([-20.0, 0.0, 0.0]), "Me");
+        // Its trip there asked for once, the kart's grace over the teleport.
+        assert_eq!(
+            gridded.grid_trip(7.0).as_deref(),
+            Some("KARTCRAFT\tR\tTG\t-20.0\t0.0\t0.000")
+        );
+        assert!(gridded.grid_trip(7.5).is_none());
+        assert!(!left_without_kart(Some(false), 9.0, gridded.grace_until));
+        assert!(!gridded.practice_start(Some([-1.0, 0.0]), [1.0, 0.0], 1.0));
+        assert!(gridded.practice_start(Some([-30.0, 0.0]), [-22.0, 1.0], 3.0));
+        assert_eq!(gridded.go_at, Some(3.0 + GRID_COUNTDOWN_MS / 1000.0));
+        let races = Races {
+            race: Some(gridded),
+            ..Default::default()
+        };
+        assert!(races.holding(4.0), "held on the grid through the lights");
+        // The draft's preview shows on the race map under its own name.
+        let draft = Active::draft(1, points, "Me");
+        assert_eq!(draft.id, PREVIEW_ID);
+        assert_eq!(draft.map().unwrap().name, "Track editor");
     }
 
     #[test]

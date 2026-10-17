@@ -717,13 +717,17 @@ pub(crate) mod schedule_tests {
     ///   camera. Its two feeds (`kart::skins::update`, `ui_kart::skin_yaw`) against the terrain
     ///   colliders' finish: a hidden preview unit far below every collider, and a yaw read. The
     ///   delivery GPS (`kart::gps::update`) reads whether a courier quest is in the log against
-    ///   the log's writers: a frame-old log drops an abandoned delivery a frame later.
+    ///   the log's writers: a frame-old log drops an abandoned delivery a frame later. The track
+    ///   editor (`kart::track_edit::update`) reads the world camera and the window for the
+    ///   cursor's ray, as `target::hover::update_hover` does, against their writers (six pairs:
+    ///   `gate_world_camera`, the booth cameras, `ui_models::sync_tiles`, `video`'s window and
+    ///   present modes): a frame-old camera aims the next gate a frame late.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
     #[cfg(not(target_os = "macos"))]
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_103;
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_109;
     /// macOS: eight more, all the native cursor's (`cursor::macos::drive`, eleven pairs in the
     /// dump). Unlike `cursor::other::drive`, it reads `CameraControl`, `Cinematic` and the window
     /// focus to hide the arrow while the camera is dragged or a cinematic plays, against their
@@ -732,7 +736,7 @@ pub(crate) mod schedule_tests {
     /// `ui_logout::drain_logout`, `cinematic::{drive, start_pending, take_trigger}`): a frame-old
     /// value hides or shows the cursor a frame late, which no one sees.
     #[cfg(target_os = "macos")]
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_111;
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_117;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

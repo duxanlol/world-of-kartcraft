@@ -32,9 +32,10 @@ pub(crate) mod settings;
 mod showcase;
 mod skins;
 mod sound;
+pub(crate) mod track_edit;
 mod ui;
 pub(crate) use garage::{class_list, racer_list};
-pub(crate) use race::{RaceMap, COURSES, ZONES};
+pub(crate) use race::{Course, RaceMap, COURSES, ZONES};
 pub(crate) use seat::SEAT_ANIMS;
 pub(crate) use ui::{KartOverlay, PadView, RacerDot, ScoreLines};
 mod weapons;
@@ -686,6 +687,8 @@ pub(crate) fn plugin(app: &mut App) {
         .net_handler(benilla_protocol::SessionEventKind::Chat, showcase::on_chat)
         .init_resource::<showcase::Showcase>()
         .init_resource::<freecam::FreeCam>()
+        .init_resource::<track_edit::TrackEdit>()
+        .add_observer(track_edit::on_cvar)
         .init_resource::<kartcraft::hud::HudHidden>()
         .init_resource::<race::Races>()
         .init_resource::<race::RaceText>()
@@ -730,7 +733,8 @@ pub(crate) fn plugin(app: &mut App) {
                 // The ground under the pads is read through the mover's trace, after its doors.
                 kartcraft::pads::lay.after(crate::go_anim::publish_ghost_door_exclusions),
                 update.in_set(KartDriveSet),
-                race::update,
+                // The track editor after the race, which a test lap of its draft runs in.
+                (race::update, track_edit::update).chain(),
                 showcase::banner,
                 sound::overtakes,
                 // After the drive: a replay playing takes its camera.

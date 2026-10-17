@@ -193,6 +193,12 @@ pub(crate) fn kart_ghost_path(course: &str) -> Option<PathBuf> {
     )
 }
 
+/// `benilla-config/kart-tracks/`: the track editor's saved tracks, a `courses.json` course a file
+/// (`crate::kart`'s `track_edit` writes them; docs/courses.md takes them in).
+pub(crate) fn kart_tracks_dir() -> Option<PathBuf> {
+    Some(home()?.join("kart-tracks"))
+}
+
 /// `benilla-config/kart-replays/`: the races we were in, to rewatch (`crate::kart`'s `replay`
 /// owns the format and keeps the newest few).
 pub(crate) fn kart_replays_dir() -> Option<PathBuf> {

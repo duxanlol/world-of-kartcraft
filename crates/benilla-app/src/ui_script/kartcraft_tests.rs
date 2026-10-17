@@ -3693,3 +3693,241 @@ fn every_kartcraft_menu_entry_has_a_button() {
         "menu entries without a button: {missing:?}"
     );
 }
+
+#[test]
+fn the_track_editor_s_button_and_bar_drive_the_kart_s_editor() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let shown = |s: &UiScript, name: &str| -> bool {
+        s.eval(&format!("return {name}:IsShown() and true or false"))
+            .unwrap()
+    };
+    let text = |s: &UiScript, name: &str| -> String {
+        s.eval(&format!("return {name}:GetText()")).unwrap()
+    };
+    let cmd = |s: &UiScript| s.cvar("KartTrackCmd").unwrap_or_default();
+    let tell = |s: &mut UiScript, state: &str, count: f64, laps: f64| {
+        s.fire_event(
+            "BENILLA_KART_TRACKEDIT",
+            vec![
+                ScriptValue::Str(state.into()),
+                ScriptValue::Number(count),
+                ScriptValue::Number(laps),
+                ScriptValue::Str(String::new()),
+                ScriptValue::Number(0.0),
+                ScriptValue::Number(0.0),
+                ScriptValue::Str(if count == 0.0 { "start" } else { "checkpoint" }.into()),
+            ],
+        );
+    };
+
+    // The minimap button opens the editor; the bar waits for the kart to say it is open.
+    assert!(shown(&s, "BenillaKartEditorMinimapButton"));
+    s.run("BenillaKartEditorMinimapButton:Click('LeftButton')")
+        .unwrap();
+    assert_eq!(s.cvar("KartTrackEdit").as_deref(), Some("1"));
+    assert!(!shown(&s, "BenillaKartEditorBar"));
+
+    // A new draft: the start first, the checkpoints wait for it.
+    tell(&mut s, "edit", 0.0, 0.0);
+    assert!(shown(&s, "BenillaKartEditorBar"));
+    // The keys card beside it: the kart's own keys, and the mouse's.
+    assert!(shown(&s, "BenillaKartEditorKeys"));
+    let keys = text(&s, "BenillaKartEditorKeysText");
+    assert!(
+        keys.contains("fly forward, back") && keys.contains("Q / E"),
+        "{keys}"
+    );
+    assert_eq!(text(&s, "BenillaKartEditorBarStart"), "Place start");
+    // The bar says what a left click on the world places; its buttons only pick that.
+    assert_eq!(
+        text(&s, "BenillaKartEditorBarTool"),
+        "Left-click the ground to place the start."
+    );
+    assert!(!s
+        .eval::<bool>("return BenillaKartEditorBarPlace:IsEnabled() == 1")
+        .unwrap());
+    s.run("BenillaKartEditorBarStart:Click()").unwrap();
+    assert_eq!(cmd(&s), "1\tstart");
+
+    // Editing: the name, the count, the editor's buttons, each a numbered press.
+    tell(&mut s, "edit", 2.0, 0.0);
+    assert!(shown(&s, "BenillaKartEditorBarPlace") && shown(&s, "BenillaKartEditorBarName"));
+    assert!(!shown(&s, "BenillaKartEditorBarBack"));
+    assert_eq!(
+        text(&s, "BenillaKartEditorBarCount"),
+        "Start + 1 checkpoints"
+    );
+    assert_eq!(text(&s, "BenillaKartEditorBarStart"), "Move start");
+    assert_eq!(
+        text(&s, "BenillaKartEditorBarTool"),
+        "Left-click the ground to place the next checkpoint."
+    );
+    assert!(shown(&s, "BenillaKartEditorBarSprint") && shown(&s, "BenillaKartEditorBarLap3"));
+    s.run("BenillaKartEditorBarPlace:Click()").unwrap();
+    assert_eq!(cmd(&s), "2\tplace");
+    s.run("BenillaKartEditorBarPlace:Click()").unwrap();
+    assert_eq!(cmd(&s), "3\tplace", "a repeat is a change");
+    s.run("BenillaKartEditorBarGrid:Click()").unwrap();
+    assert_eq!(cmd(&s), "4\tgrid");
+    s.run("BenillaKartEditorBarLap1:Click()").unwrap();
+    assert_eq!(cmd(&s), "5\tlaps\t1");
+    s.run("BenillaKartEditorBarName:SetText('Goldshire Ring') BenillaKartEditorBarSave:Click()")
+        .unwrap();
+    assert!(
+        cmd(&s).starts_with("6\tsave\tGoldshire Ring\t"),
+        "{}",
+        cmd(&s)
+    );
+    s.run("BenillaKartEditorBarTest:Click()").unwrap();
+    assert_eq!(cmd(&s), "7\tpractice\tGoldshire Ring");
+
+    // A test lap: back to the editor, or the lap again, and nothing else.
+    tell(&mut s, "test", 2.0, 1.0);
+    assert!(
+        !shown(&s, "BenillaKartEditorKeys"),
+        "no keys card in a test lap"
+    );
+    assert!(shown(&s, "BenillaKartEditorBarBack") && shown(&s, "BenillaKartEditorBarRestart"));
+    assert!(!shown(&s, "BenillaKartEditorBarPlace") && !shown(&s, "BenillaKartEditorBarName"));
+    assert_eq!(text(&s, "BenillaKartEditorBarBack"), "Back to editor");
+    s.run("BenillaKartEditorBarRestart:Click()").unwrap();
+    assert_eq!(cmd(&s), "8\trestart");
+    s.run("BenillaKartEditorBarBack:Click()").unwrap();
+    assert_eq!(cmd(&s), "9\tback");
+    // A saved track's lap from the browser: its way out is the lap's end.
+    tell(&mut s, "run", 0.0, 3.0);
+    assert!(shown(&s, "BenillaKartEditorBarBack"));
+    assert_eq!(text(&s, "BenillaKartEditorBarBack"), "End test lap");
+
+    // Closed, the bar goes; the button opens it again even after a refused open.
+    tell(&mut s, "edit", 2.0, 1.0);
+    s.run("BenillaKartEditorBarClose:Click()").unwrap();
+    assert_eq!(s.cvar("KartTrackEdit").as_deref(), Some("0"));
+    tell(&mut s, "", 2.0, 1.0);
+    assert!(!shown(&s, "BenillaKartEditorBar"));
+    s.run("SetCVar('KartTrackEdit', '1')").unwrap();
+    s.run("BenillaKartEditorMinimapButton:Click('LeftButton')")
+        .unwrap();
+    assert_eq!(s.cvar("KartTrackEdit").as_deref(), Some("1"));
+}
+
+#[test]
+fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    s.fire_event(
+        "BENILLA_KART_TRACKS",
+        vec![ScriptValue::Str(
+            "sprint\tNorthshire Sprint\tElwynn Forest\t0\t0\tA sprint.\t-8930,-118;-8989,-96"
+                .into(),
+        )],
+    );
+    s.fire_event(
+        "BENILLA_KART_MYTRACKS",
+        vec![ScriptValue::Str(
+            "goldshire-ring\tGoldshire Ring\tElwynn Forest\t0\t3\tA circuit.\t1,2;3,4;5,6\t0.0,1.0,0.500\t1.0,2.0;3.0,4.0,1.500;5.0,6.0"
+                .into(),
+        )],
+    );
+    let names = |s: &UiScript| -> Vec<String> {
+        s.eval(
+            "local out = {} for _, t in ipairs(BenillaKartTrackBrowser_Shown()) do \
+             table.insert(out, t.name) end return out",
+        )
+        .unwrap()
+    };
+    // All tracks: the courses, then ours.
+    s.run("BenillaKartTrackBrowser_Toggle()").unwrap();
+    assert_eq!(names(&s), ["Northshire Sprint", "Goldshire Ring"]);
+    s.run("BenillaKartTracksFrame:Hide()").unwrap();
+    // The editor's menu opens on a right-click; its "My tracks" lists ours alone, a test lap in
+    // place of the time trial.
+    s.run("BenillaKartEditorMinimapButton:Click('RightButton')")
+        .unwrap();
+    assert!(s
+        .eval::<bool>("return DropDownList1:IsShown() and true or false")
+        .unwrap());
+    s.run("CloseDropDownMenus() BenillaKartTrackBrowser_OpenMine()")
+        .unwrap();
+    assert_eq!(names(&s), ["Goldshire Ring"]);
+    s.run("BenillaKartTrackBrowser_Select('my:goldshire-ring')")
+        .unwrap();
+    let trial: String = s
+        .eval("return BenillaKartTracksFrameTrial:GetText()")
+        .unwrap();
+    assert_eq!(trial, "Test lap");
+    s.run("BenillaKartTracksFrameTrial:Click()").unwrap();
+    let cmd = s.cvar("KartTrackCmd").unwrap_or_default();
+    assert!(cmd.ends_with("\trun\tgoldshire-ring"), "{cmd}");
+    assert!(!s
+        .eval::<bool>("return BenillaKartTracksFrame:IsShown() and true or false")
+        .unwrap());
+    // Publish: the track, its grid and turned gates, to the server under its name.
+    s.run("BenillaKartTrackBrowser_OpenMine() BenillaKartTrackBrowser_Select('my:goldshire-ring')")
+        .unwrap();
+    let marshal: String = s
+        .eval("return BenillaKartTracksFrameMarshal:GetText()")
+        .unwrap();
+    assert_eq!(marshal, "Publish");
+    sent(&mut s);
+    s.run("BenillaKartTracksFrameMarshal:Click()").unwrap();
+    assert_eq!(
+        sent(&mut s),
+        ["KARTCRAFT\tR\tPub\tGoldshire Ring\t0\t3\tElwynn Forest\t0.0,1.0,0.500\t1.0,2.0;3.0,4.0,1.500;5.0,6.0"]
+    );
+    // Delete: asked first, then the editor deletes the file.
+    s.run("BenillaKartTracksFrameRate:Click()").unwrap();
+    assert!(s
+        .eval::<bool>("return StaticPopup_Visible('BENILLA_KART_DELETE_TRACK') ~= nil")
+        .unwrap());
+    s.run("StaticPopup1Button1:Click()").unwrap();
+    let cmd = s.cvar("KartTrackCmd").unwrap_or_default();
+    assert!(cmd.ends_with("\tdelete\tgoldshire-ring"), "{cmd}");
+
+    // Player tracks: asked of the server as the browser opens, listed by author, each test-lapped
+    // here and taken down by its author alone.
+    s.run("BenillaKartTracksFrame:Hide() BenillaKartTrackBrowser_OpenPublished()")
+        .unwrap();
+    assert!(sent(&mut s).contains(&"KARTCRAFT\tR\tPubL".to_string()));
+    from_server(&mut s, "R\tPTB");
+    let me: String = s.eval("return UnitName('player')").unwrap();
+    from_server(
+        &mut s,
+        &format!("R\tPT\t7\tDune Dash\t{me}\t1\t0\tDurotar\t\t10.0,20.0;30.0,40.0"),
+    );
+    from_server(
+        &mut s,
+        "R\tPT\t5\tCliff Loop\tSomeoneElse\t1\t3\tDurotar\t\t1.0,1.0;2.0,2.0;3.0,3.0",
+    );
+    from_server(&mut s, "R\tPTE");
+    assert_eq!(names(&s), ["Dune Dash", "Cliff Loop"]);
+    s.run("BenillaKartTrackBrowser_Select('pub:5')").unwrap();
+    assert!(
+        !s.eval::<bool>("return BenillaKartTracksFrameMarshal:IsEnabled() == 1")
+            .unwrap(),
+        "not ours to take down"
+    );
+    s.run("BenillaKartTrackBrowser_Select('pub:7')").unwrap();
+    let down: String = s
+        .eval("return BenillaKartTracksFrameMarshal:GetText()")
+        .unwrap();
+    assert_eq!(down, "Take down");
+    s.run("BenillaKartTracksFrameMarshal:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tPubD\t7"]);
+    from_server(&mut s, "R\tPubGone\t7");
+    assert_eq!(names(&s), ["Cliff Loop"]);
+    s.run("BenillaKartTrackBrowser_Select('pub:5') BenillaKartTracksFrameTrial:Click()")
+        .unwrap();
+    let cmd = s.cvar("KartTrackCmd").unwrap_or_default();
+    assert!(
+        cmd.ends_with("\trunspots\tCliff Loop\t3\t1\t\t1.0,1.0;2.0,2.0;3.0,3.0"),
+        "{cmd}"
+    );
+}

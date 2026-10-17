@@ -20,6 +20,14 @@
 //!
 //! - `BENILLA_KART_TRACKMAP(name, laps, points)`: the race map's track when it changes, its
 //!   checkpoints `x,y;x,y;...` (WoW x, y); an empty name when there is no race.
+//! - `BENILLA_KART_TRACKEDIT(state, gates, laps, note, notes, grid, tool)`: the track editor's bar,
+//!   when it changes: `edit`, `test` (a test lap of the draft), `run` (of a saved track) or
+//!   empty when closed; the draft's gates, the start among them, and laps; the last word for the
+//!   player and how many so far, a new one for the chat; 1 when the draft has its grid; what a
+//!   left click places (`start`, `checkpoint` or `grid`).
+//! - `BENILLA_KART_MYTRACKS(list)`: the track editor's saved tracks, as `BENILLA_KART_TRACKS`
+//!   lists courses with two fields more, the grid (`x,y,o` or empty) and the gates with their
+//!   facings (`x,y[,o];...`), at load and after each save or delete.
 //! - `BENILLA_KART_SEATED(seated)`: 1 when we climb into the kart, 0 when we climb out.
 //! - `BENILLA_KART_LEAVE(percent)`: leaving the kart in a race, held for, how far; no arguments
 //!   when let go or done.
@@ -57,6 +65,8 @@ pub(crate) struct Sent {
     racers: Option<String>,
     racers_at: f32,
     pad: Option<Option<crate::kart::PadView>>,
+    track_edit: Option<crate::kart::track_edit::EditView>,
+    my_tracks: Option<u32>,
 }
 
 /// How often (per second) the race map's racers may move: often enough to follow a kart.
@@ -65,6 +75,7 @@ const RACERS_HZ: f32 = 10.0;
 pub(crate) fn feed(
     time: Res<Time>,
     overlay: Res<KartOverlay>,
+    edit: Res<crate::kart::track_edit::TrackEdit>,
     script: Option<NonSendMut<UiScript>>,
     mut sent: Local<VmMemo<Sent>>,
 ) {
@@ -72,6 +83,34 @@ pub(crate) fn feed(
         return;
     };
     let sent = sent.get(&script);
+    let view = edit.view();
+    if sent.track_edit.as_ref() != Some(&view) {
+        script.fire_event(
+            "BENILLA_KART_TRACKEDIT",
+            vec![
+                ScriptValue::Str(view.state.into()),
+                ScriptValue::Number(view.gates as f64),
+                ScriptValue::Number(f64::from(view.laps)),
+                ScriptValue::Str(edit.note().into()),
+                ScriptValue::Number(f64::from(view.notes)),
+                ScriptValue::Number(f64::from(u8::from(view.grid))),
+                ScriptValue::Str(view.tool.into()),
+            ],
+        );
+        sent.track_edit = Some(view);
+    }
+    let (mine, saves) = edit.saved();
+    if sent.my_tracks != Some(saves) {
+        // A course's line, then its grid and its gates with their facings, for a publish.
+        let list: Vec<String> = mine
+            .map(|(c, grid, gates)| format!("{}\t{grid}\t{gates}", track_line(c)))
+            .collect();
+        script.fire_event(
+            "BENILLA_KART_MYTRACKS",
+            vec![ScriptValue::Str(list.join("\n"))],
+        );
+        sent.my_tracks = Some(saves);
+    }
     if !sent.courses {
         script.fire_event(
             "BENILLA_KART_COURSE_NAMES",
@@ -210,26 +249,29 @@ fn course_names() -> String {
 fn track_list() -> String {
     COURSES
         .iter()
-        .map(|c| {
-            let points: Vec<String> = c
-                .route()
-                .iter()
-                .map(|p| format!("{:.1},{:.1}", p[0], p[1]))
-                .collect();
-            let clean = |s: &str| s.replace(['\t', '\n'], " ");
-            format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                c.key,
-                clean(&c.name),
-                clean(&c.zone),
-                c.map,
-                c.laps,
-                clean(&c.description()),
-                points.join(";")
-            )
-        })
+        .map(track_line)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// A course's line in the track browser's list.
+fn track_line(c: &crate::kart::Course) -> String {
+    let points: Vec<String> = c
+        .route()
+        .iter()
+        .map(|p| format!("{:.1},{:.1}", p[0], p[1]))
+        .collect();
+    let clean = |s: &str| s.replace(['\t', '\n'], " ");
+    format!(
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        c.key,
+        clean(&c.name),
+        clean(&c.zone),
+        c.map,
+        c.laps,
+        clean(&c.description()),
+        points.join(";")
+    )
 }
 
 /// The race map's track as its event carries it; no race is an empty name.

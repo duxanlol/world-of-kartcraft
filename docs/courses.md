@@ -42,6 +42,9 @@ client's list are both made from it; nothing else holds course data.
   driver hosts or joins. Optional `z` (the server finds the ground itself). Optional `gate`:
   the gate's half-width in yards. The client passes a checkpoint through a gate this wide
   (default 20); the server accepts a report within `max(45, gate)` yards.
+- A checkpoint's optional `o`: the way the course runs through its gate (radians, a creature's
+  facing), which the track editor sets when a gate is turned; without it the gate stands square
+  between the legs in and out. Client-side only: the server takes a checkpoint by distance.
 - `marshal`: where the course's Race Marshal stands (`x`, `y`, `z`, orientation `o`), written by
   `course-gen marshals` (below); courses that share a start share the spot. Required by `pack.py`.
 - `crates`: optional. When present it replaces the layout the server builds along the
@@ -102,6 +105,31 @@ them. The Stratholme Street Circuit:
 
 then `export`, rename the key and name, add its `doors`, and `marshals` (a start on a WMO floor
 gets its marshal at the start's height, not the terrain's).
+
+## From the in-game track editor
+
+The track editor (the minimap's map button, `kart/track_edit.rs`) flies the free camera and
+places where the cursor points (a left click, or Fire at the screen's centre): the start (the
+first checkpoint), then the checkpoints in driving order, each gate turned with the middle mouse
+held, and optionally a starting grid, facing the way the camera looks. A card on the left lists
+the keys. Its bar names the track, picks sprint, one lap or three, runs a test lap and saves.
+A test lap asks the server to take the kart onto its grid (`R\tTG\t<x>\t<y>\t<o>`, the
+placed grid or a race's first slot behind the start; within 1000 yards, once every 10 seconds,
+the checks of a trip to a Race Marshal), runs the lights there and times the lap on the client's
+own clock, with no records. A save, or Close, starts a new
+draft. A saved track is one course object in this file's form, in
+`benilla-config/kart-tracks/<key>.json`: `key`, `name`, `zone`, `map`, `laps`, `note`, the
+`checkpoints` and `grid` (`x`, `y`, `z`, `o`), with no `marshal`. The track browser lists the
+saved tracks after the courses (right-click the editor's button, "My tracks", for them alone)
+and runs a test lap of one. `grid` is the editor's alone for now: `pack.py` and the server
+ignore it and line a race up behind the start. In the browser our own track's Delete removes
+its file, and Publish sends it to the server (`R\tPub`, `Kartcraft.cpp` "Player tracks": the
+`kartcraft_user_tracks` table, under the author's character name, 20 a character), where every
+browser's Player tracks (the editor button's right-click menu) lists it for a test lap; its
+author takes it down there. Q and E, or the middle mouse held, turn the gate about to be placed.
+To make a saved track a real course, paste the
+object into `courses`, then run `course-gen marshals` and `course-gen pads` for its marshal and
+pads, `pack.py`, and redeploy the server.
 
 ## Party courses
 

@@ -635,6 +635,8 @@ fn load_config(world: &mut World) {
         cvars.own_for_session("KartArrowMove", None);
         // The kart's free camera is for one filming session.
         cvars.own_for_session("KartFreeCam", None);
+        cvars.own_for_session("KartTrackEdit", None);
+        cvars.own_for_session("KartTrackCmd", None);
         cvars.own_for_session("KartHideHud", None);
         // The controller test is open, and its motor tried, for this run only.
         cvars.own_for_session("KartPadTest", None);
@@ -1996,6 +1998,7 @@ mod tests {
                 "KartRacer",
                 "KartReplay",
                 "KartReplays",
+                "KartTrackCmd",
                 "gxApi",
                 "gxResolution",
                 "realmList",
@@ -2318,6 +2321,10 @@ mod tests {
             (
                 "KartShopMinimapAngle",
                 "the layer's KartcraftFrames.xml places the shop's minimap button on the ring by it",
+            ),
+            (
+                "KartTrackMinimapAngle",
+                "the layer's KartcraftFrames.xml places the track editor's button on the ring by it",
             ),
             (
                 "KartGuideSeen",
