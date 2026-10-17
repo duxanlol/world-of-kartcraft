@@ -706,8 +706,13 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<pad_choice::PadChoice>()
         .add_observer(pad_choice::on_cvar)
         .init_resource::<caches::Touched>()
-        // The caches the kart drives through, once the wire's objects have landed.
-        .add_systems(Update, caches::touch.after(crate::net::apply_net_updates))
+        .init_resource::<caches::Beam>()
+        // The caches the kart drives through, once the wire's objects have landed, and the
+        // Astral Caches' beams.
+        .add_systems(
+            Update,
+            (caches::touch, caches::beam).after(crate::net::apply_net_updates),
+        )
         .init_resource::<skins::SkinPreview>()
         .add_observer(skins::on_cvar)
         // The shop's preview unit stood up (after the wire's own units land), then the pane's yaw

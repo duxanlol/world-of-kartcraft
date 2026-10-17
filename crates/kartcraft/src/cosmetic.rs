@@ -14,7 +14,7 @@ pub struct Paint {
 }
 
 /// The server's PAINTS by index; 0, stock, repaints nothing.
-pub const PAINTS: [Option<Paint>; 8] = [
+pub const PAINTS: [Option<Paint>; 9] = [
     None,
     // Copper
     Some(Paint {
@@ -51,6 +51,11 @@ pub const PAINTS: [Option<Paint>; 8] = [
         colour: [0.6, 0.2, 0.95],
         shade: 1.05,
     }),
+    // Astral: found only in an Astral Cache
+    Some(Paint {
+        colour: [0.35, 0.55, 1.0],
+        shade: 1.3,
+    }),
 ];
 
 /// The server's TRAILS by index: a colour (sRGB), or the rainbow; 0, none.
@@ -60,7 +65,7 @@ pub enum Trail {
     Rainbow,
 }
 
-pub const TRAILS: [Option<Trail>; 5] = [
+pub const TRAILS: [Option<Trail>; 7] = [
     None,
     // Sparks
     Some(Trail::Colour([1.0, 0.85, 0.3])),
@@ -70,6 +75,9 @@ pub const TRAILS: [Option<Trail>; 5] = [
     Some(Trail::Colour([0.5, 0.9, 1.0])),
     // Rainbow
     Some(Trail::Rainbow),
+    // Stardust and Comet: found only in an Astral Cache
+    Some(Trail::Colour([0.85, 0.7, 1.0])),
+    Some(Trail::Colour([0.75, 1.0, 0.95])),
 ];
 
 pub fn paint(index: u8) -> Option<Paint> {

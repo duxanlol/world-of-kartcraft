@@ -3842,6 +3842,35 @@ fn the_shop_sells_the_goods_the_server_sells_and_the_client_draws() {
     assert_eq!(flags, kartcraft::goods::FLAGS, "the flags' wire order");
 }
 
+/// A cosmetic found only in Astral Caches: "???" and closed until found, then the finder's to wear.
+#[test]
+fn a_cache_s_hidden_cosmetic_is_closed_until_found() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let earned = |s: &mut UiScript, i: u32| -> (bool, String) {
+        s.eval(&format!(
+            "local ok, why = BenillaKartLook_Earned('P', {i}) return ok == true, why"
+        ))
+        .unwrap()
+    };
+    from_server(
+        &mut s,
+        "R@CC@P@Stock:0:0;???:6:1;Astral:6:0"
+            .replace('@', "\t")
+            .as_str(),
+    );
+    from_server(&mut s, "R@CO@1,0,0,0,0,0,0@0@0".replace('@', "\t").as_str());
+    assert_eq!(
+        earned(&mut s, 1),
+        (false, "Found only in Astral Caches".into())
+    );
+    assert_eq!(earned(&mut s, 2), (true, String::new()));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 /// A claimed cache's line from the server is said in gold, silver and copper, with its tokens.
 #[test]
 fn a_claimed_cache_says_what_it_held() {
@@ -3856,8 +3885,8 @@ fn a_claimed_cache_says_what_it_held() {
     assert_eq!(money(&mut s, 18_000), "1g 80s");
     assert_eq!(money(&mut s, 6_005), "60s 5c");
     assert_eq!(money(&mut s, 0), "0c");
-    from_server(&mut s, "R@ACGot@18000@12@1".replace('@', "	").as_str());
-    from_server(&mut s, "R@ACGot@600@0@0".replace('@', "	").as_str());
+    from_server(&mut s, "R\tACGot\t18000\t12\t1");
+    from_server(&mut s, "R\tACGot\t600\t0\t0");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 

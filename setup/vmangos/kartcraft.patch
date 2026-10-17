@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..5b335ae
+index 0000000..cf65c91
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,6432 @@
+@@ -0,0 +1,6509 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -1374,6 +1374,8 @@ index 0000000..5b335ae
 +        STAT_CHALLENGES,
 +        STAT_PODIUMS,
 +        STAT_CHAMPIONS,
++        // Found in an Astral Cache (Caches): owned one by one in kartcraft_found, not counted.
++        STAT_FOUND,
 +        STAT_COUNT
 +    };
 +
@@ -1393,6 +1395,7 @@ index 0000000..5b335ae
 +        { "Record Red", STAT_RECORDS, 1 },
 +        { "Challenger Teal", STAT_CHALLENGES, 1 },
 +        { "Champion Violet", STAT_PODIUMS, 1 },
++        { "Astral", STAT_FOUND, 1 },
 +    };
 +
 +    static std::vector<Cosmetic> const TRAILS = {
@@ -1401,6 +1404,8 @@ index 0000000..5b335ae
 +        { "Wumpa", STAT_WINS, 10 },
 +        { "Frost", STAT_RECORDS, 3 },
 +        { "Rainbow", STAT_CHAMPIONS, 1 },
++        { "Stardust", STAT_FOUND, 1 },
++        { "Comet", STAT_FOUND, 1 },
 +    };
 +
 +    static void CreateCosmetics()
@@ -1413,6 +1418,29 @@ index 0000000..5b335ae
 +            "`at` INT UNSIGNED NOT NULL COMMENT 'when, unix time', "
 +            "PRIMARY KEY (`guid`)"
 +            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
++        CharacterDatabase.DirectExecute(
++            "CREATE TABLE IF NOT EXISTS `kartcraft_found` ("
++            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
++            "`kind` CHAR(1) NOT NULL COMMENT 'P a paint, T a trail', "
++            "`idx` TINYINT UNSIGNED NOT NULL COMMENT 'index into PAINTS or TRAILS', "
++            "`at` INT UNSIGNED NOT NULL COMMENT 'when found, unix time', "
++            "PRIMARY KEY (`guid`, `kind`, `idx`)"
++            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
++    }
++
++    // The cosmetics a character has found in caches: "P<index>" and "T<index>".
++    static std::set<std::string> Found(uint32 guid)
++    {
++        std::set<std::string> out;
++        std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
++            "SELECT `kind`, `idx` FROM `kartcraft_found` WHERE `guid` = %u", guid);
++        if (result)
++            do
++            {
++                Field* f = result->Fetch();
++                out.insert(f[0].GetCppString() + std::to_string(f[1].GetUInt32()));
++            } while (result->NextRow());
++        return out;
 +    }
 +
 +    static uint32 CountOf(char const* sql)
@@ -1456,9 +1484,14 @@ index 0000000..5b335ae
 +        return stats;
 +    }
 +
-+    static bool Earned(std::vector<Cosmetic> const& list, uint32 index, std::vector<uint32> const& stats)
++    static bool Earned(std::vector<Cosmetic> const& list, uint32 index, std::vector<uint32> const& stats,
++        std::set<std::string> const& found, char kind)
 +    {
-+        return index < list.size() && stats[list[index].stat] >= list[index].need;
++        if (index >= list.size())
++            return false;
++        if (list[index].stat == STAT_FOUND)
++            return found.count(kind + std::to_string(index)) != 0;
++        return stats[list[index].stat] >= list[index].need;
 +    }
 +
 +    // What a racer wears: (paint, trail), 0 for none on file.
@@ -1472,16 +1505,46 @@ index 0000000..5b335ae
 +        return { f[0].GetUInt32(), f[1].GetUInt32() };
 +    }
 +
-+    static std::string Catalogue(std::vector<Cosmetic> const& list)
++    // A found one is everyone's (need 0) to its finder, and "???" to the rest until they find it.
++    static std::string Catalogue(std::vector<Cosmetic> const& list, std::set<std::string> const& found, char kind)
 +    {
 +        std::string text;
-+        for (Cosmetic const& c : list)
++        for (size_t i = 0; i < list.size(); ++i)
 +        {
++            Cosmetic const& c = list[i];
 +            if (!text.empty())
 +                text += ";";
++            if (c.stat == STAT_FOUND)
++            {
++                bool const mine = found.count(kind + std::to_string(i)) != 0;
++                text += std::string(mine ? c.name : "???") + ":" + std::to_string(c.stat) + ":" + (mine ? "0" : "1");
++                continue;
++            }
 +            text += std::string(c.name) + ":" + std::to_string(c.stat) + ":" + std::to_string(c.need);
 +        }
 +        return text;
++    }
++
++    // A cosmetic found in an Astral Cache: one of the hidden ones `player` lacks, if any; its
++    // name, or "" none.
++    static std::string FindHidden(Player* player)
++    {
++        uint32 const guid = player->GetGUIDLow();
++        std::set<std::string> const found = Found(guid);
++        std::vector<std::pair<char, uint32>> left;
++        for (uint32 i = 0; i < PAINTS.size(); ++i)
++            if (PAINTS[i].stat == STAT_FOUND && !found.count("P" + std::to_string(i)))
++                left.emplace_back('P', i);
++        for (uint32 i = 0; i < TRAILS.size(); ++i)
++            if (TRAILS[i].stat == STAT_FOUND && !found.count("T" + std::to_string(i)))
++                left.emplace_back('T', i);
++        if (left.empty())
++            return "";
++        std::pair<char, uint32> const pick = left[urand(0, uint32(left.size()) - 1)];
++        CharacterDatabase.DirectPExecute("INSERT IGNORE INTO `kartcraft_found` (`guid`, `kind`, `idx`, `at`) "
++            "VALUES (%u, '%c', %u, %u)", guid, pick.first, pick.second, uint32(std::time(nullptr)));
++        return std::string(pick.first == 'P' ? PAINTS[pick.second].name : TRAILS[pick.second].name) +
++            (pick.first == 'P' ? " paint" : " trail");
 +    }
 +
 +    // "KARTCRAFT\tR\tCC\tP\t<name:stat:need;...>", the same for "T" (the trails), then
@@ -1492,10 +1555,11 @@ index 0000000..5b335ae
 +    {
 +        uint32 guid = player->GetGUIDLow();
 +        std::vector<uint32> stats = CosmeticStats(guid);
++        std::set<std::string> const found = Found(guid);
 +        std::pair<uint32, uint32> worn = Worn(guid);
-+        if (!Earned(PAINTS, worn.first, stats))
++        if (!Earned(PAINTS, worn.first, stats, found, 'P'))
 +            worn.first = 0;
-+        if (!Earned(TRAILS, worn.second, stats))
++        if (!Earned(TRAILS, worn.second, stats, found, 'T'))
 +            worn.second = 0;
 +        {
 +            std::lock_guard<std::mutex> lock(s_stateMutex);
@@ -1503,8 +1567,8 @@ index 0000000..5b335ae
 +            shown.paint = worn.first;
 +            shown.trail = worn.second;
 +        }
-+        SendLine(player, "KARTCRAFT\tR\tCC\tP\t" + Catalogue(PAINTS));
-+        SendLine(player, "KARTCRAFT\tR\tCC\tT\t" + Catalogue(TRAILS));
++        SendLine(player, "KARTCRAFT\tR\tCC\tP\t" + Catalogue(PAINTS, found, 'P'));
++        SendLine(player, "KARTCRAFT\tR\tCC\tT\t" + Catalogue(TRAILS, found, 'T'));
 +        std::string numbers;
 +        for (uint32 v : stats)
 +            numbers += (numbers.empty() ? "" : ",") + std::to_string(v);
@@ -1520,7 +1584,7 @@ index 0000000..5b335ae
 +        std::vector<uint32> stats = CosmeticStats(guid);
 +        std::pair<uint32, uint32> worn = Worn(guid);
 +        bool paint = kind == "P";
-+        if (Earned(paint ? PAINTS : TRAILS, i, stats))
++        if (Earned(paint ? PAINTS : TRAILS, i, stats, Found(guid), paint ? 'P' : 'T'))
 +        {
 +            (paint ? worn.first : worn.second) = i;
 +            CharacterDatabase.PExecute("REPLACE INTO `kartcraft_cosmetic` (`guid`, `paint`, `trail`, `at`) "
@@ -2203,6 +2267,8 @@ index 0000000..5b335ae
 +    constexpr float CACHE_RADIUS = 12.f;
 +    constexpr uint32 CACHE_INTERVAL = 20 * IN_MILLISECONDS;
 +    constexpr uint32 CACHE_DAILY = 20;
++    // The chance (%) an Astral Cache holds a cosmetic found nowhere else.
++    constexpr uint32 CACHE_HIDDEN_PERCENT = 3;
 +
 +    static std::unordered_map<uint32, uint32> s_lastClaim; // player guid low -> ms, world thread
 +
@@ -2269,6 +2335,17 @@ index 0000000..5b335ae
 +        go->SetLootState(GO_JUST_DEACTIVATED);
 +        player->ModifyMoney(int32(gold));
 +        GiveTokens(player, tokens);
++        // An Astral Cache's rare prize: a cosmetic found nowhere else.
++        if (astral && claimed < CACHE_DAILY && urand(1, 100) <= CACHE_HIDDEN_PERCENT)
++        {
++            std::string const hidden = FindHidden(player);
++            if (!hidden.empty())
++            {
++                chat.PSendSysMessage("Inside the Astral Cache: the %s, found nowhere else! Wear it in the garage.",
++                    hidden.c_str());
++                SendCosmetics(player);
++            }
++        }
 +        CharacterDatabase.PExecute("INSERT INTO `kartcraft_cache_claims` (`guid`, `cache`, `entry`, `gold`, `tokens`, `at`) "
 +            "VALUES (%u, %u, %u, %u, %u, %u)", guid, go->GetGUIDLow(), go->GetEntry(), gold, tokens,
 +            uint32(std::time(nullptr)));

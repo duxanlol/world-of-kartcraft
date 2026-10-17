@@ -54,6 +54,8 @@ CACHE_SQUARE = 3000.0
 CACHE_CLEAR = 80.0
 # One spot in this many is an Astral Cache.
 CACHE_ASTRAL_SHARE = 7
+# How much further (yards) an Astral Cache is seen than the world's 250, its beam with it.
+CACHE_ASTRAL_SEEN = 250
 # A claimed cache comes back somewhere in its square between these (s).
 CACHE_RESPAWN = (120, 300)
 GAME_DIR = 'src/game/'
@@ -605,7 +607,7 @@ def caches_sql(data):
         f'-- A spot every {int(CACHE_SPACING)} yards along the roads; one in {CACHE_ASTRAL_SHARE} an Astral Cache.',
         'INSERT INTO `gameobject` (`guid`, `id`, `map`, `position_x`, `position_y`, `position_z`,',
         '  `orientation`, `rotation0`, `rotation1`, `rotation2`, `rotation3`, `spawntimesecsmin`,',
-        '  `spawntimesecsmax`, `animprogress`, `state`) VALUES',
+        '  `spawntimesecsmax`, `animprogress`, `state`, `visibility_mod`) VALUES',
     ]
     rows, pools = [], []
     for i, (m, x, y, z) in enumerate(spots):
@@ -613,7 +615,8 @@ def caches_sql(data):
         astral = int(hashlib.sha256(f'{m}:{x}:{y}'.encode()).hexdigest(), 16) % CACHE_ASTRAL_SHARE == 0
         entry = CACHE_ASTRAL if astral else CACHE_WUMPA
         rows.append(f'({guid}, {entry}, {m}, {sql_num(round(x, 1))}, {sql_num(round(y, 1))}, '
-                    f'{sql_num(round(z, 1))}, 0, 0, 0, 0, 1, {CACHE_RESPAWN[0]}, {CACHE_RESPAWN[1]}, 100, 1)')
+                    f'{sql_num(round(z, 1))}, 0, 0, 0, 0, 1, {CACHE_RESPAWN[0]}, {CACHE_RESPAWN[1]}, 100, 1, '
+                    f'{CACHE_ASTRAL_SEEN if astral else 0})')
         square = (m, int(math.floor(x / CACHE_SQUARE)), int(math.floor(y / CACHE_SQUARE)))
         pools.append(f"({guid}, {pool_of[square]}, 0, 'Kartcraft cache')")
     out.append(',\n'.join(rows) + ';')

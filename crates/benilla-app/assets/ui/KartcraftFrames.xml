@@ -4117,13 +4117,19 @@
         -- ── The garage's Look: a paint and a boost trail, earned on the server ──
 
         BenillaKartLook = { lists = { P = {}, T = {} }, stats = {}, worn = { P = 0, T = 0 }, view = { P = 0, T = 0 } }
-        BENILLA_KART_LOOK_STATS = { "races", "wins", "course records", "challenge times", "ladder top-3 seasons", "ladder seasons won" }
+        BENILLA_KART_LOOK_STATS = { "races", "wins", "course records", "challenge times", "ladder top-3 seasons", "ladder seasons won", "caches" }
+        -- The Look's stat for one found only in an Astral Cache (Kartcraft.cpp STAT_FOUND).
+        BENILLA_KART_LOOK_FOUND = 6
 
         -- Whether a catalogue's entry (0-based) is earned, and the line saying what it needs.
         function BenillaKartLook_Earned(kind, i)
             local look = BenillaKartLook
             local c = look.lists[kind][i + 1]
             if not c then return false, "" end
+            if c.stat == BENILLA_KART_LOOK_FOUND then
+                if c.need == 0 then return true, "" end
+                return false, "Found only in Astral Caches"
+            end
             local have = look.stats[c.stat + 1] or 0
             if have >= c.need then return true, "" end
             return false, format("Needs %d %s (%d so far)", c.need, BENILLA_KART_LOOK_STATS[c.stat + 1] or "", have)
