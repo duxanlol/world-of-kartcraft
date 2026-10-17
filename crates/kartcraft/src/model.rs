@@ -77,6 +77,9 @@ pub struct WheelSprites {
 pub struct Anchors {
     #[serde(default)]
     pub seat: [f32; 3],
+    /// The centre of the steering wheel's ring.
+    #[serde(default)]
+    pub steering_wheel: Option<[f32; 3]>,
     /// The exhaust pipes' tips, where the smoke comes out.
     #[serde(default)]
     pub exhaust: Vec<[f32; 3]>,
@@ -195,6 +198,23 @@ pub fn seat() -> Vec3 {
 /// The seat of a racer's kart (see [`model_named`]), else ours.
 pub fn seat_of(racer: &str) -> Vec3 {
     model_named(racer).map_or_else(seat, |m| Vec3::from_array(m.anchors.seat))
+}
+
+/// The median of CTR's karts' steering-wheel centres, meters in the kart's frame.
+pub const MEDIAN_STEERING_WHEEL: Vec3 = Vec3::new(0.0, 0.607, 0.407);
+
+/// The centre of our kart's steering-wheel ring, in the kart's frame, meters.
+pub fn steering_wheel() -> Vec3 {
+    model()
+        .and_then(|m| m.anchors.steering_wheel)
+        .map_or(MEDIAN_STEERING_WHEEL, Vec3::from_array)
+}
+
+/// The steering wheel of a racer's kart (see [`model_named`]), else ours.
+pub fn steering_wheel_of(racer: &str) -> Vec3 {
+    model_named(racer)
+        .and_then(|m| m.anchors.steering_wheel)
+        .map_or_else(steering_wheel, Vec3::from_array)
 }
 
 /// Reads the model off the disk early, so the first `J` only spawns it.

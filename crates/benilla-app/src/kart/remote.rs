@@ -386,7 +386,6 @@ pub(crate) fn update(
             };
         }
         // The driver in the seat of their kart, as ours, hands on its wheel.
-        super::wheel::hold(&mut commands, entity, state.steer, &frame);
         let fit = anims
             .zip(rig)
             .and_then(|(anims, rig)| fits.get(anims, rig, catalog));
@@ -399,6 +398,9 @@ pub(crate) fn update(
             fit,
             scale,
         );
+        let wheel = kartcraft::model::steering_wheel_of(&remote.racer);
+        let ring = super::wheel::Ring::of(&kart, &body, wheel);
+        super::wheel::hold(&mut commands, entity, state.steer, ring, &frame);
     }
     // Karts whose drivers left the kart or our sight.
     let gone: Vec<Entity> = karts

@@ -599,7 +599,6 @@ fn seat(
     let Ok((entity, mut t, anims, rig)) = body.single_mut() else {
         return;
     };
-    wheel::hold(&mut commands, entity, view.steer, &frame);
     let catalog = anim_data.as_deref().map(|d| &d.0);
     let fit = anims
         .zip(rig)
@@ -612,6 +611,8 @@ fn seat(
         fit,
         t.scale.x,
     );
+    let ring = wheel::Ring::of(&view.transform, &t, model::steering_wheel());
+    wheel::hold(&mut commands, entity, view.steer, ring, &frame);
 }
 
 /// The driver's facing in the kart: the body's model faces −Z at rest, the kart's +Z.
