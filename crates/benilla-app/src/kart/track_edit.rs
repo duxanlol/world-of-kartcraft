@@ -812,7 +812,10 @@ mod tests {
         let facings = [None, Some(1.5), None, Some(0.5)];
         let widths = [GATE_HALF_WIDTH, GATE_HALF_WIDTH, 12.0, 30.0];
         let text = spots(&points, &facings, &widths);
-        assert_eq!(text, "1.0,2.0;3.0,-4.0,1.500;5.0,6.0,,12.0;7.0,8.0,0.500,30.0");
+        assert_eq!(
+            text,
+            "1.0,2.0;3.0,-4.0,1.500;5.0,6.0,,12.0;7.0,8.0,0.500,30.0"
+        );
         let (back, o, w) = parse_spots(&text).unwrap();
         assert_eq!(back[1], [3.0, -4.0]);
         assert_eq!(o, facings);
@@ -914,7 +917,10 @@ mod tests {
         let (_, json) = edit.course("Narrow", "").unwrap();
         let course: Course = serde_json::from_str(&json).unwrap();
         assert_eq!(course.gates(), vec![GATE_HALF_WIDTH, 14.0]);
-        assert!(!json.contains("\"gate\": 20"), "the default stays implied: {json}");
+        assert!(
+            !json.contains("\"gate\": 20"),
+            "the default stays implied: {json}"
+        );
         edit.clear();
         assert_eq!(edit.width, GATE_HALF_WIDTH);
     }
