@@ -3437,6 +3437,14 @@ fn a_controller_guide_shows_under_the_window_the_pad_drives() {
     s.run("BenillaKartTracksFrame:Hide() BenillaKart_Open(BenillaKartFinderFrame)")
         .unwrap();
     assert!(legend(&mut s).1.contains("Start: find race"));
+    // Below the finder's tabs, not over them.
+    let (legend_top, tab_bottom): (f32, f32) = s
+        .eval("return BenillaPadLegendFrame:GetTop(), BenillaKartFinderFrameTab1:GetBottom()")
+        .unwrap();
+    assert!(
+        legend_top <= tab_bottom + 0.5,
+        "{legend_top} over {tab_bottom}"
+    );
     s.run("BenillaKartFinderFrame:Hide() BenillaKartMenu_Toggle()")
         .unwrap();
     let (shown, text) = legend(&mut s);

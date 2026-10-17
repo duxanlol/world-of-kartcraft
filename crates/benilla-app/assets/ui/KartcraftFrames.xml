@@ -1792,7 +1792,8 @@
               legend = "D-pad: pick a track    L1 / R1: page\nCross / A: time trial    Square / X: marshal\nTriangle / Y: map    Select: rate    Circle / B: close" },
             { name = "BenillaKartJobsFrame", buttons = "BenillaKartJobs_Pad",
               legend = "D-pad: pick a job    Cross / A: take it    Triangle / Y: route\nSquare / X: cancel the job under way    Circle / B: close" },
-            { name = "BenillaKartFinderFrame", buttons = "BenillaKartFinder_Pad",
+            -- `below`: how far under the window its legend hangs, past its tabs.
+            { name = "BenillaKartFinderFrame", buttons = "BenillaKartFinder_Pad", below = 26,
               legend = "D-pad: move    L1 / R1: page    Cross / A: tick or join\nStart: find race (again: leave the queue)    Circle / B: close" },
             { name = "BenillaKartGarageFrame" },
             { name = "BenillaKartShopFrame" },
@@ -1828,7 +1829,7 @@
                 legend:SetWidth(math.max(frame:GetWidth(), 240))
                 legend:SetHeight(BenillaPadLegendFrameText:GetHeight() + 16)
                 legend:ClearAllPoints()
-                legend:SetPoint("TOP", frame, "BOTTOM", 0, 2)
+                legend:SetPoint("TOP", frame, "BOTTOM", 0, 2 - (w.below or 0))
             end
             legend:Show()
         end
