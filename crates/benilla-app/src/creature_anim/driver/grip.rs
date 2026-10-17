@@ -6,12 +6,19 @@ use bevy::prelude::*;
 use super::super::{HandGrip, HAND_GRIP_WEIGHT};
 
 /// Curls a hand's fingers (`HandsClosed`, on the finger-mask nodes over the gait) while a weapon
-/// occupies its attach point, as `CloseHand 0x479660` does. Runs after [`super::drive_animations`].
+/// occupies its attach point, as `CloseHand 0x479660` does; a kart's driver closes both on the
+/// wheel ([`crate::kart::wheel`]). Runs after [`super::drive_animations`].
 pub(in super::super) fn drive_hand_grip(
-    mut units: Query<(&HandGrip, &ModelAnimations, &mut AnimationPlayer)>,
+    mut units: Query<(
+        &HandGrip,
+        &ModelAnimations,
+        &mut AnimationPlayer,
+        Option<&crate::kart::wheel::Wheel>,
+    )>,
 ) {
-    for (grip, anims, mut player) in &mut units {
-        for (hand, want) in [(0usize, grip.right), (1, grip.left)] {
+    for (grip, anims, mut player, wheel) in &mut units {
+        let wheel = wheel.is_some();
+        for (hand, want) in [(0usize, grip.right || wheel), (1, grip.left || wheel)] {
             let Some(node) = anims.hand_close[hand] else {
                 continue; // no finger key-bones or no HandsClosed
             };

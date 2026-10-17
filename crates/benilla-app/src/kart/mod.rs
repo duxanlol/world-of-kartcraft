@@ -38,6 +38,7 @@ pub(crate) use race::{RaceMap, COURSES, ZONES};
 pub(crate) use seat::SEAT_ANIMS;
 pub(crate) use ui::{KartOverlay, PadView, RacerDot, ScoreLines};
 mod weapons;
+pub(crate) mod wheel;
 
 use benilla_world::collision::WorldCollision;
 use benilla_world::schedule::WorldStage;
@@ -576,11 +577,14 @@ fn update(
 /// the kart's origin facing its heading.
 #[allow(clippy::type_complexity)]
 fn seat(
+    mut commands: Commands,
+    frame: Res<bevy::diagnostic::FrameCount>,
     view: Res<KartView>,
     mut fits: ResMut<seat::SeatFits>,
     anim_data: Option<Res<crate::creature_anim::AnimData>>,
     mut body: Query<
         (
+            Entity,
             &mut Transform,
             Option<&benilla_assets::ModelAnimations>,
             Option<&benilla_world::rig_anim::RigPose>,
@@ -591,9 +595,10 @@ fn seat(
     if !view.active {
         return;
     }
-    let Ok((mut t, anims, rig)) = body.single_mut() else {
+    let Ok((entity, mut t, anims, rig)) = body.single_mut() else {
         return;
     };
+    wheel::hold(&mut commands, entity, view.steer, &frame);
     let catalog = anim_data.as_deref().map(|d| &d.0);
     let fit = anims
         .zip(rig)
@@ -766,6 +771,16 @@ pub(crate) fn plugin(app: &mut App) {
                 .chain()
                 .before(bevy::transform::TransformSystems::Propagate)
                 .after(crate::entities::conform_units),
+        )
+        // The hands on the wheel, in the pose post-pass after the seats mark their drivers and
+        // after the body twist turns the spine the arms hang from.
+        .add_systems(
+            PostUpdate,
+            wheel::grip_wheel
+                .in_set(benilla_world::rig_anim::PosePost)
+                .after(seat)
+                .after(remote::update)
+                .after(crate::creature_anim::apply_body_twist),
         );
 }
 

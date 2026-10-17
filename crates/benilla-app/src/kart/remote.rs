@@ -236,6 +236,8 @@ fn ground_normal(collide: &WorldCollision, at: Vec3, forward: Vec3) -> Vec3 {
 /// Keeps a kart for each other driver, samples their packets, and draws and seats them.
 #[allow(clippy::type_complexity)]
 pub(crate) fn update(
+    mut commands: Commands,
+    frame: Res<bevy::diagnostic::FrameCount>,
     time: Res<Time>,
     collide: WorldCollision,
     mut karts: ResMut<RemoteKarts>,
@@ -383,7 +385,8 @@ pub(crate) fn update(
                 ..Default::default()
             };
         }
-        // The driver in the seat of their kart, as ours.
+        // The driver in the seat of their kart, as ours, hands on its wheel.
+        super::wheel::hold(&mut commands, entity, state.steer, &frame);
         let fit = anims
             .zip(rig)
             .and_then(|(anims, rig)| fits.get(anims, rig, catalog));

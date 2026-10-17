@@ -23,6 +23,7 @@ use select::{Mode, Special};
 
 /// The strafe body counter-twist, composed onto SpineLow and Head after animation.
 mod twist;
+pub(crate) use twist::apply_body_twist;
 pub(crate) use twist::{wrap_pi, BodyTwist};
 
 /// Parks an off-frustum rig's pose while its clocks run, as the reference does not tick one
