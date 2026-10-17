@@ -127,6 +127,9 @@ pub struct Session {
     /// does or as asphalt everywhere ([`Session::set_ground`]).
     ground: Ground,
     terrain_physics: bool,
+    /// The surface of deep water under the kart, Bevy world height, for it to float on
+    /// ([`Session::set_water`], [`ctr_kart::Kart::water`]); none on land.
+    water: Option<f32>,
     /// The turbo pads to fire, Bevy world ([`crate::pads`]), and whether they are off for now.
     pads: Vec<crate::pads::Pad>,
     pads_off: bool,
@@ -356,6 +359,12 @@ impl Session {
         self.terrain_physics = physics;
     }
 
+    /// The water the kart floats on for the coming ticks (its surface, Bevy world height), or
+    /// none: from the host, which reads the world's liquid under the kart.
+    pub fn set_water(&mut self, surface: Option<f32>) {
+        self.water = surface;
+    }
+
     /// The turbo pads the kart fires as it drives over them, Bevy world.
     pub fn set_pads(&mut self, pads: Vec<crate::pads::Pad>) {
         self.pads = pads;
@@ -500,6 +509,7 @@ impl Session {
                 self.pads_off,
                 from_lu(before, origin),
             );
+            kart.water = self.water.map(|y| (y - origin.y) * lu_per_yard());
             let controls = input(kart);
             kart.tick_among(&world, &controls, mods, &others);
             let fb = &mut self.feedback;

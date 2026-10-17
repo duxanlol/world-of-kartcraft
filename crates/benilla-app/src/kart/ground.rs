@@ -75,6 +75,19 @@ pub(super) fn sample(
     mut host: ResMut<super::Host>,
 ) {
     let physics = drives_on_ground(races.ground_types(), settings.terrain);
+    // The water under the kart, in the air too, for it to float on (Kartcraft's deviation,
+    // `ctr_kart::Kart::water`): its surface, the water kinds only (magma and slime are none).
+    if view.active {
+        let wow = bevy_to_wow(view.transform.translation);
+        let surface = world.water_surface_at(Subject::Player, wow);
+        trace!(
+            "kart ground: water {surface:?} under {:?}",
+            view.transform.translation
+        );
+        host.session.set_water(surface);
+    } else {
+        host.session.set_water(None);
+    }
     if !view.active || !view.grounded {
         let ground = view.ground;
         host.session.set_ground(ground, physics);

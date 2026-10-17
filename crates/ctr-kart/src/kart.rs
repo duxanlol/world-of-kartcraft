@@ -292,7 +292,26 @@ impl Terrain {
     pub const ICE: Terrain = crate::Ground::Ice.terrain();
     /// In the air.
     pub const NONE: Terrain = crate::Ground::None.terrain();
+    /// Deviates (the owner's call, World of Kartcraft): afloat on deep water ([`Kart::water`]).
+    /// CTR has no floating (its shallow water is a ground row, deep water a kill plane): a
+    /// hovercraft's feel, CTR's Water row's speed lifted a little, grip let go to a slide, the
+    /// steering softer, Water's flags (its rolling sound).
+    pub const AFLOAT: Terrain = Terrain {
+        speed: 200,
+        accel: 200,
+        counter_steer: 256,
+        lean: 256,
+        ground_friction: 96,
+        turn_angle: 256,
+        turn_response: 200,
+        flags: crate::Ground::Water.terrain().flags,
+    };
+    /// Afloat with a boost burning: CTR's FastWater, the kart planing at full grip.
+    pub const PLANING: Terrain = crate::Ground::FastWater.terrain();
 }
+
+/// How deep a floating kart sits in the water, lu: its floor is the surface less this.
+pub const DRAFT: f32 = 12.0;
 
 // `actionsFlagSet` bits that matter here.
 const TOUCH_GROUND: u32 = 0x1;
@@ -564,6 +583,13 @@ pub struct Kart {
     /// The ground under the kart, the host's to set before a tick (CTR reads the touched
     /// quadblock's `terrain_type`, `COLL.c:1475-1491`); asphalt until it says otherwise.
     pub ground_type: Terrain,
+    /// Deviates (the owner's call): the surface of deep water under the kart (lu, the world's
+    /// height), the host's to set before a tick, or none. The kart's floor is then the higher of
+    /// the ground and the surface less [`DRAFT`]: the shallows drive their bed, deep water floats
+    /// the kart, and the shore joins them with no step. None is CTR's behaviour, unchanged.
+    pub water: Option<f32>,
+    /// On the water's floor this tick ([`Kart::water`]).
+    afloat: bool,
     /// `terrainMeta2`, the terrain the speed multiplier comes from: it stays through a hop and
     /// is let go 128 lu above the ground (`COLL.c:1431-1435`).
     speed_terrain: Terrain,
@@ -710,6 +736,8 @@ impl Kart {
             state: State::Normal,
             terrain: Terrain::ASPHALT,
             ground_type: Terrain::ASPHALT,
+            water: None,
+            afloat: false,
             speed_terrain: Terrain::ASPHALT,
             terrain_base: 0,
             on_pad: false,
@@ -1092,6 +1120,11 @@ impl Kart {
         }
         let distortion = (pitch + self.engine_whine).clamp(0, 0xFF);
         self.engine_sound = (distortion as u8, volume.clamp(0, 0xFF) as u8);
+    }
+
+    /// Floating on deep water this tick ([`Kart::water`]).
+    pub fn afloat(&self) -> bool {
+        self.afloat
     }
 
     pub fn grounded(&self) -> bool {
@@ -2564,11 +2597,30 @@ impl Kart {
         let steps = (delta.length() / (r * 0.4)).ceil().clamp(1.0, 32.0) as usize;
         let step = delta / steps as f32;
         let mut slammed = false;
+        let floor = self.water.map(|s| s - DRAFT);
         'outer: for _ in 0..steps {
             centre += step;
             for _ in 0..4 {
-                let Some(contact) = world.deepest(centre, r) else {
-                    break;
+                // The water's floor is a plane under the sphere, the deeper contact winning.
+                let plane = floor.and_then(|f| {
+                    let depth = f - (centre.y - r);
+                    (depth > 0.0).then_some(crate::collision::Contact {
+                        depth,
+                        normal: Vec3::Y,
+                        point: Vec3::new(centre.x, f, centre.z),
+                    })
+                });
+                let contact = match (world.deepest(centre, r), plane) {
+                    (Some(w), Some(p)) => {
+                        if p.depth > w.depth {
+                            p
+                        } else {
+                            w
+                        }
+                    }
+                    (Some(w), None) => w,
+                    (None, Some(p)) => p,
+                    (None, None) => break,
                 };
                 centre += contact.normal * (contact.depth + 0.01);
                 let ground = contact.normal.y >= GROUND_NORMAL_Y;
@@ -2630,7 +2682,20 @@ impl Kart {
     /// COLL_FIXED (9.3, 6.1, 6.5): the ground under the kart, landings, coyote time and airtime.
     fn ground_probe(&mut self, world: &Collision) {
         let was = self.flags_prev & TOUCH_GROUND != 0;
-        let hit = world.ground(self.pos + Vec3::Y * 128.0, 384.0);
+        let mut hit = world.ground(self.pos + Vec3::Y * 128.0, 384.0);
+        // The water's floor, where it is above the ground (or there is none in reach).
+        self.afloat = false;
+        if let Some(f) = self.water.map(|s| s - DRAFT) {
+            let from = self.pos.y + 128.0;
+            if f <= from && hit.as_ref().is_none_or(|h| f > h.point.y) && from - f <= 384.0 {
+                hit = Some(crate::collision::Hit {
+                    point: Vec3::new(self.pos.x, f, self.pos.z),
+                    normal: Vec3::Y,
+                    distance: from - f,
+                });
+                self.afloat = self.pos.y <= f + 16.0;
+            }
+        }
         // `quadBlockHeight` (`COLL.c:1362-1373`): the ground found, else the search's bottom.
         self.ground = hit.as_ref().map_or(self.pos.y - 256.0, |h| h.point.y);
         let mut grounded = self.flags & TOUCH_GROUND != 0;
@@ -2647,6 +2712,12 @@ impl Kart {
             // `COLL.c:1476`: a cloud's ice effect makes any ground ice.
             let under = if self.cloud == Some(CloudEffect::Ice) {
                 Terrain::ICE
+            } else if self.afloat {
+                if self.reserves > 0 {
+                    Terrain::PLANING
+                } else {
+                    Terrain::AFLOAT
+                }
             } else {
                 self.ground_type
             };

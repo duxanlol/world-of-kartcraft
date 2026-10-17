@@ -1281,3 +1281,81 @@ fn a_stopped_kart_with_its_model_turned_settles_instead_of_spinning() {
         "the drawn kart turned {travelled} of 4096 standing still"
     );
 }
+
+/// A kart at full gas over `floor`, with water `surface` lu up (or none), after `frames`.
+fn on_water(surface: Option<f32>, frames: usize) -> Kart {
+    let w = world(floor(200000.0));
+    let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 1.0, 0.0), 0);
+    kart.water = surface;
+    run(&mut kart, &w, GAS, frames);
+    kart
+}
+
+/// Deep water floats the kart at the surface less its draft, grounded, at the afloat row's
+/// speed; shallow water leaves it on its bed; water under the ground changes nothing.
+#[test]
+fn deep_water_floats_the_kart_and_the_shallows_drive_their_bed() {
+    let deep = on_water(Some(200.0), 150);
+    assert!(deep.afloat() && deep.grounded(), "afloat");
+    assert!(
+        (deep.pos.y - (200.0 - DRAFT)).abs() < 2.0,
+        "at {}",
+        deep.pos.y
+    );
+    let top = Class::Balanced.stats().speed;
+    let afloat = top * Terrain::AFLOAT.speed / 256;
+    assert!(
+        (deep.speed() - afloat).abs() < 400,
+        "{} against {afloat}",
+        deep.speed()
+    );
+    // The shallows: the floor (surface less draft) under the bed.
+    let shallow = on_water(Some(6.0), 150);
+    assert!(!shallow.afloat() && shallow.grounded());
+    assert!(shallow.pos.y.abs() < 2.0, "on the bed: {}", shallow.pos.y);
+    // Water under the ground is none: the same run as without any.
+    let under = on_water(Some(-500.0), 150);
+    let dry = on_water(None, 150);
+    assert_eq!((under.pos, under.speed()), (dry.pos, dry.speed()));
+}
+
+/// Dropped from high over water, the kart lands on it, and a hop off it lands back on it.
+#[test]
+fn a_kart_lands_on_water_and_hops_off_it() {
+    let w = world(floor(200000.0));
+    let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 1200.0, 0.0), 0);
+    kart.water = Some(300.0);
+    kart.events.clear();
+    run(&mut kart, &w, GAS, 120);
+    assert!(kart.afloat(), "on the water at {}", kart.pos.y);
+    assert!(kart.events.iter().any(|e| matches!(e, Event::Land { .. })));
+    assert!((kart.pos.y - (300.0 - DRAFT)).abs() < 2.0, "{}", kart.pos.y);
+    kart.events.clear();
+    kart.tick(&w, &Input { r1: true, ..GAS }, &NONE);
+    run(&mut kart, &w, GAS, 3);
+    assert!(!kart.grounded(), "the hop leaves the water");
+    run(&mut kart, &w, GAS, 40);
+    assert!(kart.afloat() && kart.events.iter().any(|e| matches!(e, Event::Land { .. })));
+}
+
+/// A boost on the water planes the kart: faster than afloat alone.
+#[test]
+fn a_boost_planes_the_kart_on_water() {
+    let w = world(floor(200000.0));
+    let mut plain = Kart::new(Class::Balanced, Vec3::new(0.0, 1.0, 0.0), 0);
+    plain.water = Some(200.0);
+    run(&mut plain, &w, GAS, 150);
+    let mut boosted = Kart::new(Class::Balanced, Vec3::new(0.0, 1.0, 0.0), 0);
+    boosted.water = Some(200.0);
+    run(&mut boosted, &w, GAS, 150);
+    boosted.fire_turbo(false);
+    run(&mut boosted, &w, GAS, 20);
+    run(&mut plain, &w, GAS, 20);
+    assert!(boosted.reserves() > 0 || boosted.speed() > plain.speed());
+    assert!(
+        boosted.speed() > plain.speed(),
+        "{} > {}",
+        boosted.speed(),
+        plain.speed()
+    );
+}
