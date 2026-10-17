@@ -4,6 +4,50 @@
 use glam::Vec2;
 
 /// Length of a polyline, closing it if `closed`.
+/// How much of its convex hull a closed line's area fills: 1 for a convex blob, lower the more
+/// it bends inward.
+pub fn convexity(pts: &[Vec2]) -> f32 {
+    area(pts) / area(&hull(pts)).max(1.0)
+}
+
+/// A polygon's area (shoelace).
+pub fn area(p: &[Vec2]) -> f32 {
+    let n = p.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (p[i], p[(i + 1) % n]);
+            a.x * b.y - b.x * a.y
+        })
+        .sum::<f32>()
+        .abs()
+        * 0.5
+}
+
+/// The convex hull (monotone chain).
+pub fn hull(p: &[Vec2]) -> Vec<Vec2> {
+    let mut pts = p.to_vec();
+    pts.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    let cross = |o: Vec2, a: Vec2, b: Vec2| (a - o).perp_dot(b - o);
+    let mut lower: Vec<Vec2> = Vec::new();
+    for &q in &pts {
+        while lower.len() >= 2 && cross(lower[lower.len() - 2], lower[lower.len() - 1], q) <= 0.0 {
+            lower.pop();
+        }
+        lower.push(q);
+    }
+    let mut upper: Vec<Vec2> = Vec::new();
+    for &q in pts.iter().rev() {
+        while upper.len() >= 2 && cross(upper[upper.len() - 2], upper[upper.len() - 1], q) <= 0.0 {
+            upper.pop();
+        }
+        upper.push(q);
+    }
+    lower.pop();
+    upper.pop();
+    lower.extend(upper);
+    lower
+}
+
 pub fn length(pts: &[Vec2], closed: bool) -> f32 {
     let open: f32 = pts.windows(2).map(|w| w[0].distance(w[1])).sum();
     match (closed, pts.first(), pts.last()) {
@@ -242,6 +286,27 @@ pub fn min_separation(pts: &[Vec2], closed: bool, step: f32, apart: f32) -> f32 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_square_fills_its_hull_and_an_l_does_not() {
+        let square = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(10.0, 0.0),
+            Vec2::new(10.0, 10.0),
+            Vec2::new(0.0, 10.0),
+        ];
+        assert!((convexity(&square) - 1.0).abs() < 1e-5);
+        let l = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(10.0, 0.0),
+            Vec2::new(10.0, 4.0),
+            Vec2::new(4.0, 4.0),
+            Vec2::new(4.0, 10.0),
+            Vec2::new(0.0, 10.0),
+        ];
+        // 64 of the hull's 82.
+        assert!((convexity(&l) - 64.0 / 82.0).abs() < 1e-3);
+    }
 
     fn circle(r: f32, n: usize) -> Vec<Vec2> {
         (0..n)

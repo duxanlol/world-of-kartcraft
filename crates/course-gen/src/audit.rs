@@ -217,44 +217,6 @@ fn spline_line(
 /// A spline leg with less room than this (yards) anywhere is routed round instead.
 const SPLINE_ROOM: f32 = 1.5;
 
-/// The polygon's area (shoelace).
-fn area(p: &[Vec2]) -> f32 {
-    let n = p.len();
-    (0..n)
-        .map(|i| {
-            let (a, b) = (p[i], p[(i + 1) % n]);
-            a.x * b.y - b.x * a.y
-        })
-        .sum::<f32>()
-        .abs()
-        * 0.5
-}
-
-/// The convex hull (monotone chain).
-fn hull(p: &[Vec2]) -> Vec<Vec2> {
-    let mut pts = p.to_vec();
-    pts.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
-    let cross = |o: Vec2, a: Vec2, b: Vec2| (a - o).perp_dot(b - o);
-    let mut lower: Vec<Vec2> = Vec::new();
-    for &q in &pts {
-        while lower.len() >= 2 && cross(lower[lower.len() - 2], lower[lower.len() - 1], q) <= 0.0 {
-            lower.pop();
-        }
-        lower.push(q);
-    }
-    let mut upper: Vec<Vec2> = Vec::new();
-    for &q in pts.iter().rev() {
-        while upper.len() >= 2 && cross(upper[upper.len() - 2], upper[upper.len() - 1], q) <= 0.0 {
-            upper.pop();
-        }
-        upper.push(q);
-    }
-    lower.pop();
-    upper.pop();
-    lower.extend(upper);
-    lower
-}
-
 /// The bot drives `line` (WoW x, y and a height to search the ground from) once round, or
 /// start to finish, over the world's real collision round it.
 pub fn drive_real(
@@ -492,8 +454,7 @@ fn audit_zone(zone: &str, list: &[&FileCourse], out: &Path) -> Vec<Audit> {
             .map(|i| gates[i].distance(gates[(i + 1) % gates.len()]))
             .collect();
         let convexity = if closed {
-            let h = hull(&shape);
-            area(&shape) / area(&h).max(1.0)
+            crate::geom::convexity(&shape)
         } else {
             0.0
         };
@@ -670,31 +631,4 @@ fn draw(
     };
     let _ = crate::preview::map(t, field, &course).save(out.join(format!("{}.png", a.key)));
     let _ = crate::preview::profile(&course).save(out.join(format!("{}-profile.png", a.key)));
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_square_fills_its_hull_and_an_l_does_not() {
-        let square = [
-            Vec2::new(0.0, 0.0),
-            Vec2::new(10.0, 0.0),
-            Vec2::new(10.0, 10.0),
-            Vec2::new(0.0, 10.0),
-        ];
-        assert!((area(&square) / area(&hull(&square)) - 1.0).abs() < 1e-5);
-        let l = [
-            Vec2::new(0.0, 0.0),
-            Vec2::new(10.0, 0.0),
-            Vec2::new(10.0, 4.0),
-            Vec2::new(4.0, 4.0),
-            Vec2::new(4.0, 10.0),
-            Vec2::new(0.0, 10.0),
-        ];
-        let convexity = area(&l) / area(&hull(&l));
-        // 64 of the hull's 82.
-        assert!((convexity - 64.0 / 82.0).abs() < 1e-3, "{convexity}");
-    }
 }

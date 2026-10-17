@@ -236,7 +236,14 @@ pub fn run(t: &ZoneTerrain, roads: &RoadGraph, p: &SelectParams) -> Run {
         scored.push((s, c, m, r));
     }
     scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-    // The finalists differ: each shares at most a third of its line with any above it.
+    // The finalists differ: each shares at most a third of its line with any above it. And each
+    // drives on the world's real collision (crate::soup): the test drive's stamped footprints
+    // miss what an audit of the generated courses found under them (Dire Maul's ruins, Tiragarde
+    // Keep, the Gurubashi Arena, silithid hives), so a finalist the bot cannot finish there with
+    // either kart is rejected.
+    let mut chain = (t.map_id <= 1)
+        .then(crate::open_install)
+        .and_then(Result::ok);
     let mut picked: Vec<(f32, Candidate, Metrics, DriveResult)> = Vec::new();
     for e in scored {
         if picked.len() == p.keep {
@@ -247,9 +254,32 @@ pub fn run(t: &ZoneTerrain, roads: &RoadGraph, p: &SelectParams) -> Run {
                 + generate::overlap(&o.1.pts, &e.1.pts, 30.0))
                 / 2.0
         };
-        if picked.iter().all(|o| shared(o) <= MAX_SHARED) {
-            picked.push(e);
+        if !picked.iter().all(|o| shared(o) <= MAX_SHARED) {
+            continue;
         }
+        if let Some(chain) = chain.as_mut() {
+            let z = metrics::heights(t, &e.1.pts, e.1.closed);
+            let line: Vec<[f32; 3]> =
+                e.1.pts
+                    .iter()
+                    .zip(&z)
+                    .map(|(q, &h)| [q.x, q.y, h])
+                    .collect();
+            let drives = |chain: &mut benilla_formats::Chain, class| {
+                crate::audit::drive_real(chain, t.map_id, &line, e.1.closed, class)
+                    .is_ok_and(|d| d.finished)
+            };
+            if !drives(chain, kart_driver::Class::Balanced)
+                && !drives(chain, kart_driver::Class::Turn)
+            {
+                stats
+                    .rejects
+                    .push(format!("{}: fails on the real collision", e.1.name));
+                rejected.push(course(t, &field, 0, 0.0, &e.1, e.2, e.3));
+                continue;
+            }
+        }
+        picked.push(e);
     }
     let mut finalists: Vec<Course> = picked
         .into_iter()
@@ -352,7 +382,7 @@ pub fn final_score(m: &Metrics, r: &DriveResult, closed: bool) -> f32 {
     s += 5.0 * r.longest_air.min(1.0);
     s += 1.5 * (r.airtime / laps).min(2.0);
     let lap = r.best_lap;
-    let (lo, hi) = if closed { (50.0, 110.0) } else { (45.0, 120.0) };
+    let (lo, hi) = crate::metrics::lap_window(closed);
     if (lo..=hi).contains(&lap) {
         s += 3.0;
     } else {

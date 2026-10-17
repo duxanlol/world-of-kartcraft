@@ -79,6 +79,9 @@ pub struct Metrics {
     pub subzones: Vec<String>,
     /// Estimated lap (or sprint) time from the curvature-limited speed, seconds.
     pub est_time: f32,
+    /// How much of its convex hull a circuit fills ([`geom::convexity`]; 0 for a sprint): an
+    /// oval is near 1, a course with concave sections well under.
+    pub convexity: f32,
     pub static_score: f32,
 }
 
@@ -255,8 +258,20 @@ pub fn measure(c: &Candidate, t: &ZoneTerrain, field: &CostField) -> Metrics {
         .filter(|&(a, k)| a != 0 && k as f32 * STEP >= 30.0)
         .filter_map(|(a, _)| t.area_names.get(&a).cloned())
         .collect();
+    if closed {
+        m.convexity = geom::convexity(pts);
+    }
     m.static_score = static_score(&m, c.closed);
     m
+}
+
+/// The lap (a sprint's run) a course should take, seconds, by whether it is a circuit.
+pub fn lap_window(closed: bool) -> (f32, f32) {
+    if closed {
+        (45.0, 75.0)
+    } else {
+        (45.0, 100.0)
+    }
 }
 
 /// Airtime (seconds) a crest must give to count as a jump.
@@ -324,7 +339,15 @@ pub fn static_score(m: &Metrics, closed: bool) -> f32 {
     s += 0.5 * m.hairpins.min(2) as f32;
     s -= 1.5 * m.hairpins.saturating_sub(2) as f32;
     s -= 0.5 * m.bend_hist[0].saturating_sub(m.hairpins) as f32;
-    s += 1.2 * (m.jumps.len().min(5) as f32);
+    // Jumps by their air, not their count: a flat course can collect dozens of blips (an audit
+    // of the generated courses found one with 33). Crests under 0.3 s count for nothing.
+    let air: f32 = m
+        .jumps
+        .iter()
+        .map(|j| j.airtime)
+        .filter(|&a| a >= 0.3)
+        .sum();
+    s += 4.0 * air.min(1.5);
     s += 3.0
         * m.jumps
             .iter()
@@ -338,11 +361,18 @@ pub fn static_score(m: &Metrics, closed: bool) -> f32 {
     s -= 10.0 * m.water_frac;
     s -= 6.0 * m.narrow_frac;
     s -= 0.008 * (m.longest_straight - 350.0).max(0.0);
-    let (lo, hi) = if closed { (50.0, 110.0) } else { (45.0, 120.0) };
+    // A lap of 45 to 75 s (a sprint up to 100): shorter is over before it starts, longer drags.
+    let (lo, hi) = lap_window(closed);
     if m.est_time < lo {
-        s -= 0.15 * (lo - m.est_time);
+        s -= 0.3 * (lo - m.est_time);
     } else if m.est_time > hi {
-        s -= 0.15 * (m.est_time - hi);
+        s -= 0.3 * (m.est_time - hi);
+    }
+    // A circuit is a shape, not an oval: convex loops round open ground were the audit's most
+    // common fault, concave sections its best courses' mark.
+    if closed {
+        s -= 15.0 * (m.convexity - 0.8).max(0.0);
+        s += 6.0 * ((0.8 - m.convexity) / 0.3).clamp(0.0, 1.0);
     }
     // Bends a minute, so a long course does not win on length alone.
     let per_min = (m.slide_bends + m.bend_hist[1] + m.bend_hist[2]) as f32 / (m.est_time / 60.0);
@@ -353,6 +383,41 @@ pub fn static_score(m: &Metrics, closed: bool) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_score_prefers_a_shape_to_an_oval_air_to_blips_and_a_lap_that_fits() {
+        let base = Metrics {
+            est_time: 60.0,
+            convexity: 0.75,
+            ..Default::default()
+        };
+        let score = |m: &Metrics| static_score(m, true);
+        let oval = Metrics {
+            convexity: 0.97,
+            ..base.clone()
+        };
+        assert!(score(&base) > score(&oval) + 3.0, "concave over convex");
+        let jump = |airtime| Jump {
+            at: 0,
+            s: 0.0,
+            airtime,
+            distance: 0.0,
+        };
+        let blips = Metrics {
+            jumps: (0..30).map(|_| jump(0.22)).collect(),
+            ..base.clone()
+        };
+        let one_real = Metrics {
+            jumps: vec![jump(0.6)],
+            ..base.clone()
+        };
+        assert!(score(&one_real) > score(&blips), "air, not count");
+        let drag = Metrics {
+            est_time: 110.0,
+            ..base.clone()
+        };
+        assert!(score(&base) > score(&drag) + 8.0, "a 45-75 s lap");
+    }
 
     #[test]
     fn a_u_turn_is_a_hairpin_zone() {
