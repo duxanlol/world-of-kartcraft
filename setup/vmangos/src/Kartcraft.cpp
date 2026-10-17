@@ -5024,8 +5024,9 @@ namespace Kartcraft
     // Tracks players make in the client's track editor and publish (`kartcraft_user_tracks`), for
     // every track browser to list and to test-lap on its own client: no races, records or rewards
     // on them. "R\tPub\t<name>\t<map>\t<laps>\t<zone>\t<grid>\t<points>" publishes one (grid
-    // "x,y,o" or empty; points "x,y[,o];...", the start first and a turned gate's facing), our own
-    // of that name replaced: "R\tPubOk\t<id>\t<name>" or "R\tPubNo\t<why>". "R\tPubL" lists them,
+    // "x,y,o" or empty; points "x,y[,o[,w]];...", the start first, a turned gate's facing and a
+    // gate's half-width), our own of that name replaced: "R\tPubOk\t<id>\t<name>" or
+    // "R\tPubNo\t<why>". "R\tPubL" lists them,
     // newest first: "R\tPTB", a "R\tPT\t<id>\t<name>\t<author>\t<map>\t<laps>\t<zone>\t<grid>\t<points>"
     // each, then "R\tPTE". "R\tPubD\t<id>" takes one of ours down (a GM's, anyone's): "R\tPubGone\t<id>".
     constexpr size_t USER_TRACKS_MAX = 2000;    // on the server
@@ -5050,7 +5051,7 @@ namespace Kartcraft
             "`laps` TINYINT UNSIGNED NOT NULL COMMENT '0 a sprint', "
             "`zone` VARCHAR(40) NOT NULL DEFAULT '', "
             "`grid` VARCHAR(64) NOT NULL DEFAULT '' COMMENT 'x,y,o, or empty for none', "
-            "`points` TEXT NOT NULL COMMENT 'x,y[,o];... the start first', "
+            "`points` TEXT NOT NULL COMMENT 'x,y[,o[,w]];... the start first', "
             "`at` INT UNSIGNED NOT NULL COMMENT 'when published, unix time', "
             "PRIMARY KEY (`id`), UNIQUE KEY `guid_name` (`guid`, `name`)"
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
@@ -5093,8 +5094,11 @@ namespace Kartcraft
         return out.substr(first, out.find_last_not_of(' ') - first + 1);
     }
 
-    // "x,y[,o];..." checked and written back at the wire's decimals; false if any spot is not
-    // numbers within the world, or `facing` (the grid's) is wanted and missing. `count` its spots.
+    // "x,y[,o[,w]];..." checked and written back at the wire's decimals (`o` a turned gate's facing,
+    // empty where only `w` follows; `w` the gate's half-width, which the client draws and passes
+    // by: within CHECKPOINT_RADIUS, the reach a report is taken at); false if any spot is not
+    // numbers within the world, or `facing` (the grid's: x,y,o alone) is wanted and missing.
+    // `count` its spots.
     static bool CleanTrackSpots(std::string const& text, bool facing, std::string& out, size_t& count)
     {
         out.clear();
@@ -5115,17 +5119,21 @@ namespace Kartcraft
                     c = spot.size();
                 v.push_back(spot.substr(p, c - p));
             }
-            float x, y, o = 0.f;
-            bool const has_o = v.size() == 3 && !v[2].empty();
-            if (v.size() < 2 || v.size() > 3 || !ParseFloat(v[0], x) || !ParseFloat(v[1], y) ||
+            float x, y, o = 0.f, w = 0.f;
+            bool const has_o = v.size() >= 3 && !v[2].empty();
+            bool const has_w = v.size() == 4 && !v[3].empty();
+            if (v.size() < 2 || v.size() > (facing ? 3u : 4u) || !ParseFloat(v[0], x) || !ParseFloat(v[1], y) ||
                 std::fabs(x) > 20000.f || std::fabs(y) > 20000.f || (has_o && !ParseFloat(v[2], o)) ||
-                (facing && !has_o))
+                (has_w && (!ParseFloat(v[3], w) || w < 1.f || w > CHECKPOINT_RADIUS)) || (facing && !has_o))
                 return false;
-            char buf[64];
+            char buf[80];
+            int n = std::snprintf(buf, sizeof(buf), "%.1f,%.1f", x, y);
             if (has_o)
-                std::snprintf(buf, sizeof(buf), "%.1f,%.1f,%.3f", x, y, o);
-            else
-                std::snprintf(buf, sizeof(buf), "%.1f,%.1f", x, y);
+                n += std::snprintf(buf + n, sizeof(buf) - size_t(n), ",%.3f", o);
+            else if (has_w)
+                n += std::snprintf(buf + n, sizeof(buf) - size_t(n), ",");
+            if (has_w)
+                std::snprintf(buf + n, sizeof(buf) - size_t(n), ",%.1f", w);
             out += (count ? ";" : "") + std::string(buf);
             ++count;
         }

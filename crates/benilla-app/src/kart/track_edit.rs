@@ -18,6 +18,12 @@ const AIM_REACH: f32 = 600.0;
 /// and how fast Q and E held turn it (radians a second).
 const TURN_PER_PIXEL: f32 = 0.01;
 const TURN_PER_SEC: f32 = 1.5;
+/// A gate's half-width as the mouse wheel sets it (yards a notch), between a kart's squeeze and
+/// the server's reach: it takes a checkpoint within 45 yards (`Kartcraft.cpp` `CHECKPOINT_RADIUS`),
+/// so a wider gate would pass on the client and not the server.
+const WIDTH_PER_NOTCH: f32 = 2.0;
+const WIDTH_MIN: f32 = 6.0;
+const WIDTH_MAX: f32 = 45.0;
 /// A saved track's note, for whoever adds it to courses.json.
 const NOTE: &str = "Made with the in-game track editor.";
 /// The aim's colour, and the grid's.
@@ -85,6 +91,9 @@ pub(crate) struct TrackEdit {
     /// The start first, then the checkpoints, WoW x, y, and each one's facing where turned.
     points: Vec<[f32; 2]>,
     facings: Vec<Option<f32>>,
+    /// Each gate's half-width (yards), and the one the next gate gets (the mouse wheel's).
+    widths: Vec<f32>,
+    width: f32,
     /// The facing the gate about to be placed is turned to (middle mouse); `None` square to the
     /// way from the last gate.
     turn: Option<f32>,
@@ -111,6 +120,8 @@ impl Default for TrackEdit {
             testing: false,
             points: Vec::new(),
             facings: Vec::new(),
+            widths: Vec::new(),
+            width: GATE_HALF_WIDTH,
             turn: None,
             grid: None,
             laps: 3,
@@ -147,7 +158,9 @@ impl TrackEdit {
     /// The draft for its gates and the race map: while editing, not while testing.
     pub(crate) fn preview(&self, me: &str) -> Option<Active> {
         (self.on && !self.testing && !self.points.is_empty()).then(|| {
-            Active::draft(self.laps, self.points.clone(), me).with_facings(self.facings.clone())
+            Active::draft(self.laps, self.points.clone(), me)
+                .with_facings(self.facings.clone())
+                .with_gates(self.widths.clone())
         })
     }
 
@@ -186,7 +199,7 @@ impl TrackEdit {
     }
 
     /// The saved tracks as the track browser lists courses ([`crate::ui_kart`]), each with its
-    /// grid (`x,y,o` or empty) and its gates as a publish sends them (`x,y[,o];...`), and how
+    /// grid (`x,y,o` or empty) and its gates as a publish sends them (`x,y[,o[,w]];...`), and how
     /// often the list has changed.
     pub(crate) fn saved(&self) -> (impl Iterator<Item = (&Course, String, String)>, u32) {
         let list = self.saved.iter().flatten().map(|s| {
@@ -196,7 +209,7 @@ impl TrackEdit {
             (
                 &s.course,
                 grid,
-                spots(&s.course.route(), &s.course.facings()),
+                spots(&s.course.route(), &s.course.facings(), &s.course.gates()),
             )
         });
         (list, self.saves)
@@ -206,6 +219,8 @@ impl TrackEdit {
     fn clear(&mut self) {
         self.points.clear();
         self.facings.clear();
+        self.widths.clear();
+        self.width = GATE_HALF_WIDTH;
         self.turn = None;
         self.grid = None;
         self.tool = Place::Start;
@@ -248,6 +263,10 @@ impl TrackEdit {
                 let mut c = serde_json::json!({ "x": tenth(p[0]), "y": tenth(p[1]) });
                 if let Some(o) = self.facings.get(i).copied().flatten() {
                     c["o"] = serde_json::json!((f64::from(o) * 1000.0).round() / 1000.0);
+                }
+                match self.widths.get(i) {
+                    Some(&w) if w != GATE_HALF_WIDTH => c["gate"] = serde_json::json!(tenth(w)),
+                    _ => {}
                 }
                 c
             })
@@ -350,11 +369,23 @@ fn read_saved() -> Vec<Saved> {
         .collect()
 }
 
-/// Gates as a publish and a player track's list line carry them: `x,y[,o];...`, the start first.
-fn spots(points: &[[f32; 2]], facings: &[Option<f32>]) -> String {
-    let spot = |(i, p): (usize, &[f32; 2])| match facings.get(i).copied().flatten() {
-        Some(o) => format!("{:.1},{:.1},{o:.3}", p[0], p[1]),
-        None => format!("{:.1},{:.1}", p[0], p[1]),
+/// Gates as a publish and a player track's list line carry them: `x,y[,o[,w]];...`, the start
+/// first, `o` a turned gate's facing (empty where it is not and `w` follows), `w` a half-width
+/// other than `GATE_HALF_WIDTH`.
+fn spots(points: &[[f32; 2]], facings: &[Option<f32>], widths: &[f32]) -> String {
+    let spot = |(i, p): (usize, &[f32; 2])| {
+        let o = facings.get(i).copied().flatten();
+        let w = widths.get(i).copied().filter(|&w| w != GATE_HALF_WIDTH);
+        let mut text = format!("{:.1},{:.1}", p[0], p[1]);
+        match (o, w) {
+            (Some(o), _) => text += &format!(",{o:.3}"),
+            (None, Some(_)) => text += ",",
+            (None, None) => {}
+        }
+        if let Some(w) = w {
+            text += &format!(",{w:.1}");
+        }
+        text
     };
     points
         .iter()
@@ -364,23 +395,27 @@ fn spots(points: &[[f32; 2]], facings: &[Option<f32>]) -> String {
         .join(";")
 }
 
-/// Gates (WoW x, y) and each one's facing where turned.
-type Gates = (Vec<[f32; 2]>, Vec<Option<f32>>);
+/// Gates (WoW x, y), each one's facing where turned, and each one's half-width.
+pub(crate) type Gates = (Vec<[f32; 2]>, Vec<Option<f32>>, Vec<f32>);
 
-/// `x,y[,o];...` back into gates and their facings; `None` if any spot is not numbers.
-fn parse_spots(text: &str) -> Option<Gates> {
+/// `x,y[,o[,w]];...` back into gates, their facings and widths; `None` if any spot is not
+/// numbers.
+pub(crate) fn parse_spots(text: &str) -> Option<Gates> {
     let mut points = Vec::new();
     let mut facings = Vec::new();
+    let mut widths = Vec::new();
     for spot in text.split(';').filter(|s| !s.is_empty()) {
         let v: Vec<&str> = spot.split(',').collect();
         let num = |i: usize| v.get(i).and_then(|t| t.trim().parse::<f32>().ok());
+        let opt = |i: usize| match v.get(i) {
+            Some(t) if !t.is_empty() => num(i).map(Some),
+            _ => Some(None),
+        };
         points.push([num(0)?, num(1)?]);
-        facings.push(match v.get(2) {
-            Some(t) if !t.is_empty() => Some(num(2)?),
-            _ => None,
-        });
+        facings.push(opt(2)?);
+        widths.push(opt(3)?.unwrap_or(GATE_HALF_WIDTH));
     }
-    Some((points, facings))
+    Some((points, facings, widths))
 }
 
 /// A name as courses.json takes one: ASCII, no quotes, backslashes or control characters.
@@ -457,6 +492,7 @@ pub(crate) fn on_cvar(
                 ["undo", ..] if editing => {
                     edit.points.pop();
                     edit.facings.pop();
+                    edit.widths.pop();
                 }
                 ["clear", ..] if editing => edit.clear(),
                 ["laps", n, ..] if editing => edit.laps = n.parse().unwrap_or(0).min(9),
@@ -473,7 +509,8 @@ pub(crate) fn on_cvar(
                             grid,
                             &races.me,
                         );
-                        races.race = Some(race.with_facings(edit.facings.clone()));
+                        let race = race.with_facings(edit.facings.clone());
+                        races.race = Some(race.with_gates(edit.widths.clone()));
                         free.set(FreeMode::Off);
                     }
                 },
@@ -501,6 +538,7 @@ pub(crate) fn on_cvar(
                         let grid = grid_spot(s.grid, &route);
                         Active::practice(&c.name, c.laps, route, grid, &races.me)
                             .with_facings(c.facings())
+                            .with_gates(c.gates())
                     });
                     if let Some(why) = why {
                         edit.say(why);
@@ -515,9 +553,9 @@ pub(crate) fn on_cvar(
                 // A player track's test lap, from the track browser's player tracks: its line's
                 // name, laps, map, grid (`x,y,o` or empty) and gates.
                 ["runspots", name, laps, track_map, grid, gates, ..] => {
-                    let route = parse_spots(gates).filter(|(p, _)| p.len() >= 2);
-                    let grid =
-                        parse_spots(grid).and_then(|(p, o)| Some([p.first()?[0], p[0][1], o[0]?]));
+                    let route = parse_spots(gates).filter(|(p, ..)| p.len() >= 2);
+                    let grid = parse_spots(grid)
+                        .and_then(|(p, o, _)| Some([p.first()?[0], p[0][1], o[0]?]));
                     let why = match &route {
                         None => Some("That track's checkpoints did not arrive whole."),
                         Some(_) if !drive.active => Some("Summon your kart first (J)."),
@@ -533,13 +571,13 @@ pub(crate) fn on_cvar(
                         edit.say(why);
                         return;
                     }
-                    let Some((points, facings)) = route else {
+                    let Some((points, facings, widths)) = route else {
                         return;
                     };
                     let laps = laps.parse().unwrap_or(0);
                     let grid = grid.or_else(|| grid_spot(None, &points));
                     let race = Active::practice(&clean(name), laps, points, grid, &races.me);
-                    races.race = Some(race.with_facings(facings));
+                    races.race = Some(race.with_facings(facings).with_gates(widths));
                     free.set(FreeMode::Off);
                 }
                 ["restart", ..] => {
@@ -575,11 +613,12 @@ pub(crate) fn update(
         Query<&Window, With<bevy::window::PrimaryWindow>>,
         Query<(&Camera, &GlobalTransform), With<benilla_world::view::WorldCamera>>,
     ),
-    (time, keys, typing, overlay): (
+    (time, keys, typing, overlay, scroll): (
         Res<Time>,
         Res<ButtonInput<KeyCode>>,
         Res<crate::ui_script::UiKeyboardCapture>,
         Res<crate::bindings::BindingOverlay>,
+        Res<bevy::input::mouse::AccumulatedMouseScroll>,
     ),
 ) {
     edit.load();
@@ -648,6 +687,11 @@ pub(crate) fn update(
         }
         edit.turn.unwrap_or(auto)
     });
+    // The wheel over the world (a list under the cursor scrolls instead) sizes the next gate.
+    let wheel = crate::bindings::wheel_lines(scroll.unit, scroll.delta.y);
+    if editing && cursor.is_some() && wheel != 0.0 {
+        edit.widen(wheel);
+    }
     // A left click on the world (never one on the interface), or Fire at the screen's centre.
     let clicked = buttons.just_pressed(MouseButton::Left) && cursor.is_some();
     if editing && (fired || clicked) {
@@ -665,7 +709,7 @@ pub(crate) fn update(
         gizmos.circle(flat(at), 2.0, AIM_COLOR);
         // Its posts either side, square to the way it faces, and an arrow along it.
         let w = bevy_to_wow(at);
-        let side = [o.sin() * GATE_HALF_WIDTH, -o.cos() * GATE_HALF_WIDTH];
+        let side = [o.sin() * edit.width, -o.cos() * edit.width];
         let post = |k: f32| wow_to_bevy([w[0] + k * side[0], w[1] + k * side[1], 0.0]).with_y(at.y);
         let (left, right) = (post(1.0), post(-1.0));
         for p in [left, right] {
@@ -696,24 +740,34 @@ fn flat(at: Vec3) -> Isometry3d {
     Isometry3d::new(at, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
 }
 
+impl TrackEdit {
+    /// The next gate `notches` of the wheel wider (narrower, negative), within its bounds.
+    fn widen(&mut self, notches: f32) {
+        self.width = (self.width + notches * WIDTH_PER_NOTCH).clamp(WIDTH_MIN, WIDTH_MAX);
+    }
+}
+
 /// Places `what` at `at` (Bevy world): a gate keeps its facing `o` only where the middle mouse
-/// turned it, the grid always. Checkpoints come next.
+/// turned it, the grid always, and the wheel's width. Checkpoints come next.
 fn place(edit: &mut TrackEdit, what: Place, at: Vec3, o: f32) {
     let w = bevy_to_wow(at);
     match what {
         Place::Start if edit.points.is_empty() => {
             edit.points.push([w[0], w[1]]);
             edit.facings.push(edit.turn.take());
+            edit.widths.push(edit.width);
             edit.say("Start placed: now click the checkpoints, in driving order.");
         }
         Place::Start => {
             edit.points[0] = [w[0], w[1]];
             edit.facings[0] = edit.turn.take();
+            edit.widths[0] = edit.width;
             edit.say("Start moved.");
         }
         Place::Checkpoint => {
             edit.points.push([w[0], w[1]]);
             edit.facings.push(edit.turn.take());
+            edit.widths.push(edit.width);
         }
         Place::Grid => {
             edit.turn = None;
@@ -754,11 +808,15 @@ mod tests {
 
     #[test]
     fn gates_go_out_and_come_back_with_their_facings() {
-        let text = spots(&[[1.0, 2.0], [3.04, -4.0]], &[None, Some(1.5)]);
-        assert_eq!(text, "1.0,2.0;3.0,-4.0,1.500");
-        let (points, facings) = parse_spots(&text).unwrap();
-        assert_eq!(points, vec![[1.0, 2.0], [3.0, -4.0]]);
-        assert_eq!(facings, vec![None, Some(1.5)]);
+        let points = [[1.0, 2.0], [3.04, -4.0], [5.0, 6.0], [7.0, 8.0]];
+        let facings = [None, Some(1.5), None, Some(0.5)];
+        let widths = [GATE_HALF_WIDTH, GATE_HALF_WIDTH, 12.0, 30.0];
+        let text = spots(&points, &facings, &widths);
+        assert_eq!(text, "1.0,2.0;3.0,-4.0,1.500;5.0,6.0,,12.0;7.0,8.0,0.500,30.0");
+        let (back, o, w) = parse_spots(&text).unwrap();
+        assert_eq!(back[1], [3.0, -4.0]);
+        assert_eq!(o, facings);
+        assert_eq!(w, widths);
         assert!(parse_spots("1,2;x,4").is_none());
         assert_eq!(parse_spots("").unwrap().0.len(), 0);
     }
@@ -839,6 +897,26 @@ mod tests {
         assert_eq!(edit.grid.map(|g| g.o), Some(2.5));
         assert_eq!(edit.points.len(), 2);
         assert_eq!(edit.view().tool, "checkpoint");
+    }
+
+    #[test]
+    fn the_wheel_sizes_the_next_gate_and_the_save_keeps_it() {
+        let mut edit = draft(0, &[]);
+        let at = |x: f32| wow_to_bevy([x, 0.0, 0.0]);
+        click(&mut edit, at(0.0), 0.0);
+        edit.widen(-3.0);
+        click(&mut edit, at(100.0), 0.0);
+        edit.widen(100.0);
+        assert_eq!(edit.width, WIDTH_MAX, "no wider than the server reaches");
+        edit.widen(-100.0);
+        assert_eq!(edit.width, WIDTH_MIN);
+        assert_eq!(edit.widths, vec![GATE_HALF_WIDTH, GATE_HALF_WIDTH - 6.0]);
+        let (_, json) = edit.course("Narrow", "").unwrap();
+        let course: Course = serde_json::from_str(&json).unwrap();
+        assert_eq!(course.gates(), vec![GATE_HALF_WIDTH, 14.0]);
+        assert!(!json.contains("\"gate\": 20"), "the default stays implied: {json}");
+        edit.clear();
+        assert_eq!(edit.width, GATE_HALF_WIDTH);
     }
 
     #[test]

@@ -2928,6 +2928,7 @@
             end
             table.insert(lines, "|cffffd100Left click|r  place what the bar picked")
             table.insert(lines, "|cffffd100Q / E|r or |cffffd100middle mouse held|r  turn the gate")
+            table.insert(lines, "|cffffd100Mouse wheel|r  widen or narrow the gate")
             table.insert(lines, "|cffffd100Controller Fire|r  place at the screen's centre")
             table.insert(lines, "|cffffd100Right mouse held|r  look around")
             table.insert(lines, "|cff999999The start goes first; drag this card to move it.|r")
@@ -6490,7 +6491,7 @@
     <!-- The track editor's keys card, on the left while editing: the keys the free camera flies
          on as they are bound now, and the mouse's. It drags anywhere. -->
     <Frame name="BenillaKartEditorKeys" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="MEDIUM">
-        <Size><AbsDimension x="260" y="176"/></Size>
+        <Size><AbsDimension x="260" y="190"/></Size>
         <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="20" y="80"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
             <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>

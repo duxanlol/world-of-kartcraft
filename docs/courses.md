@@ -129,7 +129,11 @@ browser's Player tracks (the editor button's right-click menu) lists it for a te
 author takes it down there. A published track is a course on the server too, `pt-<id>`: the
 Race Finder's Player tracks tab queues for a race on one (by that key; never in "any" or a zone)
 or opens its time trial (`R\tTB\tpt-<id>`), with records kept as for any course, lined up on its
-own grid where it has one. Q and E, or the middle mouse held, turn the gate about to be placed.
+own grid where it has one. Q and E, or the middle mouse held, turn the gate about to be placed,
+and the mouse wheel widens or narrows it (`gate`, 6 to 45 yards: the server's reach). A
+publish carries each gate as `x,y[,o[,w]]` (`o` empty where only the width `w` follows), and so
+do the server's `PT` lines, so a test lap or race on a player track has its gates' facings and
+widths.
 To make a saved track a real course, paste the
 object into `courses`, then run `course-gen marshals` and `course-gen pads` for its marshal and
 pads, `pack.py`, and redeploy the server.

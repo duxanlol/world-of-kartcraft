@@ -179,7 +179,7 @@ impl Course {
     }
 
     /// Each checkpoint's gate half-width.
-    fn gates(&self) -> Vec<f32> {
+    pub(crate) fn gates(&self) -> Vec<f32> {
         self.checkpoints
             .iter()
             .map(|c| {
@@ -467,12 +467,20 @@ impl Active {
         self
     }
 
+    /// The checkpoints' gate half-widths ([`CourseCheckpoint::gate`]); `GATE_HALF_WIDTH` past
+    /// the end.
+    pub(crate) fn with_gates(mut self, gates: Vec<f32>) -> Self {
+        self.gates = gates;
+        self
+    }
+
     /// The test lap from its flying start again.
     pub(crate) fn restart_practice(&mut self) {
         let me = self.roster.first().map_or("", String::as_str);
         *self = Active {
             id: self.id,
             facings: std::mem::take(&mut self.facings),
+            gates: std::mem::take(&mut self.gates),
             ..Active::practice(
                 &self.course,
                 self.laps,
@@ -900,6 +908,8 @@ pub(crate) struct Races {
     /// Player tracks' names by course key (`pt-<id>`), from the server's `PT` lines: the client
     /// has no copy of them.
     track_names: HashMap<String, String>,
+    /// And their gates (`x,y[,o[,w]];...`), for the facings and widths the `C` line has not.
+    track_spots: HashMap<String, String>,
 }
 
 impl Races {
@@ -1021,8 +1031,11 @@ impl Races {
             Some("Pop-") => self.check_pending = false,
             // A player track: its name, for a race on it (`Kartcraft.cpp` `UserTrackLine`).
             Some("PT") if f.len() >= 3 => {
-                self.track_names
-                    .insert(format!("pt-{}", f[1]), f[2].clone());
+                let key = format!("pt-{}", f[1]);
+                if let Some(spots) = f.get(8) {
+                    self.track_spots.insert(key.clone(), spots.clone());
+                }
+                self.track_names.insert(key, f[2].clone());
             }
             // Out of everything (`/leaverace`): the server has let us go, so whatever we
             // thought we were in goes too.
@@ -1095,6 +1108,13 @@ impl Races {
                         .find(|c| c.key == f[2] && c.checkpoints.len() == race.points.len());
                     race.gates = ours.map_or_else(Vec::new, Course::gates);
                     race.facings = ours.map_or_else(Vec::new, Course::facings);
+                    // A player track's from its `PT` line, which comes first.
+                    let track = self.track_spots.get(&f[2]);
+                    let track = track.and_then(|t| super::track_edit::parse_spots(t));
+                    if let Some((_, o, w)) = track.filter(|t| t.0.len() == race.points.len()) {
+                        race.facings = o;
+                        race.gates = w;
+                    }
                     info!(
                         "kart race: course {} — {} checkpoints, {} laps",
                         f[2],
@@ -3774,19 +3794,24 @@ mod tests {
     }
 
     #[test]
-    fn a_player_track_s_race_is_named_from_its_line() {
+    fn a_player_track_s_race_is_named_and_gated_from_its_line() {
         let mut races = Races {
             me: "Me".into(),
             ..Default::default()
         };
         let line = |t: &str| t.split('\t').map(str::to_string).collect::<Vec<_>>();
         races.hear(
-            &line("PT\t7\tDune Dash\tSomeone\t1\t0\tDurotar\t\t1,2;3,4"),
+            &line("PT\t7\tDune Dash\tSomeone\t1\t0\tDurotar\t\t1,2;3,4,0.500,12.0"),
             0.0,
         );
         races.hear(&line("L\t3\tMe"), 0.0);
         races.hear(&line("C\t3\tpt-7\t0\t1:2;3:4"), 0.0);
         assert_eq!(races.map().unwrap().name, "Dune Dash");
+        // Its gates as published: the second turned and narrowed.
+        let race = races.race.as_ref().unwrap();
+        assert_eq!(race.gate_half_width(1), 12.0);
+        assert_eq!(race.gate_half_width(0), GATE_HALF_WIDTH);
+        assert_eq!(race.facings, vec![None, Some(0.5)]);
     }
 
     #[test]
