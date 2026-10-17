@@ -217,7 +217,7 @@ impl ZoneTerrain {
         (wsum > 0.0).then(|| acc / wsum)
     }
 
-    fn nearest(&self, x: f32, y: f32) -> Option<usize> {
+    pub(crate) fn nearest(&self, x: f32, y: f32) -> Option<usize> {
         let (c, r) = self.grid.pixel_of(x, y);
         self.grid.index(c.floor() as i64, r.floor() as i64)
     }

@@ -1043,6 +1043,107 @@ pub fn designed_circuit(
     waypoint_circuit(planner, via, p, &OPEN_GROUND)
 }
 
+/// The line a driver takes through a course's gates (WoW `x, y`, in order; back to the first
+/// on a circuit): each leg routed round what stands between ([`Planner::route`]), pulled taut
+/// to a kart's turning circle, and bent back to any gate it then passes wide
+/// ([`GATE_PASS`]). A leg no route takes is driven straight; how many, beside the line.
+pub fn gate_line(
+    planner: &Planner,
+    gates: &[Vec2],
+    closed: bool,
+    p: &GenParams,
+    style: LineStyle,
+) -> (Vec<Vec2>, usize) {
+    let snapped: Vec<Vec2> = gates
+        .iter()
+        .map(|&g| planner.nearest_open(g, 8.0).unwrap_or(g))
+        .collect();
+    let n = snapped.len();
+    let legs = if closed { n } else { n.saturating_sub(1) };
+    let extra = HashMap::new();
+    let mut raw: Vec<Vec2> = Vec::new();
+    let mut straight = 0;
+    for i in 0..legs {
+        let (a, b) = (snapped[i], snapped[(i + 1) % n]);
+        if a.distance(b) < 1.0 {
+            continue;
+        }
+        match planner.route(a, b, &extra, None, None) {
+            Some(leg) => raw.extend_from_slice(&leg.points[..leg.points.len() - 1]),
+            None => {
+                straight += 1;
+                raw.extend(
+                    geom::resample(&[a, b], false, STEP)
+                        .iter()
+                        .take_while(|q| q.distance(b) > 0.5),
+                );
+            }
+        }
+    }
+    if !closed {
+        if let Some(&last) = snapped.last() {
+            raw.push(last);
+        }
+    }
+    // No loop is cut: a hairpin's way out to its gate and back is the course.
+    if raw.len() < 8 {
+        return (geom::resample(&snapped, closed, STEP), straight);
+    }
+    if style == LineStyle::Routed {
+        let even = geom::resample(&raw, closed, STEP);
+        return (
+            geom::resample(&geom::chaikin(&even, closed, 3), closed, STEP),
+            straight,
+        );
+    }
+    // Pulled taut to a kart's turning circle, as the course's own line was; then where it
+    // passes a gate wide, bent back to it over the yards either side, as a driver lines up.
+    let mut pts = smoothed(planner.field, &raw, closed, p, &OPEN_GROUND);
+    if style == LineStyle::Taut {
+        return (pts, straight);
+    }
+    let n = pts.len();
+    let reach = (GATE_BEND / STEP).ceil() as isize;
+    for &g in &snapped {
+        let Some((k, d)) = pts
+            .iter()
+            .enumerate()
+            .map(|(k, q)| (k, q.distance(g)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+        else {
+            continue;
+        };
+        if d <= GATE_PASS {
+            continue;
+        }
+        let shift = (g - pts[k]) * (1.0 - GATE_PASS / d);
+        for j in -reach..=reach {
+            let i = k as isize + j;
+            if !closed && (i < 0 || i >= n as isize) {
+                continue;
+            }
+            let w = 0.5 * (1.0 + (std::f32::consts::PI * j as f32 / reach as f32).cos());
+            pts[geom::wrap(i, n, closed)] += shift * w;
+        }
+    }
+    (geom::resample(&pts, closed, STEP), straight)
+}
+
+/// How [`gate_line`] draws its line: pulled taut and bent back to its gates, routed with only the
+/// grid's staircase rounded off (through each gate, sharp where a leg doubles back), or taut alone
+/// (which may pass a gate wide).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineStyle {
+    Bent,
+    Routed,
+    Taut,
+}
+
+/// [`gate_line`]: a line passing a gate wider than this (yards) is bent back to it, over this
+/// many yards either side.
+const GATE_PASS: f32 = 10.0;
+const GATE_BEND: f32 = 40.0;
+
 fn waypoint_circuit(
     planner: &Planner,
     via: &[Vec2],

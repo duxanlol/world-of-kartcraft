@@ -65,6 +65,9 @@ pub fn map_dir(map: u32) -> Result<&'static str> {
     })
 }
 
+/// An ADT tile's side, yards.
+const TILE_YARDS: f32 = 1600.0 / 3.0;
+
 /// How far an impassable chunk's fence rises (`benilla-world`'s `FENCE_REACH`).
 const FENCE_REACH: f32 = 32000.0;
 
@@ -103,7 +106,10 @@ pub struct Faces {
 /// The faces in `region` on `map`.
 pub fn gather_world(chain: &mut Chain, map: u32, region: Region) -> Result<Faces> {
     let centre = bevy_to_wow((region.min + region.max) * 0.5);
-    let tiles = load_tiles_around(chain, map_dir(map)?, centre[0], centre[1], 1)
+    // The tiles round the centre the region reaches: one each way at least.
+    let half = ((region.max - region.min) * 0.5).max_element();
+    let reach = ((half / TILE_YARDS).ceil() as u32).max(1);
+    let tiles = load_tiles_around(chain, map_dir(map)?, centre[0], centre[1], reach)
         .context("loading the tiles")?;
     let mut out: Vec<[Vec3; 3]> = Vec::new();
     let mut liquid: Vec<[Vec3; 3]> = Vec::new();

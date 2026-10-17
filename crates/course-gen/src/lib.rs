@@ -5,6 +5,7 @@
 //! measures them, [`drivetest`] drives them with the CTR-physics bot, [`select`] keeps the best and
 //! [`preview`] draws them; [`marshal`] places the Race Marshal at each course start.
 
+pub mod audit;
 pub mod cost;
 pub mod drivetest;
 pub mod export;

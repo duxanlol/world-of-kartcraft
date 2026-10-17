@@ -180,6 +180,20 @@ enum Cmd {
         #[arg(long)]
         map: Option<u32>,
     },
+    /// Measure, drive and draw every course (`course_gen::audit`): `<out>/audit.json` and each
+    /// course's map and profile.
+    Audit {
+        #[arg(long, default_value = "courses/courses.json")]
+        courses: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        /// Zones at once.
+        #[arg(long, default_value_t = 3)]
+        jobs: usize,
+        /// Only the courses whose key holds this.
+        #[arg(long)]
+        only: Option<String>,
+    },
     /// Drive the GPS roads with the CTR-physics bot (`course_gen::gps_drive`): every road cut
     /// into stretches, each driven over its zone's terrain; the ones it cannot drive listed.
     GpsDrive {
@@ -581,6 +595,23 @@ fn main() -> Result<()> {
                 .with_context(|| format!("writing {}", out.display()))?;
             print!("{report}");
             println!("wrote {}", out.display());
+        }
+        Cmd::Audit {
+            courses,
+            out,
+            jobs,
+            only,
+        } => {
+            let all = course_gen::audit::run(&courses, &out, jobs, only.as_deref())?;
+            let finished = all
+                .iter()
+                .filter(|a| a.drive.as_ref().is_some_and(|d| d.finished))
+                .count();
+            println!(
+                "{} courses audited, {finished} driven to the finish; wrote {}",
+                all.len(),
+                out.join("audit.json").display()
+            );
         }
         Cmd::GpsDrive {
             roads,
