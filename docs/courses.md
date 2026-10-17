@@ -126,7 +126,10 @@ ignore it and line a race up behind the start. In the browser our own track's De
 its file, and Publish sends it to the server (`R\tPub`, `Kartcraft.cpp` "Player tracks": the
 `kartcraft_user_tracks` table, under the author's character name, 20 a character), where every
 browser's Player tracks (the editor button's right-click menu) lists it for a test lap; its
-author takes it down there. Q and E, or the middle mouse held, turn the gate about to be placed.
+author takes it down there. A published track is a course on the server too, `pt-<id>`: the
+Race Finder's Player tracks tab queues for a race on one (by that key; never in "any" or a zone)
+or opens its time trial (`R\tTB\tpt-<id>`), with records kept as for any course, lined up on its
+own grid where it has one. Q and E, or the middle mouse held, turn the gate about to be placed.
 To make a saved track a real course, paste the
 object into `courses`, then run `course-gen marshals` and `course-gen pads` for its marshal and
 pads, `pack.py`, and redeploy the server.

@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..abcf57f
+index 0000000..d63d1a0
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,5894 @@
+@@ -0,0 +1,6000 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -113,6 +113,7 @@ index 0000000..abcf57f
 +
 +#include <algorithm>
 +#include <cstdio>
++#include <deque>
 +#include <cstdlib>
 +#include <atomic>
 +#include <mutex>
@@ -702,12 +703,101 @@ index 0000000..abcf57f
 +            ++r.seen;
 +    }
 +
++    // Player tracks ("Player tracks" below): each published one is a course too, "pt-<id>",
++    // raced and time-trialled as the official ones are, but never in a Race Finder pick of "any"
++    // or a zone, at a Race Marshal or in a challenge. Its course stays in s_userCourses, which
++    // never shrinks, for a race still on it once it is taken down or published again; the
++    // published ones are s_userTracks', each naming its course by `slot`.
++    struct UserTrack
++    {
++        uint32 id = 0;
++        uint32 guid = 0; // the author's low guid
++        std::string author, name, zone, grid, points;
++        uint32 map = 0;
++        uint32 laps = 0;
++        size_t slot = 0; // its course in s_userCourses
++    };
++    struct UserCourse
++    {
++        std::string key, name;
++        Course course{};
++    };
++    static std::vector<UserTrack> s_userTracks; // oldest first
++    static std::deque<UserCourse> s_userCourses;
++
 +    static Course const* FindCourse(std::string const& key)
 +    {
 +        for (Course const& c : COURSES)
 +            if (key == c.key)
 +                return &c;
++        for (UserTrack const& t : s_userTracks)
++            if (key == s_userCourses[t.slot].course.key)
++                return &s_userCourses[t.slot].course;
 +        return nullptr;
++    }
++
++    // Every course by one index, the official ones first and then the player tracks' (taken down
++    // or not): what a Race Finder queue's mask counts.
++    static size_t CourseCount()
++    {
++        return COURSES.size() + s_userCourses.size();
++    }
++
++    static Course const& CourseAt(size_t i)
++    {
++        return i < COURSES.size() ? COURSES[i] : s_userCourses[i - COURSES.size()].course;
++    }
++
++    // The published player track `c` is, if it is one.
++    static UserTrack const* UserTrackOf(Course const& c)
++    {
++        for (UserTrack const& t : s_userTracks)
++            if (&s_userCourses[t.slot].course == &c)
++                return &t;
++        return nullptr;
++    }
++
++    // Whether the course at `i` (CourseAt) may be raced: an official one, or a player track still
++    // published.
++    static bool CourseLive(size_t i)
++    {
++        return i < COURSES.size() || UserTrackOf(CourseAt(i));
++    }
++
++    // A player track's line, as its list and a race on it name it.
++    static std::string UserTrackLine(UserTrack const& t)
++    {
++        return "KARTCRAFT\tR\tPT\t" + std::to_string(t.id) + "\t" + t.name + "\t" + t.author + "\t" +
++            std::to_string(t.map) + "\t" + std::to_string(t.laps) + "\t" + t.zone + "\t" + t.grid + "\t" +
++            t.points;
++    }
++
++    // `t`'s course, new in s_userCourses: its gates from its spots, its Race Marshal's place its
++    // start (it has none; the start is where a racer hosts), no zone (it is in none of the Race
++    // Finder's).
++    static void MakeUserCourse(UserTrack& t)
++    {
++        s_userCourses.emplace_back();
++        UserCourse& uc = s_userCourses.back();
++        uc.key = "pt-" + std::to_string(t.id);
++        uc.name = t.name;
++        Course& c = uc.course;
++        c.key = uc.key.c_str();
++        c.name = uc.name.c_str();
++        c.zone = "";
++        c.map = t.map;
++        c.laps = uint8(t.laps);
++        for (size_t at = 0, end; at < t.points.size(); at = end + 1)
++        {
++            end = t.points.find(';', at);
++            if (end == std::string::npos)
++                end = t.points.size();
++            float x = 0.f, y = 0.f;
++            if (std::sscanf(t.points.substr(at, end - at).c_str(), "%f,%f", &x, &y) == 2)
++                c.points.emplace_back(x, y);
++        }
++        c.marshal = c.points.empty() ? std::make_pair(0.f, 0.f) : c.points[0];
++        t.slot = s_userCourses.size() - 1;
 +    }
 +
 +    static std::string Roster(Race const& race)
@@ -3134,6 +3224,9 @@ index 0000000..abcf57f
 +        std::string points;
 +        for (auto const& p : r.course->points)
 +            points += (points.empty() ? "" : ";") + std::to_string(int32(p.first)) + ":" + std::to_string(int32(p.second));
++        // A player track's name and maker, which the client has no copy of.
++        if (UserTrackOf(*r.course))
++            SendRace(r, UserTrackLine(*UserTrackOf(*r.course)));
 +        SendRace(r, "KARTCRAFT\tR\tC\t" + std::to_string(id) + "\t" + r.course->key + "\t" +
 +            std::to_string(r.course->laps) + "\t" + points);
 +        SendRace(r, "KARTCRAFT\tR\tG\t" + std::to_string(id) + "\t" + std::to_string(countdown) + "\t" + Roster(r));
@@ -3181,7 +3274,7 @@ index 0000000..abcf57f
 +    struct Queued
 +    {
 +        ObjectGuid guid;
-+        std::vector<bool> courses; // [i]: COURSES[i]
++        std::vector<bool> courses; // [i]: CourseAt(i)
 +        uint32 joined;
 +        uint32 seen;
 +        // Queued with their party (its group id): the party pops together or not at all, and
@@ -3220,7 +3313,7 @@ index 0000000..abcf57f
 +    // never a party course.
 +    static std::vector<bool> CourseMask(std::string const& asked)
 +    {
-+        std::vector<bool> mask(COURSES.size(), false);
++        std::vector<bool> mask(CourseCount(), false);
 +        std::vector<std::string> const& zones = Zones();
 +        for (size_t at = 0, comma; at <= asked.size(); at = comma + 1)
 +        {
@@ -3239,6 +3332,10 @@ index 0000000..abcf57f
 +                if (!PartyCourse(COURSES[i]) &&
 +                    (token == "any" || token == COURSES[i].key || (zone && *zone == COURSES[i].zone)))
 +                    mask[i] = true;
++            // A player track only by its own key.
++            for (UserTrack const& t : s_userTracks)
++                if (token == s_userCourses[t.slot].course.key)
++                    mask[COURSES.size() + t.slot] = true;
 +        }
 +        return mask;
 +    }
@@ -3246,6 +3343,14 @@ index 0000000..abcf57f
 +    static bool AnyCourse(std::vector<bool> const& mask)
 +    {
 +        return std::find(mask.begin(), mask.end(), true) != mask.end();
++    }
++
++    // Whether queue entry `q` takes the course at `i` (CourseAt); a mask made before a player
++    // track was published is shorter than the courses are now.
++    template <typename Q>
++    static bool Wants(Q const& q, size_t i)
++    {
++        return i < q.courses.size() && q.courses[i];
 +    }
 +
 +    static bool Overlap(std::vector<bool> const& a, std::vector<bool> const& b)
@@ -3373,6 +3478,16 @@ index 0000000..abcf57f
 +        float len = std::max(std::sqrt(dx * dx + dy * dy), 1.f);
 +        dx /= len;
 +        dy /= len;
++        // A player track's own grid: its first slot where its maker put it, facing their way.
++        float gx, gy, go;
++        UserTrack const* mine = UserTrackOf(c);
++        if (mine && std::sscanf(mine->grid.c_str(), "%f,%f,%f", &gx, &gy, &go) == 3)
++        {
++            dx = std::cos(go);
++            dy = std::sin(go);
++            sx = gx + dx * GRID_SPACING;
++            sy = gy + dy * GRID_SPACING;
++        }
 +        float back = GRID_SPACING * float(slot / 2 + 1);
 +        float side = GRID_SPACING * (slot % 2 ? 0.5f : -0.5f);
 +        float x = sx - dx * back - dy * side;
@@ -3534,13 +3649,13 @@ index 0000000..abcf57f
 +        int best = -1;
 +        size_t bestCount = 0;
 +        uint32 ties = 0;
-+        for (size_t i = 0; i < COURSES.size(); ++i)
++        for (size_t i = 0; i < CourseCount(); ++i)
 +        {
-+            if (CourseOff(COURSES[i]))
++            if (!CourseLive(i) || CourseOff(CourseAt(i)))
 +                continue;
 +            std::vector<Queued const*> takers;
 +            for (Queued const& q : s_queue)
-+                if (q.courses[i])
++                if (Wants(q, i))
 +                    takers.push_back(&q);
 +            bool ready = takers.size() >= MAX_RACERS ||
 +                (takers.size() >= 2 && WorldTimer::getMSTimeDiff(takers[1]->joined, now) >= s_fillWait);
@@ -3560,7 +3675,7 @@ index 0000000..abcf57f
 +            return;
 +        uint32 popId = s_nextPop++;
 +        Pop& pop = s_pops[popId];
-+        pop.course = &COURSES[best];
++        pop.course = &CourseAt(best);
 +        pop.created = now;
 +        // Oldest first, a party whole: all of it ticked the course and fits, or none of it.
 +        std::vector<size_t> take;
@@ -3568,7 +3683,7 @@ index 0000000..abcf57f
 +        for (size_t i = 0; i < s_queue.size() && take.size() < MAX_RACERS; ++i)
 +        {
 +            Queued const& q = s_queue[i];
-+            if (!q.courses[best])
++            if (!Wants(q, best))
 +                continue;
 +            if (!q.party)
 +            {
@@ -3583,7 +3698,7 @@ index 0000000..abcf57f
 +                if (s_queue[j].party == q.party)
 +                {
 +                    unit.push_back(j);
-+                    all = all && s_queue[j].courses[best];
++                    all = all && Wants(s_queue[j], best);
 +                }
 +            if (all && take.size() + unit.size() <= MAX_RACERS)
 +                take.insert(take.end(), unit.begin(), unit.end());
@@ -3647,7 +3762,7 @@ index 0000000..abcf57f
 +            size_t n = 0;
 +            for (Queued const& q : s_queue)
 +                for (size_t i = 0; i < COURSES.size(); ++i)
-+                    if (q.courses[i] && zones[z] == COURSES[i].zone)
++                    if (Wants(q, i) && zones[z] == COURSES[i].zone)
 +                    {
 +                        ++n;
 +                        break;
@@ -5001,21 +5116,12 @@ index 0000000..abcf57f
 +    // of that name replaced: "R\tPubOk\t<id>\t<name>" or "R\tPubNo\t<why>". "R\tPubL" lists them,
 +    // newest first: "R\tPTB", a "R\tPT\t<id>\t<name>\t<author>\t<map>\t<laps>\t<zone>\t<grid>\t<points>"
 +    // each, then "R\tPTE". "R\tPubD\t<id>" takes one of ours down (a GM's, anyone's): "R\tPubGone\t<id>".
-+    struct UserTrack
-+    {
-+        uint32 id = 0;
-+        uint32 guid = 0; // the author's low guid
-+        std::string author, name, zone, grid, points;
-+        uint32 map = 0;
-+        uint32 laps = 0;
-+    };
 +    constexpr size_t USER_TRACKS_MAX = 2000;    // on the server
 +    constexpr size_t USER_TRACKS_EACH = 20;     // by one character
 +    constexpr size_t USER_TRACK_GATES = 60;     // checkpoints on one
 +    constexpr size_t USER_TRACKS_LISTED = 100;  // newest, in a list
 +    constexpr uint32 PUBLISH_COOLDOWN = 20 * IN_MILLISECONDS;
 +    constexpr uint32 USER_TRACKS_ASK_COOLDOWN = 3 * IN_MILLISECONDS;
-+    static std::vector<UserTrack> s_userTracks; // oldest first
 +    static uint32 s_userTrackNext = 1;
 +    static std::unordered_map<uint32, uint32> s_published;      // guid low -> last publish (ms)
 +    static std::unordered_map<uint32, uint32> s_userTracksAsked; // guid low -> last list (ms)
@@ -5055,6 +5161,7 @@ index 0000000..abcf57f
 +            t.grid = f[7].GetCppString();
 +            t.points = f[8].GetCppString();
 +            s_userTrackNext = std::max(s_userTrackNext, t.id + 1);
++            MakeUserCourse(t);
 +            s_userTracks.push_back(t);
 +        } while (result->NextRow());
 +        sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Kartcraft: %u player tracks.", uint32(s_userTracks.size()));
@@ -5158,6 +5265,7 @@ index 0000000..abcf57f
 +                return no("The server holds all the tracks it can.");
 +            t.id = s_userTrackNext++;
 +        }
++        MakeUserCourse(t);
 +        s_userTracks.push_back(t);
 +        s_published[guid] = now;
 +        std::string author = t.author, name = t.name, zone = t.zone;
@@ -5181,9 +5289,7 @@ index 0000000..abcf57f
 +        SendLine(player, "KARTCRAFT\tR\tPTB");
 +        size_t sent = 0;
 +        for (auto t = s_userTracks.rbegin(); t != s_userTracks.rend() && sent < USER_TRACKS_LISTED; ++t, ++sent)
-+            SendLine(player, "KARTCRAFT\tR\tPT\t" + std::to_string(t->id) + "\t" + t->name + "\t" + t->author +
-+                "\t" + std::to_string(t->map) + "\t" + std::to_string(t->laps) + "\t" + t->zone + "\t" + t->grid +
-+                "\t" + t->points);
++            SendLine(player, UserTrackLine(*t));
 +        SendLine(player, "KARTCRAFT\tR\tPTE");
 +    }
 +

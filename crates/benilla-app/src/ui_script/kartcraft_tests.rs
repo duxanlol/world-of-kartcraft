@@ -3934,3 +3934,66 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
         "{cmd}"
     );
 }
+
+#[test]
+fn the_race_finder_s_player_tracks_tab_races_and_time_trials_a_player_track() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    courses(&mut s, 3);
+    let shown = |s: &UiScript, name: &str| -> bool {
+        s.eval(&format!("return {name}:IsVisible() and true or false"))
+            .unwrap()
+    };
+    let enabled = |s: &UiScript, name: &str| -> bool {
+        s.eval(&format!("return {name}:IsEnabled() == 1")).unwrap()
+    };
+    s.run("BenillaKartFinder_Toggle()").unwrap();
+    s.tick(0.0);
+    assert!(shown(&s, "BenillaKartFinderFrameRow1") && shown(&s, "BenillaKartFinderFrameTab2"));
+    assert!(!shown(&s, "BenillaKartFinderFramePlayer"));
+    sent(&mut s);
+
+    // The tab asks the server for the player tracks and lists them over the courses' place.
+    s.run("BenillaKartFinderFrameTab2:Click()").unwrap();
+    assert!(sent(&mut s).contains(&"KARTCRAFT\tR\tPubL".to_string()));
+    from_server(&mut s, "R\tPTB");
+    from_server(
+        &mut s,
+        "R\tPT\t7\tDune Dash\tZuljin\t1\t0\tDurotar\t\t10.0,20.0;30.0,40.0",
+    );
+    from_server(&mut s, "R\tPTE");
+    assert!(shown(&s, "BenillaKartFinderFramePlayer"));
+    assert!(!shown(&s, "BenillaKartFinderFrameRow1") && !shown(&s, "BenillaKartFinderFrameAny"));
+    let row: String = s
+        .eval("return BenillaKartFinderFramePlayerRow1Name:GetText()")
+        .unwrap();
+    assert_eq!(row, "Dune Dash");
+    // Nothing picked, nothing to queue for or trial.
+    assert!(!enabled(&s, "BenillaKartFinderFrameQueue"));
+    assert!(!enabled(&s, "BenillaKartFinderFramePlayerTrial"));
+
+    // Picked: a race on it through the queue, by its course key, named in the status.
+    s.run("BenillaKartFinderFramePlayerRow1:Click()").unwrap();
+    assert!(enabled(&s, "BenillaKartFinderFrameQueue"));
+    s.run("BenillaKartFinderFrameQueue:Click()").unwrap();
+    assert!(sent(&mut s).contains(&"KARTCRAFT\tR\tQ+\tpt-7".to_string()));
+    let status: String = s
+        .eval("return BenillaKartFinderFrameStatus:GetText()")
+        .unwrap();
+    assert!(status.contains("Dune Dash"), "{status}");
+    s.run("BenillaKartFinderFrameQueue:Click()").unwrap();
+    sent(&mut s);
+
+    // Its time trial: the server takes us to its grid.
+    s.run("BenillaKartFinderFramePlayerTrial:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tTB\tpt-7"]);
+    assert!(!shown(&s, "BenillaKartFinderFrame"));
+
+    // Back on the courses' tab, the ticks again.
+    s.run("BenillaKartFinder_Toggle() BenillaKartFinderFrameTab1:Click()")
+        .unwrap();
+    assert!(shown(&s, "BenillaKartFinderFrameRow1") && !shown(&s, "BenillaKartFinderFramePlayer"));
+}

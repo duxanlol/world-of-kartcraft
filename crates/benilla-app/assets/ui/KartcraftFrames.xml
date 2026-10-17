@@ -148,6 +148,14 @@
                 if BenillaKartCourses[i].key == key then return BenillaKartCourses[i].name end
             end
             if key == "any" then return "any course" end
+            -- A player track, by the server's list of them.
+            if string.sub(key or "", 1, 3) == "pt-" then
+                local id = string.sub(key, 4)
+                for i = 1, table.getn(BenillaKartPubTracks) do
+                    if BenillaKartPubTracks[i].id == id then return BenillaKartPubTracks[i].name end
+                end
+                return "a player track"
+            end
             return key
         end
 
@@ -170,7 +178,12 @@
 
         function BenillaKartFinder_Queue()
             local f = BenillaKartFinder
-            f.queued = BenillaKartFinder_Keys()
+            if f.mode == "player" then
+                if not f.track then return end
+                f.queued = "pt-" .. f.track
+            else
+                f.queued = BenillaKartFinder_Keys()
+            end
             f.waiting, f.waited, f.noticeUntil = nil, nil, 0
             BenillaKart_Send("Q+\t" .. f.queued)
             f.beat = GetTime() + BENILLA_KART_HEARTBEAT
@@ -232,6 +245,10 @@
             end
             if not f.queued then
                 if GetTime() < f.noticeUntil then return BENILLA_KART_RACING end
+                if f.mode == "player" then
+                    if table.getn(BenillaKartPubTracks) == 0 then return "No player tracks published yet." end
+                    return "Pick a player track: find a race on it, or run a time trial."
+                end
                 return "Pick zones and find a race."
             end
             local names = ""
@@ -264,7 +281,25 @@
             if not frame:IsVisible() then return end
             local f = BenillaKartFinder
             getglobal("BenillaKartFinderFrameAny"):SetChecked(f.any)
-            BenillaKartFinder_UpdateList()
+            -- The tab: the courses' ticks, or the player tracks to pick one.
+            local player = f.mode == "player"
+            for _, part in ipairs(BENILLA_KART_FINDER_COURSE_PARTS) do
+                local widget = getglobal("BenillaKartFinderFrame" .. part)
+                if player then widget:Hide() else widget:Show() end
+            end
+            if player then
+                for i = 1, BENILLA_KART_ROWS do getglobal("BenillaKartFinderFrameRow" .. i):Hide() end
+                BenillaKartFinderFramePlayer:Show()
+                BenillaKartFinderPlayer_Update()
+            else
+                BenillaKartFinderFramePlayer:Hide()
+                BenillaKartFinder_UpdateList()
+            end
+            if player and not f.track and not f.queued then
+                BenillaKartFinderFrameQueue:Disable()
+            else
+                BenillaKartFinderFrameQueue:Enable()
+            end
             if f.queued then
                 BenillaKartFinderFrameQueue:SetText("Leave queue")
                 BenillaKartFinderFrameClose:SetText("Minimize")
@@ -395,8 +430,73 @@
 
         function BenillaKartFinder_OnMouseWheel(delta)
             if BenillaFauxScrollFrame_OnMouseWheel then
-                BenillaFauxScrollFrame_OnMouseWheel(BenillaKartFinderFrameScroll, delta)
+                local scroll = BenillaKartFinderFrameScroll
+                if BenillaKartFinder.mode == "player" then scroll = BenillaKartFinderFramePlayerScroll end
+                BenillaFauxScrollFrame_OnMouseWheel(scroll, delta)
             end
+        end
+
+        -- ── The Player tracks tab: the tracks players published (BenillaKartPubTracks, the
+        -- server's list, asked for as the tab opens), one picked, raced through the queue by its
+        -- course key ("pt-<id>", Kartcraft.cpp's player courses) or time-trialled ("TB").
+        BENILLA_KART_FINDER_COURSE_PARTS = { "Search", "Any", "Scroll" }
+        BENILLA_KART_PLAYER_ROWS = 8
+
+        function BenillaKartFinder_SetTab(id)
+            local f = BenillaKartFinder
+            if id == 2 then
+                f.mode = "player"
+                BenillaKart_Send("PubL")
+            else
+                f.mode = nil
+            end
+            if PanelTemplates_SetTab then PanelTemplates_SetTab(BenillaKartFinderFrame, id) end
+            BenillaKartFinder_Refresh()
+        end
+
+        function BenillaKartFinder_PickTrack(id)
+            BenillaKartFinder.track = id
+            BenillaKartFinder_Refresh()
+        end
+
+        function BenillaKartFinderPlayer_Update()
+            local list = BenillaKartPubTracks
+            local offset = 0
+            if FauxScrollFrame_Update then
+                local scroll = BenillaKartFinderFramePlayerScroll
+                FauxScrollFrame_Update(scroll, table.getn(list), BENILLA_KART_PLAYER_ROWS, BENILLA_KART_ROW_HEIGHT)
+                if BenillaScrollTrough_Follow then BenillaScrollTrough_Follow(scroll:GetName()) end
+                offset = FauxScrollFrame_GetOffset(scroll)
+            end
+            local f = BenillaKartFinder
+            for i = 1, BENILLA_KART_PLAYER_ROWS do
+                local row = getglobal("BenillaKartFinderFramePlayerRow" .. i)
+                local track = list[offset + i]
+                if track then
+                    row.id = track.id
+                    getglobal(row:GetName() .. "Name"):SetText(track.name)
+                    getglobal(row:GetName() .. "Zone"):SetText("by " .. track.author)
+                    if track.id == f.track then row:LockHighlight() else row:UnlockHighlight() end
+                    row:Show()
+                else
+                    row.id = nil
+                    row:Hide()
+                end
+            end
+            if f.track then
+                BenillaKartFinderFramePlayerTrial:Enable()
+            else
+                BenillaKartFinderFramePlayerTrial:Disable()
+            end
+        end
+
+        -- The picked player track's time trial: the server takes us to its grid, as the track
+        -- browser's time trial does.
+        function BenillaKartFinder_PlayerTrial()
+            local id = BenillaKartFinder.track
+            if not id then return end
+            BenillaKart_Send("TB\tpt-" .. id)
+            BenillaKartFinderFrame:Hide()
         end
 
         -- The controller in the Race Finder, as in the track browser: the D-pad moves a cursor
@@ -737,7 +837,9 @@
             local verb = line[2]
             if verb == "PTB" then
                 BenillaKartPubIncoming = {}
-            elseif verb == "PT" and BenillaKartPubIncoming then
+            elseif verb == "PT" and not BenillaKartPubIncoming then
+                -- A race on a player track naming it, outside a list: the kart's, for its map.
+            elseif verb == "PT" then
                 local laps = tonumber(line[7]) or 0
                 local t = { key = "pub:" .. (line[3] or ""), id = line[3], name = line[4] or "",
                     author = line[5] or "", map = tonumber(line[6]) or 0, laps = laps,
@@ -752,6 +854,7 @@
                 BenillaKartPubTracks = BenillaKartPubIncoming or {}
                 BenillaKartPubIncoming = nil
                 BenillaKartTrackBrowser_Refresh()
+                BenillaKartFinder_Refresh()
             elseif verb == "PubOk" then
                 BenillaKart_Say("Published " .. (line[4] or "your track") .. ": everyone finds it in Player tracks.")
                 if BenillaKartTrackBrowser.mode == "pub" then BenillaKart_Send("PubL") end
@@ -3910,6 +4013,27 @@
         </Scripts>
     </CheckButton>
 
+    <!-- A player track in the Race Finder's Player tracks tab: its name and maker; a click picks it. -->
+    <Button name="BenillaKartFinderTrackRowTemplate" virtual="true">
+        <Size><AbsDimension x="242" y="24"/></Size>
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentName" inherits="GameFontNormalSmall" justifyH="LEFT">
+                    <Size><AbsDimension x="150" y="24"/></Size>
+                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="6" y="0"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentZone" inherits="GameFontDisableSmall" justifyH="RIGHT">
+                    <Size><AbsDimension x="84" y="24"/></Size>
+                    <Anchors><Anchor point="RIGHT"><Offset><AbsDimension x="-4" y="0"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <HighlightTexture file="Interface\QuestFrame\UI-QuestTitleHighlight" alphaMode="ADD"/>
+        <Scripts>
+            <OnClick>if this.id then BenillaKartFinder_PickTrack(this.id) end</OnClick>
+        </Scripts>
+    </Button>
+
     <!-- A hosted race in the Race Finder: its course, host and racers, and a Join. -->
     <Frame name="BenillaKartLobbyRowTemplate" virtual="true" hidden="true">
         <Size><AbsDimension x="272" y="22"/></Size>
@@ -4023,6 +4147,65 @@
                     <OnVerticalScroll>FauxScrollFrame_OnVerticalScroll(BENILLA_KART_ROW_HEIGHT, BenillaKartFinder_UpdateList)</OnVerticalScroll>
                 </Scripts>
             </ScrollFrame>
+            <!-- The Player tracks tab's list, over the courses' place (BenillaKartFinderPlayer_Update). -->
+            <Frame name="$parentPlayer" hidden="true">
+                <Size><AbsDimension x="276" y="250"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="20" y="-34"/></Offset></Anchor></Anchors>
+                <Layers>
+                    <Layer level="ARTWORK">
+                        <FontString inherits="GameFontNormalSmall" text="Player tracks, newest first">
+                            <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="4" y="-4"/></Offset></Anchor></Anchors>
+                        </FontString>
+                    </Layer>
+                </Layers>
+                <Frames>
+                    <Button name="$parentRow1" inherits="BenillaKartFinderTrackRowTemplate">
+                        <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="0" y="-24"/></Offset></Anchor></Anchors>
+                    </Button>
+                    <Button name="$parentRow2" inherits="BenillaKartFinderTrackRowTemplate">
+                        <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow1" relativePoint="BOTTOMLEFT"/></Anchors>
+                    </Button>
+                    <Button name="$parentRow3" inherits="BenillaKartFinderTrackRowTemplate">
+                        <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow2" relativePoint="BOTTOMLEFT"/></Anchors>
+                    </Button>
+                    <Button name="$parentRow4" inherits="BenillaKartFinderTrackRowTemplate">
+                        <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow3" relativePoint="BOTTOMLEFT"/></Anchors>
+                    </Button>
+                    <Button name="$parentRow5" inherits="BenillaKartFinderTrackRowTemplate">
+                        <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow4" relativePoint="BOTTOMLEFT"/></Anchors>
+                    </Button>
+                    <Button name="$parentRow6" inherits="BenillaKartFinderTrackRowTemplate">
+                        <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow5" relativePoint="BOTTOMLEFT"/></Anchors>
+                    </Button>
+                    <Button name="$parentRow7" inherits="BenillaKartFinderTrackRowTemplate">
+                        <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow6" relativePoint="BOTTOMLEFT"/></Anchors>
+                    </Button>
+                    <Button name="$parentRow8" inherits="BenillaKartFinderTrackRowTemplate">
+                        <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow7" relativePoint="BOTTOMLEFT"/></Anchors>
+                    </Button>
+                    <ScrollFrame name="$parentScroll" inherits="FauxScrollFrameTemplate">
+                        <Size><AbsDimension x="242" y="192"/></Size>
+                        <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow1"/></Anchors>
+                        <Scripts>
+                            <OnVerticalScroll>FauxScrollFrame_OnVerticalScroll(BENILLA_KART_ROW_HEIGHT, BenillaKartFinderPlayer_Update)</OnVerticalScroll>
+                        </Scripts>
+                    </ScrollFrame>
+                    <Button name="$parentTrial" inherits="UIPanelButtonTemplate" text="Time trial">
+                        <Size><AbsDimension x="120" y="22"/></Size>
+                        <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRow8" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="4" y="-8"/></Offset></Anchor></Anchors>
+                        <Scripts><OnClick>BenillaKartFinder_PlayerTrial()</OnClick></Scripts>
+                    </Button>
+                </Frames>
+            </Frame>
+            <!-- The tabs under the frame, as a stock panel's: the courses, and the player tracks. -->
+            <Button name="$parentTab1" inherits="CharacterFrameTabButtonTemplate" id="1" text="Courses">
+                <Anchors><Anchor point="TOPLEFT" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="14" y="8"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartFinder_SetTab(1)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentTab2" inherits="CharacterFrameTabButtonTemplate" id="2" text="Player tracks">
+                <Anchors><Anchor point="LEFT" relativeTo="$parentTab1" relativePoint="RIGHT"><Offset><AbsDimension x="-16" y="0"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartFinder_SetTab(2)</OnClick></Scripts>
+            </Button>
             <!-- The hosted races, each with its Join (BenillaKartLobby_Update). -->
             <Frame name="$parentLobby1" inherits="BenillaKartLobbyRowTemplate">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-350"/></Offset></Anchor></Anchors>
@@ -4049,6 +4232,10 @@
                 -- The label is the check template's; Escape closes it, as it does a stock panel.
                 local label = getglobal(this:GetName() .. "AnyText")
                 if label then label:SetText("Any course") end
+                if PanelTemplates_SetNumTabs then
+                    PanelTemplates_SetNumTabs(this, 2)
+                    PanelTemplates_SetTab(this, 1)
+                end
                 if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
                 BenillaKart_Movable(this)
                 this:EnableMouseWheel(1)

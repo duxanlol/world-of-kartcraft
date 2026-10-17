@@ -897,6 +897,9 @@ pub(crate) struct Races {
     pub(crate) me: String,
     /// Lines from the server not yet handled.
     inbox: Vec<Vec<String>>,
+    /// Player tracks' names by course key (`pt-<id>`), from the server's `PT` lines: the client
+    /// has no copy of them.
+    track_names: HashMap<String, String>,
 }
 
 impl Races {
@@ -931,7 +934,12 @@ impl Races {
 
     /// The race's track for the race map: once its course line has come.
     pub(crate) fn map(&self) -> Option<RaceMap> {
-        self.race.as_ref()?.map()
+        let race = self.race.as_ref()?;
+        let mut map = race.map()?;
+        if let Some(name) = self.track_names.get(&race.course) {
+            map.name = name.clone();
+        }
+        Some(map)
     }
 
     /// The racers by name, leader first.
@@ -1011,6 +1019,11 @@ impl Races {
                 return Heard::ReadyCheck;
             }
             Some("Pop-") => self.check_pending = false,
+            // A player track: its name, for a race on it (`Kartcraft.cpp` `UserTrackLine`).
+            Some("PT") if f.len() >= 3 => {
+                self.track_names
+                    .insert(format!("pt-{}", f[1]), f[2].clone());
+            }
             // Out of everything (`/leaverace`): the server has let us go, so whatever we
             // thought we were in goes too.
             Some("X") => {
@@ -3758,6 +3771,22 @@ mod tests {
         let draft = Active::draft(1, points, "Me");
         assert_eq!(draft.id, PREVIEW_ID);
         assert_eq!(draft.map().unwrap().name, "Track editor");
+    }
+
+    #[test]
+    fn a_player_track_s_race_is_named_from_its_line() {
+        let mut races = Races {
+            me: "Me".into(),
+            ..Default::default()
+        };
+        let line = |t: &str| t.split('\t').map(str::to_string).collect::<Vec<_>>();
+        races.hear(
+            &line("PT\t7\tDune Dash\tSomeone\t1\t0\tDurotar\t\t1,2;3,4"),
+            0.0,
+        );
+        races.hear(&line("L\t3\tMe"), 0.0);
+        races.hear(&line("C\t3\tpt-7\t0\t1:2;3:4"), 0.0);
+        assert_eq!(races.map().unwrap().name, "Dune Dash");
     }
 
     #[test]
