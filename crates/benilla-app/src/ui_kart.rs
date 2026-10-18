@@ -20,11 +20,14 @@
 //!
 //! - `BENILLA_KART_TRACKMAP(name, laps, points)`: the race map's track when it changes, its
 //!   checkpoints `x,y;x,y;...` (WoW x, y); an empty name when there is no race.
-//! - `BENILLA_KART_TRACKEDIT(state, gates, laps, note, notes, grid, tool)`: the track editor's bar,
+//! - `BENILLA_KART_TRACKEDIT(state, gates, laps, note, notes, grid, tool, picked, asks)`: the
+//!   track editor's bar,
 //!   when it changes: `edit`, `test` (a test lap of the draft), `run` (of a saved track) or
 //!   empty when closed; the draft's gates, the start among them, and laps; the last word for the
 //!   player and how many so far, a new one for the chat; 1 when the draft has its grid; what a
-//!   left click places (`start`, `checkpoint` or `grid`).
+//!   left click does (`move`, `number`, `checkpoint` or `grid`); the checkpoint Edit checkpoint
+//!   picked, 1 the start, 0 none; how often a save found its name saved already (a new one asks
+//!   to overwrite).
 //! - `BENILLA_KART_MYTRACKS(list)`: the track editor's saved tracks, as `BENILLA_KART_TRACKS`
 //!   lists courses with two fields more, the grid (`x,y,o` or empty) and the gates with their
 //!   facings (`x,y[,o];...`), at load and after each save or delete.
@@ -95,6 +98,8 @@ pub(crate) fn feed(
                 ScriptValue::Number(f64::from(view.notes)),
                 ScriptValue::Number(f64::from(u8::from(view.grid))),
                 ScriptValue::Str(view.tool.into()),
+                ScriptValue::Number(view.picked as f64),
+                ScriptValue::Number(f64::from(view.asks)),
             ],
         );
         sent.track_edit = Some(view);

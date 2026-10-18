@@ -909,6 +909,19 @@
             end
         end
 
+        -- Publish, asked first where one of ours published has its name: the server replaces it.
+        function BenillaKartPub_Ask(track)
+            local me = UnitName("player")
+            for i = 1, table.getn(BenillaKartPubTracks) do
+                local t = BenillaKartPubTracks[i]
+                if t.author == me and t.name == track.name then
+                    BenillaKartTrackBrowser.publishing = track
+                    return StaticPopup_Show("BENILLA_KART_REPUBLISH_TRACK", track.name)
+                end
+            end
+            BenillaKartPub_Publish(track)
+        end
+
         -- A saved track to the server, its name and ours (the server knows who sends it).
         function BenillaKartPub_Publish(track)
             BenillaKart_Send("Pub\t" .. track.name .. "\t" .. track.map .. "\t" .. track.laps .. "\t"
@@ -1126,7 +1139,7 @@
         function BenillaKartTrackBrowser_ToMarshal()
             local track = BenillaKartTrackBrowser.selected and BenillaKartTrack(BenillaKartTrackBrowser.selected)
             -- Our own track's Publish, and a player track of ours taken down, share its place.
-            if track and track.mine then return BenillaKartPub_Publish(track) end
+            if track and track.mine then return BenillaKartPub_Ask(track) end
             if track and track.pub then return BenillaKart_Send("PubD\t" .. track.id) end
             if not track or track.map > 1 then return end
             BenillaKart_Send("MT\t" .. track.key)
@@ -3041,7 +3054,7 @@
             elseif event == "BENILLA_KART_LEAVE" then
                 BenillaKartLeave_Show(arg1)
             elseif event == "BENILLA_KART_TRACKEDIT" then
-                BenillaKartEditor_Set(arg1, arg2, arg3, arg4, arg5, arg6, arg7)
+                BenillaKartEditor_Set(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9)
             elseif event == "BENILLA_KART_MYTRACKS" then
                 BenillaKartMyTracks_Set(arg1)
             elseif event == "BENILLA_KART_GPS" then
@@ -3128,8 +3141,10 @@
 
         -- What the kart last said of it (BENILLA_KART_TRACKEDIT): "edit", "test" (the draft's
         -- test lap), "run" (a saved track's) or "" closed, the draft's gates (the start first),
-        -- laps and grid, and how many notes so far; `n` numbers our presses.
-        BenillaKartEditor = { state = "", count = 0, laps = 3, grid = nil, notes = 0, n = 0 }
+        -- laps and grid, how many notes so far and the checkpoint Edit checkpoint picked (0
+        -- none); `n` numbers our presses.
+        BenillaKartEditor = { state = "", count = 0, laps = 3, grid = nil, notes = 0, n = 0, picked = 0,
+            asks = 0 }
 
         function BenillaKartEditorButton_Place(angle)
             BenillaKartRing_Place(BenillaKartEditorMinimapButton, angle or tonumber(GetCVar("KartTrackMinimapAngle")) or 250)
@@ -3192,12 +3207,13 @@
         end
 
         -- A press of the bar's: "<n><TAB>verb[<TAB>arg...]", n counting so a repeat changes it.
-        function BenillaKartEditor_Send(verb, a, b)
+        function BenillaKartEditor_Send(verb, a, b, c)
             local e = BenillaKartEditor
             e.n = e.n + 1
             local line = e.n .. "\t" .. verb
             if a then line = line .. "\t" .. a end
             if b then line = line .. "\t" .. b end
+            if c then line = line .. "\t" .. c end
             SetCVar("KartTrackCmd", line)
         end
 
@@ -3215,15 +3231,32 @@
             BenillaKartEditor_Send("practice", BenillaKartEditor_Name())
         end
 
+        -- Kept for the overwrite popup's yes, if the kart finds the name saved already.
         function BenillaKartEditor_Save()
             BenillaKartEditorBarName:ClearFocus()
-            BenillaKartEditor_Send("save", BenillaKartEditor_Name(), GetZoneText() or "")
+            local e = BenillaKartEditor
+            e.saving = { name = BenillaKartEditor_Name(), zone = GetZoneText() or "" }
+            BenillaKartEditor_Send("save", e.saving.name, e.saving.zone)
         end
 
-        function BenillaKartEditor_Set(state, count, laps, note, notes, grid, tool)
+        function BenillaKartEditor_Set(state, count, laps, note, notes, grid, tool, picked, asks)
             local e = BenillaKartEditor
             e.state, e.count, e.laps = state or "", tonumber(count) or 0, tonumber(laps) or 0
-            e.grid, e.tool = tonumber(grid) == 1, tool or "start"
+            e.grid, e.tool = tonumber(grid) == 1, tool or "move"
+            -- A new pick: its number box takes the keys, to type the new number in.
+            picked = tonumber(picked) or 0
+            if picked > 0 and picked ~= e.picked then
+                BenillaKartEditorBarNumber:SetText("")
+                BenillaKartEditorBarNumber:Show()
+                BenillaKartEditorBarNumber:SetFocus()
+            end
+            e.picked = picked
+            -- A save found its name saved already: overwrite it, or not.
+            asks = tonumber(asks) or 0
+            if asks ~= e.asks then
+                e.asks = asks
+                if e.saving then StaticPopup_Show("BENILLA_KART_OVERWRITE_TRACK", e.saving.name) end
+            end
             notes = tonumber(notes) or 0
             if notes ~= e.notes then
                 e.notes = notes
@@ -3238,10 +3271,19 @@
         -- The tools' buttons, and what the bar says a left click places with each.
         BENILLA_KART_EDITOR_TOOLS = {
             move = { "Move", "Drag the start, a checkpoint or the grid to move it." },
-            start = { "Start", "Left-click the ground to place the start." },
+            number = { "Edit", "Click a checkpoint to give it a new number." },
             checkpoint = { "Place", "Left-click the ground to place the next checkpoint." },
             grid = { "Grid", "Left-click the ground to place the starting grid." },
         }
+
+        -- The number box's Enter: the checkpoint picked as that number.
+        function BenillaKartEditor_Renumber()
+            local box = BenillaKartEditorBarNumber
+            local n = tonumber(box:GetText())
+            box:SetText("")
+            box:ClearFocus()
+            if n then BenillaKartEditor_Send("renumber", n) end
+        end
 
         -- The keys card's lines: the kart's own bindings the free camera flies on, by command,
         -- then the mouse's.
@@ -3272,7 +3314,7 @@
             table.insert(lines, "|cffffd100Mouse wheel|r  widen or narrow the gate")
             table.insert(lines, "|cffffd100Controller Fire|r  place at the screen's centre")
             table.insert(lines, "|cffffd100Right mouse held|r  look around")
-            table.insert(lines, "|cff999999The start goes first; drag this card to move it.|r")
+            table.insert(lines, "|cff999999The first checkpoint is the start; drag this card to move it.|r")
             BenillaKartEditorKeysText:SetText(table.concat(lines, "\n"))
         end
 
@@ -3304,15 +3346,8 @@
             end
             if e.count == 0 then
                 BenillaKartEditorBarCount:SetText("|cffff8040No start yet|r")
-                BenillaKartEditorBarPlace:Disable()
             else
                 BenillaKartEditorBarCount:SetText("Start + " .. (e.count - 1) .. " checkpoints")
-                BenillaKartEditorBarPlace:Enable()
-            end
-            if e.count == 0 then
-                BenillaKartEditorBarStart:SetText("Place start")
-            else
-                BenillaKartEditorBarStart:SetText("Move start")
             end
             if e.grid then
                 BenillaKartEditorBarGridText:SetText("Grid placed")
@@ -3328,6 +3363,18 @@
                 else
                     button:UnlockHighlight()
                 end
+            end
+            if e.tool == "checkpoint" and e.count == 0 then
+                BenillaKartEditorBarTool:SetText("Left-click the ground to place the start, the first checkpoint.")
+            end
+            -- Edit checkpoint's pick: its number, typed in the box beside.
+            if e.tool == "number" and e.picked > 0 then
+                BenillaKartEditorBarTool:SetText("Checkpoint " .. e.picked .. " of " .. e.count
+                    .. " (1 is the start). New number:")
+                BenillaKartEditorBarNumber:Show()
+            else
+                BenillaKartEditorBarNumber:ClearFocus()
+                BenillaKartEditorBarNumber:Hide()
             end
             -- The race type picked shows lit, the others plain.
             for part, laps in pairs(BENILLA_KART_EDITOR_TYPES) do
@@ -4507,6 +4554,32 @@
                     BenillaKart_Send("PubDN\t" .. track.name)
                     BenillaKartEditor_Send("delete", track.file)
                     BenillaKartTrackBrowser.selected = nil
+                end,
+            }
+            -- The editor's Save, where a track of that name is saved already (the kart's answer).
+            StaticPopupDialogs["BENILLA_KART_OVERWRITE_TRACK"] = {
+                text = "A track named %s is saved already.\n\nOverwrite it?",
+                button1 = "Overwrite",
+                button2 = CANCEL,
+                timeout = 0,
+                whileDead = 1,
+                hideOnEscape = 1,
+                OnAccept = function()
+                    local s = BenillaKartEditor.saving
+                    if s then BenillaKartEditor_Send("save", s.name, s.zone, "overwrite") end
+                end,
+            }
+            -- Publish, where one of ours published already has the name.
+            StaticPopupDialogs["BENILLA_KART_REPUBLISH_TRACK"] = {
+                text = "You have published a track named %s already.\n\nOverwrite it in Player tracks?",
+                button1 = "Overwrite",
+                button2 = CANCEL,
+                timeout = 0,
+                whileDead = 1,
+                hideOnEscape = 1,
+                OnAccept = function()
+                    local track = BenillaKartTrackBrowser.publishing
+                    if track then BenillaKartPub_Publish(track) end
                 end,
             }
             -- After any other time trial: another go, or not.
@@ -7280,7 +7353,7 @@
          back to the editor (or out of a saved track's lap) or the lap again.
          BENILLA_KART_TRACKEDIT shows and hides it. -->
     <Frame name="BenillaKartEditorBar" enableMouse="true" hidden="true" parent="UIParent" frameStrata="MEDIUM">
-        <Size><AbsDimension x="600" y="136"/></Size>
+        <Size><AbsDimension x="640" y="136"/></Size>
         <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="160"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
             <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>
@@ -7320,30 +7393,44 @@
                     <OnEnterPressed>this:ClearFocus()</OnEnterPressed>
                 </Scripts>
             </EditBox>
+            <!-- Edit checkpoint's number, for the checkpoint it picked; shown with a pick. -->
+            <EditBox name="$parentNumber" inherits="InputBoxTemplate" autoFocus="false" letters="3" hidden="true">
+                <Size><AbsDimension x="40" y="20"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="386" y="-40"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnEscapePressed>this:ClearFocus()</OnEscapePressed>
+                    <OnEnterPressed>BenillaKartEditor_Renumber()</OnEnterPressed>
+                </Scripts>
+            </EditBox>
             <Button name="$parentMove" inherits="UIPanelButtonTemplate" text="Move">
-                <Size><AbsDimension x="70" y="24"/></Size>
+                <Size><AbsDimension x="60" y="24"/></Size>
                 <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="16" y="46"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartEditor_Send("move")</OnClick></Scripts>
             </Button>
-            <Button name="$parentStart" inherits="UIPanelButtonTemplate" text="Place start">
-                <Size><AbsDimension x="100" y="24"/></Size>
-                <Anchors><Anchor point="LEFT" relativeTo="$parentMove" relativePoint="RIGHT"><Offset><AbsDimension x="8" y="0"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartEditor_Send("start")</OnClick></Scripts>
+            <Button name="$parentEdit" inherits="UIPanelButtonTemplate" text="Edit checkpoint">
+                <Size><AbsDimension x="110" y="24"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentMove" relativePoint="RIGHT"><Offset><AbsDimension x="6" y="0"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartEditor_Send("number")</OnClick></Scripts>
             </Button>
             <Button name="$parentPlace" inherits="UIPanelButtonTemplate" text="Place checkpoint">
                 <Size><AbsDimension x="120" y="24"/></Size>
-                <Anchors><Anchor point="LEFT" relativeTo="$parentStart" relativePoint="RIGHT"><Offset><AbsDimension x="8" y="0"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentEdit" relativePoint="RIGHT"><Offset><AbsDimension x="6" y="0"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartEditor_Send("place")</OnClick></Scripts>
             </Button>
             <Button name="$parentGrid" inherits="UIPanelButtonTemplate" text="Place grid">
-                <Size><AbsDimension x="96" y="24"/></Size>
-                <Anchors><Anchor point="LEFT" relativeTo="$parentPlace" relativePoint="RIGHT"><Offset><AbsDimension x="8" y="0"/></Offset></Anchor></Anchors>
+                <Size><AbsDimension x="90" y="24"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentPlace" relativePoint="RIGHT"><Offset><AbsDimension x="6" y="0"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartEditor_Send("grid")</OnClick></Scripts>
             </Button>
             <Button name="$parentUndo" inherits="UIPanelButtonTemplate" text="Undo">
-                <Size><AbsDimension x="64" y="24"/></Size>
-                <Anchors><Anchor point="LEFT" relativeTo="$parentGrid" relativePoint="RIGHT"><Offset><AbsDimension x="8" y="0"/></Offset></Anchor></Anchors>
+                <Size><AbsDimension x="56" y="24"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentGrid" relativePoint="RIGHT"><Offset><AbsDimension x="6" y="0"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartEditor_Send("undo")</OnClick></Scripts>
+            </Button>
+            <Button name="$parentRedo" inherits="UIPanelButtonTemplate" text="Redo">
+                <Size><AbsDimension x="56" y="24"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentUndo" relativePoint="RIGHT"><Offset><AbsDimension x="6" y="0"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartEditor_Send("redo")</OnClick></Scripts>
             </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="70" y="24"/></Size>

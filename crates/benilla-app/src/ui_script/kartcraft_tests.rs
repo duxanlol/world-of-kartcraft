@@ -4100,7 +4100,23 @@ fn the_track_editor_s_button_and_bar_drive_the_kart_s_editor() {
         s.eval(&format!("return {name}:GetText()")).unwrap()
     };
     let cmd = |s: &UiScript| s.cvar("KartTrackCmd").unwrap_or_default();
-    let tell = |s: &mut UiScript, state: &str, count: f64, laps: f64| {
+    let tell_asks = |s: &mut UiScript, tool: &str, picked: f64, asks: f64| {
+        s.fire_event(
+            "BENILLA_KART_TRACKEDIT",
+            vec![
+                ScriptValue::Str("edit".into()),
+                ScriptValue::Number(3.0),
+                ScriptValue::Number(1.0),
+                ScriptValue::Str(String::new()),
+                ScriptValue::Number(0.0),
+                ScriptValue::Number(0.0),
+                ScriptValue::Str(tool.into()),
+                ScriptValue::Number(picked),
+                ScriptValue::Number(asks),
+            ],
+        );
+    };
+    let tell_tool = |s: &mut UiScript, state: &str, count: f64, laps: f64, tool: &str, picked| {
         s.fire_event(
             "BENILLA_KART_TRACKEDIT",
             vec![
@@ -4110,9 +4126,13 @@ fn the_track_editor_s_button_and_bar_drive_the_kart_s_editor() {
                 ScriptValue::Str(String::new()),
                 ScriptValue::Number(0.0),
                 ScriptValue::Number(0.0),
-                ScriptValue::Str(if count == 0.0 { "start" } else { "checkpoint" }.into()),
+                ScriptValue::Str(tool.into()),
+                ScriptValue::Number(picked),
             ],
         );
+    };
+    let tell = |s: &mut UiScript, state: &str, count: f64, laps: f64| {
+        tell_tool(s, state, count, laps, "checkpoint", 0.0);
     };
 
     // The minimap button opens the editor; the bar waits for the kart to say it is open.
@@ -4122,7 +4142,7 @@ fn the_track_editor_s_button_and_bar_drive_the_kart_s_editor() {
     assert_eq!(s.cvar("KartTrackEdit").as_deref(), Some("1"));
     assert!(!shown(&s, "BenillaKartEditorBar"));
 
-    // A new draft: the start first, the checkpoints wait for it.
+    // A new draft: the first checkpoint placed is the start, no tool of its own.
     tell(&mut s, "edit", 0.0, 0.0);
     assert!(shown(&s, "BenillaKartEditorBar"));
     // The keys card beside it: the kart's own keys, and the mouse's.
@@ -4132,17 +4152,16 @@ fn the_track_editor_s_button_and_bar_drive_the_kart_s_editor() {
         keys.contains("fly forward, back") && keys.contains("Q / E"),
         "{keys}"
     );
-    assert_eq!(text(&s, "BenillaKartEditorBarStart"), "Place start");
     // The bar says what a left click on the world places; its buttons only pick that.
     assert_eq!(
         text(&s, "BenillaKartEditorBarTool"),
-        "Left-click the ground to place the start."
+        "Left-click the ground to place the start, the first checkpoint."
     );
-    assert!(!s
-        .eval::<bool>("return BenillaKartEditorBarPlace:IsEnabled() == 1")
+    assert!(s
+        .eval::<bool>("return BenillaKartEditorBarStart == nil")
         .unwrap());
-    s.run("BenillaKartEditorBarStart:Click()").unwrap();
-    assert_eq!(cmd(&s), "1\tstart");
+    s.run("BenillaKartEditorBarEdit:Click()").unwrap();
+    assert_eq!(cmd(&s), "1\tnumber");
 
     // Editing: the name, the count, the editor's buttons, each a numbered press.
     tell(&mut s, "edit", 2.0, 0.0);
@@ -4155,7 +4174,6 @@ fn the_track_editor_s_button_and_bar_drive_the_kart_s_editor() {
         text(&s, "BenillaKartEditorBarCount"),
         "Start + 1 checkpoints"
     );
-    assert_eq!(text(&s, "BenillaKartEditorBarStart"), "Move start");
     assert_eq!(
         text(&s, "BenillaKartEditorBarTool"),
         "Left-click the ground to place the next checkpoint."
@@ -4201,13 +4219,42 @@ fn the_track_editor_s_button_and_bar_drive_the_kart_s_editor() {
     tell(&mut s, "edit", 2.0, 1.0);
     s.run("BenillaKartEditorBarMove:Click()").unwrap();
     assert_eq!(cmd(&s), "10\tmove");
+    // Edit checkpoint: its pick shows the number box, its Enter the new number; Redo a press.
+    assert!(!shown(&s, "BenillaKartEditorBarNumber"));
+    tell_tool(&mut s, "edit", 3.0, 1.0, "number", 2.0);
+    assert!(shown(&s, "BenillaKartEditorBarNumber"));
+    assert_eq!(
+        text(&s, "BenillaKartEditorBarTool"),
+        "Checkpoint 2 of 3 (1 is the start). New number:"
+    );
+    s.run("BenillaKartEditorBarNumber:SetText('1') BenillaKartEditor_Renumber()")
+        .unwrap();
+    assert_eq!(cmd(&s), "11\trenumber\t1");
+    s.run("BenillaKartEditorBarRedo:Click()").unwrap();
+    assert_eq!(cmd(&s), "12\tredo");
+    tell_tool(&mut s, "edit", 3.0, 1.0, "move", 0.0);
+    assert!(!shown(&s, "BenillaKartEditorBarNumber"));
+    // A save the kart found saved already under its name: overwrite it only on a yes.
+    let overwrite = "return StaticPopup_Visible('BENILLA_KART_OVERWRITE_TRACK') ~= nil";
+    assert!(!s.eval::<bool>(overwrite).unwrap());
+    tell_asks(&mut s, "move", 0.0, 1.0);
+    assert!(s.eval::<bool>(overwrite).unwrap());
+    assert_eq!(cmd(&s), "12\tredo", "nothing sent before the answer");
+    s.run("StaticPopup1Button1:Click()").unwrap();
+    assert!(
+        cmd(&s).starts_with("13\tsave\tGoldshire Ring\t") && cmd(&s).ends_with("\toverwrite"),
+        "{}",
+        cmd(&s)
+    );
+    tell_asks(&mut s, "move", 0.0, 1.0);
+    assert!(!s.eval::<bool>(overwrite).unwrap(), "the same ask once");
     // Closed by a press (the CVar may read "0" already, opened from My tracks), the bar goes;
     // the button opens it again even after a refused open.
     s.run("BenillaKartEditorBarClose:Click()").unwrap();
-    assert_eq!(cmd(&s), "11\tclose");
+    assert_eq!(cmd(&s), "14\tclose");
     s.run("BenillaKartEditorMinimapButton:Click('LeftButton')")
         .unwrap();
-    assert_eq!(cmd(&s), "12\tclose", "the button closes it the same way");
+    assert_eq!(cmd(&s), "15\tclose", "the button closes it the same way");
     tell(&mut s, "", 2.0, 1.0);
     assert!(!shown(&s, "BenillaKartEditorBar"));
     s.run("SetCVar('KartTrackEdit', '1')").unwrap();
@@ -4351,6 +4398,26 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
     assert!(
         cmd.ends_with("\trunspots\tCliff Loop\t3\t1\t\t1.0,1.0;2.0,2.0;3.0,3.0"),
         "{cmd}"
+    );
+    // Published already under its name by us: Publish asks before the server replaces it.
+    from_server(&mut s, "R\tPTB");
+    from_server(
+        &mut s,
+        &format!("R\tPT\t9\tGoldshire Ring\t{me}\t0\t3\tElwynn Forest\t\t1.0,2.0;3.0,4.0"),
+    );
+    from_server(&mut s, "R\tPTE");
+    sent(&mut s);
+    s.run("BenillaKartPub_Ask(BenillaKartTrack('my:goldshire-ring'))")
+        .unwrap();
+    assert!(s
+        .eval::<bool>("return StaticPopup_Visible('BENILLA_KART_REPUBLISH_TRACK') ~= nil")
+        .unwrap());
+    assert!(sent(&mut s).is_empty(), "nothing sent before the answer");
+    s.run("StaticPopup1Button1:Click()").unwrap();
+    let pubs = sent(&mut s);
+    assert!(
+        pubs.len() == 1 && pubs[0].starts_with("KARTCRAFT\tR\tPub\tGoldshire Ring\t"),
+        "{pubs:?}"
     );
 }
 

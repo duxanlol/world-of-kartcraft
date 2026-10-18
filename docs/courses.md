@@ -110,8 +110,10 @@ gets its marshal at the start's height, not the terrain's).
 
 The track editor (the minimap's map button, `kart/track_edit.rs`) flies the free camera. It
 opens on the Move cursor, which places nothing: a press on the start, a checkpoint or the grid
-drags it (Q/E and the wheel turn and size a dragged gate). The bar's tools place where the cursor points (a left click, or Fire at the screen's centre): the start (the
-first checkpoint), then the checkpoints in driving order, each gate turned with the middle mouse
+drags it (Q/E and the wheel turn and size a dragged gate). Edit checkpoint picks one with a
+click and gives it a new number (1, the start, to the count; the others move up or down a
+place), and Redo puts back what Undo took until a new gate is placed. The bar's tools place where the cursor points (a left click, or Fire at the screen's centre): the checkpoints in driving order, the
+first placed the start, each gate turned with the middle mouse
 held, and optionally a starting grid, facing the way the camera looks. A card on the left lists
 the keys. Its bar names the track, picks sprint, one lap or three, runs a test lap and saves.
 A test lap asks the server to take the kart onto its grid (`R\tTG\t<x>\t<y>\t<o>`, the
@@ -123,7 +125,7 @@ draft. A saved track is one course object in this file's form, in
 `checkpoints` and `grid` (`x`, `y`, `z`, `o`), with no `marshal`. The track browser lists the
 saved tracks after the courses (right-click the editor's button, "My tracks", for them alone)
 and runs a test lap of one, or Edit opens it in the editor again (saved under the same name, it
-replaces the file). A publish or a take-down sends the author the fresh list at once. `grid` is the editor's alone for now: `pack.py` and the server
+replaces the file, after the bar asks; a publish over one of ours of that name asks too). A publish or a take-down sends the author the fresh list at once. `grid` is the editor's alone for now: `pack.py` and the server
 ignore it and line a race up behind the start. In the browser our own track's Delete takes its
 published copy down (`R\tPubDN\t<name>`: ours of that name, as a publish replaces it) and removes
 its file, and Publish sends it to the server (`R\tPub`, `Kartcraft.cpp` "Player tracks": the
@@ -134,7 +136,7 @@ Race Finder's Player tracks tab (each with its good and bad votes, sorted newest
 rating or by name) queues for a race on one (by that key; never in "any" or a zone)
 or opens its time trial (`R\tTB\tpt-<id>`), with records kept as for any course, lined up on its
 own grid where it has one. Q and E, or the middle mouse held, turn the gate about to be placed,
-and the mouse wheel widens or narrows it (`gate`, 6 to 45 yards: the server's reach). A
+and the mouse wheel widens or narrows it (`gate`, 2 to 45 yards: the server's reach). A
 publish carries each gate as `x,y[,o[,w]]` (`o` empty where only the width `w` follows), and so
 do the server's `PT` lines, so a test lap or race on a player track has its gates' facings and
 widths.
