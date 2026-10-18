@@ -2381,7 +2381,7 @@ namespace Kartcraft
     };
 
     static HopCourse const HOP_COURSES[] = {
-        { "skyhop", { -5651.06f, -4029.94f, -51.8f }, 1, 9000 },
+        { "skyhop", { -5651.06f, -4029.94f, -23.8f }, 1, 9000 },
     };
     // How near the goal (yards) a finish is told from.
     constexpr float HOP_GOAL_RADIUS = 30.f;

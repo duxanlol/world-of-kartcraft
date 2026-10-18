@@ -39,16 +39,18 @@ ramp(-6150, -4070, GROUND, 0, 18, 10, 6, ORANGE)
 pad(-6172, -4070, GROUND, 0)
 
 # ── Skyhop: a launch ramp up onto floating platforms, gaps the hop must clear at speed ──
-start = (-6178.0, -4030.0)
+# The climb: 35 up over 160 (12 degrees, a climb and not a launcher), so the platforms float clear
+# of anything on the ground; it starts back far enough that its high edge stays at x -6134.
+RISE, CLIMB = 35, 160
+start = (-6134.0 - 12 - CLIMB, -4030.0)
 o = 0.0
 fwd = lambda o: (math.cos(o), math.sin(o))
 x, y = start
 gates.append({'x': x, 'y': y, 'z': GROUND, 'r': 8})
-# The ramp up: 32 long, 7 up (13 degrees, a climb and not a launcher).
-lx, ly = x + 12 + 16, y
-ramp(lx, ly, GROUND, o, 32, 10, 7, ORANGE)
-top = GROUND + 7
-edge = (lx + 16, ly)  # the ramp's high edge
+lx, ly = x + 12 + CLIMB / 2, y
+ramp(lx, ly, GROUND, o, CLIMB, 10, RISE, ORANGE)
+top = GROUND + RISE
+edge = (lx + CLIMB / 2, ly)  # the ramp's high edge
 # (length, width, gap, rise, lateral shift, turn before it, pad on it)
 PLATFORMS = [
     # The first half: gaps of 9 to 13 yards (a hop at full speed clears 15), two gentle turns.
