@@ -135,8 +135,9 @@ pub(super) fn release_post_snap_hold(
         t == (tx as i32, ty as i32)
     });
     // Residency means this map's own tile (a WMO-only map's one building) is spawned, which a
-    // swap reaches only after draining every tile of the map we left.
-    if p.focus_resident && p.total > 0 && focus_matches {
+    // swap reaches only after draining every tile of the map we left; or the map has no tile
+    // there at all (`focus_void`), where nothing will ever arrive and the stall budget decides.
+    if p.focus_resident && (p.total > 0 || p.focus_void) && focus_matches {
         player.world_stale = false;
     }
     // Any counter moving is the destination still arriving; tracked every frame, so the first
@@ -325,6 +326,27 @@ mod tests {
         assert!(
             !settling(&mut app),
             "a dead stream must not hold the body (and the screen) forever"
+        );
+    }
+
+    /// A teleport off the map's grid (a coordinate's sign mistyped) lands where the WDT authors no
+    /// tile: nothing will stream, so the stall budget lets the body go instead of holding it, and
+    /// the loading cover, forever.
+    #[test]
+    fn a_focus_off_the_map_s_grid_is_let_go_after_the_stall_budget() {
+        let mut app = app();
+        app.world_mut().resource_mut::<Player>().world_stale = true;
+        for _ in 0..=(2.0 * SETTLE_TIMEOUT) as usize {
+            step(&mut app, 1.0, |p| {
+                p.total = 0;
+                p.scene_ready = false;
+                p.focus_resident = true;
+                p.focus_void = true;
+            });
+        }
+        assert!(
+            !settling(&mut app),
+            "held over ground that will never stream"
         );
     }
 

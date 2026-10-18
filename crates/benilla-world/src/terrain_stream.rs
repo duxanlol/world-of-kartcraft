@@ -190,6 +190,9 @@ pub struct WorldLoadProgress {
     /// The focus tile these facts are about. The settle release refuses on a mismatch with the
     /// avatar's own tile, so residency for one tile never unfreezes a body on another.
     pub focus_tile: Option<(i32, i32)>,
+    /// The map's WDT has answered and authors no tile anywhere around the focus: nothing will
+    /// ever stream there (a teleport off the map's grid), so the world has arrived as it is.
+    pub focus_void: bool,
     /// Latched once the load reads fully ready, freezing the counts until a new load re-arms it;
     /// [`Self::focus_tile`] and [`Self::focus_resident`] stay live every frame regardless.
     pub complete: bool,
@@ -205,15 +208,17 @@ impl WorldLoadProgress {
         }
     }
 
-    /// Every wanted unit is resident; `total == 0` is a frame before the window, never done.
+    /// Every wanted unit is resident (`total == 0` is a frame before the window, never done); or
+    /// nothing is wanted because the map has no tile there ([`Self::focus_void`]), which is as
+    /// ready as it will ever be.
     pub fn is_ready(&self) -> bool {
-        self.total > 0 && self.ready >= self.total
+        (self.total > 0 && self.ready >= self.total) || self.focus_void
     }
 
     /// The scene term with no collider, merge or retained-pass backlog: what the loading cover and
     /// the settle release key on.
     pub fn presentable(&self) -> bool {
-        self.scene_ready
+        (self.scene_ready || self.focus_void)
             && self.colliders_pending == 0
             && self.merge_pending == 0
             && self.gx_pending == 0
@@ -809,6 +814,7 @@ fn stream_terrain(
     let was_paced = std::mem::replace(&mut state.was_paced, focus.paced);
     if let Some(p) = load_progress.as_mut() {
         p.focus_tile = Some((cx, cy));
+        p.focus_void = wdt_index.is_some() && !state.global_wmo && desired.is_empty();
         // Judged from the desired set, so a desired tile not yet requested is not there; ground
         // the WDT never authors counts as resident, or the wait would never end.
         p.focus_resident = if desired.contains(&(cx, cy)) {
