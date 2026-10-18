@@ -331,7 +331,7 @@ const fn terrain(file: &'static str, id: usize, reference: &'static str) -> Soun
     }
 }
 
-pub const SOUNDS: [SoundSpec; 58] = [
+pub const SOUNDS: [SoundSpec; 56] = [
     SoundSpec {
         file: "engine.wav",
         source: Source::Engine(ENGINE_BALANCED_P1),
@@ -524,9 +524,6 @@ pub const SOUNDS: [SoundSpec; 58] = [
     // distortion (HOWL_OtherFX.c:19-21, namespace_Howl.h:65).
     weapon("countdown.wav", 0x45, false, "DotLights.c:26 DOT_LIGHT_FX_COUNTDOWN = 0x45: OtherFX_Play(0x45, 0) as each red start light comes on (DotLights.c:108, 121, 134)"),
     weapon("go.wav", 0x46, false, "DotLights.c:27 DOT_LIGHT_FX_GREEN = 0x46: OtherFX_Play(0x46, 0) as the green start light comes on (DotLights.c:95)"),
-    // The Relic Race's end: the relic won, and "PERFECT", every time crate taken (223.c:36-37).
-    weapon("relic.wav", 0x67, false, "223.c:36 RR_RELIC_AWARD_SFX = 0x67: OtherFX_Play(0x67, 1) as the relic is awarded (223.c:446)"),
-    weapon("perfect.wav", 0x65, false, "223.c:37 RR_PERFECT_SFX = 0x65: OtherFX_Play(0x65, 1) once at the end, with the PERFECT banner, when every time crate was taken (223.c:509-531)"),
 ];
 
 /// OtherFX distortion pitch factor (`distortConst_OtherFX[d] / 0x10000`).

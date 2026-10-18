@@ -44,9 +44,7 @@ pub enum Cue {
     Countdown(bool),
     /// A ready check pops (the Race Finder's; no CTR sound).
     Ready,
-    /// A checkpoint passed: the Relic Race's "PERFECT", every time crate taken (OtherFX 0x65,
-    /// `223.c:509-531`); CTR has no checkpoint sound. Kart data converted before it has the
-    /// countdown beep, soft and pitched up.
+    /// A checkpoint passed: the countdown beep, soft and pitched up (CTR has no checkpoint sound).
     Checkpoint,
     /// A lap done, or the finish crossed: the start's green sound (CTR plays none at the line).
     Lap,
@@ -619,8 +617,6 @@ struct Bank {
     /// The start lights' red and green sounds.
     countdown: StaticSoundData,
     go: StaticSoundData,
-    /// The Relic Race's "PERFECT" (`perfect.wav`), the checkpoint's.
-    checkpoint: Option<StaticSoundData>,
     /// The weapons' one-shots and loops, those the player's audio has.
     sfx: std::collections::HashMap<Sfx, StaticSoundData>,
     roulette: Option<StaticSoundData>,
@@ -698,7 +694,6 @@ impl Bank {
             crash: one("crash", crash),
             countdown: one("countdown", beep),
             go: one("go", go_beep),
-            checkpoint: file("perfect"),
             sfx,
             roulette,
             missile,
@@ -1241,10 +1236,7 @@ impl Sounds {
                 Cue::Countdown(false) => (&bank.countdown, 1.0),
                 Cue::Countdown(true) => (&bank.go, 1.0),
                 Cue::Ready => (&bank.beep, 0.9),
-                Cue::Checkpoint => match &bank.checkpoint {
-                    Some(data) => (data, 0.8),
-                    None => (&bank.countdown, 0.35),
-                },
+                Cue::Checkpoint => (&bank.countdown, 0.35),
                 Cue::Lap => (&bank.go, 0.8),
                 Cue::Sfx(sfx, gain) => match bank.sfx.get(&sfx) {
                     Some(data) => (data, gain.clamp(0.0, 1.0)),
@@ -1254,7 +1246,7 @@ impl Sounds {
             let mut data = data.clone().volume(db(gain * sfx));
             if cue == Cue::Ready {
                 data = data.playback_rate(2.0);
-            } else if cue == Cue::Checkpoint && bank.checkpoint.is_none() {
+            } else if cue == Cue::Checkpoint {
                 data = data.playback_rate(1.5);
             }
             let _ = play(data);
