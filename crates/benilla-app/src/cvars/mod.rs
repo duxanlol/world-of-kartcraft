@@ -1976,7 +1976,8 @@ mod tests {
     /// The string-valued rows, a closed list, each default checked on its own terms: `realmName`
     /// (the reference's registered `""`, `0x882748`), `gxApi` and the kart's `KartReplay` and
     /// `KartReplays` (the replay playing and those on disk, `kart::replay`) and `KartPads` (the
-    /// controllers connected) are empty until the session writes them, and `KartPad` (the
+    /// controllers connected) and `KartFlag` (the flag flown, `kartcraft::goods`) are empty until
+    /// the session writes them, and `KartPad` (the
     /// controller chosen) is empty for any; `gxResolution`, `realmList` and the kart garage's `KartClass` and `KartRacer` pass
     /// their observers' parsers ([`crate::video::parse_resolution`],
     /// [`crate::realmlist::normalize`], [`kartcraft::class_named`], `ctr-extract`'s racers).
@@ -1992,6 +1993,7 @@ mod tests {
             strings,
             vec![
                 "KartClass",
+                "KartFlag",
                 "KartFreeCam",
                 "KartNavGpsColor",
                 "KartPad",
@@ -2017,6 +2019,7 @@ mod tests {
         assert_eq!(default_of("gxApi"), "");
         assert_eq!(default_of("KartNavGpsColor"), "ffbf26");
         assert_eq!(default_of("KartPad"), "");
+        assert_eq!(default_of("KartFlag"), "");
         assert_eq!(default_of("KartPads"), "");
         assert_eq!(default_of("KartReplay"), "");
         assert_eq!(default_of("KartReplays"), "");

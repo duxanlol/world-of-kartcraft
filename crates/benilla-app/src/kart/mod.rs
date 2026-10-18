@@ -715,7 +715,9 @@ pub(crate) fn plugin(app: &mut App) {
         // Astral Caches' beams.
         .add_systems(
             Update,
-            (caches::touch, caches::beam).after(crate::net::apply_net_updates),
+            (caches::touch, caches::beam)
+                .chain()
+                .after(crate::net::apply_net_updates),
         )
         .init_resource::<skins::SkinPreview>()
         .add_observer(skins::on_cvar)
@@ -743,7 +745,7 @@ pub(crate) fn plugin(app: &mut App) {
                 // The controller chosen, before anything reads the pads.
                 (input::log_pads, pad_choice::update).chain(),
                 race_name,
-                (pads::feed, props::lay),
+                (pads::feed, props::lay).chain(),
                 showcase::hook,
                 // The ground under the pads is read through the mover's trace, after its doors.
                 kartcraft::pads::lay.after(crate::go_anim::publish_ghost_door_exclusions),
