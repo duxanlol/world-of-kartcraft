@@ -18,6 +18,7 @@ mod caches;
 pub(crate) mod freecam;
 mod garage;
 mod ghost;
+mod goods_preview;
 pub(crate) mod gps;
 mod ground;
 pub(crate) mod marshals;
@@ -723,6 +724,17 @@ pub(crate) fn plugin(app: &mut App) {
         .add_observer(skins::on_cvar)
         // The shop's preview unit stood up (after the wire's own units land), then the pane's yaw
         // read once clicks are in (after the VM's tick), both before the booth bakes them.
+        .init_resource::<goods_preview::GoodPreview>()
+        .add_observer(goods_preview::on_cvar)
+        .add_systems(Startup, goods_preview::setup)
+        .add_systems(
+            Update,
+            // After the drive's own kart spawners (the ghost, the replay, our kart).
+            (goods_preview::yaw, goods_preview::update)
+                .chain()
+                .after(crate::ui_script::UiInput)
+                .after(crate::player::PlayerControlSet),
+        )
         .add_systems(
             Update,
             (skins::update, crate::ui_kart::skin_yaw)

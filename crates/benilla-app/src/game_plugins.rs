@@ -725,14 +725,16 @@ pub(crate) mod schedule_tests {
     ///   (`kart::caches::{touch, beam}`) read the chests' `GlobalTransform` and the kart's view
     ///   against their writers (seven pairs: `live_display::refresh_live_display`,
     ///   `collider::finish_colliders`, `view::publish_camera_pose`, `kart::update`): a frame-old
-    ///   chest is touched, or gets its beam, a frame late.
+    ///   chest is touched, or gets its beam, a frame late. The shop's goods preview
+    ///   (`kart::goods_preview::{yaw, update}`) has the skin feeds' two pairs exactly, against the
+    ///   terrain colliders' finish: a kart far below every collider, and a yaw read.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
     #[cfg(not(target_os = "macos"))]
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_116;
-    /// macOS: eight more (than the 5,116 elsewhere), all the native cursor's (`cursor::macos::drive`, eleven pairs in the
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_118;
+    /// macOS: eight more (than the 5,118 elsewhere), all the native cursor's (`cursor::macos::drive`, eleven pairs in the
     /// dump). Unlike `cursor::other::drive`, it reads `CameraControl`, `Cinematic` and the window
     /// focus to hide the arrow while the camera is dragged or a cinematic plays, against their
     /// writers (`player::controller::control`, `camera::latch_world_mouse`,
@@ -740,7 +742,7 @@ pub(crate) mod schedule_tests {
     /// `ui_logout::drain_logout`, `cinematic::{drive, start_pending, take_trigger}`): a frame-old
     /// value hides or shows the cursor a frame late, which no one sees.
     #[cfg(target_os = "macos")]
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_124;
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_126;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

@@ -822,6 +822,13 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "",
         "Kartcraft's own — the kart's flag; 1.12 has no kart",
     ),
+    // The shop's picked good (`kart::goods_preview`), a key the goods pane shows, empty none; for
+    // the session only.
+    ours(
+        "KartGoodPreview",
+        "",
+        "Kartcraft's own — the shop's goods preview; 1.12 has no kart",
+    ),
     // The skin shop's picked skin, a `CreatureDisplayInfo` id the shop's model pane shows
     // (`kart::skins`), `0` while the shop is closed; for the session only.
     ours(

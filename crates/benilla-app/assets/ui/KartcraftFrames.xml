@@ -3982,6 +3982,7 @@
             local item = BenillaKartShop_Item(i)
             -- The pane turns a skin; a kart or a flag shows in the garage, and on the kart.
             SetCVar("KartSkinPreview", item.display or 0)
+            SetCVar("KartGoodPreview", (item.kind == "kart" or item.kind == "flag") and item.key or "")
             BenillaKartShop_Refresh()
         end
 
@@ -4015,6 +4016,7 @@
             local item = BenillaKartShop_Item(shop.selected)
             local buy, wear = BenillaKartShopFrameBuy, BenillaKartShopFrameWear
             BenillaKartShopFrameSkinName:SetText(item.name)
+            if item.kind == "kart" or item.kind == "flag" then BenillaKartShopFrameGood:Show() else BenillaKartShopFrameGood:Hide() end
             if item.kind == "crate" then
                 BenillaKartShopFrameModel:Hide()
                 if not BenillaKartCrate.reel then BenillaKartShopFrameAbout:SetText(BenillaKartCrate_About()) end
@@ -5743,6 +5745,40 @@
                     </Button>
                 </Frames>
             </PlayerModel>
+            <!-- The picked kart or flag, drawn by its own camera (kart/goods_preview.rs, KartGoodPreview). -->
+            <!-- Under the good's words, which stand where a skin's pane does. -->
+            <PlayerModel name="$parentGood" hidden="true">
+                <Size><AbsDimension x="230" y="210"/></Size>
+                <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-112"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnLoad>Model_OnLoad()</OnLoad>
+                    <OnUpdate>Model_OnUpdate(arg1, this)</OnUpdate>
+                </Scripts>
+                <Frames>
+                    <Button name="$parentRotateLeftButton">
+                        <Size><AbsDimension x="35" y="35"/></Size>
+                        <Anchors><Anchor point="BOTTOMLEFT"/></Anchors>
+                        <Scripts>
+                            <OnLoad>this:RegisterForClicks("LeftButtonDown", "LeftButtonUp")</OnLoad>
+                            <OnClick>Model_RotateLeft(this:GetParent())</OnClick>
+                        </Scripts>
+                        <NormalTexture file="Interface\Buttons\UI-RotationLeft-Button-Up"/>
+                        <PushedTexture file="Interface\Buttons\UI-RotationLeft-Button-Down"/>
+                        <HighlightTexture file="Interface\Buttons\ButtonHilight-Round" alphaMode="ADD"/>
+                    </Button>
+                    <Button name="$parentRotateRightButton">
+                        <Size><AbsDimension x="35" y="35"/></Size>
+                        <Anchors><Anchor point="LEFT" relativeTo="$parentRotateLeftButton" relativePoint="RIGHT"/></Anchors>
+                        <Scripts>
+                            <OnLoad>this:RegisterForClicks("LeftButtonDown", "LeftButtonUp")</OnLoad>
+                            <OnClick>Model_RotateRight(this:GetParent())</OnClick>
+                        </Scripts>
+                        <NormalTexture file="Interface\Buttons\UI-RotationRight-Button-Up"/>
+                        <PushedTexture file="Interface\Buttons\UI-RotationRight-Button-Down"/>
+                        <HighlightTexture file="Interface\Buttons\ButtonHilight-Round" alphaMode="ADD"/>
+                    </Button>
+                </Frames>
+            </PlayerModel>
             <Button name="$parentBuy" inherits="UIPanelButtonTemplate" text="Buy">
                 <Size><AbsDimension x="112" y="22"/></Size>
                 <Anchors><Anchor point="TOPLEFT" relativeTo="$parentModel" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-48"/></Offset></Anchor></Anchors>
@@ -5774,6 +5810,7 @@
             <OnHide>
                 PlaySound("igMainMenuClose")
                 SetCVar("KartSkinPreview", "0")
+                SetCVar("KartGoodPreview", "")
             </OnHide>
             <OnDragStart>this:StartMoving()</OnDragStart>
             <OnDragStop>this:StopMovingOrSizing()</OnDragStop>

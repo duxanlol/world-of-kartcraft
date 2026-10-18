@@ -96,12 +96,15 @@ const STABLE_SLOT: &str = "stable";
 /// World of Kartcraft's skin shop pane: a skin nobody wears yet, on a hidden local unit
 /// ([`SkinBooth`], `crate::kart::skins`).
 const SKIN_SLOT: &str = "kartskin";
+/// World of Kartcraft's goods pane: a custom kart or a flag, drawn by its own camera
+/// (`crate::kart::goods_preview`).
+pub(crate) const KART_GOOD_SLOT: &str = "kartgood";
 
 /// Which booth a `<Model>`/`<PlayerModel>` pane samples, keyed by the pane's global name from the
 /// stock file (`PaperDollFrame.xml`, `TabardFrame.xml`, `PetPaperDollFrame.xml`,
 /// `InspectPaperDollFrame.xml`, `PetStable.xml`, `DressUpFrame.xml`,
 /// `Blizzard_AuctionDressUp.xml`). A pane not in this table draws nothing.
-const MODEL_PANE_BOOTHS: [(&str, &str); 8] = [
+const MODEL_PANE_BOOTHS: [(&str, &str); 9] = [
     ("CharacterModelFrame", PAPERDOLL_SLOT),
     // The tabard designer's pane: the paper doll's bake, wearing the design under preview.
     ("TabardModel", PAPERDOLL_SLOT),
@@ -115,6 +118,7 @@ const MODEL_PANE_BOOTHS: [(&str, &str); 8] = [
     ("AuctionDressUpModel", dressup::DRESSUP_SLOT),
     // World of Kartcraft's skin shop (`KartcraftFrames.xml`).
     ("BenillaKartShopFrameModel", SKIN_SLOT),
+    ("BenillaKartShopFrameGood", KART_GOOD_SLOT),
 ];
 
 /// The booth a named model pane samples, or `None` for a pane no window has claimed.
@@ -156,6 +160,8 @@ pub(crate) const UI_MODELS_LAYER: usize = MINIMAP_COMPOSITE_LAYER + 1;
 pub(crate) const UI_MODEL_CAM_LAYER_BASE: usize = UI_MODELS_LAYER + 1;
 /// How many perspective model panes draw at once; a ninth draws nothing.
 pub(crate) const UI_MODEL_CAM_LAYERS: usize = 8;
+/// The kart goods pane's layer (`crate::kart::goods_preview`), past the model pane block.
+pub(crate) const KART_GOOD_LAYER: usize = UI_MODEL_CAM_LAYER_BASE + UI_MODEL_CAM_LAYERS;
 
 // A booth camera's layer is its identity, for rendering and for the emitter-to-camera match.
 const _: () = assert!(
