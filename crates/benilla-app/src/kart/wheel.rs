@@ -8,6 +8,8 @@
 //! as the arm goes. The fingers close as
 //! on a weapon's grip.
 
+use std::sync::Arc;
+
 use benilla_world::rig_anim::RigPose;
 use bevy::diagnostic::FrameCount;
 use bevy::math::Affine3A;
@@ -117,6 +119,38 @@ pub(crate) struct Wheel {
     pub(crate) ring: Ring,
     pub(crate) frame: u32,
     bones: Option<Bones>,
+    /// A made chair sit's bones and their locals (`seat::chair_legs`), empty for a model that
+    /// authors its own, and each one's animated and last-written local.
+    sit: Arc<[(usize, Transform)]>,
+    sat: Vec<(Transform, Option<Transform>)>,
+}
+
+impl Wheel {
+    /// The made sit's bones back on this frame's animated pose.
+    fn restore_sit(&mut self, rig: &mut RigPose) {
+        if self.sat.len() != self.sit.len() {
+            self.sat = vec![(Transform::IDENTITY, None); self.sit.len()];
+        }
+        for (&(bone, _), (base, last)) in self.sit.iter().zip(&mut self.sat) {
+            let Some(cur) = rig.locals.get_mut(bone) else {
+                continue;
+            };
+            if Some(*cur) != *last {
+                *base = *cur;
+            }
+            *cur = *base;
+        }
+    }
+
+    /// The made sit's bones held over the animated pose.
+    fn hold_sit(&mut self, rig: &mut RigPose) {
+        for (&(bone, held), (_, last)) in self.sit.iter().zip(&mut self.sat) {
+            if let Some(cur) = rig.locals.get_mut(bone) {
+                *cur = held;
+                *last = Some(held);
+            }
+        }
+    }
 }
 
 /// A bone the solve turns, and the rotations it composed on (the animated one) and last wrote:
@@ -201,12 +235,14 @@ impl Bones {
     }
 }
 
-/// The seat code's per-frame mark: this body drives, steering `steer`, its kart's wheel `ring`.
+/// The seat code's per-frame mark: this body drives, steering `steer`, its kart's wheel `ring`,
+/// seated in `sit` where its model authors no chair sit of its own (`seat::SeatFit::legs`).
 pub(crate) fn hold(
     commands: &mut Commands,
     body: Entity,
     steer: f32,
     ring: Ring,
+    sit: Arc<[(usize, Transform)]>,
     frame: &FrameCount,
 ) {
     // Kept, not replaced: its bones hold the animated pose the solve composes on, and a fresh
@@ -215,16 +251,26 @@ pub(crate) fn hold(
     commands
         .entity(body)
         .entry::<Wheel>()
-        .and_modify(move |mut w| {
-            w.steer = steer;
-            w.ring = ring;
-            w.frame = frame;
+        .and_modify({
+            let sit = sit.clone();
+            move |mut w| {
+                w.steer = steer;
+                w.ring = ring;
+                w.frame = frame;
+                // A new model's sit holds bones of its own.
+                if !Arc::ptr_eq(&w.sit, &sit) {
+                    w.sit = sit;
+                    w.sat.clear();
+                }
+            }
         })
         .or_insert(Wheel {
             steer,
             ring,
             frame,
             bones: None,
+            sit,
+            sat: Vec::new(),
         });
 }
 
@@ -341,17 +387,22 @@ pub(crate) fn grip_wheel(
         {
             wheel.bones = find_bones(rig);
         }
-        let Some(bones) = wheel.bones.as_mut() else {
-            continue;
-        };
-        bones.restore(rig);
+        wheel.restore_sit(rig);
+        if let Some(bones) = wheel.bones.as_mut() {
+            bones.restore(rig);
+        }
         if frame.0.wrapping_sub(wheel.frame) > 1 {
             // Out of the kart: the animated pose stands, and the mark goes.
             rig.pose_dirty = true;
             commands.entity(entity).remove::<Wheel>();
             continue;
         }
-        reach_wheel(rig, bones, &wheel.ring, wheel.steer);
+        // A made sit first: the arms reach from the body it seats.
+        wheel.hold_sit(rig);
+        let (steer, ring) = (wheel.steer, wheel.ring);
+        if let Some(bones) = wheel.bones.as_mut() {
+            reach_wheel(rig, bones, &ring, steer);
+        }
         rig.pose_dirty = true;
     }
 }
@@ -707,7 +758,7 @@ mod tests {
             (
                 |mut f: ResMut<FrameCount>| f.0 += 1,
                 move |mut commands: Commands, f: Res<FrameCount>| {
-                    hold(&mut commands, driver, 0.0, ring, &f);
+                    hold(&mut commands, driver, 0.0, ring, Default::default(), &f);
                 },
                 grip_wheel,
             )

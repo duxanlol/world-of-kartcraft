@@ -3998,6 +3998,12 @@
             { key = "tyrande", name = "Tyrande Whisperwind", short = "Tyrande", display = 7274, price = 200, icon = "INV_Misc_Head_Elf_02" },
             { key = "mekkatorque", name = "High Tinker Mekkatorque", short = "Mekkatorque", display = 7006, price = 200, icon = "INV_Misc_Head_Gnome_01" },
             { key = "vancleef", name = "Edwin VanCleef", short = "VanCleef", display = 2029, price = 200, icon = "INV_Misc_Bandana_03" },
+            { key = "gnarlpine", name = "Gnarlpine Furbolg", short = "Gnarlpine", display = 6800, price = 150, icon = "INV_Misc_MonsterClaw_04" },
+            { key = "murloc", name = "Murloc", short = "Murloc", display = 617, price = 150, icon = "INV_Misc_Head_Murloc_01" },
+            { key = "kobold", name = "Kobold", short = "Kobold", display = 2299, price = 150, icon = "INV_Misc_Head_Kobold_01" },
+            { key = "razormane", name = "Razormane Quillboar", short = "Razormane", display = 1252, price = 150, icon = "INV_Misc_Head_Quillboar_01" },
+            { key = "goblin", name = "Goblin", short = "Goblin", display = 1233, price = 150, icon = "INV_Misc_Bomb_04" },
+            { key = "zombie", name = "Zombie", short = "Zombie", display = 1200, price = 150, icon = "Ability_Racial_Cannibalize" },
         }
         -- World of Kartcraft's own cosmetics, after the skins: custom karts and flags (the
         -- server's GOODS, Kartcraft.cpp, and the client's built-in models, kartcraft goods.rs;
@@ -4030,9 +4036,27 @@
 
         -- The picked cell, and the server's word: our tokens (nil before it answers), the skins we
         -- own (by key) and the one we wear ("" our own body).
-        BenillaKartShop = { selected = 1, owned = {}, worn = "" }
-        -- The grid's cells (BenillaKartShopFrameSkin1..).
+        BenillaKartShop = { selected = 1, page = 1, owned = {}, worn = "" }
+        -- The grid's cells (BenillaKartShopFrameSkin1..), a page of the shop's items.
         BENILLA_KART_SHOP_CELLS = 16
+
+        -- The item a cell of the page shown holds.
+        function BenillaKartShop_Index(cell)
+            return (BenillaKartShop.page - 1) * BENILLA_KART_SHOP_CELLS + cell
+        end
+
+        function BenillaKartShop_Pages()
+            return math.max(1, math.ceil(BenillaKartShop_Count() / BENILLA_KART_SHOP_CELLS))
+        end
+
+        -- A page on or back, as the spellbook's buttons turn it.
+        function BenillaKartShop_Turn(by)
+            local page = BenillaKartShop.page + by
+            if page < 1 or page > BenillaKartShop_Pages() then return end
+            BenillaKartShop.page = page
+            PlaySound("igAbiliityPageTurn")
+            BenillaKartShop_Refresh()
+        end
 
         -- The goods sold in the shop (tier 0); the rest are found only in Mystery Crates.
         function BenillaKartShop_Sold()
@@ -4152,13 +4176,24 @@
             local shop = BenillaKartShop
             BenillaKartShopFrameTokens:SetText("Kartcraft Tokens: " .. (shop.tokens or "?"))
             local count = BenillaKartShop_Count()
-            -- The grid has room for more than are sold: the rest of it stays empty.
-            for i = count + 1, BENILLA_KART_SHOP_CELLS do
-                getglobal("BenillaKartShopFrameSkin" .. i):Hide()
+            local pages = BenillaKartShop_Pages()
+            if shop.page > pages then shop.page = pages end
+            -- The page's buttons and its number, as the spellbook's, shown where there are two.
+            BenillaKartShopFramePageText:SetText(pages > 1 and format("Page %d of %d", shop.page, pages) or "")
+            for _, b in ipairs({ BenillaKartShopFramePrevPage, BenillaKartShopFrameNextPage }) do
+                if pages > 1 then b:Show() else b:Hide() end
             end
-            for i = 1, math.min(count, BENILLA_KART_SHOP_CELLS) do
+            if shop.page > 1 then BenillaKartShopFramePrevPage:Enable() else BenillaKartShopFramePrevPage:Disable() end
+            if shop.page < pages then BenillaKartShopFrameNextPage:Enable() else BenillaKartShopFrameNextPage:Disable() end
+            -- The last page has room for more than are sold: the rest of it stays empty.
+            local shown = math.min(count - BenillaKartShop_Index(0), BENILLA_KART_SHOP_CELLS)
+            for c = shown + 1, BENILLA_KART_SHOP_CELLS do
+                getglobal("BenillaKartShopFrameSkin" .. c):Hide()
+            end
+            for c = 1, shown do
+                local i = BenillaKartShop_Index(c)
                 local item = BenillaKartShop_Item(i)
-                local cell = "BenillaKartShopFrameSkin" .. i
+                local cell = "BenillaKartShopFrameSkin" .. c
                 getglobal(cell):Show()
                 getglobal(cell .. "Icon"):SetTexture("Interface\\Icons\\" .. item.icon)
                 getglobal(cell .. "Name"):SetText(item.short)
@@ -5792,7 +5827,7 @@
         </Layers>
         <HighlightTexture file="Interface\QuestFrame\UI-QuestLogTitleHighlight" alphaMode="ADD"/>
         <Scripts>
-            <OnClick>BenillaKartShop_Select(this:GetID())</OnClick>
+            <OnClick>BenillaKartShop_Select(BenillaKartShop_Index(this:GetID()))</OnClick>
         </Scripts>
     </Button>
 
@@ -5842,6 +5877,10 @@
                 <FontString inherits="GameFontDisableSmall" justifyH="LEFT" text="Kartcraft Tokens are earned on the road. Courier deliveries pay them: see the innkeepers and the neutral towns' couriers.">
                     <Size><AbsDimension x="336" y="28"/></Size>
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-392"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentPageText" inherits="GameFontNormal">
+                    <Size><AbsDimension x="236" y="20"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="72" y="-430"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentSkinName" inherits="GameFontNormalLarge">
                     <Size><AbsDimension x="230" y="20"/></Size>
@@ -5906,6 +5945,29 @@
             </Button>
             <Button name="$parentSkin16" inherits="BenillaKartShopSkinTemplate" id="16">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="272" y="-302"/></Offset></Anchor></Anchors>
+            </Button>
+            <!-- The grid's pages, turned as the spellbook's (SpellBookFrame.xml's page buttons). -->
+            <Button name="$parentPrevPage">
+                <Size><AbsDimension x="32" y="32"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-424"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnClick>BenillaKartShop_Turn(-1)</OnClick>
+                </Scripts>
+                <NormalTexture file="Interface\Buttons\UI-SpellbookIcon-PrevPage-Up"/>
+                <PushedTexture file="Interface\Buttons\UI-SpellbookIcon-PrevPage-Down"/>
+                <DisabledTexture file="Interface\Buttons\UI-SpellbookIcon-PrevPage-Disabled"/>
+                <HighlightTexture file="Interface\Buttons\UI-Common-MouseHilight" alphaMode="ADD"/>
+            </Button>
+            <Button name="$parentNextPage">
+                <Size><AbsDimension x="32" y="32"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="324" y="-424"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnClick>BenillaKartShop_Turn(1)</OnClick>
+                </Scripts>
+                <NormalTexture file="Interface\Buttons\UI-SpellbookIcon-NextPage-Up"/>
+                <PushedTexture file="Interface\Buttons\UI-SpellbookIcon-NextPage-Down"/>
+                <DisabledTexture file="Interface\Buttons\UI-SpellbookIcon-NextPage-Disabled"/>
+                <HighlightTexture file="Interface\Buttons\UI-Common-MouseHilight" alphaMode="ADD"/>
             </Button>
             <!-- The picked skin, drawn by the engine (kart/skins.rs, KartSkinPreview). -->
             <PlayerModel name="$parentModel">

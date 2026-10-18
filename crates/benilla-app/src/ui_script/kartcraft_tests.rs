@@ -3746,15 +3746,25 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     assert_eq!(preview(&mut s), "3597");
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin1Name"), "Magni");
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin10Name"), "VanCleef");
-    // Ten skins, then the four goods, then the crate: the grid's last cell stays empty.
+    // Sixteen skins fill the first page, then the four goods and the crate the second, the rest
+    // of its grid empty.
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin16Name"), "Zombie");
+    assert_eq!(text(&mut s, "BenillaKartShopFramePageText"), "Page 1 of 2");
+    assert!(!enabled(&mut s, "BenillaKartShopFramePrevPage"));
+    s.run("BenillaKartShopFrameNextPage:Click()").unwrap();
+    assert_eq!(text(&mut s, "BenillaKartShopFramePageText"), "Page 2 of 2");
+    assert!(!enabled(&mut s, "BenillaKartShopFrameNextPage"));
     assert_eq!(
-        text(&mut s, "BenillaKartShopFrameSkin11Name"),
+        text(&mut s, "BenillaKartShopFrameSkin1Name"),
         "Student Flag"
     );
-    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin12Name"), "Fel Kart");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin2Name"), "Fel Kart");
     assert!(!s
-        .eval::<bool>("return BenillaKartShopFrameSkin16:IsVisible() == 1")
+        .eval::<bool>("return BenillaKartShopFrameSkin6:IsVisible() == 1")
         .unwrap());
+    // The picked skin stays picked on another page.
+    assert_eq!(preview(&mut s), "3597");
+    s.run("BenillaKartShopFramePrevPage:Click()").unwrap();
     assert_eq!(
         text(&mut s, "BenillaKartShopFrameTokens"),
         "Kartcraft Tokens: ?"
@@ -3789,8 +3799,15 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     s.run("BenillaKartShopFrameWear:Click()").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tSkinWear\t"]);
 
-    // A flag: no unit in the pane, its words instead; bought, worn, flown on the kart.
-    s.run("BenillaKartShopFrameSkin11:Click()").unwrap();
+    // A creature: picked like any skin, its own display in the pane.
+    s.run("BenillaKartShopFrameSkin12:Click()").unwrap();
+    assert_eq!(preview(&mut s), "617");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkinName"), "Murloc");
+
+    // A flag, on the second page: no unit in the pane, its words instead; bought, worn, flown
+    // on the kart.
+    s.run("BenillaKartShopFrameNextPage:Click()").unwrap();
+    s.run("BenillaKartShopFrameSkin1:Click()").unwrap();
     assert_eq!(preview(&mut s), "0");
     assert!(!s
         .eval::<bool>("return BenillaKartShopFrameModel:IsVisible() == 1")
@@ -3804,14 +3821,14 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     s.run("BenillaKartShopFrameWear:Click()").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tFlagWear\tstudent"]);
     from_server(&mut s, "R\tGoods\t50\tstudent\tstudent");
-    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin11Price"), "Worn");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin1Price"), "Worn");
     assert_eq!(
         s.eval::<String>("return GetCVar('KartFlag')").unwrap(),
         "student"
     );
     // A kart: not ours, it cannot be driven; picked anyway (another character's pick), the
     // server's word puts us back in Crash's.
-    s.run("BenillaKartShopFrameSkin12:Click()").unwrap();
+    s.run("BenillaKartShopFrameSkin2:Click()").unwrap();
     assert_eq!(text(&mut s, "BenillaKartShopFrameWear"), "Drive");
     assert!(!enabled(&mut s, "BenillaKartShopFrameWear"));
     s.run("SetCVar('KartRacer', 'fel')").unwrap();
@@ -3827,12 +3844,12 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
         s.eval::<String>("return GetCVar('KartRacer')").unwrap(),
         "fel"
     );
-    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin12Price"), "Driven");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin2Price"), "Driven");
 
     // The Mystery Crate: closed with no prizes in it, then open, its odds said, one opened.
-    s.run("BenillaKartShopFrameSkin15:Click()").unwrap();
+    s.run("BenillaKartShopFrameSkin5:Click()").unwrap();
     assert_eq!(
-        text(&mut s, "BenillaKartShopFrameSkin15Name"),
+        text(&mut s, "BenillaKartShopFrameSkin5Name"),
         "Mystery Crate"
     );
     from_server(&mut s, "R\tCrateOdds\t100\t5\t0\t0\t-\t60,28,10,2\t20\t50");
@@ -3901,7 +3918,7 @@ fn the_skin_shop_sells_what_the_server_sells() {
             ))
         })
         .collect();
-    assert_eq!(client.len(), 10, "the shop's ten skins");
+    assert_eq!(client.len(), 16, "the shop's sixteen skins");
     assert_eq!(client, server);
 }
 

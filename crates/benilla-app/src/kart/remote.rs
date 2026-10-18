@@ -399,6 +399,7 @@ pub(crate) fn update(
         let fit = anims
             .zip(rig)
             .and_then(|(anims, rig)| fits.get(anims, rig, catalog));
+        let sit = fit.map_or_else(Default::default, |f| f.legs.clone());
         let scale = body.scale.x;
         (body.translation, body.rotation) = super::seat::place(
             &kart,
@@ -410,7 +411,7 @@ pub(crate) fn update(
         );
         let wheel = kartcraft::model::steering_wheel_of(&remote.racer);
         let ring = super::wheel::Ring::of(&kart, &body, wheel);
-        super::wheel::hold(&mut commands, entity, state.steer, ring, &frame);
+        super::wheel::hold(&mut commands, entity, state.steer, ring, sit, &frame);
     }
     // Karts whose drivers left the kart or our sight.
     let gone: Vec<Entity> = karts

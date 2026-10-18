@@ -1965,9 +1965,9 @@ namespace Kartcraft
 
     // ── Skins ──────────────────────────────────────────────────────────────────────────────────
     //
-    // Famous NPCs' looks, bought with Kartcraft Tokens in the client's skin shop
-    // (BenillaKartShopFrame, whose catalogue kartcraft_tests holds to this one; each a humanoid on
-    // a playable race's body, which sits in the kart: kart/seat.rs tests it) and worn as the
+    // Famous NPCs' and creatures' looks, bought with Kartcraft Tokens in the client's skin shop
+    // (BenillaKartShopFrame, whose catalogue kartcraft_tests holds to this one; each sits in the
+    // kart, a creature without the chair sit in one the client makes: kart/seat.rs tests it) and worn as the
     // character's own body: the native display, so a form or a transform still shows over it and
     // gives it back, on foot and in the kart, to everyone. Owned and worn in kartcraft_skins.
 
@@ -1989,6 +1989,12 @@ namespace Kartcraft
         { "tyrande", 7274, 200 },
         { "mekkatorque", 7006, 200 },
         { "vancleef", 2029, 200 },
+        { "gnarlpine", 6800, 150 },
+        { "murloc", 617, 150 },
+        { "kobold", 2299, 150 },
+        { "razormane", 1252, 150 },
+        { "goblin", 1233, 150 },
+        { "zombie", 1200, 150 },
     };
 
     static Skin const* FindSkin(std::string const& key)

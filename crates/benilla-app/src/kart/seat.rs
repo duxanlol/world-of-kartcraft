@@ -29,6 +29,15 @@ const KEY_ROOT: i16 = 26;
 /// The foot bones are the pelvis's lowest descendants in `Stand`, within this fraction of the
 /// pelvis's height of the lowest: the toes (or hooves), never the cloth flaps nor a tail.
 const FOOT_BAND: f32 = 0.05;
+/// How near a bone lies to a foot's mirror across the pelvis, a share of the pelvis's height, to
+/// be the other foot.
+const MIRROR_REACH: f32 = 0.15;
+/// A made sit's hip: the first joint down the leg this share of the pelvis's height out to its
+/// side.
+const HIP_SIDE: f32 = 0.05;
+/// A made sit's shin, radians forward off hanging straight down: a kart's driver reaches for the
+/// pedals, and a kobold's long shins clear the floor without a recline.
+const SHIN_FORWARD: f32 = 0.5;
 
 /// How far the lowest sole keeps above the kart's floor, meters in the kart's frame.
 pub(crate) const FLOOR_CLEARANCE: f32 = 0.01;
@@ -51,6 +60,9 @@ pub(crate) struct SeatFit {
     /// Each foot's sole (its bone's posed origin less its sole depth) less the pelvis, at every
     /// sample of the clip.
     pub feet: Vec<Vec3>,
+    /// The held bones' locals of a made chair sit ([`chair_legs`]), written over the animated pose
+    /// in the seat; empty for a model that authors its own.
+    pub legs: Arc<[(usize, Transform)]>,
 }
 
 /// Where the body goes in the kart: its origin (the kart's frame, meters before the kart's
@@ -67,6 +79,14 @@ pub(crate) struct SeatPose {
 /// Every bone's posed origin in the model frame at `t` seconds into `clip`; an unkeyed channel
 /// keeps its bind value, as the rig's evaluator does.
 pub(crate) fn posed_origins(binds: &[Vec3], parents: &[i16], clip: &PoseClip, t: f32) -> Vec<Vec3> {
+    let locals = posed_locals(binds, clip, t);
+    (0..locals.len())
+        .map(|i| Vec3::from(model_of(&locals, parents, i).translation))
+        .collect()
+}
+
+/// Every bone's local at `t` seconds into `clip`, an unkeyed channel on its bind value.
+fn posed_locals(binds: &[Vec3], clip: &PoseClip, t: f32) -> Vec<Transform> {
     let mut locals: Vec<Transform> = binds
         .iter()
         .map(|&b| Transform::from_translation(b))
@@ -85,16 +105,136 @@ pub(crate) fn posed_origins(binds: &[Vec3], parents: &[i16], clip: &PoseClip, t:
             l.scale = s;
         }
     }
-    let mut model = vec![Affine3A::IDENTITY; locals.len()];
-    for i in 0..locals.len() {
-        let parent = parents
-            .get(i)
-            .and_then(|&p| usize::try_from(p).ok())
-            .filter(|&p| p < i)
-            .map_or(Affine3A::IDENTITY, |p| model[p]);
-        model[i] = parent * locals[i].compute_affine();
+    locals
+}
+
+/// Bone `i`'s model-space affine from the locals.
+fn model_of(locals: &[Transform], parents: &[i16], i: usize) -> Affine3A {
+    let mut m = locals[i].compute_affine();
+    let mut b = parents.get(i).copied().unwrap_or(-1);
+    while let Ok(p) = usize::try_from(b) {
+        m = locals[p].compute_affine() * m;
+        b = parents.get(p).copied().unwrap_or(-1);
     }
-    model.iter().map(|m| Vec3::from(m.translation)).collect()
+    m
+}
+
+/// The chair sit for a model that authors none (a murloc, a kobold, a furbolg): from its `Stand`
+/// at the start, each leg's thigh turned level and forward from the hip and its shin
+/// [`SHIN_FORWARD`] off hanging straight down, by the wheel's two-bone solve, and the pelvis held
+/// where it starts, so the stand's breath does not bob the seated body through the floor (a
+/// quillboar's pelvis dips 0.04 yd). The held bones' locals; `None` where the legs are not found.
+pub(crate) fn chair_legs(
+    binds: &[Vec3],
+    parents: &[i16],
+    key_bones: &[i16],
+    stand: &PoseClip,
+) -> Option<Vec<(usize, Transform)>> {
+    let (pelvis, feet) = pelvis_and_feet(binds, parents, key_bones, stand)?;
+    let mut locals = posed_locals(binds, stand, 0.0);
+    let at = |locals: &[Transform], i: usize| Vec3::from(model_of(locals, parents, i).translation);
+    let parent = |i: usize| parents.get(i).and_then(|&p| usize::try_from(p).ok());
+    // Each leg once: the hip under the pelvis, the ankle over the foot, the knee the joint
+    // between them that stands furthest off the line from one to the other.
+    let mut legs: Vec<[usize; 3]> = Vec::new();
+    for &(foot, _) in &feet {
+        let mut path = vec![foot];
+        while *path.last()? != pelvis {
+            path.push(parent(*path.last()?)?);
+            if path.len() > 16 {
+                return None;
+            }
+        }
+        path.reverse();
+        // [pelvis, .., hip, .., ankle, foot]: the hip the first joint out to the pelvis's side
+        // (a murloc's leg roots on the pelvis before it); the foot its own ankle on a short leg.
+        let centre = at(&locals, pelvis);
+        let side = HIP_SIDE * centre.y;
+        let Some(h) = path
+            .iter()
+            .position(|&i| (at(&locals, i).x - centre.x).abs() > side)
+        else {
+            continue;
+        };
+        let k = if path.len() >= h + 4 {
+            path.len() - 2
+        } else {
+            path.len() - 1
+        };
+        let (hip, ankle) = (path[h], path[k]);
+        let (a, c) = (at(&locals, hip), at(&locals, ankle));
+        let line = (c - a).normalize_or_zero();
+        let off = |i: usize| {
+            let p = at(&locals, i) - a;
+            (p - line * p.dot(line)).length()
+        };
+        let Some(&knee) = path
+            .get(h + 1..k)
+            .and_then(|between| between.iter().max_by(|&&x, &&y| off(x).total_cmp(&off(y))))
+        else {
+            continue;
+        };
+        if !legs.iter().any(|l| l[0] == hip) {
+            legs.push([hip, knee, ankle]);
+        }
+    }
+    if legs.is_empty() {
+        return None;
+    }
+    // The body faces −Z in its model frame, +Y up.
+    let ahead = Vec3::NEG_Z;
+    let turn = |locals: &mut [Transform], bone: usize, r: Quat| {
+        let q_parent = parent(bone).map_or(Quat::IDENTITY, |p| {
+            model_of(locals, parents, p)
+                .to_scale_rotation_translation()
+                .1
+        });
+        let q = (q_parent.inverse() * r * q_parent * locals[bone].rotation).normalize();
+        locals[bone].rotation = q;
+    };
+    for &[hip, knee, ankle] in &legs {
+        let (a, b, c) = (at(&locals, hip), at(&locals, knee), at(&locals, ankle));
+        let (l1, l2) = (a.distance(b), b.distance(c));
+        let target =
+            a + ahead * (l1 + l2 * SHIN_FORWARD.sin()) - Vec3::Y * (l2 * SHIN_FORWARD.cos());
+        let (b2, c2) = super::wheel::two_bone(a, b, c, target, ahead + Vec3::Y);
+        let r1 = Quat::from_rotation_arc((b - a).normalize_or_zero(), (b2 - a).normalize_or_zero());
+        let c1 = a + r1 * (c - a);
+        let r2 =
+            Quat::from_rotation_arc((c1 - b2).normalize_or_zero(), (c2 - b2).normalize_or_zero());
+        turn(&mut locals, hip, r1);
+        turn(&mut locals, knee, r2);
+    }
+    // The pelvis and its ancestors but the skeleton's root, which the wheel's reach slides.
+    let mut held: Vec<usize> = legs
+        .iter()
+        .flat_map(|&[hip, knee, _]| [hip, knee])
+        .collect();
+    let mut i = pelvis;
+    while let Some(p) = parent(i) {
+        held.push(i);
+        i = p;
+    }
+    held.sort_unstable();
+    held.dedup();
+    Some(held.into_iter().map(|i| (i, locals[i])).collect())
+}
+
+/// `stand` with the made sit's bones held over it.
+pub(crate) fn chair_clip(stand: &PoseClip, held: &[(usize, Transform)]) -> PoseClip {
+    use benilla_assets::{PoseBone, PoseTrack};
+    let mut clip = stand.clone();
+    for &(bone, t) in held {
+        let bone = bone as u16;
+        clip.bones.retain(|b| b.bone != bone);
+        clip.push(PoseBone {
+            bone,
+            translation: PoseTrack::new(&[(0.0, t.translation)]),
+            rotation: PoseTrack::new(&[(0.0, t.rotation)]),
+            scale: PoseTrack::new(&[(0.0, t.scale)]),
+        });
+    }
+    clip
 }
 
 /// The pelvis bone and the foot bones under it with each one's sole depth, found in the `stand`
@@ -131,10 +271,36 @@ pub(crate) fn pelvis_and_feet(
         .iter()
         .map(|&i| standing[i].y)
         .fold(f32::INFINITY, f32::min);
-    let band = lowest + standing.get(pelvis)?.y * FOOT_BAND;
-    let feet: Vec<(usize, f32)> = legs
-        .into_iter()
+    let centre = *standing.get(pelvis)?;
+    let band = lowest + centre.y * FOOT_BAND;
+    let mut feet: Vec<usize> = legs
+        .iter()
+        .copied()
         .filter(|&i| standing[i].y <= band)
+        .collect();
+    // A staggered stance (a murloc's, a kobold's) lifts one foot over the band: on a side with no
+    // foot, each foot's mirror across the pelvis finds the other.
+    let side = |i: usize| standing[i].x > centre.x;
+    for f in feet.clone() {
+        if feet.iter().any(|&o| side(o) != side(f)) {
+            continue;
+        }
+        let p = standing[f];
+        let mirror = Vec3::new(2.0 * centre.x - p.x, p.y, p.z);
+        let near = legs
+            .iter()
+            .copied()
+            .min_by(|&a, &b| {
+                let d = |i: usize| (standing[i] - mirror).with_z(0.0).length();
+                d(a).total_cmp(&d(b))
+            })
+            .filter(|&i| (standing[i] - mirror).with_z(0.0).length() < centre.y * MIRROR_REACH);
+        if let Some(i) = near.filter(|i| !feet.contains(i)) {
+            feet.push(i);
+        }
+    }
+    let feet: Vec<(usize, f32)> = feet
+        .into_iter()
         .map(|i| (i, standing[i].y.max(0.0)))
         .collect();
     (!feet.is_empty()).then_some((pelvis, feet))
@@ -170,6 +336,7 @@ pub(crate) fn fit(
         anim,
         pelvis: pelvis_at,
         feet: rel,
+        legs: Arc::default(),
     })
 }
 
@@ -267,19 +434,40 @@ fn measure(
     };
     let (_, stand) = pose_of(STAND)?;
     let (clip, pose) = SEAT_ANIMS.iter().find_map(|&id| pose_of(id))?;
-    let f = fit(
-        rig.bind_translations(),
-        &rig.parents,
-        &rig.key_bones,
-        stand,
-        clip.anim_id,
-        pose,
-        clip.duration,
-    );
+    let binds = rig.bind_translations();
+    // A model without the chair sit gets one made from its stand.
+    let made = (clip.anim_id != SIT_CHAIR_LOW)
+        .then(|| chair_legs(binds, &rig.parents, &rig.key_bones, stand))
+        .flatten();
+    let f = match made {
+        Some(legs) => fit(
+            binds,
+            &rig.parents,
+            &rig.key_bones,
+            stand,
+            clip.anim_id,
+            &chair_clip(stand, &legs),
+            clip.duration,
+        )
+        .map(|f| SeatFit {
+            legs: legs.into(),
+            ..f
+        }),
+        None => fit(
+            binds,
+            &rig.parents,
+            &rig.key_bones,
+            stand,
+            clip.anim_id,
+            pose,
+            clip.duration,
+        ),
+    };
     info!(
-        "kart: seat fit: anim {} pelvis {:?}",
+        "kart: seat fit: anim {} pelvis {:?}, {} made leg bones",
         clip.anim_id,
-        f.as_ref().map(|f| f.pelvis)
+        f.as_ref().map(|f| f.pelvis),
+        f.as_ref().map_or(0, |f| f.legs.len())
     );
     f
 }
@@ -305,6 +493,7 @@ mod tests {
             anim: SIT_CHAIR_LOW,
             pelvis,
             feet: feet.to_vec(),
+            legs: Arc::default(),
         }
     }
 
@@ -360,9 +549,12 @@ mod tests {
 
     /// How one display sits in the kart as the game draws it (CTR's median seat at the host's
     /// model size), in the kart's frame, meters: the pose played, its seat pose, how far the
-    /// pelvis lands from the seat, and the lowest foot bone and sole over the clip.
+    /// pelvis lands from the seat, the lowest foot bone and sole over the clip, how far the feet
+    /// reach ahead of the pelvis, and whether the sit was made from the stand ([`chair_legs`]).
     struct Sitting {
         anim: u16,
+        made: bool,
+        ahead: f32,
         pose: SeatPose,
         pelvis_off: f32,
         foot: f32,
@@ -401,6 +593,11 @@ mod tests {
             .iter()
             .find_map(|&id| Some((id, clip_of(id)?)))
             .expect("a seat pose");
+        // Without the chair sit, the one made from the stand, as `measure` makes it.
+        let made = (anim != SIT_CHAIR_LOW)
+            .then(|| chair_legs(&binds, &parents, &ms.key_bones, &stand))
+            .flatten();
+        let clip = made.as_ref().map_or(clip, |legs| chair_clip(&stand, legs));
         let f = fit(
             &binds,
             &parents,
@@ -438,8 +635,16 @@ mod tests {
             .fold((f32::INFINITY, f32::INFINITY), |(a, b), (f, s)| {
                 (a.min(f), b.min(s))
             });
+        // The feet ahead of the pelvis along the kart's forward (+Z), at the clip's start.
+        let start = posed_origins(&binds, &parents, &clip, 0.0);
+        let ahead = feet
+            .iter()
+            .map(|&(i, _)| to_kart(start[i]).z - pelvis.z)
+            .fold(f32::INFINITY, f32::min);
         Sitting {
             anim,
+            made: made.is_some(),
+            ahead,
             pose: seat_pose(&f, seat, turn, 1.0 / kart.scale.x),
             pelvis_off: (pelvis - seat).length(),
             foot,
@@ -451,15 +656,21 @@ mod tests {
     /// floor and nothing lifted: the body is in the kart, not standing in it.
     fn assert_seated(label: &str, s: &Sitting) {
         println!(
-            "{label:<15} {:>4} {:>7.1}° {:>6.3}m {:>8.3}m {:>8.3}m {:>8.3}m",
+            "{label:<15} {:>4}{} {:>7.1}° {:>6.3}m {:>8.3}m {:>8.3}m {:>8.3}m {:>7.3}m",
             s.anim,
+            if s.made { "*" } else { " " },
             s.pose.recline.to_degrees(),
             s.pose.lift,
             s.pelvis_off,
             s.foot,
-            s.sole
+            s.sole,
+            s.ahead
         );
-        assert_eq!(s.anim, SIT_CHAIR_LOW, "{label} authors SitChairLow");
+        assert!(
+            s.anim == SIT_CHAIR_LOW || s.made,
+            "{label}: no SitChairLow, and none made"
+        );
+        assert!(s.ahead > 0.0, "{label}: feet {} behind the pelvis", s.ahead);
         assert!(
             s.foot >= FLOOR_CLEARANCE - 1e-3 && s.sole >= FLOOR_CLEARANCE - 1e-3,
             "{label}: foot {} / sole {} under the floor",
@@ -478,7 +689,8 @@ mod tests {
         );
     }
 
-    const HEADER: &str = "model           anim  recline    lift  pelvis_d    foot_y    sole_y";
+    const HEADER: &str =
+        "model           anim   recline    lift  pelvis_d    foot_y    sole_y   ahead";
 
     /// Every playable model authors the chair sit, and seated in a kart with it, its pelvis is on
     /// CTR's seat and its lowest foot bone over the floor. The placement is checked by posing the
@@ -497,8 +709,8 @@ mod tests {
         }
     }
 
-    /// Every skin the skin shop sells (`Kartcraft.cpp`'s `SKINS`) sits as a playable model does: a
-    /// creature model with no chair sit (a gnoll) would stand in the kart.
+    /// Every skin the skin shop sells (`Kartcraft.cpp`'s `SKINS`) sits as a playable model does,
+    /// a creature model without the chair sit (a murloc) in the one made from its stand.
     #[test]
     fn every_skin_sits_in_the_kart() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -517,13 +729,38 @@ mod tests {
         assert!(!skins.is_empty(), "the server's SKINS");
         println!("{HEADER}");
         for (key, display) in skins {
-            // Worn, the skin is the native display too: its outfit comes with its look alone.
-            let npc = cat.model(display).and_then(|m| m.npc_appearance);
-            assert!(
-                npc.is_some_and(|n| n.equipment != [0; 10]),
-                "{key}: no NPC outfit"
-            );
+            // Worn, the skin is the native display too: a character model's outfit comes with
+            // its look alone; a creature's is its own skin.
+            let m = cat.model(display).expect("display");
+            if m.model_path.to_ascii_lowercase().starts_with("character") {
+                assert!(
+                    m.npc_appearance.is_some_and(|n| n.equipment != [0; 10]),
+                    "{key}: no NPC outfit"
+                );
+            }
             assert_seated(&key, &sit(&mut chain, &cat, display));
+        }
+    }
+
+    /// A creature model that authors no chair sit sits in the one made from its stand: a furbolg,
+    /// a murloc, a kobold, a quillboar, a goblin and a zombie, short to tall.
+    #[test]
+    fn a_creature_without_the_chair_sit_sits_in_a_made_one() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let cat = benilla_formats::load_creature_catalog(&mut chain).expect("creature catalog");
+        println!("{HEADER}");
+        for (display, label) in [
+            (145, "Furbolg"),
+            (617, "Murloc"),
+            (2299, "Kobold"),
+            (1252, "QuillBoar"),
+            (1233, "Goblin"),
+            (1200, "Zombie"),
+        ] {
+            let s = sit(&mut chain, &cat, display);
+            assert!(s.made, "{label}: authors its own sit");
+            assert_seated(label, &s);
         }
     }
 }
