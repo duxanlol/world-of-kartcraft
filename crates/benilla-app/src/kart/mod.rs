@@ -31,6 +31,7 @@ mod remote;
 mod replay;
 mod score;
 mod seat;
+mod server_replays;
 pub(crate) mod settings;
 mod showcase;
 mod skins;
@@ -696,6 +697,10 @@ pub(crate) fn plugin(app: &mut App) {
         .net_handler(benilla_protocol::SessionEventKind::Chat, weapons::on_chat)
         .net_handler(benilla_protocol::SessionEventKind::Chat, showcase::on_chat)
         .net_handler(benilla_protocol::SessionEventKind::Chat, props::on_chat)
+        .net_handler(
+            benilla_protocol::SessionEventKind::Chat,
+            server_replays::on_chat,
+        )
         .init_resource::<showcase::Showcase>()
         .init_resource::<freecam::FreeCam>()
         .init_resource::<track_edit::TrackEdit>()

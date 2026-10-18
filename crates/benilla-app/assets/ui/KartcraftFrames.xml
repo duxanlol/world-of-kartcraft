@@ -1574,6 +1574,8 @@
                 if line[4] == line[6] then text = "Skyhop record! " .. text end
                 UIErrorsFrame:AddMessage(text, 1, 0.82, 0, 1, 6)
                 BenillaKart_Say(text)
+            elseif verb == "RL" or verb == "RL-" or verb == "RR" or verb == "RR-" or verb == "RP" then
+                BenillaKartReplays_OnLine(verb, line)
             elseif verb == "CrateOdds" then
                 -- The crate's price, opens left today, pity counts, what we lack by tier ("-" closed),
                 -- the odds and the pity's reach.
@@ -2223,23 +2225,129 @@
             return list
         end
 
+        -- The server's replays (Kartcraft.cpp "Replays"): our races' ("RL" lines, then "RL-") and
+        -- the courses' records ("RR", then "RR-"), each played as KartReplay "s<key>"; ours are
+        -- kept 2 days unless pinned ("RPin") or they hold a best or a record.
+        BenillaKartReplays = { tab = "local", ours = {}, records = {}, asked = {} }
+
+        function BenillaKartReplays_Clock(ms)
+            ms = tonumber(ms) or 0
+            return format("%d:%02d.%02d", math.floor(ms / 60000), math.mod(math.floor(ms / 1000), 60), math.mod(math.floor(ms / 10), 100))
+        end
+
+        -- A server race's line: the course, how we did, and what keeps it.
+        function BenillaKartReplays_ServerLabel(r)
+            local how
+            if r.trial then
+                how = r.ms > 0 and ("time trial, " .. BenillaKartReplays_Clock(r.ms)) or "time trial"
+            elseif r.place == 0 then
+                how = "did not finish"
+            else
+                how = format("%d of %d, %s", r.place, r.field, BenillaKartReplays_Clock(r.ms))
+            end
+            local keep = r.kept and " (a best)" or ""
+            return BenillaKart_CourseName(r.course) .. ": " .. how .. keep
+        end
+
+        -- The rows of the tab shown: { token, label, key (a server race of ours), pinned }.
+        function BenillaKartReplays_Rows()
+            local rp = BenillaKartReplays
+            local rows = {}
+            if rp.tab == "server" then
+                for _, r in ipairs(rp.ours) do
+                    table.insert(rows, { token = "s" .. r.key, label = BenillaKartReplays_ServerLabel(r), key = r.key, pinned = r.pinned })
+                end
+            elseif rp.tab == "records" then
+                for _, r in ipairs(rp.records) do
+                    local kind = r.board == "T" and "time trial record" or "race record"
+                    table.insert(rows, { token = "s" .. r.key, label = format("%s: %s, %s by %s",
+                        BenillaKart_CourseName(r.course), kind, BenillaKartReplays_Clock(r.ms), r.name) })
+                end
+            else
+                rows = BenillaKartReplays_List()
+            end
+            return rows
+        end
+
+        function BenillaKartReplays_Tab(tab)
+            local rp = BenillaKartReplays
+            rp.tab = tab
+            if tab == "server" then
+                BenillaKart_Send("RList")
+            elseif tab == "records" then
+                -- The records of the courses we have raced on the server.
+                rp.records, rp.asked = {}, {}
+                for _, r in ipairs(rp.ours) do
+                    if not rp.asked[r.course] then
+                        rp.asked[r.course] = true
+                        BenillaKart_Send("RRec\t" .. r.course)
+                    end
+                end
+            end
+            BenillaKartReplays_Refresh()
+        end
+
+        function BenillaKartReplays_Pin(i)
+            local r = BenillaKartReplayList and BenillaKartReplayList[i]
+            if not r or not r.key then return end
+            BenillaKart_Send("RPin\t" .. r.key .. "\t" .. (r.pinned and "0" or "1"))
+        end
+
         function BenillaKartReplays_Refresh()
-            local list = BenillaKartReplays_List()
+            local rp = BenillaKartReplays
+            local list = BenillaKartReplays_Rows()
             BenillaKartReplayList = list
             for i = 1, BENILLA_KART_REPLAY_ROWS do
                 local b = getglobal("BenillaKartReplaysFrameEntry" .. i)
+                local pin = getglobal("BenillaKartReplaysFramePin" .. i)
                 if list[i] then
                     b:SetText(list[i].label)
                     b:Show()
                 else
                     b:Hide()
                 end
+                if list[i] and list[i].key then
+                    pin:SetChecked(list[i].pinned and 1 or nil)
+                    pin:Show()
+                else
+                    pin:Hide()
+                end
             end
-            if table.getn(list) == 0 then
-                BenillaKartReplaysFrameEmpty:Show()
+            local tabs = { ["local"] = "BenillaKartReplaysFrameTabLocal", server = "BenillaKartReplaysFrameTabServer", records = "BenillaKartReplaysFrameTabRecords" }
+            for tab, name in pairs(tabs) do
+                if tab == rp.tab then getglobal(name):LockHighlight() else getglobal(name):UnlockHighlight() end
+            end
+            local empty = BenillaKartReplaysFrameEmpty
+            if rp.tab == "server" then
+                empty:SetText("No races on the server yet. Every race and time trial you run there is kept 2 days, or for good if pinned or a best.")
+            elseif rp.tab == "records" then
+                empty:SetText("No records yet on the courses you have raced.")
             else
-                BenillaKartReplaysFrameEmpty:Hide()
+                empty:SetText("No replays yet. Every race you run is kept here, the newest ten.")
             end
+            if table.getn(list) == 0 then empty:Show() else empty:Hide() end
+        end
+
+        -- The server's lines about its replays.
+        function BenillaKartReplays_OnLine(verb, line)
+            local rp = BenillaKartReplays
+            if verb == "RL" then
+                rp.incoming = rp.incoming or {}
+                table.insert(rp.incoming, { key = line[3], course = line[4] or "", trial = line[5] == "1",
+                    at = tonumber(line[6]) or 0, field = tonumber(line[7]) or 0, place = tonumber(line[8]) or 0,
+                    ms = tonumber(line[9]) or 0, pinned = line[10] == "1", kept = line[11] == "1" })
+            elseif verb == "RL-" then
+                rp.ours = rp.incoming or {}
+                rp.incoming = nil
+            elseif verb == "RR" then
+                table.insert(rp.records, { course = line[3], board = line[4], key = line[5], name = line[6] or "?", ms = tonumber(line[7]) or 0 })
+            elseif verb == "RP" then
+                for _, r in ipairs(rp.ours) do
+                    if r.key == line[3] then r.pinned = line[4] == "1" end
+                end
+                BenillaKart_Say(line[4] == "1" and "Replay pinned: kept for good." or "Replay unpinned: kept 2 days, or while it is a best.")
+            end
+            if BenillaKartReplaysFrame:IsVisible() then BenillaKartReplays_Refresh() end
         end
 
         function BenillaKartReplays_MenuClick()
@@ -6780,7 +6888,7 @@
         </Scripts>
     </Frame>
     <Frame name="BenillaKartReplaysFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="400" y="370"/></Size>
+        <Size><AbsDimension x="400" y="396"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -6798,7 +6906,7 @@
                 </FontString>
                 <FontString name="$parentEmpty" inherits="GameFontHighlight" text="No replays yet. Every race you run is kept here, the newest ten." hidden="true">
                     <Size><AbsDimension x="320" y="60"/></Size>
-                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-60"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-86"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString inherits="GameFontDisableSmall" text="Plays while you sit in your kart. Steer to watch another racer.">
                     <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="48"/></Offset></Anchor></Anchors>
@@ -6807,59 +6915,165 @@
         </Layers>
         <Frames>
             <Button name="$parentEntry1" inherits="UIPanelButtonTemplate" id="1">
-                <Size><AbsDimension x="340" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-34"/></Offset></Anchor></Anchors>
+                <Size><AbsDimension x="320" y="22"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-60"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
+            <CheckButton name="$parentPin1" inherits="UICheckButtonTemplate" id="1" hidden="true">
+                <Size><AbsDimension x="24" y="24"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentEntry1" relativePoint="RIGHT"><Offset><AbsDimension x="4" y="0"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnClick>BenillaKartReplays_Pin(this:GetID())</OnClick>
+                    <OnEnter>GameTooltip:SetOwner(this, "ANCHOR_RIGHT") GameTooltip:SetText("Pin: keep this replay for good") GameTooltip:Show()</OnEnter>
+                    <OnLeave>GameTooltip:Hide()</OnLeave>
+                </Scripts>
+            </CheckButton>
             <Button name="$parentEntry2" inherits="UIPanelButtonTemplate" id="2">
-                <Size><AbsDimension x="340" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-60"/></Offset></Anchor></Anchors>
+                <Size><AbsDimension x="320" y="22"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-86"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
+            <CheckButton name="$parentPin2" inherits="UICheckButtonTemplate" id="2" hidden="true">
+                <Size><AbsDimension x="24" y="24"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentEntry2" relativePoint="RIGHT"><Offset><AbsDimension x="4" y="0"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnClick>BenillaKartReplays_Pin(this:GetID())</OnClick>
+                    <OnEnter>GameTooltip:SetOwner(this, "ANCHOR_RIGHT") GameTooltip:SetText("Pin: keep this replay for good") GameTooltip:Show()</OnEnter>
+                    <OnLeave>GameTooltip:Hide()</OnLeave>
+                </Scripts>
+            </CheckButton>
             <Button name="$parentEntry3" inherits="UIPanelButtonTemplate" id="3">
-                <Size><AbsDimension x="340" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-86"/></Offset></Anchor></Anchors>
+                <Size><AbsDimension x="320" y="22"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-112"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
+            <CheckButton name="$parentPin3" inherits="UICheckButtonTemplate" id="3" hidden="true">
+                <Size><AbsDimension x="24" y="24"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentEntry3" relativePoint="RIGHT"><Offset><AbsDimension x="4" y="0"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnClick>BenillaKartReplays_Pin(this:GetID())</OnClick>
+                    <OnEnter>GameTooltip:SetOwner(this, "ANCHOR_RIGHT") GameTooltip:SetText("Pin: keep this replay for good") GameTooltip:Show()</OnEnter>
+                    <OnLeave>GameTooltip:Hide()</OnLeave>
+                </Scripts>
+            </CheckButton>
             <Button name="$parentEntry4" inherits="UIPanelButtonTemplate" id="4">
-                <Size><AbsDimension x="340" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-112"/></Offset></Anchor></Anchors>
+                <Size><AbsDimension x="320" y="22"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-138"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
+            <CheckButton name="$parentPin4" inherits="UICheckButtonTemplate" id="4" hidden="true">
+                <Size><AbsDimension x="24" y="24"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentEntry4" relativePoint="RIGHT"><Offset><AbsDimension x="4" y="0"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnClick>BenillaKartReplays_Pin(this:GetID())</OnClick>
+                    <OnEnter>GameTooltip:SetOwner(this, "ANCHOR_RIGHT") GameTooltip:SetText("Pin: keep this replay for good") GameTooltip:Show()</OnEnter>
+                    <OnLeave>GameTooltip:Hide()</OnLeave>
+                </Scripts>
+            </CheckButton>
             <Button name="$parentEntry5" inherits="UIPanelButtonTemplate" id="5">
-                <Size><AbsDimension x="340" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-138"/></Offset></Anchor></Anchors>
+                <Size><AbsDimension x="320" y="22"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-164"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
+            <CheckButton name="$parentPin5" inherits="UICheckButtonTemplate" id="5" hidden="true">
+                <Size><AbsDimension x="24" y="24"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentEntry5" relativePoint="RIGHT"><Offset><AbsDimension x="4" y="0"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnClick>BenillaKartReplays_Pin(this:GetID())</OnClick>
+                    <OnEnter>GameTooltip:SetOwner(this, "ANCHOR_RIGHT") GameTooltip:SetText("Pin: keep this replay for good") GameTooltip:Show()</OnEnter>
+                    <OnLeave>GameTooltip:Hide()</OnLeave>
+                </Scripts>
+            </CheckButton>
             <Button name="$parentEntry6" inherits="UIPanelButtonTemplate" id="6">
-                <Size><AbsDimension x="340" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-164"/></Offset></Anchor></Anchors>
+                <Size><AbsDimension x="320" y="22"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-190"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
+            <CheckButton name="$parentPin6" inherits="UICheckButtonTemplate" id="6" hidden="true">
+                <Size><AbsDimension x="24" y="24"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentEntry6" relativePoint="RIGHT"><Offset><AbsDimension x="4" y="0"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnClick>BenillaKartReplays_Pin(this:GetID())</OnClick>
+                    <OnEnter>GameTooltip:SetOwner(this, "ANCHOR_RIGHT") GameTooltip:SetText("Pin: keep this replay for good") GameTooltip:Show()</OnEnter>
+                    <OnLeave>GameTooltip:Hide()</OnLeave>
+                </Scripts>
+            </CheckButton>
             <Button name="$parentEntry7" inherits="UIPanelButtonTemplate" id="7">
-                <Size><AbsDimension x="340" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-190"/></Offset></Anchor></Anchors>
+                <Size><AbsDimension x="320" y="22"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-216"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
+            <CheckButton name="$parentPin7" inherits="UICheckButtonTemplate" id="7" hidden="true">
+                <Size><AbsDimension x="24" y="24"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentEntry7" relativePoint="RIGHT"><Offset><AbsDimension x="4" y="0"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnClick>BenillaKartReplays_Pin(this:GetID())</OnClick>
+                    <OnEnter>GameTooltip:SetOwner(this, "ANCHOR_RIGHT") GameTooltip:SetText("Pin: keep this replay for good") GameTooltip:Show()</OnEnter>
+                    <OnLeave>GameTooltip:Hide()</OnLeave>
+                </Scripts>
+            </CheckButton>
             <Button name="$parentEntry8" inherits="UIPanelButtonTemplate" id="8">
-                <Size><AbsDimension x="340" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-216"/></Offset></Anchor></Anchors>
+                <Size><AbsDimension x="320" y="22"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-242"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
+            <CheckButton name="$parentPin8" inherits="UICheckButtonTemplate" id="8" hidden="true">
+                <Size><AbsDimension x="24" y="24"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentEntry8" relativePoint="RIGHT"><Offset><AbsDimension x="4" y="0"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnClick>BenillaKartReplays_Pin(this:GetID())</OnClick>
+                    <OnEnter>GameTooltip:SetOwner(this, "ANCHOR_RIGHT") GameTooltip:SetText("Pin: keep this replay for good") GameTooltip:Show()</OnEnter>
+                    <OnLeave>GameTooltip:Hide()</OnLeave>
+                </Scripts>
+            </CheckButton>
             <Button name="$parentEntry9" inherits="UIPanelButtonTemplate" id="9">
-                <Size><AbsDimension x="340" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-242"/></Offset></Anchor></Anchors>
+                <Size><AbsDimension x="320" y="22"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-268"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
+            <CheckButton name="$parentPin9" inherits="UICheckButtonTemplate" id="9" hidden="true">
+                <Size><AbsDimension x="24" y="24"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentEntry9" relativePoint="RIGHT"><Offset><AbsDimension x="4" y="0"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnClick>BenillaKartReplays_Pin(this:GetID())</OnClick>
+                    <OnEnter>GameTooltip:SetOwner(this, "ANCHOR_RIGHT") GameTooltip:SetText("Pin: keep this replay for good") GameTooltip:Show()</OnEnter>
+                    <OnLeave>GameTooltip:Hide()</OnLeave>
+                </Scripts>
+            </CheckButton>
             <Button name="$parentEntry10" inherits="UIPanelButtonTemplate" id="10">
-                <Size><AbsDimension x="340" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-268"/></Offset></Anchor></Anchors>
+                <Size><AbsDimension x="320" y="22"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-294"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
+            <CheckButton name="$parentPin10" inherits="UICheckButtonTemplate" id="10" hidden="true">
+                <Size><AbsDimension x="24" y="24"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentEntry10" relativePoint="RIGHT"><Offset><AbsDimension x="4" y="0"/></Offset></Anchor></Anchors>
+                <Scripts>
+                    <OnClick>BenillaKartReplays_Pin(this:GetID())</OnClick>
+                    <OnEnter>GameTooltip:SetOwner(this, "ANCHOR_RIGHT") GameTooltip:SetText("Pin: keep this replay for good") GameTooltip:Show()</OnEnter>
+                    <OnLeave>GameTooltip:Hide()</OnLeave>
+                </Scripts>
+            </CheckButton>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>
                 <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplaysFrame:Hide()</OnClick></Scripts>
+            </Button>
+            <!-- The tabs: this computer's replays, our races on the server, the courses' records. -->
+            <Button name="$parentTabLocal" inherits="UIPanelButtonTemplate" text="This computer">
+                <Size><AbsDimension x="112" y="22"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-30"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartReplays_Tab("local")</OnClick></Scripts>
+            </Button>
+            <Button name="$parentTabServer" inherits="UIPanelButtonTemplate" text="Your races">
+                <Size><AbsDimension x="112" y="22"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentTabLocal" relativePoint="RIGHT"><Offset><AbsDimension x="4" y="0"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartReplays_Tab("server")</OnClick></Scripts>
+            </Button>
+            <Button name="$parentTabRecords" inherits="UIPanelButtonTemplate" text="Records">
+                <Size><AbsDimension x="112" y="22"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentTabServer" relativePoint="RIGHT"><Offset><AbsDimension x="4" y="0"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartReplays_Tab("records")</OnClick></Scripts>
             </Button>
         </Frames>
         <Scripts>
@@ -6870,6 +7084,8 @@
             <OnDragStart>this:StartMoving()</OnDragStart>
             <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
             <OnShow>
+                -- Our races on the server, asked afresh, for that tab and the records'.
+                BenillaKart_Send("RList")
                 BenillaKartReplays_Refresh()
                 PlaySound("igMainMenuOpen")
             </OnShow>

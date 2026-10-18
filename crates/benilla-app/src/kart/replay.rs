@@ -370,6 +370,8 @@ pub(crate) struct Replays {
     listed: bool,
     /// This frame's controls, as the kart would have read them.
     input: kartcraft::input::Controls,
+    /// A server replay being fetched ([`super::server_replays`]).
+    fetch: Option<super::server_replays::Fetch>,
 }
 
 impl Replays {
@@ -529,8 +531,18 @@ pub(crate) fn update(
     }
     // Asked for out of the kart, it waits for the kart.
     if !off && replays.playing.is_none() && drive.active && view.active {
-        match read(&wanted) {
-            Some(replay) => {
+        // A server replay (`s<key>`) is fetched first, waiting meanwhile.
+        let loaded = match wanted.strip_prefix(super::server_replays::TOKEN) {
+            Some(key) => match super::server_replays::load(key, &our_name, &mut replays.fetch) {
+                super::server_replays::Load::Ready(r) => Some(Some(r)),
+                super::server_replays::Load::Waiting => None,
+                super::server_replays::Load::Missing => Some(None),
+            },
+            None => Some(read(&wanted)),
+        };
+        match loaded {
+            None => {}
+            Some(Some(replay)) => {
                 let n = replay.tracks.len();
                 let watch = replay.tracks.iter().position(|t| t.us).unwrap_or(0);
                 // The chase camera's place and look in our kart's frame, to film theirs alike.
@@ -564,7 +576,7 @@ pub(crate) fn update(
                     camera_was: false,
                 });
             }
-            None => {
+            Some(None) => {
                 warn!("kart replay: no replay {wanted}");
                 replays.wanted = String::new();
                 cvars.set("KartReplay", "0");

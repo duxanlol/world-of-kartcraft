@@ -2484,6 +2484,89 @@ fn a_track_is_rated_after_a_race_and_a_closed_one_leaves_the_browser() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
+/// The Replays window's server tabs: our races there, each with a pin, and the courses'
+/// records, each played as a server replay token.
+#[test]
+fn the_replays_window_lists_our_server_races_pins_one_and_plays_a_record() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let text = |s: &mut UiScript, f: &str| -> String {
+        s.eval(&format!("return {f}:GetText() or ''")).unwrap()
+    };
+    let shown = |s: &mut UiScript, f: &str| {
+        s.eval::<bool>(&format!("return {f}:IsVisible() == 1"))
+            .unwrap()
+    };
+    s.fire_event(
+        "BENILLA_KART_COURSE_NAMES",
+        vec![ScriptValue::Str("gp-azora	Azora Hill Climb".into())],
+    );
+    sent(&mut s);
+    s.run("BenillaKartReplaysFrame:Show()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tRList"]);
+    from_server(
+        &mut s,
+        "R\tRL\t1792320294-12\tgp-azora\t0\t1792320294\t4\t2\t61250\t0\t1",
+    );
+    from_server(
+        &mut s,
+        "R\tRL\t1792320100-3\tgp-azora\t1\t1792320100\t1\t1\t58010\t1\t0",
+    );
+    from_server(&mut s, "R\tRL-");
+    s.run("BenillaKartReplaysFrameTabServer:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tRList"]);
+    from_server(
+        &mut s,
+        "R\tRL\t1792320294-12\tgp-azora\t0\t1792320294\t4\t2\t61250\t0\t1",
+    );
+    from_server(
+        &mut s,
+        "R\tRL\t1792320100-3\tgp-azora\t1\t1792320100\t1\t1\t58010\t1\t0",
+    );
+    from_server(&mut s, "R\tRL-");
+    assert_eq!(
+        text(&mut s, "BenillaKartReplaysFrameEntry1"),
+        "Azora Hill Climb: 2 of 4, 1:01.25 (a best)"
+    );
+    assert_eq!(
+        text(&mut s, "BenillaKartReplaysFrameEntry2"),
+        "Azora Hill Climb: time trial, 0:58.01"
+    );
+    assert!(shown(&mut s, "BenillaKartReplaysFramePin1"));
+    assert!(s
+        .eval::<bool>("return BenillaKartReplaysFramePin2:GetChecked() == 1")
+        .unwrap());
+    // Pinning the first: asked, and checked once the server says so.
+    s.run("BenillaKartReplaysFramePin1:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tRPin\t1792320294-12\t1"]);
+    from_server(&mut s, "R\tRP\t1792320294-12\t1");
+    assert!(s
+        .eval::<bool>("return BenillaKartReplaysFramePin1:GetChecked() == 1")
+        .unwrap());
+    // The records of the courses raced, each played from the server.
+    s.run("BenillaKartReplaysFrameTabRecords:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tRRec\tgp-azora"]);
+    from_server(&mut s, "R\tRR\tgp-azora\tT\t1792300000-7\tSpeedy\t55120");
+    from_server(&mut s, "R\tRR-\tgp-azora");
+    assert_eq!(
+        text(&mut s, "BenillaKartReplaysFrameEntry1"),
+        "Azora Hill Climb: time trial record, 0:55.12 by Speedy"
+    );
+    assert!(
+        !shown(&mut s, "BenillaKartReplaysFramePin1"),
+        "a record is not ours to pin"
+    );
+    s.run("BenillaKartReplaysFrameEntry1:Click()").unwrap();
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartReplay')").unwrap(),
+        "s1792300000-7"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 #[test]
 fn the_replays_window_lists_the_kept_races_and_plays_one() {
     benilla_formats::wow_data_or_skip!();

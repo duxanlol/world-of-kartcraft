@@ -18,6 +18,9 @@
 #include "QuestDef.h"
 #include "Utilities/Random.h"
 #include "Config/Config.h"
+#include <zlib.h>
+#include <fstream>
+#include <sys/stat.h>
 
 #include <cmath>
 #include <ctime>
@@ -78,6 +81,8 @@ namespace Kartcraft
     static std::unordered_map<uint32, uint32> s_lastState; // player guid low -> ms, s_stateMutex
     // RelayState's own: a state line is relayed outside s_mutex, the race lock.
     static std::mutex s_stateMutex;
+    // Each driver's last relayed state line, for their race's take (Replays), s_stateMutex.
+    static std::unordered_map<uint32, std::string> s_stateLines;
 
     // World of Kartcraft's own cosmetics (Goods, below): the catalogue, ahead of the relay that
     // holds what a driver shows to it.
@@ -309,6 +314,7 @@ namespace Kartcraft
     static void SkinLogin(Player* player);
     static void GoodsLogin(Player* player);
     static void PropsLogin(Player* player);
+    static void ReplayLogin(Player* player);
 
     static void MarathonLogin(Player* player);
 
@@ -338,6 +344,7 @@ namespace Kartcraft
         if (player->HasAura(SPELL_SUMMON_KART))
             OnMounted(player, SPELL_SUMMON_KART, true);
         PropsLogin(player);
+        ReplayLogin(player);
         if (!sSkillLineStore.LookupEntry(SKILL_KARTING))
             return;
         if (!player->HasSkill(SKILL_KARTING))
@@ -434,6 +441,7 @@ namespace Kartcraft
                 return;
             last = now;
             held = HeldToShown(message, s_shown[player->GetGUIDLow()]);
+            s_stateLines[player->GetGUIDLow()] = held;
         }
         WorldPacket data;
         ChatHandler::BuildChatPacket(data, CHAT_MSG_PARTY, held.c_str(), LANG_ADDON, CHAT_TAG_NONE,
@@ -532,6 +540,7 @@ namespace Kartcraft
         uint8 checkpoint = 0;
         bool finished = false;
         uint8 place = 0; // finishing place, 1 = first; 0 with `finished`, out of time (DNF)
+        uint32 ms = 0;   // its time, with a place
         // The passes the server has seen with its own eyes (Witness), counted as Passes counts:
         // a report that reaches us after the position proving it still counts.
         uint32 seen = 0;
@@ -1139,6 +1148,16 @@ namespace Kartcraft
         std::string picked = ChallengePick(period);
         if (!picked.empty())
             return picked;
+        // The course this server chose for the period before keeps it to the period's end,
+        // whatever the course list has become since (a redeploy with tracks added or cut).
+        std::unique_ptr<QueryResult> chosen = CharacterDatabase.PQuery(
+            "SELECT `course` FROM `kartcraft_challenge_course` WHERE `period` = '%s' AND `auto` = 1", period.c_str());
+        if (chosen)
+        {
+            Course const* c = FindCourse(chosen->Fetch()[0].GetCppString());
+            if (c && c->map <= 1 && !CourseOff(*c))
+                return c->key;
+        }
         std::vector<Course const*> open;
         for (Course const& c : COURSES)
             if (c.map <= 1 && !CourseOff(c))
@@ -1180,6 +1199,9 @@ namespace Kartcraft
         board.bests.clear();
         std::string escaped = course;
         CharacterDatabase.escape_string(escaped);
+        CharacterDatabase.PExecute("REPLACE INTO `kartcraft_challenge_course` (`period`, `course`, `auto`, `at`) "
+            "VALUES ('%s', '%s', %u, %u)", period.c_str(), escaped.c_str(), ChallengePick(period).empty() ? 1u : 0u,
+            uint32(std::time(nullptr)));
         std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
             "SELECT `guid`, `name`, `ms` FROM `kartcraft_challenge` WHERE `period` = '%s' AND `course` = '%s'",
             period.c_str(), escaped.c_str());
@@ -1224,6 +1246,16 @@ namespace Kartcraft
             "`at` INT UNSIGNED NOT NULL COMMENT 'when, unix time', "
             "PRIMARY KEY (`period`, `guid`), KEY `period_ms` (`period`, `ms`)"
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+        // The course each period's challenge is on, as this server chose it (the owner's pick, or
+        // its own among the open courses), for the website to show the same board.
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_challenge_course` ("
+            "`period` VARCHAR(12) NOT NULL COMMENT 'd<YYYYMMDD> a day, w<weeks since 1969-12-29> a week, UTC', "
+            "`course` VARCHAR(32) NOT NULL COMMENT 'the course the period is on now', "
+            "`auto` TINYINT UNSIGNED NOT NULL COMMENT '1 this server''s own choice, 0 the owner''s pick', "
+            "`at` INT UNSIGNED NOT NULL COMMENT 'when chosen, unix time', "
+            "PRIMARY KEY (`period`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
     }
 
     static Record const* ChallengeLeader(ChallengeBoard const& board)
@@ -1250,7 +1282,10 @@ namespace Kartcraft
 
     // A time trial's finish on the day's or the week's course: a better time than the racer's
     // in the period goes on its board.
-    static void ChallengeFinish(uint32 guid, std::string const& name, std::string const& course, uint32 ms)
+    static void ReplayKeep(Race const& r, char const* reason, uint32 guid, std::string const& course, uint32 holder);
+
+    static void ChallengeFinish(uint32 guid, std::string const& name, std::string const& course, uint32 ms,
+        Race const* race = nullptr)
     {
         ChallengesNow();
         for (ChallengeBoard* board : { &s_daily, &s_weekly })
@@ -1271,6 +1306,8 @@ namespace Kartcraft
             CharacterDatabase.PExecute("REPLACE INTO `kartcraft_challenge` (`period`, `course`, `guid`, `name`, "
                 "`ms`, `at`) VALUES ('%s', '%s', %u, '%s', %u, %u)", board->period.c_str(), course.c_str(), guid,
                 escaped.c_str(), ms, uint32(std::time(nullptr)));
+            if (race)
+                ReplayKeep(*race, board == &s_daily ? "cd" : "cw", guid, board->period, guid);
             if (record)
                 AnnounceChallengeRecord(board == &s_daily, name, course, ms, was);
         }
@@ -2370,6 +2407,473 @@ namespace Kartcraft
     static void PropsLogin(Player* player)
     {
         SendLine(player, PropsOn() ? "KARTCRAFT\tR\tProps\t1" : "KARTCRAFT\tR\tProps\t0");
+    }
+
+    // ── Replays ────────────────────────────────────────────────────────────────────────────────
+    //
+    // Every race and time trial is recorded here, from what the server already sees: each racer's
+    // place and facing (their kart's movement, 15 a second) and their kart's state line (steer,
+    // drift, flags; RelayState), sampled every REPLAY_STEP from GO until the race is gone, a
+    // racer's own run REPLAY_AFTER past their finish. A race's take is written once it is over, to
+    // Kartcraft.ReplayDir as <key>.krps (the race's start, unix time, and its id), and kept in
+    // kartcraft_replays with its racers in kartcraft_replay_racers. A take lives REPLAY_KEEP; past
+    // that only one that holds an achievement (kartcraft_replay_keeps: a personal best or a course
+    // record on either board, a challenge best, each replaced as it is beaten) or that a racer has
+    // pinned (kartcraft_replay_pins) stays. Clients fetch the files over HTTP from
+    // Kartcraft.ReplayUrl, told at login ("R\tRUrl\t<url>", empty none); "R\tRList" lists our races'
+    // takes, "R\tRRec\t<course>" a course's record takes, "R\tRPin\t<key>\t<1|0>" pins one of ours.
+
+    constexpr uint32 REPLAY_STEP = 66;
+    constexpr uint32 REPLAY_AFTER = 8 * IN_MILLISECONDS;
+    constexpr uint32 REPLAY_MAX_SAMPLES = 20 * 60 * 15;
+    constexpr uint32 REPLAY_KEEP = 2 * DAY;
+    constexpr uint32 REPLAY_SWEEP = HOUR * IN_MILLISECONDS;
+    constexpr uint8 REPLAY_VERSION = 1;
+
+    // One sample: the place in hundredths of a yard, the facing over 65536 of a turn, and the
+    // state line's steer (-100..100), drift yaw (milliradians) and flags.
+    struct ReplaySample
+    {
+        int32 x, y, z;
+        uint16 o;
+        int8 steer;
+        int16 drift;
+        uint8 flags;
+    };
+
+    struct ReplayTrack
+    {
+        ObjectGuid guid;
+        std::string name;
+        std::string kart = "crash";
+        uint8 paint = 0, trail = 0, flag = 0;
+        uint8 place = 0;
+        uint32 ms = 0;
+        uint32 finishedAt = 0; // ms, 0 not yet
+        uint32 from = 0;       // the sample its first is
+        std::vector<ReplaySample> samples;
+    };
+
+    struct ReplayTake
+    {
+        std::string key;
+        std::string course;
+        uint32 startedAt = 0;
+        bool trial = false;
+        uint32 start = 0;
+        uint32 lastSample = 0;
+        std::vector<ReplayTrack> tracks;
+    };
+
+    static std::unordered_map<uint32, ReplayTake> s_takes; // race id -> its take, s_mutex
+    static uint32 s_replaySwept = 0;
+
+    static std::string ReplayKey(Race const& r)
+    {
+        return std::to_string(r.startedAt) + "-" + std::to_string(r.id);
+    }
+
+    static std::string ReplayDir()
+    {
+        return sConfig.GetStringDefault("Kartcraft.ReplayDir", "/opt/vmangos/storage/replays");
+    }
+
+    static void CreateReplays()
+    {
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_replays` ("
+            "`key` VARCHAR(24) NOT NULL COMMENT 'the race start (unix time) and its id', "
+            "`course` VARCHAR(32) NOT NULL, "
+            "`trial` TINYINT UNSIGNED NOT NULL, "
+            "`at` INT UNSIGNED NOT NULL COMMENT 'when it started, unix time', "
+            "`field` TINYINT UNSIGNED NOT NULL, "
+            "`bytes` INT UNSIGNED NOT NULL, "
+            "PRIMARY KEY (`key`), KEY `at` (`at`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_replay_racers` ("
+            "`key` VARCHAR(24) NOT NULL, "
+            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
+            "`name` VARCHAR(12) NOT NULL, "
+            "`place` TINYINT UNSIGNED NOT NULL COMMENT '0 did not finish', "
+            "`ms` INT UNSIGNED NOT NULL, "
+            "PRIMARY KEY (`key`, `guid`), KEY `guid` (`guid`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_replay_keeps` ("
+            "`reason` CHAR(2) NOT NULL COMMENT 'pR/pT a personal best, rR/rT a course record (race/trial), cd/cw a challenge best', "
+            "`guid` INT UNSIGNED NOT NULL COMMENT 'whose best; 0 for a record', "
+            "`course` VARCHAR(32) NOT NULL COMMENT 'course key, or a challenge period', "
+            "`key` VARCHAR(24) NOT NULL, "
+            "`holder` INT UNSIGNED NOT NULL COMMENT 'who set it, character low guid', "
+            "PRIMARY KEY (`reason`, `guid`, `course`), KEY `key` (`key`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_replay_pins` ("
+            "`key` VARCHAR(24) NOT NULL, "
+            "`guid` INT UNSIGNED NOT NULL, "
+            "PRIMARY KEY (`key`, `guid`), KEY `guid` (`guid`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+        mkdir(ReplayDir().c_str(), 0755);
+    }
+
+    // A take holds an achievement: `reason` for `guid` (0 a record) on `course` (or a challenge
+    // period), set by `holder` in race `r`, replacing the one before it.
+    static void ReplayKeep(Race const& r, char const* reason, uint32 guid, std::string const& course, uint32 holder)
+    {
+        std::string escaped = course;
+        CharacterDatabase.escape_string(escaped);
+        CharacterDatabase.PExecute("REPLACE INTO `kartcraft_replay_keeps` (`reason`, `guid`, `course`, `key`, `holder`) "
+            "VALUES ('%s', %u, '%s', '%s', %u)", reason, guid, escaped.c_str(), ReplayKey(r).c_str(), holder);
+    }
+
+    // "KARTCRAFT\tS\t<steer>,<drift>,<fire>,<distortion>,<volume>,<flags>,<racer>,<wheelie>,
+    // <paint>,<trail>,<flag>" (kart/remote.rs state_line): its fields.
+    static std::vector<std::string> StateFields(std::string const& line)
+    {
+        std::vector<std::string> out;
+        size_t head = line.find("\tS\t");
+        if (head == std::string::npos)
+            return out;
+        std::string body = line.substr(head + 3);
+        size_t at = 0;
+        while (at <= body.size())
+        {
+            size_t comma = body.find(',', at);
+            if (comma == std::string::npos)
+                comma = body.size();
+            out.push_back(body.substr(at, comma - at));
+            at = comma + 1;
+        }
+        return out;
+    }
+
+    static int32 StateInt(std::vector<std::string> const& f, size_t i, int32 lo, int32 hi)
+    {
+        if (i >= f.size())
+            return 0;
+        int32 v = int32(std::strtol(f[i].c_str(), nullptr, 10));
+        return std::max(lo, std::min(hi, v));
+    }
+
+    // Every race under way: each racer's place now, every REPLAY_STEP. Under s_mutex.
+    static void SampleReplays(uint32 now)
+    {
+        for (auto& entry : s_races)
+        {
+            Race& r = entry.second;
+            if (!r.start || !r.course || int32(now - r.start) < 0)
+                continue;
+            ReplayTake& take = s_takes[entry.first];
+            if (take.key.empty())
+            {
+                take.key = ReplayKey(r);
+                take.course = r.course->key;
+                take.startedAt = r.startedAt;
+                take.trial = r.timeTrial;
+                take.start = r.start;
+            }
+            if (take.lastSample && WorldTimer::getMSTimeDiff(take.lastSample, now) < REPLAY_STEP)
+                continue;
+            take.lastSample = now;
+            uint32 const index = WorldTimer::getMSTimeDiff(r.start, now) / REPLAY_STEP;
+            if (index >= REPLAY_MAX_SAMPLES)
+                continue;
+            for (Racer const& x : r.racers)
+            {
+                auto t = std::find_if(take.tracks.begin(), take.tracks.end(),
+                    [&x](ReplayTrack const& k) { return k.guid == x.guid; });
+                if (t == take.tracks.end())
+                {
+                    take.tracks.emplace_back();
+                    t = std::prev(take.tracks.end());
+                    t->guid = x.guid;
+                    t->name = x.name;
+                    t->from = index;
+                }
+                if (x.finished && !t->finishedAt)
+                {
+                    t->finishedAt = now ? now : 1;
+                    t->place = x.place;
+                    t->ms = x.ms;
+                }
+                if (t->finishedAt && WorldTimer::getMSTimeDiff(t->finishedAt, now) > REPLAY_AFTER)
+                    continue;
+                Player* p = ObjectAccessor::FindPlayer(x.guid);
+                if (!p || !p->IsInWorld() || p->GetMapId() != r.course->map)
+                    continue;
+                ReplaySample s;
+                s.x = int32(std::lround(p->GetPositionX() * 100.f));
+                s.y = int32(std::lround(p->GetPositionY() * 100.f));
+                s.z = int32(std::lround(p->GetPositionZ() * 100.f));
+                s.o = uint16(std::lround(p->GetOrientation() / 6.2831853f * 65536.f) & 0xFFFF);
+                std::vector<std::string> f;
+                {
+                    std::lock_guard<std::mutex> lock(s_stateMutex);
+                    auto line = s_stateLines.find(x.guid.GetCounter());
+                    if (line != s_stateLines.end())
+                        f = StateFields(line->second);
+                }
+                s.steer = int8(StateInt(f, 0, -100, 100));
+                s.drift = int16(StateInt(f, 1, -3200, 3200));
+                s.flags = uint8(StateInt(f, 5, 0, 255));
+                if (f.size() > 6 && !f[6].empty() && f[6].size() <= 12)
+                    t->kart = f[6];
+                t->paint = uint8(StateInt(f, 8, 0, 255));
+                t->trail = uint8(StateInt(f, 9, 0, 255));
+                t->flag = uint8(StateInt(f, 10, 0, 255));
+                // A gap (out of the world a while) holds the last place, so a sample's index is
+                // its time.
+                if (index < t->from)
+                    continue;
+                if (t->samples.empty())
+                    t->from = index;
+                while (!t->samples.empty() && t->from + t->samples.size() < index)
+                    t->samples.push_back(t->samples.back());
+                if (t->from + t->samples.size() == index)
+                    t->samples.push_back(s);
+            }
+        }
+    }
+
+    static void PutVar(std::string& out, uint32 v)
+    {
+        while (v >= 0x80)
+        {
+            out.push_back(char((v & 0x7F) | 0x80));
+            v >>= 7;
+        }
+        out.push_back(char(v));
+    }
+
+    static void PutSigned(std::string& out, int32 v)
+    {
+        PutVar(out, (uint32(v) << 1) ^ uint32(v >> 31));
+    }
+
+    static void PutStr(std::string& out, std::string const& s)
+    {
+        std::string const cut = s.substr(0, 255);
+        out.push_back(char(cut.size()));
+        out += cut;
+    }
+
+    static void PutU32(std::string& out, uint32 v)
+    {
+        for (int i = 0; i < 4; ++i)
+            out.push_back(char((v >> (8 * i)) & 0xFF));
+    }
+
+    // The file: "KRPS", a version byte and the body's size (u32), then the body deflated: the
+    // step (ms, u16), the start (u32), a time trial (u8), the course, the track count (u8), and
+    // per track its name, kart, paint, trail, flag, place (u8), time (ms, u32), first sample
+    // (u32), sample count (u32) and samples, each field the change from the one before as a
+    // zigzag varint (the first from zero), the steer and flags as bytes. Little endian; a string
+    // is a length byte and its bytes.
+    static std::string EncodeTake(ReplayTake const& take)
+    {
+        std::string body;
+        body.push_back(char(REPLAY_STEP & 0xFF));
+        body.push_back(char(REPLAY_STEP >> 8));
+        PutU32(body, take.startedAt);
+        body.push_back(char(take.trial ? 1 : 0));
+        PutStr(body, take.course);
+        size_t const n = std::min<size_t>(take.tracks.size(), 16);
+        body.push_back(char(n));
+        for (size_t i = 0; i < n; ++i)
+        {
+            ReplayTrack const& t = take.tracks[i];
+            PutStr(body, t.name);
+            PutStr(body, t.kart);
+            body.push_back(char(t.paint));
+            body.push_back(char(t.trail));
+            body.push_back(char(t.flag));
+            body.push_back(char(t.place));
+            PutU32(body, t.ms);
+            PutU32(body, t.from);
+            PutU32(body, uint32(t.samples.size()));
+            ReplaySample last = {};
+            for (ReplaySample const& s : t.samples)
+            {
+                PutSigned(body, s.x - last.x);
+                PutSigned(body, s.y - last.y);
+                PutSigned(body, s.z - last.z);
+                PutSigned(body, int16(uint16(s.o - last.o)));
+                body.push_back(char(s.steer));
+                PutSigned(body, s.drift - last.drift);
+                body.push_back(char(s.flags));
+                last = s;
+            }
+        }
+        uLongf packed = compressBound(uLong(body.size()));
+        std::string out = "KRPS";
+        out.push_back(char(REPLAY_VERSION));
+        PutU32(out, uint32(body.size()));
+        std::string z(packed, '\0');
+        if (compress2(reinterpret_cast<Bytef*>(&z[0]), &packed, reinterpret_cast<Bytef const*>(body.data()),
+                uLong(body.size()), 9) != Z_OK)
+            return "";
+        z.resize(packed);
+        return out + z;
+    }
+
+    // A take whose race is gone: to its file and its rows. Under s_mutex.
+    static void WriteTake(ReplayTake const& take)
+    {
+        bool any = false;
+        for (ReplayTrack const& t : take.tracks)
+            any = any || t.samples.size() > 15;
+        if (!any || take.key.empty())
+            return;
+        std::string const bytes = EncodeTake(take);
+        if (bytes.empty())
+            return;
+        std::string const path = ReplayDir() + "/" + take.key + ".krps";
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        if (!file)
+        {
+            sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "Kartcraft: cannot write replay %s", path.c_str());
+            return;
+        }
+        file.write(bytes.data(), std::streamsize(bytes.size()));
+        file.close();
+        std::string course = take.course;
+        CharacterDatabase.escape_string(course);
+        CharacterDatabase.PExecute("REPLACE INTO `kartcraft_replays` (`key`, `course`, `trial`, `at`, `field`, `bytes`) "
+            "VALUES ('%s', '%s', %u, %u, %u, %u)", take.key.c_str(), course.c_str(), take.trial ? 1u : 0u,
+            take.startedAt, uint32(take.tracks.size()), uint32(bytes.size()));
+        for (ReplayTrack const& t : take.tracks)
+        {
+            std::string name = t.name;
+            CharacterDatabase.escape_string(name);
+            CharacterDatabase.PExecute("REPLACE INTO `kartcraft_replay_racers` (`key`, `guid`, `name`, `place`, `ms`) "
+                "VALUES ('%s', %u, '%s', %u, %u)", take.key.c_str(), t.guid.GetCounter(), name.c_str(),
+                uint32(t.place), t.ms);
+        }
+    }
+
+    // Takes whose race is over, written. Under s_mutex.
+    static void FinishTakes()
+    {
+        for (auto it = s_takes.begin(); it != s_takes.end();)
+        {
+            if (s_races.count(it->first))
+            {
+                ++it;
+                continue;
+            }
+            WriteTake(it->second);
+            it = s_takes.erase(it);
+        }
+    }
+
+    // Takes past REPLAY_KEEP that hold no achievement and no pin: gone, file and rows. On the
+    // world thread.
+    static void SweepReplays()
+    {
+        uint32 const before = uint32(std::time(nullptr)) - REPLAY_KEEP;
+        std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
+            "SELECT r.`key` FROM `kartcraft_replays` r WHERE r.`at` < %u "
+            "AND NOT EXISTS (SELECT 1 FROM `kartcraft_replay_keeps` k WHERE k.`key` = r.`key`) "
+            "AND NOT EXISTS (SELECT 1 FROM `kartcraft_replay_pins` p WHERE p.`key` = r.`key`) LIMIT 1000", before);
+        if (!result)
+            return;
+        uint32 gone = 0;
+        do
+        {
+            std::string const key = result->Fetch()[0].GetCppString();
+            std::remove((ReplayDir() + "/" + key + ".krps").c_str());
+            CharacterDatabase.PExecute("DELETE FROM `kartcraft_replays` WHERE `key` = '%s'", key.c_str());
+            CharacterDatabase.PExecute("DELETE FROM `kartcraft_replay_racers` WHERE `key` = '%s'", key.c_str());
+            ++gone;
+        } while (result->NextRow());
+        sLog.Out(LOG_BASIC, LOG_LVL_MINIMAL, "Kartcraft: %u replays past %u days swept.", gone, REPLAY_KEEP / DAY);
+    }
+
+    // A replay key as the client sends it: digits, a dash, digits.
+    static bool ReplayKeyOk(std::string const& key)
+    {
+        if (key.empty() || key.size() > 24)
+            return false;
+        bool dash = false;
+        for (char c : key)
+        {
+            if (c == '-' && !dash)
+                dash = true;
+            else if (!std::isdigit(static_cast<unsigned char>(c)))
+                return false;
+        }
+        return dash;
+    }
+
+    // "R\tRList": our races' takes, newest first, then "R\tRL-"; each
+    // "R\tRL\t<key>\t<course>\t<trial>\t<at>\t<field>\t<place>\t<ms>\t<pinned>\t<kept>".
+    // "R\tRRec\t<course>": its record takes, "R\tRR\t<course>\t<R|T>\t<key>\t<name>\t<ms>" each,
+    // then "R\tRR-\t<course>". "R\tRPin\t<key>\t<1|0>": one of ours pinned or not. World thread.
+    static void HandleReplays(Player* player, std::vector<std::string> const& f)
+    {
+        uint32 const guid = player->GetGUIDLow();
+        if (f[1] == "RList")
+        {
+            std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
+                "SELECT r.`key`, r.`course`, r.`trial`, r.`at`, r.`field`, m.`place`, m.`ms`, "
+                "EXISTS (SELECT 1 FROM `kartcraft_replay_pins` p WHERE p.`key` = r.`key` AND p.`guid` = %u), "
+                "EXISTS (SELECT 1 FROM `kartcraft_replay_keeps` k WHERE k.`key` = r.`key`) "
+                "FROM `kartcraft_replay_racers` m JOIN `kartcraft_replays` r ON r.`key` = m.`key` "
+                "WHERE m.`guid` = %u ORDER BY r.`at` DESC LIMIT 50", guid, guid);
+            if (result)
+            {
+                do
+                {
+                    Field* x = result->Fetch();
+                    SendLine(player, "KARTCRAFT\tR\tRL\t" + x[0].GetCppString() + "\t" + x[1].GetCppString() + "\t" +
+                        std::to_string(x[2].GetUInt32()) + "\t" + std::to_string(x[3].GetUInt32()) + "\t" +
+                        std::to_string(x[4].GetUInt32()) + "\t" + std::to_string(x[5].GetUInt32()) + "\t" +
+                        std::to_string(x[6].GetUInt32()) + "\t" + std::to_string(x[7].GetUInt32()) + "\t" +
+                        std::to_string(x[8].GetUInt32()));
+                } while (result->NextRow());
+            }
+            SendLine(player, "KARTCRAFT\tR\tRL-");
+        }
+        else if (f[1] == "RRec" && f.size() >= 3 && FindCourse(f[2]))
+        {
+            std::string const course = FindCourse(f[2])->key;
+            std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
+                "SELECT k.`reason`, k.`key`, m.`name`, m.`ms` FROM `kartcraft_replay_keeps` k "
+                "JOIN `kartcraft_replay_racers` m ON m.`key` = k.`key` AND m.`guid` = k.`holder` "
+                "JOIN `kartcraft_replays` r ON r.`key` = k.`key` "
+                "WHERE k.`guid` = 0 AND k.`course` = '%s' AND k.`reason` IN ('rR', 'rT')", course.c_str());
+            if (result)
+            {
+                do
+                {
+                    Field* x = result->Fetch();
+                    std::string const reason = x[0].GetCppString();
+                    SendLine(player, "KARTCRAFT\tR\tRR\t" + course + "\t" + (reason == "rT" ? "T" : "R") + "\t" +
+                        x[1].GetCppString() + "\t" + x[2].GetCppString() + "\t" + std::to_string(x[3].GetUInt32()));
+                } while (result->NextRow());
+            }
+            SendLine(player, "KARTCRAFT\tR\tRR-\t" + course);
+        }
+        else if (f[1] == "RPin" && f.size() >= 4 && ReplayKeyOk(f[2]))
+        {
+            std::unique_ptr<QueryResult> ours = CharacterDatabase.PQuery(
+                "SELECT 1 FROM `kartcraft_replay_racers` WHERE `key` = '%s' AND `guid` = %u", f[2].c_str(), guid);
+            if (!ours)
+                return;
+            if (f[3] == "1")
+                CharacterDatabase.PExecute("REPLACE INTO `kartcraft_replay_pins` (`key`, `guid`) VALUES ('%s', %u)",
+                    f[2].c_str(), guid);
+            else
+                CharacterDatabase.PExecute("DELETE FROM `kartcraft_replay_pins` WHERE `key` = '%s' AND `guid` = %u",
+                    f[2].c_str(), guid);
+            SendLine(player, "KARTCRAFT\tR\tRP\t" + f[2] + "\t" + (f[3] == "1" ? "1" : "0"));
+        }
+    }
+
+    static void ReplayLogin(Player* player)
+    {
+        SendLine(player, "KARTCRAFT\tR\tRUrl\t" + sConfig.GetStringDefault("Kartcraft.ReplayUrl", ""));
     }
 
     // ── Skyhop ─────────────────────────────────────────────────────────────────────────────────
@@ -5143,6 +5647,19 @@ namespace Kartcraft
     void Update(uint32 /*diff*/)
     {
         uint32 const now = WorldTimer::getMSTime();
+        {
+            std::lock_guard<std::mutex> races(s_mutex);
+            SampleReplays(now);
+            FinishTakes();
+            // Today's and this week's courses chosen as the period turns, nobody racing or not,
+            // so the website shows them from the first minute.
+            ChallengesNow();
+        }
+        if (!s_replaySwept || WorldTimer::getMSTimeDiff(s_replaySwept, now) >= REPLAY_SWEEP)
+        {
+            s_replaySwept = now;
+            SweepReplays();
+        }
         if (!s_hubTicked || WorldTimer::getMSTimeDiff(s_hubTicked, now) >= HUB_TICK)
         {
             s_hubTicked = now;
@@ -6127,6 +6644,17 @@ namespace Kartcraft
             });
             return;
         }
+        if (f.size() >= 2 && (f[1] == "RList" || f[1] == "RRec" || f[1] == "RPin"))
+        {
+            ObjectGuid const guid = player->GetObjectGuid();
+            std::vector<std::string> const args = f;
+            sWorld.GetMessager().AddMessage([guid, args](World*)
+            {
+                if (Player* p = ObjectAccessor::FindPlayer(guid))
+                    HandleReplays(p, args);
+            });
+            return;
+        }
         if (f.size() >= 2 && f[1] == "Hub")
         {
             ObjectGuid const guid = player->GetObjectGuid();
@@ -6334,13 +6862,22 @@ namespace Kartcraft
                 if (!r.firstFinish)
                     r.firstFinish = now ? now : 1;
                 uint32 ms = WorldTimer::getMSTimeDiff(r.start, now);
+                me->ms = ms;
                 RecordResult(r, *me, place, ms);
                 if (r.timeTrial)
                 {
-                    ChallengeFinish(player->GetGUIDLow(), me->name, c.key, ms);
+                    ChallengeFinish(player->GetGUIDLow(), me->name, c.key, ms, &r);
                     s_lastTrial[player->GetGUIDLow()] = c.key;
                 }
                 std::string const best = RecordFinish(BoardOf(r), player->GetGUIDLow(), me->name, c, ms);
+                // The take keeps a new best, and a new record (Replays).
+                if (!best.empty())
+                {
+                    char const* board = r.timeTrial ? "T" : "R";
+                    ReplayKeep(r, (std::string("p") + board).c_str(), player->GetGUIDLow(), c.key, player->GetGUIDLow());
+                    if (best == "r")
+                        ReplayKeep(r, (std::string("r") + board).c_str(), 0, c.key, player->GetGUIDLow());
+                }
                 SendRace(r, "KARTCRAFT\tR\tF\t" + std::to_string(id) + "\t" + me->name + "\t" +
                     std::to_string(place) + "\t" + std::to_string(ms) + "\t" + best);
                 if (!best.empty())
@@ -6821,6 +7358,7 @@ namespace Kartcraft
         CreateCacheClaims();
         CreateHops();
         CreateCrates();
+        CreateReplays();
         CreateResults();
         CreateChallenges();
         CreateCosmetics();

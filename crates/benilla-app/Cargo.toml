@@ -39,6 +39,8 @@ libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Thread-to-ECS channels: crossbeam's `Receiver` is `Sync`, so it is a resource without a mutex.
 crossbeam-channel = "0.5"
+# The server's replays, deflated (kart::server_replays).
+flate2 = "1"
 benilla-assets = { path = "../benilla-assets", default-features = false }
 benilla-formats = { path = "../benilla-formats", default-features = false }
 benilla-protocol = { path = "../benilla-protocol" }
@@ -73,6 +75,8 @@ kart-gps = { path = "../kart-gps" }
 # The showcase runs' tapes and their playback (`kart::showcase`), GPL-3.0 as well.
 kart-driver = { path = "../kart-driver" }
 serde_json = "1"
+# The server's replays, fetched over HTTP (kart::server_replays).
+ureq = "2"
 
 # Wayland clipboard over the standard `wl_data_device`; arboard's speaks `wlr-data-control`,
 # which GNOME does not implement.
