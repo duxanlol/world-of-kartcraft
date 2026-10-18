@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..0ea5f11
+index 0000000..39ef862
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,6874 @@
+@@ -0,0 +1,6875 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -105,6 +105,7 @@ index 0000000..0ea5f11
 +#include "MapManager.h"
 +#include "QuestDef.h"
 +#include "Utilities/Random.h"
++#include "Config/Config.h"
 +
 +#include <cmath>
 +#include <ctime>
@@ -395,6 +396,7 @@ index 0000000..0ea5f11
 +
 +    static void SkinLogin(Player* player);
 +    static void GoodsLogin(Player* player);
++    static void PropsLogin(Player* player);
 +
 +    static void MarathonLogin(Player* player);
 +
@@ -423,6 +425,7 @@ index 0000000..0ea5f11
 +        // A kart kept over the logout: its aura came back before the client was in the world.
 +        if (player->HasAura(SPELL_SUMMON_KART))
 +            OnMounted(player, SPELL_SUMMON_KART, true);
++        PropsLogin(player);
 +        if (!sSkillLineStore.LookupEntry(SKILL_KARTING))
 +            return;
 +        if (!player->HasSkill(SKILL_KARTING))
@@ -2382,15 +2385,13 @@ index 0000000..0ea5f11
 +    // Flats with marshals for its courses, and the Quartermaster (sql/kartcraft.sql, its menu
 +    // here) for the garage, the shop, the tracks and the Race Finder. Within HUB_RADIUS of it
 +    // is a sanctuary: nothing attacks anyone there. "R\tHub" (/hub) goes there
-+    // from the open world, in the kart if in it, at most once every HUB_COOLDOWN.
++    // from the open world, in the kart if in it.
 +
 +    constexpr uint32 HUB_TEXT = 190020;
 +    constexpr uint32 HUB_MAP = 1;
 +    constexpr float HUB_X = -6214.f, HUB_Y = -3894.f, HUB_O = 0.f;
-+    constexpr uint32 HUB_COOLDOWN = 10 * MINUTE * IN_MILLISECONDS;
 +    enum HubAction : uint32 { HUB_GARAGE = 1, HUB_SHOP, HUB_TRACKS, HUB_FINDER };
 +
-+    static std::unordered_map<uint32, uint32> s_hubAt; // player guid low -> ms, world thread
 +    // The sanctuary: within HUB_RADIUS of the hub nothing attacks anyone, the race's shield on
 +    // them (TickShields) while they are there. Who is there, under s_mutex (HubTick).
 +    constexpr float HUB_RADIUS = 150.f;
@@ -2437,19 +2438,26 @@ index 0000000..0ea5f11
 +            chat.SendSysMessage("The hub is reached from the open world, out of a race and not carrying a delivery.");
 +            return;
 +        }
-+        uint32 const now = WorldTimer::getMSTime();
-+        uint32& last = s_hubAt[player->GetGUIDLow()];
-+        if (last && WorldTimer::getMSTimeDiff(last, now) < HUB_COOLDOWN)
-+        {
-+            uint32 const left = (HUB_COOLDOWN - WorldTimer::getMSTimeDiff(last, now)) / IN_MILLISECONDS;
-+            chat.PSendSysMessage("You can go to the hub again in %u min %u s.", left / 60, left % 60);
-+            return;
-+        }
 +        if (TeleportOnto(player, HUB_MAP, HUB_X, HUB_Y, HUB_O, player->HasAura(SPELL_SUMMON_KART)))
-+        {
-+            last = now;
 +            chat.SendSysMessage("Off to the Mirage Raceway, the racers' hub.");
-+        }
++    }
++
++    // ── Props ──────────────────────────────────────────────────────────────────────────────────
++    //
++    // The client's props (props/props.json: the hub's stunt park, Skyhop's platforms, and their
++    // pads) are out only where mangosd.conf's Kartcraft.Props is 1, off by default: each client
++    // is told at login ("R\tProps\t1" or "0") and draws, drives and races none until told, and
++    // Skyhop's finishes are taken only while they are out.
++
++    static bool PropsOn()
++    {
++        static bool const on = sConfig.GetBoolDefault("Kartcraft.Props", false);
++        return on;
++    }
++
++    static void PropsLogin(Player* player)
++    {
++        SendLine(player, PropsOn() ? "KARTCRAFT\tR\tProps\t1" : "KARTCRAFT\tR\tProps\t0");
 +    }
 +
 +    // ── Skyhop ─────────────────────────────────────────────────────────────────────────────────
@@ -2469,7 +2477,7 @@ index 0000000..0ea5f11
 +    };
 +
 +    static HopCourse const HOP_COURSES[] = {
-+        { "skyhop", { -5651.06f, -4029.94f, -51.8f }, 1, 9000 },
++        { "skyhop", { -5651.06f, -4029.94f, -23.8f }, 1, 9000 },
 +    };
 +    // How near the goal (yards) a finish is told from.
 +    constexpr float HOP_GOAL_RADIUS = 30.f;
@@ -2501,7 +2509,7 @@ index 0000000..0ea5f11
 +        for (HopCourse const& c : HOP_COURSES)
 +            if (key == c.key)
 +                course = &c;
-+        if (!course || ms < course->fastest || !player->HasAura(SPELL_SUMMON_KART) || InRace(player) ||
++        if (!PropsOn() || !course || ms < course->fastest || !player->HasAura(SPELL_SUMMON_KART) || InRace(player) ||
 +            player->GetMapId() != course->map ||
 +            player->GetDistance(course->goal[0], course->goal[1], course->goal[2]) > HOP_GOAL_RADIUS)
 +            return;
@@ -5983,8 +5991,6 @@ index 0000000..0ea5f11
 +        return true;
 +    }
 +
-+    static void ListUserTracks(Player* player, uint32 now, bool now_please = false);
-+
 +    static void PublishTrack(Player* player, std::vector<std::string> const& f, uint32 now)
 +    {
 +        auto no = [player](char const* why) { SendLine(player, std::string("KARTCRAFT\tR\tPubNo\t") + why); };
@@ -6042,17 +6048,13 @@ index 0000000..0ea5f11
 +            t.id, t.guid, author.c_str(), name.c_str(), t.map, t.laps, zone.c_str(), t.grid.c_str(),
 +            t.points.c_str(), uint32(std::time(nullptr)));
 +        SendLine(player, "KARTCRAFT\tR\tPubOk\t" + std::to_string(t.id) + "\t" + t.name);
-+        ListUserTracks(player, now, true);
 +    }
 +
-+    // The player tracks to `player`, at most once per USER_TRACKS_ASK_COOLDOWN unless `now_please`
-+    // (after their own publish or take-down, so their lists show it at once).
-+    static void ListUserTracks(Player* player, uint32 now, bool now_please)
++    static void ListUserTracks(Player* player, uint32 now)
 +    {
 +        uint32 const guid = player->GetGUIDLow();
 +        auto last = s_userTracksAsked.find(guid);
-+        if (!now_please && last != s_userTracksAsked.end() &&
-+            WorldTimer::getMSTimeDiff(last->second, now) < USER_TRACKS_ASK_COOLDOWN)
++        if (last != s_userTracksAsked.end() && WorldTimer::getMSTimeDiff(last->second, now) < USER_TRACKS_ASK_COOLDOWN)
 +            return;
 +        s_userTracksAsked[guid] = now;
 +        // Each player track's good and bad votes (kartcraft_rating), for the Race Finder's list.
@@ -6089,7 +6091,6 @@ index 0000000..0ea5f11
 +        s_userTracks.erase(t);
 +        CharacterDatabase.PExecute("DELETE FROM `kartcraft_user_tracks` WHERE `id` = %u", id);
 +        SendLine(player, "KARTCRAFT\tR\tPubGone\t" + std::to_string(id));
-+        ListUserTracks(player, WorldTimer::getMSTime(), true);
 +    }
 +
 +    // Ours called `name` taken down, if one is: the client deleting its saved track, which knows

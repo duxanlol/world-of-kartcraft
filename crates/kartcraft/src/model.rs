@@ -112,6 +112,15 @@ pub fn data_root() -> Option<PathBuf> {
 /// The racer picked with [`set_our_kart`], over [`our_kart`]'s default.
 static CHOSEN: std::sync::RwLock<Option<&'static str>> = std::sync::RwLock::new(None);
 
+/// The karts that float on deep water and plane across it (`ctr_kart::Kart::water`), in races
+/// and time trials only: none yet; every other kart drives the water's bed as CTR's do.
+pub const FLOATING_KARTS: &[&str] = &[];
+
+/// Whether `racer`'s kart floats ([`FLOATING_KARTS`]).
+pub fn floats(racer: &str) -> bool {
+    FLOATING_KARTS.iter().any(|k| k.eq_ignore_ascii_case(racer))
+}
+
 /// Our kart's racer: the one picked with [`set_our_kart`], else `WOW_KART` (crash, cortex, coco,
 /// tiny, polar, pura, pinstripe, roo, joe, pen, fake), else whichever `kart.json` holds.
 pub fn our_kart() -> &'static str {

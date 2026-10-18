@@ -77,7 +77,9 @@ pub(super) fn sample(
     let physics = drives_on_ground(races.ground_types(), settings.terrain);
     // The water under the kart, in the air too, for it to float on (Kartcraft's deviation,
     // `ctr_kart::Kart::water`): its surface, the water kinds only (magma and slime are none).
-    if view.active {
+    // Only a kart that floats, and only in a race or a time trial.
+    let floats = races.race.is_some() && kartcraft::model::floats(kartcraft::model::our_kart());
+    if view.active && floats {
         let wow = bevy_to_wow(view.transform.translation);
         let surface = world.water_surface_at(Subject::Player, wow);
         trace!(
