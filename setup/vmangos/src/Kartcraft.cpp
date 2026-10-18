@@ -17,6 +17,7 @@
 #include "MapManager.h"
 #include "QuestDef.h"
 #include "Utilities/Random.h"
+#include "Config/Config.h"
 
 #include <cmath>
 #include <ctime>
@@ -307,6 +308,7 @@ namespace Kartcraft
 
     static void SkinLogin(Player* player);
     static void GoodsLogin(Player* player);
+    static void PropsLogin(Player* player);
 
     static void MarathonLogin(Player* player);
 
@@ -335,6 +337,7 @@ namespace Kartcraft
         // A kart kept over the logout: its aura came back before the client was in the world.
         if (player->HasAura(SPELL_SUMMON_KART))
             OnMounted(player, SPELL_SUMMON_KART, true);
+        PropsLogin(player);
         if (!sSkillLineStore.LookupEntry(SKILL_KARTING))
             return;
         if (!player->HasSkill(SKILL_KARTING))
@@ -2294,15 +2297,13 @@ namespace Kartcraft
     // Flats with marshals for its courses, and the Quartermaster (sql/kartcraft.sql, its menu
     // here) for the garage, the shop, the tracks and the Race Finder. Within HUB_RADIUS of it
     // is a sanctuary: nothing attacks anyone there. "R\tHub" (/hub) goes there
-    // from the open world, in the kart if in it, at most once every HUB_COOLDOWN.
+    // from the open world, in the kart if in it.
 
     constexpr uint32 HUB_TEXT = 190020;
     constexpr uint32 HUB_MAP = 1;
     constexpr float HUB_X = -6214.f, HUB_Y = -3894.f, HUB_O = 0.f;
-    constexpr uint32 HUB_COOLDOWN = 10 * MINUTE * IN_MILLISECONDS;
     enum HubAction : uint32 { HUB_GARAGE = 1, HUB_SHOP, HUB_TRACKS, HUB_FINDER };
 
-    static std::unordered_map<uint32, uint32> s_hubAt; // player guid low -> ms, world thread
     // The sanctuary: within HUB_RADIUS of the hub nothing attacks anyone, the race's shield on
     // them (TickShields) while they are there. Who is there, under s_mutex (HubTick).
     constexpr float HUB_RADIUS = 150.f;
@@ -2349,19 +2350,26 @@ namespace Kartcraft
             chat.SendSysMessage("The hub is reached from the open world, out of a race and not carrying a delivery.");
             return;
         }
-        uint32 const now = WorldTimer::getMSTime();
-        uint32& last = s_hubAt[player->GetGUIDLow()];
-        if (last && WorldTimer::getMSTimeDiff(last, now) < HUB_COOLDOWN)
-        {
-            uint32 const left = (HUB_COOLDOWN - WorldTimer::getMSTimeDiff(last, now)) / IN_MILLISECONDS;
-            chat.PSendSysMessage("You can go to the hub again in %u min %u s.", left / 60, left % 60);
-            return;
-        }
         if (TeleportOnto(player, HUB_MAP, HUB_X, HUB_Y, HUB_O, player->HasAura(SPELL_SUMMON_KART)))
-        {
-            last = now;
             chat.SendSysMessage("Off to the Mirage Raceway, the racers' hub.");
-        }
+    }
+
+    // ── Props ──────────────────────────────────────────────────────────────────────────────────
+    //
+    // The client's props (props/props.json: the hub's stunt park, Skyhop's platforms, and their
+    // pads) are out only where mangosd.conf's Kartcraft.Props is 1, off by default: each client
+    // is told at login ("R\tProps\t1" or "0") and draws, drives and races none until told, and
+    // Skyhop's finishes are taken only while they are out.
+
+    static bool PropsOn()
+    {
+        static bool const on = sConfig.GetBoolDefault("Kartcraft.Props", false);
+        return on;
+    }
+
+    static void PropsLogin(Player* player)
+    {
+        SendLine(player, PropsOn() ? "KARTCRAFT\tR\tProps\t1" : "KARTCRAFT\tR\tProps\t0");
     }
 
     // ── Skyhop ─────────────────────────────────────────────────────────────────────────────────
@@ -2413,7 +2421,7 @@ namespace Kartcraft
         for (HopCourse const& c : HOP_COURSES)
             if (key == c.key)
                 course = &c;
-        if (!course || ms < course->fastest || !player->HasAura(SPELL_SUMMON_KART) || InRace(player) ||
+        if (!PropsOn() || !course || ms < course->fastest || !player->HasAura(SPELL_SUMMON_KART) || InRace(player) ||
             player->GetMapId() != course->map ||
             player->GetDistance(course->goal[0], course->goal[1], course->goal[2]) > HOP_GOAL_RADIUS)
             return;

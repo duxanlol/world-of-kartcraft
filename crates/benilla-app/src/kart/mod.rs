@@ -695,6 +695,7 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<gps::Gps>()
         .net_handler(benilla_protocol::SessionEventKind::Chat, weapons::on_chat)
         .net_handler(benilla_protocol::SessionEventKind::Chat, showcase::on_chat)
+        .net_handler(benilla_protocol::SessionEventKind::Chat, props::on_chat)
         .init_resource::<showcase::Showcase>()
         .init_resource::<freecam::FreeCam>()
         .init_resource::<track_edit::TrackEdit>()

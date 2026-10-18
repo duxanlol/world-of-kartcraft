@@ -3,8 +3,11 @@
 //! the client, so everyone sees the same ones: each a box (a platform) or a ramp (a wedge rising
 //! along its heading), drawn on the map it stands on and handed to the kart's collision
 //! ([`kartcraft::session::Session::set_props`]). On foot they are scenery: the body's collision
-//! is the world's. Client-side, as the turbo pads are: the server knows nothing of them.
+//! is the world's. Client-side, as the turbo pads are: the server knows nothing of them, but
+//! says at login whether they are out (`KARTCRAFT\tR\tProps\t1`, its `Kartcraft.Props`): until
+//! it does, none is drawn, driven on or raced (their pads and Skyhop with them).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use benilla_assets::coords::wow_to_bevy;
@@ -141,8 +144,30 @@ fn mesh(p: &Prop) -> Mesh {
 #[derive(Resource, Default)]
 pub(crate) struct Laid {
     map: Option<u32>,
+    /// Whether the props were out when these were laid.
+    on: bool,
     entities: Vec<Entity>,
     faces: kartcraft::session::Props,
+}
+
+static ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the server has put the props out.
+pub(crate) fn enabled() -> bool {
+    ENABLED.load(Ordering::Relaxed)
+}
+
+/// The server's word on the props, at login.
+pub(crate) fn on_chat(In(ev): In<benilla_protocol::SessionEvent>) {
+    let benilla_protocol::SessionEvent::Chat(m) = ev else {
+        return;
+    };
+    if !m.is_addon() {
+        return;
+    }
+    if let Some(on) = m.text.strip_prefix("KARTCRAFT\tR\tProps\t") {
+        ENABLED.store(on == "1", Ordering::Relaxed);
+    }
 }
 
 /// Draws the map's props, and takes the last map's down; hands their faces to the kart.
@@ -155,11 +180,16 @@ pub(crate) fn lay(
     mut host: ResMut<super::Host>,
 ) {
     let now = map.map(|m| m.0);
-    if laid.map != now {
+    let on = enabled();
+    if laid.map != now || laid.on != on {
         for e in laid.entities.drain(..) {
             commands.entity(e).despawn();
         }
-        let here: Vec<&Prop> = FILE.props.iter().filter(|p| Some(p.map) == now).collect();
+        let here: Vec<&Prop> = FILE
+            .props
+            .iter()
+            .filter(|p| on && Some(p.map) == now)
+            .collect();
         let material = materials.add(StandardMaterial {
             base_color: Color::WHITE,
             unlit: true,
@@ -182,6 +212,7 @@ pub(crate) fn lay(
             .collect();
         laid.faces = Arc::new(here.iter().flat_map(|p| triangles(p)).collect());
         laid.map = now;
+        laid.on = on;
         info!("kart props: {} on map {now:?}", here.len());
     }
     host.session.set_props(laid.faces.clone());

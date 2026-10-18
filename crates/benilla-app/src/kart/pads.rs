@@ -49,17 +49,18 @@ fn all_pads(json: &str) -> Vec<(u32, Pad)> {
     out
 }
 
-/// Every course's pads, and the props' ([`super::props`]: the stunt park's, Skyhop's), these at
-/// their own heights: the world's ground under Skyhop's is the desert floor far below.
-static PADS: std::sync::LazyLock<Vec<(u32, Pad)>> = std::sync::LazyLock::new(|| {
-    let mut pads = all_pads(include_str!("../../../../courses/courses.json"));
-    pads.extend(
-        super::props::FILE
-            .pads
-            .iter()
-            .map(|p| (p.map, Pad::from_wow(p.x, p.y, p.z, p.o).fixed())),
-    );
-    pads
+/// Every course's pads.
+static PADS: std::sync::LazyLock<Vec<(u32, Pad)>> =
+    std::sync::LazyLock::new(|| all_pads(include_str!("../../../../courses/courses.json")));
+
+/// The props' pads ([`super::props`]: the stunt park's, Skyhop's), out with the props, at their
+/// own heights: the world's ground under Skyhop's is the desert floor far below.
+static PROP_PADS: std::sync::LazyLock<Vec<(u32, Pad)>> = std::sync::LazyLock::new(|| {
+    super::props::FILE
+        .pads
+        .iter()
+        .map(|p| (p.map, Pad::from_wow(p.x, p.y, p.z, p.o).fixed()))
+        .collect()
 });
 
 /// Hands the map's pads to the field, and the ones laid so far to the session.
@@ -70,7 +71,9 @@ pub(super) fn feed(
     mut host: ResMut<super::Host>,
 ) {
     let pads = map.map_or_else(Vec::new, |map| {
+        let props = PROP_PADS.iter().filter(|_| super::props::enabled());
         PADS.iter()
+            .chain(props)
             .filter(|(m, _)| *m == map.0)
             .map(|(_, p)| *p)
             .collect()

@@ -130,7 +130,7 @@ pub(crate) fn update(
     net: Option<Res<NetCommands>>,
 ) {
     let now = time.elapsed_secs();
-    if !view.active || races.race.is_some() {
+    if !view.active || races.race.is_some() || !super::props::enabled() {
         run.state = State::Idle;
         return;
     }
