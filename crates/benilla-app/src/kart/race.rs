@@ -2315,7 +2315,8 @@ pub(crate) fn beams(
     // The arrows: turned to face the camera, so none without one. An arrow not wanted is gone
     // rather than hidden, and one wanted again is spawned where it goes.
     // The floating arrows, unless switched off (`KartNavCheckpointArrows`): none wanted, none kept.
-    let legs = if settings.nav.checkpoint_arrows {
+    // Not over the track editor's draft: its own small markers show each checkpoint there.
+    let legs = if settings.nav.checkpoint_arrows && race.id != PREVIEW_ID {
         arrow_legs(race)
     } else {
         Vec::new()

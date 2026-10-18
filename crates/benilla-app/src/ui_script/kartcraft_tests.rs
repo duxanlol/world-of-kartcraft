@@ -4070,10 +4070,17 @@ fn the_track_editor_s_button_and_bar_drive_the_kart_s_editor() {
     assert!(shown(&s, "BenillaKartEditorLapBack"));
     assert_eq!(text(&s, "BenillaKartEditorLapBack"), "End test lap");
 
-    // Closed, the bar goes; the button opens it again even after a refused open.
+    // The move cursor, a tool as the others are.
     tell(&mut s, "edit", 2.0, 1.0);
+    s.run("BenillaKartEditorBarMove:Click()").unwrap();
+    assert_eq!(cmd(&s), "10\tmove");
+    // Closed by a press (the CVar may read "0" already, opened from My tracks), the bar goes;
+    // the button opens it again even after a refused open.
     s.run("BenillaKartEditorBarClose:Click()").unwrap();
-    assert_eq!(s.cvar("KartTrackEdit").as_deref(), Some("0"));
+    assert_eq!(cmd(&s), "11\tclose");
+    s.run("BenillaKartEditorMinimapButton:Click('LeftButton')")
+        .unwrap();
+    assert_eq!(cmd(&s), "12\tclose", "the button closes it the same way");
     tell(&mut s, "", 2.0, 1.0);
     assert!(!shown(&s, "BenillaKartEditorBar"));
     s.run("SetCVar('KartTrackEdit', '1')").unwrap();
@@ -4136,6 +4143,26 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
     assert!(!s
         .eval::<bool>("return BenillaKartTracksFrame:IsShown() and true or false")
         .unwrap());
+    // Edit: back in the editor under its name, the browser closed; a course has no Edit.
+    let edit_shown = |s: &UiScript| -> bool {
+        s.eval("return BenillaKartTracksFrameEdit:IsShown() and true or false")
+            .unwrap()
+    };
+    s.run("BenillaKartTrackBrowser_OpenMine() BenillaKartTrackBrowser_Select('my:goldshire-ring')")
+        .unwrap();
+    assert!(edit_shown(&s));
+    s.run("BenillaKartTracksFrameEdit:Click()").unwrap();
+    let cmd = s.cvar("KartTrackCmd").unwrap_or_default();
+    assert!(cmd.ends_with("\tedit\tgoldshire-ring"), "{cmd}");
+    let name: String = s.eval("return BenillaKartEditorBarName:GetText()").unwrap();
+    assert_eq!(name, "Goldshire Ring");
+    assert!(!s
+        .eval::<bool>("return BenillaKartTracksFrame:IsShown() and true or false")
+        .unwrap());
+    s.run("BenillaKartTrackBrowser_Toggle() BenillaKartTrackBrowser_Select('sprint')")
+        .unwrap();
+    assert!(!edit_shown(&s));
+    s.run("BenillaKartTracksFrame:Hide()").unwrap();
     // Publish: the track, its grid and turned gates, to the server under its name.
     s.run("BenillaKartTrackBrowser_OpenMine() BenillaKartTrackBrowser_Select('my:goldshire-ring')")
         .unwrap();
@@ -4265,7 +4292,18 @@ fn the_race_finder_s_player_tracks_tab_races_and_time_trials_a_player_track() {
     assert!(rows(&s)[2].ends_with("+0|r |cffff5050-0|r"), "none yet");
     assert_eq!(named(&s), ["Dune Dash", "barrens Run", "Azshara Arc"]);
     let sort = "BenillaKartFinderFramePlayerSort";
-    s.run(&format!("{sort}:Click()")).unwrap();
+    // A real click on it reaches it: nothing lies over it.
+    s.resolve();
+    let at = {
+        let edge = |e: &str| -> f32 { s.eval(&format!("return {sort}:Get{e}()")).unwrap() };
+        (
+            (edge("Left") + edge("Right")) * 0.5,
+            (edge("Top") + edge("Bottom")) * 0.5,
+        )
+    };
+    assert_eq!(s.hit_test_name(at.0, at.1).as_deref(), Some(sort));
+    s.mouse_button(at.0, at.1, "LeftButton", true);
+    s.mouse_button(at.0, at.1, "LeftButton", false);
     assert_eq!(named(&s), ["barrens Run", "Dune Dash", "Azshara Arc"]);
     let label: String = s.eval(&format!("return {sort}:GetText()")).unwrap();
     assert_eq!(label, "Sort: Rating");

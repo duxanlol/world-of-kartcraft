@@ -108,8 +108,9 @@ gets its marshal at the start's height, not the terrain's).
 
 ## From the in-game track editor
 
-The track editor (the minimap's map button, `kart/track_edit.rs`) flies the free camera and
-places where the cursor points (a left click, or Fire at the screen's centre): the start (the
+The track editor (the minimap's map button, `kart/track_edit.rs`) flies the free camera. It
+opens on the Move cursor, which places nothing: a press on the start, a checkpoint or the grid
+drags it (Q/E and the wheel turn and size a dragged gate). The bar's tools place where the cursor points (a left click, or Fire at the screen's centre): the start (the
 first checkpoint), then the checkpoints in driving order, each gate turned with the middle mouse
 held, and optionally a starting grid, facing the way the camera looks. A card on the left lists
 the keys. Its bar names the track, picks sprint, one lap or three, runs a test lap and saves.
@@ -121,7 +122,8 @@ draft. A saved track is one course object in this file's form, in
 `benilla-config/kart-tracks/<key>.json`: `key`, `name`, `zone`, `map`, `laps`, `note`, the
 `checkpoints` and `grid` (`x`, `y`, `z`, `o`), with no `marshal`. The track browser lists the
 saved tracks after the courses (right-click the editor's button, "My tracks", for them alone)
-and runs a test lap of one. `grid` is the editor's alone for now: `pack.py` and the server
+and runs a test lap of one, or Edit opens it in the editor again (saved under the same name, it
+replaces the file). A publish or a take-down sends the author the fresh list at once. `grid` is the editor's alone for now: `pack.py` and the server
 ignore it and line a race up behind the start. In the browser our own track's Delete takes its
 published copy down (`R\tPubDN\t<name>`: ours of that name, as a publish replaces it) and removes
 its file, and Publish sends it to the server (`R\tPub`, `Kartcraft.cpp` "Player tracks": the

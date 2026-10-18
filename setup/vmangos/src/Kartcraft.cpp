@@ -5895,6 +5895,8 @@ namespace Kartcraft
         return true;
     }
 
+    static void ListUserTracks(Player* player, uint32 now, bool now_please = false);
+
     static void PublishTrack(Player* player, std::vector<std::string> const& f, uint32 now)
     {
         auto no = [player](char const* why) { SendLine(player, std::string("KARTCRAFT\tR\tPubNo\t") + why); };
@@ -5952,13 +5954,17 @@ namespace Kartcraft
             t.id, t.guid, author.c_str(), name.c_str(), t.map, t.laps, zone.c_str(), t.grid.c_str(),
             t.points.c_str(), uint32(std::time(nullptr)));
         SendLine(player, "KARTCRAFT\tR\tPubOk\t" + std::to_string(t.id) + "\t" + t.name);
+        ListUserTracks(player, now, true);
     }
 
-    static void ListUserTracks(Player* player, uint32 now)
+    // The player tracks to `player`, at most once per USER_TRACKS_ASK_COOLDOWN unless `now_please`
+    // (after their own publish or take-down, so their lists show it at once).
+    static void ListUserTracks(Player* player, uint32 now, bool now_please)
     {
         uint32 const guid = player->GetGUIDLow();
         auto last = s_userTracksAsked.find(guid);
-        if (last != s_userTracksAsked.end() && WorldTimer::getMSTimeDiff(last->second, now) < USER_TRACKS_ASK_COOLDOWN)
+        if (!now_please && last != s_userTracksAsked.end() &&
+            WorldTimer::getMSTimeDiff(last->second, now) < USER_TRACKS_ASK_COOLDOWN)
             return;
         s_userTracksAsked[guid] = now;
         // Each player track's good and bad votes (kartcraft_rating), for the Race Finder's list.
@@ -5995,6 +6001,7 @@ namespace Kartcraft
         s_userTracks.erase(t);
         CharacterDatabase.PExecute("DELETE FROM `kartcraft_user_tracks` WHERE `id` = %u", id);
         SendLine(player, "KARTCRAFT\tR\tPubGone\t" + std::to_string(id));
+        ListUserTracks(player, WorldTimer::getMSTime(), true);
     }
 
     // Ours called `name` taken down, if one is: the client deleting its saved track, which knows

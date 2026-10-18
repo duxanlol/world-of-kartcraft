@@ -26,9 +26,20 @@ const WIDTH_MIN: f32 = 6.0;
 const WIDTH_MAX: f32 = 45.0;
 /// A saved track's note, for whoever adds it to courses.json.
 const NOTE: &str = "Made with the in-game track editor.";
-/// The aim's colour, and the grid's.
+/// The aim's colour, the grid's, and what the move cursor is over or holds.
 const AIM_COLOR: Color = Color::srgb(1.0, 0.85, 0.2);
 const GRID_COLOR: Color = Color::srgb(0.3, 1.0, 0.4);
+const HOVER_COLOR: Color = Color::srgb(0.4, 0.8, 1.0);
+/// How near the grid's spot the move cursor takes it (yards): its circle.
+const GRID_PICK: f32 = 6.0;
+/// Each checkpoint's marker while editing, as big as the cursor's own circle (yards), and how
+/// near it the move cursor takes the checkpoint; the marker's pole, seen from afar.
+const MARKER: f32 = 2.0;
+const MARKER_PICK: f32 = 3.0;
+const MARKER_POLE: f32 = 6.0;
+/// The start's marker, and the checkpoints'.
+const START_COLOR: Color = Color::srgb(0.3, 1.0, 0.4);
+const MARKER_COLOR: Color = Color::srgb(1.0, 0.9, 0.3);
 
 /// A starting grid: its first slot (WoW x, y, z) and the way it faces (radians, WoW's).
 #[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
@@ -73,11 +84,20 @@ struct Saved {
     grid: Option<Grid>,
 }
 
-/// What a left click in the world places, as the bar's buttons pick it.
+/// What a left click in the world places, as the bar's buttons pick it: `Move` nothing, it
+/// takes what is under the cursor to drag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Place {
+    Move,
     Start,
     Checkpoint,
+    Grid,
+}
+
+/// What the move cursor holds: a gate (0 the start) or the grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Held {
+    Gate(usize),
     Grid,
 }
 
@@ -104,6 +124,8 @@ pub(crate) struct TrackEdit {
     map: u32,
     /// The tool picked; [`TrackEdit::tool`] is the one a click uses.
     tool: Place,
+    /// What the move cursor is dragging, until let go.
+    held: Option<Held>,
     /// The saved tracks once read, and how often the list changed: each change goes to the
     /// track browser.
     saved: Option<Vec<Saved>>,
@@ -126,7 +148,8 @@ impl Default for TrackEdit {
             grid: None,
             laps: 3,
             map: 0,
-            tool: Place::Start,
+            tool: Place::Move,
+            held: None,
             saved: None,
             saves: 0,
             note: String::new(),
@@ -145,7 +168,7 @@ pub(crate) struct EditView {
     pub(crate) grid: bool,
     pub(crate) laps: u8,
     pub(crate) notes: u32,
-    /// What a click places: `start`, `checkpoint` or `grid`.
+    /// What a click does: `move`, or places `start`, `checkpoint` or `grid`.
     pub(crate) tool: &'static str,
 }
 
@@ -178,6 +201,7 @@ impl TrackEdit {
             laps: self.laps,
             notes: self.notes,
             tool: match self.tool() {
+                Place::Move => "move",
                 Place::Start => "start",
                 Place::Checkpoint => "checkpoint",
                 Place::Grid => "grid",
@@ -185,7 +209,7 @@ impl TrackEdit {
         }
     }
 
-    /// What a click places: the tool picked, but the start while there is none.
+    /// What a click does: the tool picked, but the start while there is none to follow.
     fn tool(&self) -> Place {
         match self.tool {
             Place::Checkpoint if self.points.is_empty() => Place::Start,
@@ -223,7 +247,84 @@ impl TrackEdit {
         self.width = GATE_HALF_WIDTH;
         self.turn = None;
         self.grid = None;
-        self.tool = Place::Start;
+        self.tool = Place::Move;
+        self.held = None;
+    }
+
+    /// What the move cursor at `at` (WoW x, y) would take: the nearest checkpoint's marker, or
+    /// the grid within its circle.
+    fn under(&self, at: [f32; 2]) -> Option<Held> {
+        let off = |p: [f32; 2]| (p[0] - at[0]).hypot(p[1] - at[1]);
+        let gates =
+            (self.points.iter().enumerate()).map(|(i, &p)| (Held::Gate(i), off(p), MARKER_PICK));
+        let grid = self.grid.map(|g| (Held::Grid, off([g.x, g.y]), GRID_PICK));
+        gates
+            .chain(grid)
+            .filter(|&(_, d, reach)| d <= reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(held, ..)| held)
+    }
+
+    /// Takes `held` up: the turn and the wheel's width are its own while dragged.
+    fn take(&mut self, held: Held) {
+        self.held = Some(held);
+        match held {
+            Held::Gate(i) => {
+                self.turn = self.facings.get(i).copied().flatten();
+                self.width = self.widths.get(i).copied().unwrap_or(GATE_HALF_WIDTH);
+            }
+            Held::Grid => self.turn = self.grid.map(|g| g.o),
+        }
+    }
+
+    /// What is held to `at` (Bevy world), facing as turned (`o` for the grid).
+    fn drag(&mut self, at: Vec3, o: f32) {
+        let w = bevy_to_wow(at);
+        match self.held {
+            Some(Held::Gate(i)) if i < self.points.len() => {
+                self.points[i] = [w[0], w[1]];
+                self.facings[i] = self.turn;
+                self.widths[i] = self.width;
+            }
+            Some(Held::Grid) => {
+                self.grid = Some(Grid {
+                    x: w[0],
+                    y: w[1],
+                    z: w[2],
+                    o,
+                });
+            }
+            _ => self.held = None,
+        }
+    }
+
+    /// Lets go of what is held.
+    fn drop_held(&mut self) {
+        if self.held.take().is_some() {
+            self.turn = None;
+            self.width = GATE_HALF_WIDTH;
+        }
+    }
+
+    /// The saved track `key` as the draft, to edit on and save over (by its name).
+    fn edit_saved(&mut self, key: &str) -> Result<String, &'static str> {
+        let s = self
+            .saved
+            .iter()
+            .flatten()
+            .find(|s| s.course.key == key)
+            .ok_or("That track is not saved any more.")?;
+        let c = &s.course;
+        if c.map != self.map {
+            return Err("That track is on another continent.");
+        }
+        let (points, facings, widths, grid, laps) =
+            (c.route(), c.facings(), c.gates(), s.grid, c.laps);
+        let name = c.name.clone();
+        self.clear();
+        (self.points, self.facings, self.widths) = (points, facings, widths);
+        (self.grid, self.laps) = (grid, laps);
+        Ok(name)
     }
 
     /// Why the draft cannot be raced yet, if it cannot.
@@ -462,21 +563,19 @@ pub(crate) fn on_cvar(
                 edit.say("Leave the race first to edit a track.");
                 return;
             }
-            edit.on = ev.flag();
+            if !ev.flag() {
+                return close(&mut edit, &mut free, &mut races, testing);
+            }
+            edit.on = true;
             if testing {
                 races.race = None;
             }
-            if edit.on {
-                // A draft the kart's loss closed goes on, on its own map.
-                if map != edit.map {
-                    edit.clear();
-                }
-                edit.map = map;
-                free.set(FreeMode::Fly);
-            } else {
+            // A draft the kart's loss closed goes on, on its own map.
+            if map != edit.map {
                 edit.clear();
-                free.set(FreeMode::Off);
             }
+            edit.map = map;
+            free.set(FreeMode::Fly);
         }
         "karttrackcmd" => {
             let words: Vec<&str> = ev.new.split('\t').skip(1).collect();
@@ -490,11 +589,44 @@ pub(crate) fn on_cvar(
                 ["place", ..] if editing => edit.tool = Place::Checkpoint,
                 ["grid", ..] if editing => edit.tool = Place::Grid,
                 ["undo", ..] if editing => {
+                    edit.drop_held();
                     edit.points.pop();
                     edit.facings.pop();
                     edit.widths.pop();
                 }
                 ["clear", ..] if editing => edit.clear(),
+                ["move", ..] if editing => edit.tool = Place::Move,
+                // The bar's Close: by a press, as `KartTrackEdit` may already read "0" (the
+                // editor opened from My tracks' Edit).
+                ["close", ..] => close(&mut edit, &mut free, &mut races, testing),
+                // My tracks' Edit: the saved track as the draft, in the editor.
+                ["edit", key, ..] => {
+                    let why = if !drive.active {
+                        Some("Summon your kart first (J).")
+                    } else if races.in_race() && !testing {
+                        Some("Leave the race first to edit a track.")
+                    } else {
+                        None
+                    };
+                    if let Some(why) = why {
+                        return edit.say(why);
+                    }
+                    edit.map = map;
+                    match edit.edit_saved(key) {
+                        Ok(name) => {
+                            edit.on = true;
+                            if testing {
+                                races.race = None;
+                            }
+                            free.set(FreeMode::Fly);
+                            edit.say(format!(
+                                "Editing {name}: drag what to move, and save under its name to \
+                                 replace it."
+                            ));
+                        }
+                        Err(why) => edit.say(why),
+                    }
+                }
                 ["laps", n, ..] if editing => edit.laps = n.parse().unwrap_or(0).min(9),
                 ["practice", name, ..] if editing => match edit.unready() {
                     Some(why) => edit.say(why),
@@ -593,6 +725,16 @@ pub(crate) fn on_cvar(
     }
 }
 
+/// The editor closed, its draft gone, and a test lap of it ended.
+fn close(edit: &mut TrackEdit, free: &mut FreeCam, races: &mut Races, testing: bool) {
+    edit.on = false;
+    if testing {
+        races.race = None;
+    }
+    edit.clear();
+    free.set(FreeMode::Off);
+}
+
 /// Each frame of the editor: out of the kart it closes; while editing the camera flies, the aim
 /// follows the cursor to the ground (the screen's centre while looking), the middle mouse held
 /// turns the gate about to go there, and a left click, Fire or the bar places it: the start when
@@ -668,7 +810,11 @@ pub(crate) fn update(
     let tool = edit.tool();
     let facing = aim.zip(eye).map(|(at, eye)| {
         let w = bevy_to_wow(at);
-        let from = match edit.points.last().filter(|_| tool == Place::Checkpoint) {
+        let last = match edit.held {
+            Some(_) => None,
+            None => edit.points.last().filter(|_| tool == Place::Checkpoint),
+        };
+        let from = match last {
             Some(p) => [p[0], p[1]],
             None => {
                 let back = bevy_to_wow(at - eye.forward() * 10.0);
@@ -694,13 +840,42 @@ pub(crate) fn update(
     }
     // A left click on the world (never one on the interface), or Fire at the screen's centre.
     let clicked = buttons.just_pressed(MouseButton::Left) && cursor.is_some();
-    if editing && (fired || clicked) {
+    // The move cursor: a press on something takes it, held it follows the aim, let go (Fire
+    // again on a controller) it stays.
+    let hover = aim.map(bevy_to_wow).and_then(|w| edit.under([w[0], w[1]]));
+    let let_go = edit.held.is_some() && (fired || buttons.just_released(MouseButton::Left));
+    if !editing || let_go {
+        edit.drop_held();
+    } else if let Some(held) = edit.held {
+        if let (Some(at), Some(o)) = (aim, facing) {
+            edit.drag(at, o);
+        }
+        if let Some(at) = aim.filter(|_| held == Held::Grid) {
+            gizmos.circle(flat(at + Vec3::Y * 0.3), GRID_PICK, HOVER_COLOR);
+        }
+    } else if (fired || clicked) && tool == Place::Move {
+        if let Some(held) = hover {
+            edit.take(held);
+        }
+    } else if fired || clicked {
         match aim.zip(facing) {
             Some((at, o)) => place(&mut edit, tool, at, o),
             None => edit.say("Aim at the ground to place it."),
         }
     }
-    if let (Some(at), Some(o), Place::Grid) = (aim, facing, tool) {
+    if let (Some(at), Place::Move) = (aim.filter(|_| editing), tool) {
+        // The cursor, and a ring round what a press would take.
+        gizmos.circle(flat(at + Vec3::Y * 0.3), MARKER, HOVER_COLOR);
+        let ring = match edit.held.or(hover) {
+            Some(Held::Gate(i)) => edit.points.get(i).map(|p| (*p, MARKER_PICK)),
+            Some(Held::Grid) => edit.grid.map(|g| ([g.x, g.y], GRID_PICK)),
+            None => None,
+        };
+        if let Some((p, r)) = ring {
+            let centre = wow_to_bevy([p[0], p[1], 0.0]).with_y(at.y + 0.5);
+            gizmos.circle(flat(centre), r, HOVER_COLOR);
+        }
+    } else if let (Some(at), Some(o), Place::Grid) = (aim, facing, tool) {
         gizmos.circle(flat(at + Vec3::Y * 0.3), 6.0, GRID_COLOR);
         let w = bevy_to_wow(at);
         let ahead = wow_to_bevy([w[0] + 8.0 * o.cos(), w[1] + 8.0 * o.sin(), 0.0]).with_y(at.y);
@@ -718,6 +893,19 @@ pub(crate) fn update(
         gizmos.line(left + Vec3::Y * 8.0, right + Vec3::Y * 8.0, AIM_COLOR);
         let ahead = wow_to_bevy([w[0] + 8.0 * o.cos(), w[1] + 8.0 * o.sin(), 0.0]).with_y(at.y);
         gizmos.arrow(at + Vec3::Y * 0.5, ahead + Vec3::Y * 0.5, AIM_COLOR);
+    }
+    // Each checkpoint's small marker and pole on the ground, the start's green.
+    if let Some(eye) = eye {
+        for (i, p) in edit.points.iter().enumerate() {
+            let top = wow_to_bevy([p[0], p[1], 0.0]).with_y(eye.translation.y + 200.0);
+            let Some(hit) = collide.ray_body(top, Dir3::NEG_Y, 4000.0) else {
+                continue;
+            };
+            let foot = top - Vec3::Y * (hit.distance - 0.3);
+            let color = if i == 0 { START_COLOR } else { MARKER_COLOR };
+            gizmos.circle(flat(foot), MARKER, color);
+            gizmos.line(foot, foot + Vec3::Y * MARKER_POLE, color);
+        }
     }
     // The grid: the draft's while editing, a test lap's until its start.
     let grid = match practice {
@@ -779,6 +967,7 @@ fn place(edit: &mut TrackEdit, what: Place, at: Vec3, o: f32) {
             });
             edit.say("Starting grid placed.");
         }
+        Place::Move => return,
     }
     edit.tool = Place::Checkpoint;
     info!(
@@ -905,6 +1094,7 @@ mod tests {
     #[test]
     fn the_wheel_sizes_the_next_gate_and_the_save_keeps_it() {
         let mut edit = draft(0, &[]);
+        edit.tool = Place::Start;
         let at = |x: f32| wow_to_bevy([x, 0.0, 0.0]);
         click(&mut edit, at(0.0), 0.0);
         edit.widen(-3.0);
@@ -923,6 +1113,59 @@ mod tests {
         );
         edit.clear();
         assert_eq!(edit.width, GATE_HALF_WIDTH);
+    }
+
+    #[test]
+    fn the_move_cursor_places_nothing_and_drags_a_gate_or_the_grid() {
+        let mut edit = draft(0, &[]);
+        assert_eq!(edit.tool(), Place::Move, "a cursor first");
+        let at = |x: f32, y: f32| wow_to_bevy([x, y, 0.0]);
+        place(&mut edit, Place::Move, at(0.0, 0.0), 0.0);
+        assert!(edit.points.is_empty());
+        edit.tool = Place::Start;
+        click(&mut edit, at(0.0, 0.0), 0.0);
+        click(&mut edit, at(100.0, 0.0), 0.0);
+        edit.widen(-2.0);
+        click(&mut edit, at(200.0, 0.0), 0.0);
+        edit.width = GATE_HALF_WIDTH;
+        edit.grid = Some(Grid {
+            x: -10.0,
+            y: 0.0,
+            z: 0.0,
+            o: 1.0,
+        });
+        // Under the cursor: the nearest checkpoint's small marker, else nothing.
+        assert_eq!(edit.under([102.0, 1.0]), Some(Held::Gate(1)));
+        assert_eq!(
+            edit.under([105.0, 10.0]),
+            None,
+            "a gate's width is not its marker"
+        );
+        assert_eq!(edit.under([-9.0, 0.0]), Some(Held::Grid));
+        // Dragged: it goes where aimed with its width, turned as the turn is.
+        edit.take(Held::Gate(2));
+        assert_eq!(edit.width, 16.0);
+        edit.turn = Some(0.5);
+        edit.drag(at(250.0, 30.0), 0.0);
+        edit.drop_held();
+        let p = edit.points[2];
+        assert!(
+            (p[0] - 250.0).abs() < 1e-3 && (p[1] - 30.0).abs() < 1e-3,
+            "{p:?}"
+        );
+        assert_eq!((edit.facings[2], edit.widths[2]), (Some(0.5), 16.0));
+        assert_eq!(
+            edit.width, GATE_HALF_WIDTH,
+            "the next gate is the default again"
+        );
+        edit.take(Held::Grid);
+        edit.drag(at(-20.0, 5.0), 1.0);
+        let g = edit.grid.unwrap();
+        assert!((g.x + 20.0).abs() < 1e-3 && (g.y - 5.0).abs() < 1e-3 && g.o == 1.0);
+        // Undo lets go of what it takes away.
+        edit.take(Held::Gate(2));
+        edit.drop_held();
+        assert!(edit.held.is_none());
     }
 
     #[test]
@@ -966,6 +1209,13 @@ mod tests {
             ["Short Dash"]
         );
         assert!(now > saves, "the browser hears of it");
+        // Edited: back as the draft, on its own map alone.
+        assert_eq!(edit.edit_saved("short-dash"), Ok("Short Dash".to_string()));
+        assert_eq!(edit.points.len(), 2);
+        assert_eq!(edit.tool(), Place::Move);
+        edit.map = 1;
+        assert!(edit.edit_saved("short-dash").is_err());
+        assert_eq!(edit.points.len(), 2, "a refusal keeps the draft");
         // Deleted: gone from the folder and the list; a path is no key.
         edit.delete("../short-dash");
         assert!(file.exists());

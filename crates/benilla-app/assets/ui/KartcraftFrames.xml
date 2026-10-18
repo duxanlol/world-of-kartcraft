@@ -894,8 +894,8 @@
                 BenillaKartTrackBrowser_Refresh()
                 BenillaKartFinder_Refresh()
             elseif verb == "PubOk" then
+                -- The server's fresh list follows at once.
                 BenillaKart_Say("Published " .. (line[4] or "your track") .. ": everyone finds it in Player tracks.")
-                if BenillaKartTrackBrowser.mode == "pub" then BenillaKart_Send("PubL") end
             elseif verb == "PubNo" then
                 BenillaKart_Say("Not published: " .. (line[3] or ""))
             elseif verb == "PubGone" then
@@ -1044,6 +1044,7 @@
                 end
             end
             local track = selected and BenillaKartTrack(selected)
+            BenillaKartTracksFrameEdit:Hide()
             BenillaKartTracksFrameHeaderText:SetText(BENILLA_KART_BROWSER_TITLES[BenillaKartTrackBrowser.mode or ""] or "Tracks")
             BenillaKartTracksFrameTrial:SetText("Time trial")
             BenillaKartTracksFrameMarshal:SetText("Go to marshal")
@@ -1055,12 +1056,13 @@
                 BenillaKartTracksFrameTrial:Enable()
                 if track.mine then
                     BenillaKartTracksFrameText:SetText(track.text .. "\n\n|cff80ff80Your own track: Test lap"
-                        .. " runs it on your client alone, with no records; Publish puts it in everyone's"
-                        .. " Player tracks.|r")
+                        .. " runs it on your client alone, with no records; Edit opens it in the track"
+                        .. " editor; Publish puts it in everyone's Player tracks.|r")
                     BenillaKartTracksFrameMarshal:SetText("Publish")
                     BenillaKartTracksFrameMarshal:Enable()
                     BenillaKartTracksFrameRate:SetText("Delete")
                     BenillaKartTracksFrameRate:Enable()
+                    BenillaKartTracksFrameEdit:Show()
                 else
                     BenillaKartTracksFrameText:SetText(track.text .. "\n\n|cff999999A player's track:"
                         .. " Test lap runs it on your client alone, with no records.|r")
@@ -3059,14 +3061,22 @@
             end
         end
 
-        -- Open or closed: "0" first, so a "1" the kart refused (in a race) is a change again.
+        -- Open: "0" first, so a "1" the kart refused (in a race) is a change again. Closed by a
+        -- press, as the CVar may already read "0" (opened by My tracks' Edit).
         function BenillaKartEditor_Toggle()
             if BenillaKartEditor.state == "" then
                 SetCVar("KartTrackEdit", "0")
                 SetCVar("KartTrackEdit", "1")
             else
-                SetCVar("KartTrackEdit", "0")
+                BenillaKartEditor_Send("close")
             end
+        end
+
+        -- My tracks' Edit: the saved track back in the editor, under its name.
+        function BenillaKartEditor_Edit(track)
+            BenillaKartEditorBarName:SetText(track.name)
+            BenillaKartEditor_Send("edit", track.file)
+            BenillaKartTracksFrame:Hide()
         end
 
         -- A press of the bar's: "<n><TAB>verb[<TAB>arg...]", n counting so a repeat changes it.
@@ -3115,6 +3125,7 @@
 
         -- The tools' buttons, and what the bar says a left click places with each.
         BENILLA_KART_EDITOR_TOOLS = {
+            move = { "Move", "Drag the start, a checkpoint or the grid to move it." },
             start = { "Start", "Left-click the ground to place the start." },
             checkpoint = { "Place", "Left-click the ground to place the next checkpoint." },
             grid = { "Grid", "Left-click the ground to place the starting grid." },
@@ -3143,7 +3154,8 @@
                 if row[2] then keys = keys .. " / " .. BenillaKartEditorKeys_Key(row[2]) end
                 table.insert(lines, "|cffffd100" .. keys .. "|r  " .. row[3])
             end
-            table.insert(lines, "|cffffd100Left click|r  place what the bar picked")
+            table.insert(lines, "|cffffd100Left click|r  place with the tool picked")
+            table.insert(lines, "|cffffd100Left drag|r  with Move: move a gate or the grid")
             table.insert(lines, "|cffffd100Q / E|r or |cffffd100middle mouse held|r  turn the gate")
             table.insert(lines, "|cffffd100Mouse wheel|r  widen or narrow the gate")
             table.insert(lines, "|cffffd100Controller Fire|r  place at the screen's centre")
@@ -5962,6 +5974,15 @@
                 <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-24" y="18"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartTracksFrame:Hide()</OnClick></Scripts>
             </Button>
+            <!-- Our own track back in the track editor (BenillaKartEditor_Edit); shown for it alone. -->
+            <Button name="$parentEdit" inherits="UIPanelButtonTemplate" text="Edit" hidden="true">
+                <Size><AbsDimension x="120" y="22"/></Size>
+                <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-24" y="74"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>
+                    local track = BenillaKartTrack(BenillaKartTrackBrowser.selected)
+                    if track and track.mine then BenillaKartEditor_Edit(track) end
+                </OnClick></Scripts>
+            </Button>
         </Frames>
         <Scripts>
             <OnLoad>
@@ -7035,30 +7056,35 @@
                     <OnEnterPressed>this:ClearFocus()</OnEnterPressed>
                 </Scripts>
             </EditBox>
-            <Button name="$parentStart" inherits="UIPanelButtonTemplate" text="Place start">
-                <Size><AbsDimension x="110" y="24"/></Size>
+            <Button name="$parentMove" inherits="UIPanelButtonTemplate" text="Move">
+                <Size><AbsDimension x="70" y="24"/></Size>
                 <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="16" y="46"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartEditor_Send("move")</OnClick></Scripts>
+            </Button>
+            <Button name="$parentStart" inherits="UIPanelButtonTemplate" text="Place start">
+                <Size><AbsDimension x="100" y="24"/></Size>
+                <Anchors><Anchor point="LEFT" relativeTo="$parentMove" relativePoint="RIGHT"><Offset><AbsDimension x="8" y="0"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartEditor_Send("start")</OnClick></Scripts>
             </Button>
             <Button name="$parentPlace" inherits="UIPanelButtonTemplate" text="Place checkpoint">
-                <Size><AbsDimension x="130" y="24"/></Size>
+                <Size><AbsDimension x="120" y="24"/></Size>
                 <Anchors><Anchor point="LEFT" relativeTo="$parentStart" relativePoint="RIGHT"><Offset><AbsDimension x="8" y="0"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartEditor_Send("place")</OnClick></Scripts>
             </Button>
             <Button name="$parentGrid" inherits="UIPanelButtonTemplate" text="Place grid">
-                <Size><AbsDimension x="110" y="24"/></Size>
+                <Size><AbsDimension x="96" y="24"/></Size>
                 <Anchors><Anchor point="LEFT" relativeTo="$parentPlace" relativePoint="RIGHT"><Offset><AbsDimension x="8" y="0"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartEditor_Send("grid")</OnClick></Scripts>
             </Button>
             <Button name="$parentUndo" inherits="UIPanelButtonTemplate" text="Undo">
-                <Size><AbsDimension x="70" y="24"/></Size>
+                <Size><AbsDimension x="64" y="24"/></Size>
                 <Anchors><Anchor point="LEFT" relativeTo="$parentGrid" relativePoint="RIGHT"><Offset><AbsDimension x="8" y="0"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartEditor_Send("undo")</OnClick></Scripts>
             </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
-                <Size><AbsDimension x="80" y="24"/></Size>
+                <Size><AbsDimension x="70" y="24"/></Size>
                 <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-16" y="46"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>SetCVar("KartTrackEdit", "0")</OnClick></Scripts>
+                <Scripts><OnClick>BenillaKartEditor_Send("close")</OnClick></Scripts>
             </Button>
             <Button name="$parentSprint" inherits="UIPanelButtonTemplate" text="Sprint">
                 <Size><AbsDimension x="64" y="24"/></Size>
@@ -7090,7 +7116,7 @@
     <!-- The track editor's keys card, on the left while editing: the keys the free camera flies
          on as they are bound now, and the mouse's. It drags anywhere. -->
     <Frame name="BenillaKartEditorKeys" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="MEDIUM">
-        <Size><AbsDimension x="260" y="190"/></Size>
+        <Size><AbsDimension x="260" y="204"/></Size>
         <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="20" y="80"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
             <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>
@@ -7103,7 +7129,7 @@
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="12" y="-10"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentText" inherits="GameFontHighlightSmall" justifyH="LEFT" justifyV="TOP">
-                    <Size><AbsDimension x="236" y="136"/></Size>
+                    <Size><AbsDimension x="236" y="150"/></Size>
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="12" y="-30"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
