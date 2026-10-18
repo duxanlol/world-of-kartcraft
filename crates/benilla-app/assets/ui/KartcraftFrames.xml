@@ -1522,6 +1522,14 @@
                 SetCVar("KartPaint", look.worn.P)
                 SetCVar("KartTrail", look.worn.T)
                 if BenillaKartGarageFrame:IsVisible() then BenillaKartGarage_Refresh() end
+            elseif verb == "HopBest" then
+                -- A Skyhop finish kept (Kartcraft.cpp "Skyhop"): the time, our best, the record.
+                local function clock(ms) return format("%.2f s", (tonumber(ms) or 0) / 1000) end
+                local text = "Skyhop: " .. clock(line[4]) .. ". Your best: " .. clock(line[5]) ..
+                    ". Record: " .. clock(line[6]) .. " by " .. (line[7] or "?") .. "."
+                if line[4] == line[6] then text = "Skyhop record! " .. text end
+                UIErrorsFrame:AddMessage(text, 1, 0.82, 0, 1, 6)
+                BenillaKart_Say(text)
             elseif verb == "Open" then
                 -- The hub's Quartermaster opens a window: the garage or the shop.
                 if line[3] == "garage" then

@@ -117,5 +117,7 @@ windows-sys = { version = "0.59", features = [
 # The login cycle's fake realmd runs the server half of SRP6 (`net::io::cycle_tests`).
 [dev-dependencies]
 benilla-srp = { path = "../benilla-srp" }
+# The kart's physics for a bot driving the props' courses (kart/skyhop.rs's tests).
+ctr-kart = { path = "../ctr-kart" }
 num-bigint = "0.4.6"
 sha1.workspace = true

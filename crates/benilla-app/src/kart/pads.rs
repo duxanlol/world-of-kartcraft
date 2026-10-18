@@ -49,8 +49,17 @@ fn all_pads(json: &str) -> Vec<(u32, Pad)> {
     out
 }
 
-static PADS: std::sync::LazyLock<Vec<(u32, Pad)>> =
-    std::sync::LazyLock::new(|| all_pads(include_str!("../../../../courses/courses.json")));
+/// Every course's pads, and the props' ([`super::props`]: the stunt park's, Skyhop's).
+static PADS: std::sync::LazyLock<Vec<(u32, Pad)>> = std::sync::LazyLock::new(|| {
+    let mut pads = all_pads(include_str!("../../../../courses/courses.json"));
+    pads.extend(
+        super::props::FILE
+            .pads
+            .iter()
+            .map(|p| (p.map, Pad::from_wow(p.x, p.y, p.z, p.o))),
+    );
+    pads
+});
 
 /// Hands the map's pads to the field, and the ones laid so far to the session.
 pub(super) fn feed(

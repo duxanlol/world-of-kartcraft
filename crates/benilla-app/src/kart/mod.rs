@@ -24,6 +24,7 @@ pub(crate) mod marshals;
 mod pad_choice;
 mod pads;
 mod profession;
+mod props;
 mod race;
 mod remote;
 mod replay;
@@ -32,6 +33,7 @@ mod seat;
 pub(crate) mod settings;
 mod showcase;
 mod skins;
+mod skyhop;
 mod sound;
 pub(crate) mod track_edit;
 mod ui;
@@ -705,6 +707,8 @@ pub(crate) fn plugin(app: &mut App) {
         .add_observer(settings::on_cvar)
         .init_resource::<pad_choice::PadChoice>()
         .add_observer(pad_choice::on_cvar)
+        .init_resource::<props::Laid>()
+        .init_resource::<skyhop::Run>()
         .init_resource::<caches::Touched>()
         .init_resource::<caches::Beam>()
         // The caches the kart drives through, once the wire's objects have landed, and the
@@ -739,13 +743,13 @@ pub(crate) fn plugin(app: &mut App) {
                 // The controller chosen, before anything reads the pads.
                 (input::log_pads, pad_choice::update).chain(),
                 race_name,
-                pads::feed,
+                (pads::feed, props::lay),
                 showcase::hook,
                 // The ground under the pads is read through the mover's trace, after its doors.
                 kartcraft::pads::lay.after(crate::go_anim::publish_ghost_door_exclusions),
                 update.in_set(KartDriveSet),
                 // The track editor after the race, which a test lap of its draft runs in.
-                (race::update, track_edit::update).chain(),
+                (race::update, track_edit::update, skyhop::update).chain(),
                 showcase::banner,
                 sound::overtakes,
                 // After the drive: a replay playing takes its camera.

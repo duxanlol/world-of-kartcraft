@@ -2289,7 +2289,8 @@ namespace Kartcraft
     //
     // The Mirage Raceway, World of Kartcraft's meeting place: neutral ground on the Shimmering
     // Flats with marshals for its courses, and the Quartermaster (sql/kartcraft.sql, its menu
-    // here) for the garage, the shop, the tracks and the Race Finder. "R\tHub" (/hub) goes there
+    // here) for the garage, the shop, the tracks and the Race Finder. Within HUB_RADIUS of it
+    // is a sanctuary: nothing attacks anyone there. "R\tHub" (/hub) goes there
     // from the open world, in the kart if in it, at most once every HUB_COOLDOWN.
 
     constexpr uint32 HUB_TEXT = 190020;
@@ -2299,6 +2300,12 @@ namespace Kartcraft
     enum HubAction : uint32 { HUB_GARAGE = 1, HUB_SHOP, HUB_TRACKS, HUB_FINDER };
 
     static std::unordered_map<uint32, uint32> s_hubAt; // player guid low -> ms, world thread
+    // The sanctuary: within HUB_RADIUS of the hub nothing attacks anyone, the race's shield on
+    // them (TickShields) while they are there. Who is there, under s_mutex (HubTick).
+    constexpr float HUB_RADIUS = 150.f;
+    constexpr uint32 HUB_TICK = 2 * IN_MILLISECONDS;
+    static std::set<ObjectGuid> s_hubbed;
+    static uint32 s_hubTicked = 0;
 
     static bool HubHello(Player* player, Creature* quartermaster)
     {
@@ -2352,6 +2359,95 @@ namespace Kartcraft
             last = now;
             chat.SendSysMessage("Off to the Mirage Raceway, the racers' hub.");
         }
+    }
+
+    // ── Skyhop ─────────────────────────────────────────────────────────────────────────────────
+    //
+    // The client's challenges of floating platforms (props/props.json, kart/skyhop.rs), run out of
+    // any race: a finish is told ("R\tHop\t<key>\t<ms>") from the goal, in the kart, no faster
+    // than a run can be (the client's bot, on CTR's physics, takes 11.17 s), and kept as the
+    // racer's best in kartcraft_hops; a new record is said to everyone. The answer is
+    // "R\tHopBest\t<key>\t<ms>\t<best>\t<record>\t<holder>".
+
+    struct HopCourse
+    {
+        char const* key;
+        float goal[3];  // the last gate, props.json's (kart/skyhop.rs's tests hold them alike)
+        uint32 map;
+        uint32 fastest; // ms
+    };
+
+    static HopCourse const HOP_COURSES[] = {
+        { "skyhop", { -5651.06f, -4029.94f, -51.8f }, 1, 9000 },
+    };
+    // How near the goal (yards) a finish is told from.
+    constexpr float HOP_GOAL_RADIUS = 30.f;
+
+    static void CreateHops()
+    {
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `kartcraft_hops` ("
+            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
+            "`course` VARCHAR(16) NOT NULL COMMENT 'HOP_COURSES key', "
+            "`ms` INT UNSIGNED NOT NULL, "
+            "`at` INT UNSIGNED NOT NULL COMMENT 'unix time', "
+            "PRIMARY KEY (`guid`, `course`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+    }
+
+    static std::string HopClock(uint32 ms)
+    {
+        char text[32];
+        std::snprintf(text, sizeof(text), "%u.%02u s", ms / 1000, (ms % 1000) / 10);
+        return text;
+    }
+
+    // A finish told: kept if it is the racer's best, said to all if it is the record. On the world
+    // thread.
+    static void HandleHop(Player* player, std::string const& key, uint32 ms)
+    {
+        HopCourse const* course = nullptr;
+        for (HopCourse const& c : HOP_COURSES)
+            if (key == c.key)
+                course = &c;
+        if (!course || ms < course->fastest || !player->HasAura(SPELL_SUMMON_KART) || InRace(player) ||
+            player->GetMapId() != course->map ||
+            player->GetDistance(course->goal[0], course->goal[1], course->goal[2]) > HOP_GOAL_RADIUS)
+            return;
+        uint32 const guid = player->GetGUIDLow();
+        auto best_of = [&](char const* sql) -> std::pair<uint32, std::string>
+        {
+            std::unique_ptr<QueryResult> result = CharacterDatabase.Query(sql);
+            if (!result)
+                return { 0, "" };
+            Field* f = result->Fetch();
+            return { f[0].GetUInt32(), f[1].GetCppString() };
+        };
+        char sql[384];
+        std::snprintf(sql, sizeof(sql), "SELECT h.`ms`, c.`name` FROM `kartcraft_hops` h JOIN `characters` c ON "
+            "c.`guid` = h.`guid` WHERE h.`course` = '%s' ORDER BY h.`ms` LIMIT 1", course->key);
+        std::pair<uint32, std::string> const record = best_of(sql);
+        std::snprintf(sql, sizeof(sql), "SELECT `ms`, '' FROM `kartcraft_hops` WHERE `guid` = %u AND `course` = '%s'",
+            guid, course->key);
+        uint32 best = best_of(sql).first;
+        if (!best || ms < best)
+        {
+            CharacterDatabase.DirectPExecute("REPLACE INTO `kartcraft_hops` (`guid`, `course`, `ms`, `at`) "
+                "VALUES (%u, '%s', %u, %u)", guid, course->key, ms, uint32(std::time(nullptr)));
+            best = ms;
+        }
+        uint32 rec = record.first;
+        std::string holder = record.second;
+        if (!rec || ms < rec)
+        {
+            if (rec)
+                sWorld.SendGlobalText((std::string(player->GetName()) + " set a new Skyhop record: " + HopClock(ms) +
+                    " (was " + HopClock(rec) + " by " + holder + ")!").c_str(), nullptr);
+            rec = ms;
+            holder = player->GetName();
+        }
+        SendLine(player, "KARTCRAFT\tR\tHopBest\t" + std::string(course->key) + "\t" + std::to_string(ms) + "\t" +
+            std::to_string(best) + "\t" + std::to_string(rec) + "\t" + holder);
     }
 
     static bool HasRated(uint32 guid, char const* course)
@@ -3020,6 +3116,8 @@ namespace Kartcraft
                         want[r.guid] |= RACE_SHIELD_FLAGS;
         for (ObjectGuid const& guid : s_raceMode)
             want[guid] |= RACE_MODE_FLAGS;
+        for (ObjectGuid const& guid : s_hubbed)
+            want[guid] |= RACE_SHIELD_FLAGS;
         // The flags each player no longer needs.
         std::vector<std::pair<ObjectGuid, uint32>> off;
         for (auto const& had : s_shielded)
@@ -4839,9 +4937,33 @@ namespace Kartcraft
             EndMarathon(m);
     }
 
+    // Who is in the hub's sanctuary now, and their shields with it. On the world thread.
+    static void HubTick(uint32 now)
+    {
+        std::set<ObjectGuid> here;
+        if (Map* map = sMapMgr.FindMap(HUB_MAP, 0))
+        {
+            Map::PlayerList const& players = map->GetPlayers();
+            for (auto itr = players.begin(); itr != players.end(); ++itr)
+                if (Player* p = itr->getSource())
+                    if (p->IsInWorld() && p->IsAlive() && p->GetDistance2d(HUB_X, HUB_Y) < HUB_RADIUS)
+                        here.insert(p->GetObjectGuid());
+        }
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (here == s_hubbed && here.empty())
+            return;
+        s_hubbed = here;
+        TickShields(now);
+    }
+
     void Update(uint32 /*diff*/)
     {
         uint32 const now = WorldTimer::getMSTime();
+        if (!s_hubTicked || WorldTimer::getMSTimeDiff(s_hubTicked, now) >= HUB_TICK)
+        {
+            s_hubTicked = now;
+            HubTick(now);
+        }
         if (s_marathonTicked && WorldTimer::getMSTimeDiff(s_marathonTicked, now) < MARATHON_TICK)
             return;
         s_marathonTicked = now;
@@ -5756,6 +5878,18 @@ namespace Kartcraft
             EquipCosmetic(player, f[2], f[3]);
             return;
         }
+        if (f.size() >= 4 && f[1] == "Hop")
+        {
+            ObjectGuid const guid = player->GetObjectGuid();
+            std::string const key = f[2];
+            uint32 const ms = uint32(std::strtoul(f[3].c_str(), nullptr, 10));
+            sWorld.GetMessager().AddMessage([guid, key, ms](World*)
+            {
+                if (Player* p = ObjectAccessor::FindPlayer(guid))
+                    HandleHop(p, key, ms);
+            });
+            return;
+        }
         if (f.size() >= 2 && f[1] == "Hub")
         {
             ObjectGuid const guid = player->GetObjectGuid();
@@ -6448,6 +6582,7 @@ namespace Kartcraft
         cache->pGOHello = &CacheHello;
         cache->RegisterSelf(true);
         CreateCacheClaims();
+        CreateHops();
         CreateResults();
         CreateChallenges();
         CreateCosmetics();

@@ -127,6 +127,8 @@ pub struct Session {
     /// does or as asphalt everywhere ([`Session::set_ground`]).
     ground: Ground,
     terrain_physics: bool,
+    /// The props' faces ([`Session::set_props`]).
+    props: Props,
     /// The surface of deep water under the kart, Bevy world height, for it to float on
     /// ([`Session::set_water`], [`ctr_kart::Kart::water`]); none on land.
     water: Option<f32>,
@@ -167,20 +169,41 @@ impl Taps {
     }
 }
 
-/// A grid to build: the session's epoch, the colliders near the kart, the box's centre and the
-/// session's lu origin.
+/// A grid to build: the session's epoch, the colliders near the kart, the props' faces, the
+/// box's centre and the session's lu origin.
 struct Job {
     epoch: u64,
     pieces: Vec<ColliderPiece>,
+    props: Props,
     centre: Vec3,
     origin: Vec3,
 }
 
+/// Faces the kart drives on that the world does not have (the host's props: ramps, platforms),
+/// Bevy world.
+pub type Props = Arc<Vec<[Vec3; 3]>>;
+
 /// Every collision triangle of `pieces` in the box around `centre`, in lu from `origin`;
 /// zero-area and non-finite faces are left out. Off the main thread for the moving kart: a
 /// town's box holds tens of thousands of faces.
-fn triangles(pieces: &[ColliderPiece], centre: Vec3, origin: Vec3) -> Vec<Tri> {
+fn triangles(
+    pieces: &[ColliderPiece],
+    props: &[[Vec3; 3]],
+    centre: Vec3,
+    origin: Vec3,
+) -> Vec<Tri> {
     let mut out = Vec::new();
+    // The props near the box: a face with a corner in it, or spanning it.
+    for face in props {
+        let lo = face[0].min(face[1]).min(face[2]);
+        let hi = face[0].max(face[1]).max(face[2]);
+        if (lo - (centre + GATHER_HALF)).max_element() > 0.0
+            || ((centre - GATHER_HALF) - hi).max_element() > 0.0
+        {
+            continue;
+        }
+        out.push(face.map(|v| to_lu(v, origin).to_array()));
+    }
     for piece in pieces {
         piece.faces_in(centre, GATHER_HALF, |verts, _| {
             let t = verts.map(|v| to_lu(v, origin));
@@ -207,7 +230,7 @@ fn spawn_builder() -> std::io::Result<Builder> {
                 while let Ok(newer) = jobs.try_recv() {
                     job = newer;
                 }
-                let tris = triangles(&job.pieces, job.centre, job.origin);
+                let tris = triangles(&job.pieces, &job.props, job.centre, job.origin);
                 let grid = Arc::new(Collision::new(tris, CELL_LU));
                 if publish.send((job.epoch, grid)).is_err() {
                     break;
@@ -300,7 +323,7 @@ impl Session {
         self.centre = at;
         self.gathered_at = now;
         let pieces = collide.colliders_near_body(at, GATHER_HALF);
-        let world = Collision::new(triangles(&pieces, at, at), CELL_LU);
+        let world = Collision::new(triangles(&pieces, &self.props, at, at), CELL_LU);
         let faces = world.len();
         // The ground under us, from a little above the feet: a body the server put a little under
         // the terrain (its positions are not exact) must not start the kart beneath it.
@@ -363,6 +386,15 @@ impl Session {
     /// none: from the host, which reads the world's liquid under the kart.
     pub fn set_water(&mut self, surface: Option<f32>) {
         self.water = surface;
+    }
+
+    /// The props the kart drives on (their faces, Bevy world), in the grids built from now on.
+    pub fn set_props(&mut self, props: Props) {
+        if !Arc::ptr_eq(&self.props, &props) {
+            self.props = props;
+            // The grid in use was built without them: build the next one at once.
+            self.gathered_at = f32::NEG_INFINITY;
+        }
     }
 
     /// The turbo pads the kart fires as it drives over them, Bevy world.
@@ -473,6 +505,7 @@ impl Session {
                 let _ = send.send(Job {
                     epoch: self.epoch,
                     pieces,
+                    props: self.props.clone(),
                     centre: at,
                     origin: self.origin,
                 });

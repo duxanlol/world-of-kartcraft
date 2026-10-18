@@ -613,6 +613,7 @@ dependencies = [
  "cosmic-text",
  "cpal 0.17.1",
  "crossbeam-channel",
+ "ctr-kart",
  "fontdb",
  "half",
  "image",
