@@ -194,14 +194,9 @@ pub(crate) fn update(
     }
 }
 
-/// `ms` as "12.34 s", or "1:02.34" past a minute.
+/// `ms` as a race clock, "0:12.34", as every race time is shown.
 fn clock(ms: u32) -> String {
-    let s = ms as f32 / 1000.0;
-    if s < 60.0 {
-        format!("{s:.2} s")
-    } else {
-        format!("{}:{:05.2}", (s / 60.0) as u32, s % 60.0)
-    }
+    format!("{}:{:02}.{:02}", ms / 60_000, ms / 1000 % 60, ms % 1000 / 10)
 }
 
 #[cfg(test)]
@@ -262,7 +257,7 @@ mod tests {
         step(&mut s, 0, &c, [30.0, 0.0, 7.0], 2.0);
         assert_eq!(step(&mut s, 0, &c, [45.0, 0.0, 1.0], 3.0), Step::Fell(1));
         assert_eq!(s, State::Idle);
-        assert_eq!(clock(12_340), "12.34 s");
+        assert_eq!(clock(12_340), "0:12.34");
         assert_eq!(clock(62_340), "1:02.34");
     }
 

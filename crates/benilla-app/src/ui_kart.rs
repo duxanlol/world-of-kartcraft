@@ -322,6 +322,17 @@ fn score_args(lines: ScoreLines) -> Vec<ScriptValue> {
     args
 }
 
+/// The shop's goods pane's yaw, which its rotate buttons turn, for its kart
+/// (`crate::kart::goods_preview`).
+pub(crate) fn good_yaw(
+    script: Option<NonSend<UiScript>>,
+    mut preview: ResMut<crate::kart::goods_preview::GoodPreview>,
+) {
+    if let Some(script) = script {
+        preview.yaw = script.model_pane_facing("BenillaKartShopFrameGood");
+    }
+}
+
 /// The skin shop pane's yaw, which its rotate buttons turn, for its booth (`crate::kart::skins`).
 pub(crate) fn skin_yaw(
     script: Option<NonSend<UiScript>>,

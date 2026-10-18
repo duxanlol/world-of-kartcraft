@@ -30,7 +30,8 @@ pub(crate) struct GoodPreview {
     shown: Option<(String, Entity)>,
     camera: Option<Entity>,
     image: Option<Handle<Image>>,
-    yaw: f32,
+    /// The pane's yaw, which its rotate buttons turn (fed by `crate::ui_kart::good_yaw`).
+    pub(crate) yaw: f32,
     turned: f32,
 }
 
@@ -55,16 +56,6 @@ pub(crate) fn setup(
         PortraitSource::Live(image.clone()),
     );
     preview.image = Some(image);
-}
-
-/// The goods pane's yaw, which its rotate buttons turn.
-pub(crate) fn yaw(
-    script: Option<NonSend<benilla_ui::script::UiScript>>,
-    mut preview: ResMut<GoodPreview>,
-) {
-    if let Some(script) = script {
-        preview.yaw = script.model_pane_facing("BenillaKartShopFrameGood");
-    }
 }
 
 /// Stand the wanted good up (and the last one down) with the booth's camera, and turn it to the

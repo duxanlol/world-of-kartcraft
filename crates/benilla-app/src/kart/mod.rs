@@ -18,7 +18,7 @@ mod caches;
 pub(crate) mod freecam;
 mod garage;
 mod ghost;
-mod goods_preview;
+pub(crate) mod goods_preview;
 pub(crate) mod gps;
 mod ground;
 pub(crate) mod marshals;
@@ -740,7 +740,7 @@ pub(crate) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             // After the drive's own kart spawners (the ghost, the replay, our kart).
-            (goods_preview::yaw, goods_preview::update)
+            (crate::ui_kart::good_yaw, goods_preview::update)
                 .chain()
                 .after(crate::ui_script::UiInput)
                 .after(crate::player::PlayerControlSet),
