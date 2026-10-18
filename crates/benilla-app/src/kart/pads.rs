@@ -49,14 +49,15 @@ fn all_pads(json: &str) -> Vec<(u32, Pad)> {
     out
 }
 
-/// Every course's pads, and the props' ([`super::props`]: the stunt park's, Skyhop's).
+/// Every course's pads, and the props' ([`super::props`]: the stunt park's, Skyhop's), these at
+/// their own heights: the world's ground under Skyhop's is the desert floor far below.
 static PADS: std::sync::LazyLock<Vec<(u32, Pad)>> = std::sync::LazyLock::new(|| {
     let mut pads = all_pads(include_str!("../../../../courses/courses.json"));
     pads.extend(
         super::props::FILE
             .pads
             .iter()
-            .map(|p| (p.map, Pad::from_wow(p.x, p.y, p.z, p.o))),
+            .map(|p| (p.map, Pad::from_wow(p.x, p.y, p.z, p.o).fixed())),
     );
     pads
 });

@@ -33,6 +33,9 @@ pub struct Pad {
     pub centre: Vec3,
     /// Unit, level: the way the pad points.
     pub forward: Vec3,
+    /// Laid flat at its own height, not dropped onto the world's ground: a pad on a prop the
+    /// world's collision has not (Skyhop's platforms).
+    pub fixed: bool,
 }
 
 impl Pad {
@@ -42,6 +45,15 @@ impl Pad {
         Self {
             centre: wow_to_bevy([x, y, z]),
             forward: wow_to_bevy([o.cos(), o.sin(), 0.0]).normalize_or(Vec3::NEG_Z),
+            fixed: false,
+        }
+    }
+
+    /// This pad laid flat at its own height ([`Pad::fixed`]).
+    pub fn fixed(self) -> Self {
+        Self {
+            fixed: true,
+            ..self
         }
     }
 
@@ -232,17 +244,26 @@ pub fn lay(
         }
         // The course's height (else the camera's) is only where the look down starts.
         let (x, z) = (spot.pad.centre.x, spot.pad.centre.z);
-        let Some(y) = [spot.pad.centre.y, eye.y]
-            .into_iter()
-            .find_map(|start| ground_y(&collide, Vec3::new(x, start, z)))
-        else {
+        let y = if spot.pad.fixed {
+            Some(spot.pad.centre.y)
+        } else {
+            [spot.pad.centre.y, eye.y]
+                .into_iter()
+                .find_map(|start| ground_y(&collide, Vec3::new(x, start, z)))
+        };
+        let Some(y) = y else {
             continue;
         };
         let pad = Pad {
             centre: Vec3::new(x, y, z),
             ..spot.pad
         };
-        let Some(mesh) = pad_mesh(&pad, |p| ground_y(&collide, Vec3::new(p.x, y, p.z))) else {
+        let mesh = if pad.fixed {
+            pad_mesh(&pad, |_| Some(y))
+        } else {
+            pad_mesh(&pad, |p| ground_y(&collide, Vec3::new(p.x, y, p.z)))
+        };
+        let Some(mesh) = mesh else {
             continue;
         };
         let entity = commands
