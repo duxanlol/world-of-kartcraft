@@ -44,8 +44,8 @@ pub enum Cue {
     Countdown(bool),
     /// A ready check pops (the Race Finder's; no CTR sound).
     Ready,
-    /// A checkpoint passed: the Relic Race's sound for each time crate taken (OtherFX 0x65,
-    /// `223.c:531`); CTR has no checkpoint sound. Kart data converted before it has the
+    /// A checkpoint passed: the Relic Race's "PERFECT", every time crate taken (OtherFX 0x65,
+    /// `223.c:509-531`); CTR has no checkpoint sound. Kart data converted before it has the
     /// countdown beep, soft and pitched up.
     Checkpoint,
     /// A lap done, or the finish crossed: the start's green sound (CTR plays none at the line).
@@ -619,7 +619,7 @@ struct Bank {
     /// The start lights' red and green sounds.
     countdown: StaticSoundData,
     go: StaticSoundData,
-    /// The Relic Race's time crate taken (`perfect.wav`), the checkpoint's.
+    /// The Relic Race's "PERFECT" (`perfect.wav`), the checkpoint's.
     checkpoint: Option<StaticSoundData>,
     /// The weapons' one-shots and loops, those the player's audio has.
     sfx: std::collections::HashMap<Sfx, StaticSoundData>,
