@@ -124,8 +124,10 @@ pub(crate) struct TrackEdit {
     map: u32,
     /// The tool picked; [`TrackEdit::tool`] is the one a click uses.
     tool: Place,
-    /// What the move cursor is dragging, until let go.
+    /// What the move cursor is dragging, until let go, and its offset from the cursor (WoW x,
+    /// y) as taken, so a press without a drag moves nothing.
     held: Option<Held>,
+    grab: [f32; 2],
     /// The saved tracks once read, and how often the list changed: each change goes to the
     /// track browser.
     saved: Option<Vec<Saved>>,
@@ -150,6 +152,7 @@ impl Default for TrackEdit {
             map: 0,
             tool: Place::Move,
             held: None,
+            grab: [0.0; 2],
             saved: None,
             saves: 0,
             note: String::new(),
@@ -265,9 +268,15 @@ impl TrackEdit {
             .map(|(held, ..)| held)
     }
 
-    /// Takes `held` up: the turn and the wheel's width are its own while dragged.
-    fn take(&mut self, held: Held) {
+    /// Takes `held` up with the cursor at `at` (WoW x, y): the turn and the wheel's width are
+    /// its own while dragged.
+    fn take(&mut self, held: Held, at: [f32; 2]) {
         self.held = Some(held);
+        let p = match held {
+            Held::Gate(i) => self.points.get(i).copied(),
+            Held::Grid => self.grid.map(|g| [g.x, g.y]),
+        };
+        self.grab = p.map_or([0.0; 2], |p| [p[0] - at[0], p[1] - at[1]]);
         match held {
             Held::Gate(i) => {
                 self.turn = self.facings.get(i).copied().flatten();
@@ -277,9 +286,11 @@ impl TrackEdit {
         }
     }
 
-    /// What is held to `at` (Bevy world), facing as turned (`o` for the grid).
+    /// What is held to the cursor at `at` (Bevy world), facing as turned (`o` for the grid).
     fn drag(&mut self, at: Vec3, o: f32) {
-        let w = bevy_to_wow(at);
+        let mut w = bevy_to_wow(at);
+        w[0] += self.grab[0];
+        w[1] += self.grab[1];
         match self.held {
             Some(Held::Gate(i)) if i < self.points.len() => {
                 self.points[i] = [w[0], w[1]];
@@ -296,6 +307,12 @@ impl TrackEdit {
             }
             _ => self.held = None,
         }
+    }
+
+    /// Editing, not in a test lap: the left button places and drags, so the camera's left-drag
+    /// orbit (which locks the cursor) stays off.
+    pub(crate) fn owns_left(&self) -> bool {
+        self.on && !self.testing
     }
 
     /// Lets go of what is held.
@@ -776,7 +793,7 @@ pub(crate) fn update(
         free.set(FreeMode::Off);
         edit.say("The track editor needs your kart: summon it (J) first.");
     }
-    let editing = edit.on && !edit.testing;
+    let editing = edit.owns_left();
     // Back from a test lap, or the camera switched off (/kartfree): the editor flies it.
     if editing && !free.flying() {
         free.set(FreeMode::Fly);
@@ -842,7 +859,8 @@ pub(crate) fn update(
     let clicked = buttons.just_pressed(MouseButton::Left) && cursor.is_some();
     // The move cursor: a press on something takes it, held it follows the aim, let go (Fire
     // again on a controller) it stays.
-    let hover = aim.map(bevy_to_wow).and_then(|w| edit.under([w[0], w[1]]));
+    let at = aim.map(bevy_to_wow).map(|w| [w[0], w[1]]);
+    let hover = at.and_then(|w| edit.under(w));
     let let_go = edit.held.is_some() && (fired || buttons.just_released(MouseButton::Left));
     if !editing || let_go {
         edit.drop_held();
@@ -854,8 +872,8 @@ pub(crate) fn update(
             gizmos.circle(flat(at + Vec3::Y * 0.3), GRID_PICK, HOVER_COLOR);
         }
     } else if (fired || clicked) && tool == Place::Move {
-        if let Some(held) = hover {
-            edit.take(held);
+        if let Some((held, at)) = hover.zip(at) {
+            edit.take(held, at);
         }
     } else if fired || clicked {
         match aim.zip(facing) {
@@ -1142,11 +1160,15 @@ mod tests {
             "a gate's width is not its marker"
         );
         assert_eq!(edit.under([-9.0, 0.0]), Some(Held::Grid));
-        // Dragged: it goes where aimed with its width, turned as the turn is.
-        edit.take(Held::Gate(2));
+        // Taken off its centre: a press with no drag moves nothing.
+        edit.take(Held::Gate(2), [201.0, 2.0]);
+        edit.drag(at(201.0, 2.0), 0.0);
+        let p = edit.points[2];
+        assert!((p[0] - 200.0).abs() < 1e-3 && p[1].abs() < 1e-3, "{p:?}");
+        // Dragged: it follows the cursor with its width, turned as the turn is.
         assert_eq!(edit.width, 16.0);
         edit.turn = Some(0.5);
-        edit.drag(at(250.0, 30.0), 0.0);
+        edit.drag(at(251.0, 32.0), 0.0);
         edit.drop_held();
         let p = edit.points[2];
         assert!(
@@ -1158,12 +1180,12 @@ mod tests {
             edit.width, GATE_HALF_WIDTH,
             "the next gate is the default again"
         );
-        edit.take(Held::Grid);
+        edit.take(Held::Grid, [-10.0, 0.0]);
         edit.drag(at(-20.0, 5.0), 1.0);
         let g = edit.grid.unwrap();
         assert!((g.x + 20.0).abs() < 1e-3 && (g.y - 5.0).abs() < 1e-3 && g.o == 1.0);
         // Undo lets go of what it takes away.
-        edit.take(Held::Gate(2));
+        edit.take(Held::Gate(2), [250.0, 30.0]);
         edit.drop_held();
         assert!(edit.held.is_none());
     }

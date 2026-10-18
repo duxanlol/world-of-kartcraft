@@ -801,7 +801,8 @@ pub(super) fn run_look_session(
     face_yaw: &mut f32,
     window: &mut Window,
     cursor_opts: &mut CursorOptions,
-    inspect_enabled: bool,
+    // The inspector or the track editor owns the left button: no orbit, no select.
+    left_owned: bool,
     // A left press the UI consumed as a cursor-payload world drop, which must not also select.
     click_consumed: bool,
     world_click: &mut MessageWriter<WorldClick>,
@@ -887,9 +888,9 @@ pub(super) fn run_look_session(
             // `MouselookStart` with no button: the channel's rise enters the same freelook
             // (`0x514840` → `0x51491f`), and no click is armed (`0x514810(0)`).
             engage_look(rig, LookButton::Right, focused, window, cursor_opts);
-        } else if rig.world_mouse.down(LookButton::Left) && !inspect_enabled {
+        } else if rig.world_mouse.down(LookButton::Left) && !left_owned {
             // Left-drag orbits, engaged on the press like right (`0x51491f`); the select settles
-            // at the release. While the inspector is armed, left belongs to it.
+            // at the release. While the inspector is armed or a track edited, left is theirs.
             engage_look(rig, LookButton::Left, focused, window, cursor_opts);
             // A cursor-payload world drop still orbits (`0x51491f`) but must not also select.
             *right_click = None;

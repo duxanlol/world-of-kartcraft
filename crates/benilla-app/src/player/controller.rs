@@ -66,6 +66,8 @@ pub(super) fn control(
         Res<scoped_view::ScopedView>,
         // The loading cover blanks input at the source; a gesture in flight is unwound below.
         Res<crate::loading_screen::LoadingScreen>,
+        // The track editor owns the left button: it places and drags, never orbits.
+        Option<Res<crate::kart::track_edit::TrackEdit>>,
     ),
     mut commands: Commands,
     mut player: ResMut<Player>,
@@ -109,6 +111,7 @@ pub(super) fn control(
     let self_guid = speed_capsule.7 .0;
     let scoped = &speed_capsule.8;
     let covered = speed_capsule.9.covering();
+    let editing = speed_capsule.10.as_ref().is_some_and(|e| e.owns_left());
     // Far sight turns the auto-follow off: our facing is not "behind" for a body we only watch.
     let follow_cfg = camera::FollowConfig {
         style: if view_subject.remote.is_some() {
@@ -238,7 +241,7 @@ pub(super) fn control(
         &mut player.face_yaw,
         &mut window,
         &mut opts_shadow,
-        inspect.enabled,
+        inspect.enabled || editing,
         click_consumed.0,
         &mut world_clicks.0,
         &mut world_clicks.1,
