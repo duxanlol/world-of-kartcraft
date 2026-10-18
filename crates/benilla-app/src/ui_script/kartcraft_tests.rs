@@ -4297,7 +4297,7 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
     s.fire_event(
         "BENILLA_KART_MYTRACKS",
         vec![ScriptValue::Str(
-            "goldshire-ring\tGoldshire Ring\tElwynn Forest\t0\t3\tA circuit.\t1,2;3,4;5,6\t0.0,1.0,0.500\t1.0,2.0;3.0,4.0,1.500;5.0,6.0"
+            "goldshire-ring\tGoldshire Ring\tElwynn Forest\t0\t3\tA circuit.\t1,2;3,4;5,6\t0.0,1.0,0.500\t1.0,2.0;3.0,4.0,1.500;5.0,6.0\t35.5"
                 .into(),
         )],
     );
@@ -4365,7 +4365,7 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
     s.run("BenillaKartTracksFrameMarshal:Click()").unwrap();
     assert_eq!(
         sent(&mut s),
-        ["KARTCRAFT\tR\tPub\tGoldshire Ring\t0\t3\tElwynn Forest\t0.0,1.0,0.500\t1.0,2.0;3.0,4.0,1.500;5.0,6.0"]
+        ["KARTCRAFT\tR\tPub\tGoldshire Ring\t0\t3\tElwynn Forest\t0.0,1.0,0.500\t1.0,2.0;3.0,4.0,1.500;5.0,6.0\t35.5"]
     );
     // Delete: asked first, then its published copy taken down by name and the file deleted.
     s.run("BenillaKartTracksFrameRate:Click()").unwrap();
@@ -4390,7 +4390,7 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
     );
     from_server(
         &mut s,
-        "R\tPT\t5\tCliff Loop\tSomeoneElse\t1\t3\tDurotar\t\t1.0,1.0;2.0,2.0;3.0,3.0",
+        "R\tPT\t5\tCliff Loop\tSomeoneElse\t1\t3\tDurotar\t\t1.0,1.0;2.0,2.0;3.0,3.0\t0\t0\t12.5",
     );
     from_server(&mut s, "R\tPTE");
     assert_eq!(names(&s), ["Dune Dash", "Cliff Loop"]);
@@ -4413,7 +4413,7 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
         .unwrap();
     let cmd = s.cvar("KartTrackCmd").unwrap_or_default();
     assert!(
-        cmd.ends_with("\trunspots\tCliff Loop\t3\t1\t\t1.0,1.0;2.0,2.0;3.0,3.0"),
+        cmd.ends_with("\trunspots\tCliff Loop\t3\t1\t\t1.0,1.0;2.0,2.0;3.0,3.0\t12.5"),
         "{cmd}"
     );
     // Published already under its name by us: Publish asks before the server replaces it.

@@ -487,6 +487,10 @@ namespace Kartcraft
         // Gameobject entries a race on it opens near its start while it runs (doors and gates
         // across the course: Stratholme's locked King's Square gates); may be empty.
         std::vector<uint32> doors;
+        // A dungeon course's start height (WoW z), 0 for none: the floor a teleport onto its grid
+        // looks for from a little over it, so a trip in from outside lands on the course's floor,
+        // not a roof over it (TeleportOnto).
+        float z = 0.f;
     };
 
     // The courses: courses/courses.json, made into this table by setup/vmangos/pack.py.
@@ -729,6 +733,7 @@ namespace Kartcraft
         std::string author, name, zone, grid, points;
         uint32 map = 0;
         uint32 laps = 0;
+        float z = 0.f;   // a dungeon track's start height (Course::z), 0 for none
         size_t slot = 0; // its course in s_userCourses
     };
     struct UserCourse
@@ -811,6 +816,7 @@ namespace Kartcraft
                 c.points.emplace_back(x, y);
         }
         c.marshal = c.points.empty() ? std::make_pair(0.f, 0.f) : c.points[0];
+        c.z = t.z;
         t.slot = s_userCourses.size() - 1;
     }
 
@@ -2243,7 +2249,7 @@ namespace Kartcraft
     static bool InRace(Unit const* u);
     static void GiveTokens(Player* player, uint32 count);
     static bool CanBeRacedOff(Player* player);
-    static bool TeleportOnto(Player* player, uint32 map, float x, float y, float o, bool kart);
+    static bool TeleportOnto(Player* player, uint32 map, float x, float y, float o, bool kart, float z = 0.f);
 
     static void CreateCacheClaims()
     {
@@ -4643,12 +4649,15 @@ namespace Kartcraft
     // to a checkpoint mid-race, where no countdown would cover the kart's absence) a driver stays
     // in it. No terrain data there: better left where they are, to drive over, than dropped from
     // the sky.
-    static bool TeleportOnto(Player* player, uint32 map, float x, float y, float o, bool kart)
+    static bool TeleportOnto(Player* player, uint32 map, float x, float y, float o, bool kart, float z)
     {
         // The ground under the highest point looked from: in a dungeon, a city of floors and roofs
-        // (Stratholme's), from a little over the racer, who is on its streets, not from the sky.
-        float const from = player->GetMapId() == map && player->GetMap()->IsDungeon() ?
-            player->GetPositionZ() + DUNGEON_LOOK_UP : 500.f;
+        // (Stratholme's), from a little over the floor wanted (`z`, where the course or track says)
+        // or else over the racer, who is on its streets, not from the sky.
+        MapEntry const* entry = sMapStorage.LookupEntry<MapEntry>(map);
+        bool const dungeon = entry && entry->IsDungeon();
+        float const from = dungeon && z != 0.f ? z + DUNGEON_LOOK_UP :
+            dungeon && player->GetMapId() == map ? player->GetPositionZ() + DUNGEON_LOOK_UP : 500.f;
         float ground = sTerrainMgr.LoadTerrain(map)->GetHeightStatic(x, y, from);
         if (ground <= INVALID_HEIGHT)
             return false;
@@ -4749,7 +4758,7 @@ namespace Kartcraft
         if (PartyCourse(c) && !(player->GetMapId() == c.map && player->GetInstanceId() == instance) &&
             !IntoCopy(player, c.map, instance))
             return false;
-        return TeleportOnto(player, c.map, x, y, std::atan2(dy, dx), true);
+        return TeleportOnto(player, c.map, x, y, std::atan2(dy, dx), true, c.z);
     }
 
     // Where the Race Finder took each racer from, so they can go back when their race is over, as
@@ -5194,21 +5203,24 @@ namespace Kartcraft
         dx /= len;
         dy /= len;
         float x = c.marshal.first + dx * MARSHAL_TRIP_GAP, y = c.marshal.second + dy * MARSHAL_TRIP_GAP;
-        if (TeleportOnto(player, c.map, x, y, std::atan2(-dy, -dx), player->HasAura(SPELL_SUMMON_KART)))
+        if (TeleportOnto(player, c.map, x, y, std::atan2(-dy, -dx), player->HasAura(SPELL_SUMMON_KART), c.z))
             s_marshalTrips[player->GetGUIDLow()] = now;
     }
 
-    // "R\tTG\t<x>\t<y>\t<o>", the track editor's test lap: onto its grid on our own map, in the
-    // kart, as a time trial's grid takes a racer; the lap and its countdown are the client's. Only
-    // within EDIT_TRIP_REACH of where we are ("R\tTGf" further), in the open world, out of every
-    // race and not carrying a delivery, once every EDIT_TRIP_COOLDOWN ("R\tTGx\t<secs>").
+    // "R\tTG\t<x>\t<y>\t<o>[\t<z>]", the track editor's test lap: onto its grid on our own map, in
+    // the kart, as a time trial's grid takes a racer, on the floor at `z` in a dungeon; the lap and
+    // its countdown are the client's. Only within EDIT_TRIP_REACH of where we are ("R\tTGf"
+    // further), in the open world or inside a dungeon, out of every race and not carrying a
+    // delivery, once every EDIT_TRIP_COOLDOWN ("R\tTGx\t<secs>").
     constexpr uint32 EDIT_TRIP_COOLDOWN = 10 * IN_MILLISECONDS;
     constexpr float EDIT_TRIP_REACH = 1000.f;
     static std::unordered_map<uint32, uint32> s_editTrips; // guid low -> when last made (ms)
 
-    static void ToEditorGrid(Player* player, float x, float y, float o, uint32 now)
+    static void ToEditorGrid(Player* player, float x, float y, float o, float z, uint32 now)
     {
-        if (InAnyRace(player->GetObjectGuid()) || !CanBeRacedOff(player))
+        // Inside a dungeon too: the trip stays on its map, so in its copy (a near teleport).
+        bool const inDungeon = player->GetMap()->IsDungeon() && Settled(player) && !CarryingDelivery(player);
+        if (InAnyRace(player->GetObjectGuid()) || !(CanBeRacedOff(player) || inDungeon))
             return;
         float dx = x - player->GetPositionX(), dy = y - player->GetPositionY();
         if (dx * dx + dy * dy > EDIT_TRIP_REACH * EDIT_TRIP_REACH)
@@ -5223,7 +5235,7 @@ namespace Kartcraft
             SendLine(player, "KARTCRAFT\tR\tTGx\t" + std::to_string((left + 999) / IN_MILLISECONDS));
             return;
         }
-        if (TeleportOnto(player, player->GetMapId(), x, y, o, player->HasAura(SPELL_SUMMON_KART)))
+        if (TeleportOnto(player, player->GetMapId(), x, y, o, player->HasAura(SPELL_SUMMON_KART), z))
             s_editTrips[player->GetGUIDLow()] = now;
     }
 
@@ -6204,9 +6216,11 @@ namespace Kartcraft
         }
         else if (verb == "TG" && f.size() > 4)
         {
-            float x, y, o;
-            if (ParseFloat(f[2], x) && ParseFloat(f[3], y) && ParseFloat(f[4], o))
-                ToEditorGrid(player, x, y, o, now);
+            // An optional fifth field: the grid's height, the floor to land on in a dungeon.
+            float x, y, o, z = 0.f;
+            if (ParseFloat(f[2], x) && ParseFloat(f[3], y) && ParseFloat(f[4], o) &&
+                (f.size() < 6 || f[5].empty() || ParseFloat(f[5], z)))
+                ToEditorGrid(player, x, y, o, z, now);
         }
         else if (verb == "Q-")
             LeaveQueue(guid);
@@ -6411,12 +6425,12 @@ namespace Kartcraft
     //
     // Tracks players make in the client's track editor and publish (`kartcraft_user_tracks`), for
     // every track browser to list and to test-lap on its own client: no races, records or rewards
-    // on them. "R\tPub\t<name>\t<map>\t<laps>\t<zone>\t<grid>\t<points>" publishes one (grid
-    // "x,y,o" or empty; points "x,y[,o[,w]];...", the start first, a turned gate's facing and a
-    // gate's half-width), our own of that name replaced: "R\tPubOk\t<id>\t<name>" or
-    // "R\tPubNo\t<why>". "R\tPubL" lists them,
+    // on them. "R\tPub\t<name>\t<map>\t<laps>\t<zone>\t<grid>\t<points>[\t<z>]" publishes one
+    // (grid "x,y,o" or empty; points "x,y[,o[,w]];...", the start first, a turned gate's facing and
+    // a gate's half-width; `z` a dungeon track's start height), in the open world or a dungeon, our
+    // own of that name replaced: "R\tPubOk\t<id>\t<name>" or "R\tPubNo\t<why>". "R\tPubL" lists them,
     // newest first: "R\tPTB", a "R\tPT\t<id>\t<name>\t<author>\t<map>\t<laps>\t<zone>\t<grid>\t<points>
-    // \t<good>\t<bad>" each (its votes), then "R\tPTE". "R\tPubD\t<id>" takes one of ours down (a GM's, anyone's): "R\tPubGone\t<id>";
+    // \t<good>\t<bad>\t<z>" each (its votes, its height or empty), then "R\tPTE". "R\tPubD\t<id>" takes one of ours down (a GM's, anyone's): "R\tPubGone\t<id>";
     // "R\tPubDN\t<name>" ours of that name, if any.
     constexpr size_t USER_TRACKS_MAX = 2000;    // on the server
     constexpr size_t USER_TRACKS_EACH = 20;     // by one character
@@ -6444,8 +6458,11 @@ namespace Kartcraft
             "`at` INT UNSIGNED NOT NULL COMMENT 'when published, unix time', "
             "PRIMARY KEY (`id`), UNIQUE KEY `guid_name` (`guid`, `name`)"
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+        // A dungeon track's height (TeleportOnto), added to a table made before it.
+        CharacterDatabase.DirectExecute("ALTER TABLE `kartcraft_user_tracks` ADD COLUMN IF NOT EXISTS `z` FLOAT "
+            "NOT NULL DEFAULT 0 COMMENT 'a dungeon track''s start height, 0 for none'");
         std::unique_ptr<QueryResult> result = CharacterDatabase.Query(
-            "SELECT `id`, `guid`, `author`, `name`, `map`, `laps`, `zone`, `grid`, `points` "
+            "SELECT `id`, `guid`, `author`, `name`, `map`, `laps`, `zone`, `grid`, `points`, `z` "
             "FROM `kartcraft_user_tracks` ORDER BY `at`, `id`");
         if (!result)
             return;
@@ -6462,6 +6479,7 @@ namespace Kartcraft
             t.zone = f[6].GetCppString();
             t.grid = f[7].GetCppString();
             t.points = f[8].GetCppString();
+            t.z = f[9].GetFloat();
             s_userTrackNext = std::max(s_userTrackNext, t.id + 1);
             MakeUserCourse(t);
             s_userTracks.push_back(t);
@@ -6550,8 +6568,16 @@ namespace Kartcraft
         size_t gates = 0, grids = 0;
         if (t.name.empty())
             return no("The track needs a name.");
-        if (t.map > 1)
-            return no("Only tracks in the open world can be published.");
+        // The open world or a dungeon, whose races run in copies of their own (Race copies); never a
+        // raid, whose copy wants a raid group, nor a battleground.
+        MapEntry const* entry = sMapStorage.LookupEntry<MapEntry>(t.map);
+        if (t.map > 1 && (!entry || !entry->IsDungeon() || entry->IsRaid()))
+            return no("Tracks can be published in the open world and in dungeons, not in raids or battlegrounds.");
+        // A dungeon track's start height, an optional ninth field.
+        if (f.size() > 8 && !f[8].empty() && (!ParseFloat(f[8], t.z) || std::fabs(t.z) > 20000.f))
+            return no("The track's height is not right.");
+        if (t.map <= 1)
+            t.z = 0.f;
         if (t.laps > 9)
             return no("A track has at most 9 laps.");
         if (!CleanTrackSpots(f[7], false, t.points, gates) || gates < 2 || gates > USER_TRACK_GATES ||
@@ -6584,9 +6610,10 @@ namespace Kartcraft
         CharacterDatabase.escape_string(name);
         CharacterDatabase.escape_string(zone);
         CharacterDatabase.PExecute("REPLACE INTO `kartcraft_user_tracks` (`id`, `guid`, `author`, `name`, "
-            "`map`, `laps`, `zone`, `grid`, `points`, `at`) VALUES (%u, %u, '%s', '%s', %u, %u, '%s', '%s', '%s', %u)",
+            "`map`, `laps`, `zone`, `grid`, `points`, `z`, `at`) VALUES (%u, %u, '%s', '%s', %u, %u, '%s', '%s', '%s', "
+            "%.1f, %u)",
             t.id, t.guid, author.c_str(), name.c_str(), t.map, t.laps, zone.c_str(), t.grid.c_str(),
-            t.points.c_str(), uint32(std::time(nullptr)));
+            t.points.c_str(), t.z, uint32(std::time(nullptr)));
         SendLine(player, "KARTCRAFT\tR\tPubOk\t" + std::to_string(t.id) + "\t" + t.name);
         ListUserTracks(player, now, true);
     }
@@ -6619,8 +6646,11 @@ namespace Kartcraft
         for (auto t = s_userTracks.rbegin(); t != s_userTracks.rend() && sent < USER_TRACKS_LISTED; ++t, ++sent)
         {
             std::pair<uint32, uint32> const vote = votes[s_userCourses[t->slot].key];
+            // Its height last, after the votes, so an older client reads the line as before.
+            char z[16];
+            std::snprintf(z, sizeof(z), "%.1f", t->z);
             SendLine(player, UserTrackLine(*t) + "\t" + std::to_string(vote.first) + "\t" +
-                std::to_string(vote.second));
+                std::to_string(vote.second) + "\t" + (t->z != 0.f ? z : ""));
         }
         SendLine(player, "KARTCRAFT\tR\tPTE");
     }

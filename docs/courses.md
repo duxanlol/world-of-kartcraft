@@ -36,7 +36,9 @@ client's list are both made from it; nothing else holds course data.
 - `series`: optional, the hand-made set a course belongs to (`"Grand Prix"`). The Race Finder
   offers it under its series instead of its zone, and the track browser names both.
 - `map`: the map id (0 Eastern Kingdoms, 1 Kalimdor). Any other map is a dungeon's: the course
-  is a party course (below).
+  is a dungeon course (below). `pack.py` gives a dungeon course its start height (the start's
+  `z`, else its marshal's), the floor a teleport onto its grid lands on from outside, not a roof
+  over it.
 - `laps`: 0 for a sprint from the first checkpoint to the last; else laps back through the first.
 - `checkpoints`: at least two, WoW world `x`, `y` (yards); the first is the start, where a
   driver hosts or joins. Optional `z` (the server finds the ground itself). Optional `gate`:
@@ -116,13 +118,18 @@ place), and Redo puts back what Undo took until a new gate is placed. The bar's 
 first placed the start, each gate turned with the middle mouse
 held, and optionally a starting grid, facing the way the camera looks. A card on the left lists
 the keys. Its bar names the track, picks sprint, one lap or three, runs a test lap and saves.
-A test lap asks the server to take the kart onto its grid (`R\tTG\t<x>\t<y>\t<o>`, the
-placed grid or a race's first slot behind the start; within 1000 yards, once every 10 seconds,
-the checks of a trip to a Race Marshal), runs the lights there and times the lap on the client's
-own clock, with no records. A save, or Close, starts a new
+A test lap asks the server to take the kart onto its grid (`R\tTG\t<x>\t<y>\t<o>\t<z>`, the
+placed grid or a race's first slot behind the start, `z` the track's floor; within 1000 yards,
+once every 10 seconds, the checks of a trip to a Race Marshal), runs the lights there and times
+the lap on the client's own clock, with no records. A save, or Close, starts a new
 draft. A saved track is one course object in this file's form, in
 `benilla-config/kart-tracks/<key>.json`: `key`, `name`, `zone`, `map`, `laps`, `note`, the
-`checkpoints` and `grid` (`x`, `y`, `z`, `o`), with no `marshal`. The track browser lists the
+`checkpoints` (each with the `z` it was placed at) and `grid` (`x`, `y`, `z`, `o`), with no
+`marshal`. The editor works in a dungeon as in the open world: a track on a dungeon's map is
+made, test-lapped (the grid trip stays in our copy of it) and published there. Its floor, the
+grid's height or else the start's, goes with its publish (`R\tPub`'s last field, the `PT`
+lines' last) and its test lap, so the server lands a trip onto its grid on the course's floor
+among a dungeon's floors and roofs. The track browser lists the
 saved tracks after the courses (right-click the editor's button, "My tracks", for them alone)
 and runs a test lap of one, or Edit opens it in the editor again, the kart taken to its start
 first by the test lap's trip (the camera flies once it lands; refused, it edits from where it is) (saved under the same name, it
@@ -145,15 +152,18 @@ To make a saved track a real course, paste the
 object into `courses`, then run `course-gen marshals` and `course-gen pads` for its marshal and
 pads, `pack.py`, and redeploy the server.
 
-## Party courses
+## Dungeon courses
 
-A course on a dungeon's map (not 0 or 1) is a party course. Each party has its own copy of a
-dungeon, so it races in its own: the Race Marshal stands inside (Stratholme's in King's Square,
-past the main gate), the party's leader (or a player with no party) hosts there, and only the
-host's party in the host's copy can join; the grid, the unstuck hop and every checkpoint stay in
-that copy, as a teleport within one map does. The Race Finder never offers a party course nor
-lists its races, and still refuses players inside a dungeon. Only a triggered cast mounts in a
-dungeon, so the kart comes from the marshal (host, join, time trial), not the spell book.
+A course on a dungeon's map (not 0 or 1) is a dungeon course, raced in a copy of the dungeon
+(`Kartcraft.cpp` "Race copies"). The Race Finder offers it in its zone like any course: a race
+that pops on one gets a fresh copy of its own, and every racer, party or not, is bound to it
+(not for keeps) and lands on its grid from wherever they were. A time trial (the track browser,
+Try again, the Race Finder's) runs in the player's own copy, kept while it lives, so a run
+after a run makes no new copy. A raid's copy wants a raid group, so a raid is never raced. The
+Race Marshal stands inside too (Stratholme's in King's Square, past the main gate): the party's
+leader (or a player with no party) hosts there, and only the host's party in the host's copy
+can join; the grid, the unstuck hop and every checkpoint stay in that copy, as a teleport within
+one map does. A player track published on a dungeon's map is a dungeon course too.
 
 In the kart, a driver springs none of Stratholme's position events: the rat-trap gates (and their
 rat swarm) and The Unforgiven's ambush on Market Row (`instance_stratholme.cpp`, a hunk of

@@ -190,9 +190,14 @@ def courses_header(data):
         else:
             out.append('          {},')
         out.append(f'          {{ {rows(crates, 3)} }},' if crates else '          {},')
-        mx, my, _, _ = marshal_of(c, key)
+        mx, my, mz, _ = marshal_of(c, key)
         doors_c = '{ ' + ', '.join(f'{d}u' for d in doors) + ' }' if doors else '{}'
-        out.append(f'          {{ {cfloat(mx)}, {cfloat(my)} }}, {doors_c} }},')
+        # A dungeon course's start height (Course::z): the start's z, else its marshal's beside it.
+        if cmap > 1:
+            sz = num(points[0]['z'], f'course {key}: checkpoint 0 z') if 'z' in points[0] else mz
+            out.append(f'          {{ {cfloat(mx)}, {cfloat(my)} }}, {doors_c}, {cfloat(sz)} }},')
+        else:
+            out.append(f'          {{ {cfloat(mx)}, {cfloat(my)} }}, {doors_c} }},')
     out.append('    };')
     return '\n'.join(out) + '\n'
 

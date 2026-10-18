@@ -106,9 +106,10 @@ pub(crate) fn feed(
     }
     let (mine, saves) = edit.saved();
     if sent.my_tracks != Some(saves) {
-        // A course's line, then its grid and its gates with their facings, for a publish.
+        // A course's line, then its grid, its gates with their facings and its floor, for a
+        // publish.
         let list: Vec<String> = mine
-            .map(|(c, grid, gates)| format!("{}\t{grid}\t{gates}", track_line(c)))
+            .map(|(c, grid, gates, z)| format!("{}\t{grid}\t{gates}\t{z}", track_line(c)))
             .collect();
         script.fire_event(
             "BENILLA_KART_MYTRACKS",

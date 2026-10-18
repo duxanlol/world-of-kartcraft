@@ -87,6 +87,9 @@ struct CourseCheckpoint {
     /// checkpoint by distance.
     #[serde(default)]
     o: Option<f32>,
+    /// Its height (WoW z) where known: the track editor's, the floor a dungeon's trip lands on.
+    #[serde(default)]
+    z: Option<f32>,
 }
 
 impl Course {
@@ -176,6 +179,11 @@ impl Course {
     /// Each checkpoint's facing, where one is set.
     pub(crate) fn facings(&self) -> Vec<Option<f32>> {
         self.checkpoints.iter().map(|c| c.o).collect()
+    }
+
+    /// Each checkpoint's height, where known.
+    pub(crate) fn heights(&self) -> Vec<Option<f32>> {
+        self.checkpoints.iter().map(|c| c.z).collect()
     }
 
     /// Each checkpoint's gate half-width.
@@ -342,6 +350,8 @@ pub(crate) struct Active {
     grid: Option<[f32; 3]>,
     /// The trip onto the grid is still to ask for.
     grid_trip: bool,
+    /// The grid's height (WoW z) where known: the floor the trip lands on in a dungeon.
+    floor: Option<f32>,
     /// The race's ground types (`GT`), the host's choice: every racer drives off-road as CTR's
     /// grounds hold it, or on asphalt everywhere, whatever their own `KartTerrain`.
     ground_types: bool,
@@ -441,8 +451,9 @@ impl Active {
         let g = self.grid.filter(|_| self.practice && self.grid_trip)?;
         self.grid_trip = false;
         self.grace_until = self.grace_until.max(now + KART_GRACE_SECS);
+        let z = self.floor.map_or_else(String::new, |z| format!("\t{z:.1}"));
         Some(format!(
-            "KARTCRAFT\tR\tTG\t{:.1}\t{:.1}\t{:.3}",
+            "KARTCRAFT\tR\tTG\t{:.1}\t{:.1}\t{:.3}{z}",
             g[0], g[1], g[2]
         ))
     }
@@ -459,6 +470,12 @@ impl Active {
             self.our_ms = Some(ms);
             self.finished.push((me.to_string(), 1, ms));
         }
+    }
+
+    /// The grid's height, where known ([`Active::floor`]).
+    pub(crate) fn with_floor(mut self, floor: Option<f32>) -> Self {
+        self.floor = floor;
+        self
     }
 
     /// The checkpoints' facings, where set ([`CourseCheckpoint::o`]).
@@ -3778,6 +3795,14 @@ mod tests {
             Some("KARTCRAFT\tR\tTG\t-20.0\t0.0\t0.000")
         );
         assert!(gridded.grid_trip(7.5).is_none());
+        // A track with a floor (a dungeon's) says where to land.
+        let mut floored =
+            Active::practice("Loop", 1, points.clone(), Some([-20.0, 0.0, 0.0]), "Me")
+                .with_floor(Some(133.12));
+        assert_eq!(
+            floored.grid_trip(7.0).as_deref(),
+            Some("KARTCRAFT\tR\tTG\t-20.0\t0.0\t0.000\t133.1")
+        );
         assert!(!left_without_kart(Some(false), 9.0, gridded.grace_until));
         assert!(!gridded.practice_start(Some([-1.0, 0.0]), [1.0, 0.0], 1.0));
         assert!(gridded.practice_start(Some([-30.0, 0.0]), [-22.0, 1.0], 3.0));

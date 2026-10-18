@@ -88,10 +88,27 @@ fn near(kart: Vec3, to: [f32; 3]) -> bool {
     (w[0] - to[0]).hypot(w[1] - to[1]) < TRIP_NEAR
 }
 
+/// A track's floor (WoW z): its grid's height, else its start's, where known. In a dungeon the
+/// server lands a trip onto the grid on the floor under it (`Kartcraft.cpp` `TeleportOnto`), not on
+/// a roof over it.
+fn floor(grid: Option<Grid>, heights: &[Option<f32>]) -> Option<f32> {
+    grid.map(|g| g.z)
+        .or_else(|| heights.first().copied().flatten())
+}
+
+/// A test lap refused off the track's own map (a continent or a dungeon).
+const ELSEWHERE: &str = "That track is on another map: go there to test it.";
+
 /// A saved track, read back from `kart-tracks/`.
 struct Saved {
     course: Course,
     grid: Option<Grid>,
+}
+
+impl Saved {
+    fn floor(&self) -> Option<f32> {
+        floor(self.grid, &self.course.heights())
+    }
 }
 
 /// What a left click in the world places, as the bar's buttons pick it: `Move` nothing, it
@@ -112,6 +129,9 @@ enum Held {
     Grid,
 }
 
+/// A gate undo took: its spot, facing, half-width and height.
+type Undone = ([f32; 2], Option<f32>, f32, Option<f32>);
+
 /// The editor, its draft and the saved tracks. A draft goes once saved or closed; one the kart's
 /// loss closed waits for the editor to open again on its map.
 #[derive(Resource)]
@@ -122,6 +142,8 @@ pub(crate) struct TrackEdit {
     /// The start first, then the checkpoints, WoW x, y, and each one's facing where turned.
     points: Vec<[f32; 2]>,
     facings: Vec<Option<f32>>,
+    /// Each gate's height (WoW z) where placed: a saved track's, and a dungeon trip's floor.
+    heights: Vec<Option<f32>>,
     /// Each gate's half-width (yards), and the one the next gate gets (the mouse wheel's).
     widths: Vec<f32>,
     width: f32,
@@ -140,7 +162,7 @@ pub(crate) struct TrackEdit {
     held: Option<Held>,
     grab: [f32; 2],
     /// The gates undo took, the last on top, for redo; a new gate forgets them.
-    undone: Vec<([f32; 2], Option<f32>, f32)>,
+    undone: Vec<Undone>,
     /// The checkpoint the number tool picked, to renumber.
     picked: Option<usize>,
     /// The saved tracks once read, and how often the list changed: each change goes to the
@@ -164,6 +186,7 @@ impl Default for TrackEdit {
             testing: false,
             points: Vec::new(),
             facings: Vec::new(),
+            heights: Vec::new(),
             widths: Vec::new(),
             width: GATE_HALF_WIDTH,
             turn: None,
@@ -255,7 +278,8 @@ impl TrackEdit {
         if let Some(p) = self.points.pop() {
             let o = self.facings.pop().flatten();
             let w = self.widths.pop().unwrap_or(GATE_HALF_WIDTH);
-            self.undone.push((p, o, w));
+            let z = self.heights.pop().flatten();
+            self.undone.push((p, o, w, z));
         }
         self.picked = self.picked.filter(|&i| i < self.points.len());
     }
@@ -263,10 +287,11 @@ impl TrackEdit {
     /// Puts back the gate undo took last.
     fn redo(&mut self) {
         match self.undone.pop() {
-            Some((p, o, w)) => {
+            Some((p, o, w, z)) => {
                 self.points.push(p);
                 self.facings.push(o);
                 self.widths.push(w);
+                self.heights.push(z);
             }
             None => self.say("Nothing to redo."),
         }
@@ -282,12 +307,15 @@ impl TrackEdit {
             return self.say(format!("A checkpoint's number is 1 (the start) to {n}."));
         }
         let j = to - 1;
+        self.heights.resize(n, None);
         let p = self.points.remove(i);
         self.points.insert(j, p);
         let o = self.facings.remove(i);
         self.facings.insert(j, o);
         let w = self.widths.remove(i);
         self.widths.insert(j, w);
+        let z = self.heights.remove(i);
+        self.heights.insert(j, z);
         self.picked = Some(j);
         let now = if j == 0 {
             "the start".to_string()
@@ -303,9 +331,10 @@ impl TrackEdit {
     }
 
     /// The saved tracks as the track browser lists courses ([`crate::ui_kart`]), each with its
-    /// grid (`x,y,o` or empty) and its gates as a publish sends them (`x,y[,o[,w]];...`), and how
-    /// often the list has changed.
-    pub(crate) fn saved(&self) -> (impl Iterator<Item = (&Course, String, String)>, u32) {
+    /// grid (`x,y,o` or empty), its gates as a publish sends them (`x,y[,o[,w]];...`) and its
+    /// floor (`z` or empty, [`floor`]), and how often the list has changed.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn saved(&self) -> (impl Iterator<Item = (&Course, String, String, String)>, u32) {
         let list = self.saved.iter().flatten().map(|s| {
             let grid = s
                 .grid
@@ -314,6 +343,7 @@ impl TrackEdit {
                 &s.course,
                 grid,
                 spots(&s.course.route(), &s.course.facings(), &s.course.gates()),
+                s.floor().map_or_else(String::new, |z| format!("{z:.1}")),
             )
         });
         (list, self.saves)
@@ -323,6 +353,7 @@ impl TrackEdit {
     fn clear(&mut self) {
         self.points.clear();
         self.facings.clear();
+        self.heights.clear();
         self.widths.clear();
         self.width = GATE_HALF_WIDTH;
         self.turn = None;
@@ -376,6 +407,8 @@ impl TrackEdit {
                 self.points[i] = [w[0], w[1]];
                 self.facings[i] = self.turn;
                 self.widths[i] = self.width;
+                self.heights.resize(self.points.len(), None);
+                self.heights[i] = Some(w[2]);
             }
             Some(Held::Grid) => {
                 self.grid = Some(Grid {
@@ -413,13 +446,15 @@ impl TrackEdit {
             .ok_or("That track is not saved any more.")?;
         let c = &s.course;
         if c.map != self.map {
-            return Err("That track is on another continent.");
+            return Err(ELSEWHERE);
         }
         let (points, facings, widths, grid, laps) =
             (c.route(), c.facings(), c.gates(), s.grid, c.laps);
+        let heights = c.heights();
         let name = c.name.clone();
         self.clear();
         (self.points, self.facings, self.widths) = (points, facings, widths);
+        self.heights = heights;
         (self.grid, self.laps) = (grid, laps);
         Ok(name)
     }
@@ -432,8 +467,10 @@ impl TrackEdit {
             return None;
         }
         self.trip = Some((to, now));
+        // Onto the track's floor, under a roof where it runs under one (as a test lap's trip).
+        let z = floor(self.grid, &self.heights).map_or_else(String::new, |z| format!("\t{z:.1}"));
         Some(format!(
-            "KARTCRAFT\tR\tTG\t{:.1}\t{:.1}\t{:.3}",
+            "KARTCRAFT\tR\tTG\t{:.1}\t{:.1}\t{:.3}{z}",
             to[0], to[1], to[2]
         ))
     }
@@ -490,6 +527,9 @@ impl TrackEdit {
                 match self.widths.get(i) {
                     Some(&w) if w != GATE_HALF_WIDTH => c["gate"] = serde_json::json!(tenth(w)),
                     _ => {}
+                }
+                if let Some(z) = self.heights.get(i).copied().flatten() {
+                    c["z"] = serde_json::json!(tenth(z));
                 }
                 c
             })
@@ -772,6 +812,7 @@ pub(crate) fn on_cvar(
                             &races.me,
                         );
                         let race = race.with_facings(edit.facings.clone());
+                        let race = race.with_floor(floor(edit.grid, &edit.heights));
                         races.race = Some(race.with_gates(edit.widths.clone()));
                         free.set(FreeMode::Off);
                     }
@@ -789,9 +830,7 @@ pub(crate) fn on_cvar(
                         Some(_) if races.in_race() && !testing => {
                             Some("Leave the race first to test a track.")
                         }
-                        Some(s) if s.course.map != map => {
-                            Some("That track is on another continent.")
-                        }
+                        Some(s) if s.course.map != map => Some(ELSEWHERE),
                         Some(_) => None,
                     };
                     let race = run.map(|s| {
@@ -801,6 +840,7 @@ pub(crate) fn on_cvar(
                         Active::practice(&c.name, c.laps, route, grid, &races.me)
                             .with_facings(c.facings())
                             .with_gates(c.gates())
+                            .with_floor(s.floor())
                     });
                     if let Some(why) = why {
                         edit.say(why);
@@ -813,8 +853,10 @@ pub(crate) fn on_cvar(
                 // A saved track gone from the browser: its file deleted, the list read again.
                 ["delete", key, ..] => edit.delete(key),
                 // A player track's test lap, from the track browser's player tracks: its line's
-                // name, laps, map, grid (`x,y,o` or empty) and gates.
-                ["runspots", name, laps, track_map, grid, gates, ..] => {
+                // name, laps, map, grid (`x,y,o` or empty), gates and floor (`z`, or empty or
+                // absent where the server sent none).
+                ["runspots", name, laps, track_map, grid, gates, rest @ ..] => {
+                    let floor = rest.first().and_then(|z| z.trim().parse::<f32>().ok());
                     let route = parse_spots(gates).filter(|(p, ..)| p.len() >= 2);
                     let grid = parse_spots(grid)
                         .and_then(|(p, o, _)| Some([p.first()?[0], p[0][1], o[0]?]));
@@ -824,9 +866,7 @@ pub(crate) fn on_cvar(
                         Some(_) if races.in_race() && !testing => {
                             Some("Leave the race first to test a track.")
                         }
-                        Some(_) if track_map.parse::<u32>().ok() != Some(map) => {
-                            Some("That track is on another continent.")
-                        }
+                        Some(_) if track_map.parse::<u32>().ok() != Some(map) => Some(ELSEWHERE),
                         Some(_) => None,
                     };
                     if let Some(why) = why {
@@ -839,7 +879,8 @@ pub(crate) fn on_cvar(
                     let laps = laps.parse().unwrap_or(0);
                     let grid = grid.or_else(|| grid_spot(None, &points));
                     let race = Active::practice(&clean(name), laps, points, grid, &races.me);
-                    races.race = Some(race.with_facings(facings).with_gates(widths));
+                    let race = race.with_facings(facings).with_floor(floor);
+                    races.race = Some(race.with_gates(widths));
                     free.set(FreeMode::Off);
                 }
                 ["restart", ..] => {
@@ -1093,6 +1134,7 @@ fn place(edit: &mut TrackEdit, what: Place, at: Vec3, o: f32) {
             edit.points.push([w[0], w[1]]);
             edit.facings.push(edit.turn.take());
             edit.widths.push(edit.width);
+            edit.heights.push(Some(w[2]));
             edit.undone.clear();
         }
         Place::Grid => {
@@ -1200,6 +1242,28 @@ mod tests {
         );
         let err = draft(0, &two).course(&COURSES[0].key, "").unwrap_err();
         assert!(err.contains("already"), "{err}");
+    }
+
+    /// Each gate keeps the height it was placed at, which the saved track writes; its floor is the
+    /// grid's height, else the start's, the floor a dungeon's trip lands on.
+    #[test]
+    fn a_track_keeps_its_heights_and_its_floor_is_the_grids_else_the_starts() {
+        let mut edit = draft(0, &[]);
+        edit.tool = Place::Checkpoint;
+        click(&mut edit, wow_to_bevy([20.0, 0.0, 133.0]), 0.0);
+        click(&mut edit, wow_to_bevy([50.0, 0.0, 140.0]), 0.0);
+        assert_eq!(edit.heights, vec![Some(133.0), Some(140.0)]);
+        assert_eq!(floor(edit.grid, &edit.heights), Some(133.0));
+        let (_, json) = edit.course("Crypt Dash", "Stratholme").unwrap();
+        let saved: Course = serde_json::from_str(&json).unwrap();
+        assert_eq!(saved.heights(), vec![Some(133.0), Some(140.0)]);
+        // Undo and redo carry the height with the gate.
+        edit.undo();
+        edit.redo();
+        assert_eq!(edit.heights, vec![Some(133.0), Some(140.0)]);
+        edit.tool = Place::Grid;
+        click(&mut edit, wow_to_bevy([10.0, 0.0, 131.0]), 0.0);
+        assert_eq!(floor(edit.grid, &edit.heights), Some(131.0));
     }
 
     #[test]

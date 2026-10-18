@@ -819,7 +819,7 @@
         -- "my:<key>", each with its file's key: a test lap of one runs on this client alone.
         BenillaKartMyTracks = {}
         function BenillaKartMyTracks_Set(list)
-            BenillaKartMyTracks = BenillaKartTracks_Parse(list, 9)
+            BenillaKartMyTracks = BenillaKartTracks_Parse(list, 10)
             for i = 1, table.getn(BenillaKartMyTracks) do
                 local t = BenillaKartMyTracks[i]
                 t.mine, t.file, t.key = 1, t.key, "my:" .. t.key
@@ -827,8 +827,8 @@
             BenillaKartTrackBrowser_Refresh()
         end
 
-        -- Course lines, as BENILLA_KART_TRACKS sends them, as tracks; `fields` a line (7, or 9
-        -- with a saved track's grid and gates).
+        -- Course lines, as BENILLA_KART_TRACKS sends them, as tracks; `fields` a line (7, or 10
+        -- with a saved track's grid, gates and floor: its height, for a dungeon's trips).
         function BenillaKartTracks_Parse(list, fields)
             fields = fields or 7
             local tracks = {}
@@ -846,7 +846,7 @@
                 table.insert(tracks, { key = lines[i], name = lines[i + 1],
                     zone = lines[i + 2], map = tonumber(lines[i + 3]) or 0,
                     laps = tonumber(lines[i + 4]) or 0, text = lines[i + 5], points = points,
-                    grid = lines[i + 7], gates = lines[i + 8] })
+                    grid = lines[i + 7], gates = lines[i + 8], z = lines[i + 9] })
             end
             return tracks
         end
@@ -865,7 +865,8 @@
 
         -- ── Player tracks: published to the server, for everyone's browser (Kartcraft.cpp) ──
         -- From "PTB", "PT" lines and "PTE", each { key = "pub:<id>", id, name, author, map, laps,
-        -- zone, grid, gates, points, text, good, bad (its votes), order (1 the newest) }.
+        -- zone, grid, gates, points, text, good, bad (its votes), z (a dungeon track's height, or
+        -- ""), order (1 the newest) }.
         BenillaKartPubTracks = {}
         BenillaKartPubIncoming = nil
 
@@ -880,7 +881,7 @@
                 local t = { key = "pub:" .. (line[3] or ""), id = line[3], name = line[4] or "",
                     author = line[5] or "", map = tonumber(line[6]) or 0, laps = laps,
                     zone = line[8] or "", grid = line[9] or "", gates = line[10] or "", pub = 1,
-                    good = tonumber(line[11]) or 0, bad = tonumber(line[12]) or 0,
+                    good = tonumber(line[11]) or 0, bad = tonumber(line[12]) or 0, z = line[13] or "",
                     order = table.getn(BenillaKartPubIncoming) + 1 }
                 t.points = BenillaKartTracks_Points(t.gates)
                 local kind = "A sprint"
@@ -922,10 +923,12 @@
             BenillaKartPub_Publish(track)
         end
 
-        -- A saved track to the server, its name and ours (the server knows who sends it).
+        -- A saved track to the server, its name and ours (the server knows who sends it), with
+        -- its floor, which a dungeon's trips land on.
         function BenillaKartPub_Publish(track)
             BenillaKart_Send("Pub\t" .. track.name .. "\t" .. track.map .. "\t" .. track.laps .. "\t"
-                .. (track.zone or "") .. "\t" .. (track.grid or "") .. "\t" .. (track.gates or ""))
+                .. (track.zone or "") .. "\t" .. (track.grid or "") .. "\t" .. (track.gates or "")
+                .. "\t" .. (track.z or ""))
         end
 
         function BenillaKartTrack(key)
@@ -1125,7 +1128,7 @@
             end
             if track and track.pub then
                 BenillaKartEditor_Send("runspots", track.name, track.laps .. "\t" .. track.map .. "\t"
-                    .. track.grid .. "\t" .. track.gates)
+                    .. track.grid .. "\t" .. track.gates .. "\t" .. (track.z or ""))
                 BenillaKartTracksFrame:Hide()
                 return
             end
