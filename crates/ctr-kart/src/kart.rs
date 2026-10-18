@@ -323,6 +323,14 @@ const BRAKE_WITH_ACCEL: u32 = 0x20;
 const BACK_SKID: u32 = 0x800;
 const FRONT_SKID: u32 = 0x1000;
 const DRIVING_AGAINST_WALL: u32 = 0x2000;
+
+/// Mashing ✕ (`namespace_Vehicle.h:102-103`): each press and let-go of the gas within this many
+/// CTR-ms of the last counts; at this many the kart steers hard and pivots, below this speed
+/// (`VehPhysProc.c:55-56`), at this steer strength.
+const ACCEL_TAP_WINDOW_MS: i32 = 0x100;
+const ACCEL_TAP_STEER_COUNT: i32 = 7;
+const ACCEL_TAP_SPEED_MAX: i32 = 0x2600;
+const ACCEL_TAP_STRENGTH: i32 = 0x5a;
 const REVERSING: u32 = 0x20000;
 const AIRBORNE: u32 = 0x80000;
 /// `ACTION_TURBO_INPUT_LATCH`: no boost wheelie until the next boost (`VehFire.c:158` clears it).
@@ -646,6 +654,9 @@ pub struct Kart {
 
     wall_rub: i32,
     grip_timer: i32,
+    /// `accelTapWindowTimer` and `accelTapCount`: the gas mashed ([`ACCEL_TAP_WINDOW_MS`]).
+    accel_tap_window: i32,
+    accel_tap_count: i32,
 
     /// The ground normal touched this frame, the smoothed one, and last frame's.
     n1: Vec3,
@@ -783,6 +794,8 @@ impl Kart {
             fall: 0,
             wall_rub: 0,
             grip_timer: 0,
+            accel_tap_window: 0,
+            accel_tap_count: 0,
             n1: Vec3::Y,
             n2: Vec3::Y,
             n4: Vec3::Y,
@@ -2058,6 +2071,7 @@ impl Kart {
         tick(&mut self.reserves);
         tick(&mut self.turbo_outside);
         tick(&mut self.wall_rub);
+        tick(&mut self.accel_tap_window);
         tick(&mut self.jump_forced);
         tick(&mut self.jump_cooldown);
         self.jump_buffer = (self.jump_buffer - 1).max(0);
@@ -2108,6 +2122,18 @@ impl Kart {
             (true, false, false) => (0, ACCEL_PREVENTION),
         };
         self.flags = (self.flags & !REVERSING) | flags;
+        // The gas mashed (`VehPhysProc.c:1328-1357`): its count goes once the window lapses or
+        // the kart is not in its normal state, and each change between going and not, within
+        // the window, counts.
+        if self.accel_tap_window == 0 || self.state != State::Normal {
+            self.accel_tap_count = 0;
+        }
+        if (self.fire_speed > 0) != (gas > 0) {
+            if self.accel_tap_window != 0 {
+                self.accel_tap_count += 1;
+            }
+            self.accel_tap_window = ACCEL_TAP_WINDOW_MS;
+        }
         self.fire_speed = gas;
         // Super Engine's top-up, once the gas is known (`VehPhysProc.c:1281-1308`): moving
         // forward and not reversing, not braking with the gas, and refused under accel prevention
@@ -2150,7 +2176,12 @@ impl Kart {
 
         // The steer command (4.1); + is left.
         let mut strength = self.stats.turn_rate;
-        if self.wall_rub != 0 {
+        // Mashing ✕ below a pace steers hard, over a wall's rub and a brake
+        // (`VehPhysProc.c:1424-1436`).
+        if self.accel_tap_count >= ACCEL_TAP_STEER_COUNT && self.speed_approx < ACCEL_TAP_SPEED_MAX
+        {
+            strength = ACCEL_TAP_STRENGTH;
+        } else if self.wall_rub != 0 {
             strength = 48;
         } else if self.flags & (ACCEL_PREVENTION | BRAKE_WITH_ACCEL) != 0 && !lockout {
             strength = if input.gas {
@@ -2241,7 +2272,11 @@ impl Kart {
         // 4.5: yaw, and the velocity's heading turned with it (the grip).
         self.amp_turn = rot;
         self.angle = wrap(self.angle + ((rot * MS) >> 13));
-        let lean = if self.flags & ACCEL_PREVENTION != 0 {
+        // Braking, or mashing the gas, the heading barely follows the yaw: the kart pivots
+        // (`VehPhysGeneral.c:885-899`).
+        let lean = if self.flags & ACCEL_PREVENTION != 0
+            || self.accel_tap_count >= ACCEL_TAP_STEER_COUNT
+        {
             (rot * 10) >> 8
         } else {
             (rot * self.terrain.lean) >> 8

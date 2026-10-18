@@ -1359,3 +1359,38 @@ fn a_boost_planes_the_kart_on_water() {
         plain.speed()
     );
 }
+
+/// How far (degrees) the kart turns in two seconds from rest on the flat, full left, the gas on
+/// for `on` frames and off for `off` (`off` 0: held).
+fn turned_mashing(on: usize, off: usize) -> f32 {
+    let w = world(floor(40000.0));
+    let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 1.0, 0.0), 0);
+    let mut total = 0;
+    let mut last = kart.angle;
+    for frame in 0..60 {
+        let gas = off == 0 || frame % (on + off) < on;
+        kart.tick(
+            &w,
+            &Input {
+                steer: -1.0,
+                gas,
+                ..GAS
+            },
+            &NONE,
+        );
+        let d = (kart.angle - last).rem_euclid(4096);
+        total += if d > 2048 { d - 4096 } else { d };
+        last = kart.angle;
+    }
+    total.abs() as f32 * 360.0 / 4096.0
+}
+
+#[test]
+fn mashing_the_gas_with_the_steer_held_spins_the_kart_round() {
+    // CTR's accel tap (`VehPhysProc.c:1328-1357`, `:1424-1436`): held, the kart turns a third
+    // of a circle in two seconds; mashed, it pivots round most of the way and more.
+    let held = turned_mashing(1, 0);
+    let mashed = turned_mashing(2, 2);
+    assert!((90.0..130.0).contains(&held), "held: {held:.0}°");
+    assert!(mashed > 2.5 * held, "mashed: {mashed:.0}°, held {held:.0}°");
+}
