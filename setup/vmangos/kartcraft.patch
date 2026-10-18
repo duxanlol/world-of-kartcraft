@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..e2c55e9
+index 0000000..7e9c7b8
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,7448 @@
+@@ -0,0 +1,7523 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -105,6 +105,7 @@ index 0000000..e2c55e9
 +#include "MapManager.h"
 +#include "QuestDef.h"
 +#include "Utilities/Random.h"
++#include "Maps/MapPersistentStateMgr.h"
 +#include "Config/Config.h"
 +#include <zlib.h>
 +#include <fstream>
@@ -4572,7 +4573,7 @@ index 0000000..e2c55e9
 +        static std::vector<std::string> zones = [] {
 +            std::vector<std::string> out;
 +            for (Course const& c : COURSES)
-+                if (*c.zone && !PartyCourse(c) && std::find(out.begin(), out.end(), c.zone) == out.end())
++                if (*c.zone && std::find(out.begin(), out.end(), c.zone) == out.end())
 +                    out.push_back(c.zone);
 +            return out;
 +        }();
@@ -4599,8 +4600,7 @@ index 0000000..e2c55e9
 +                    zone = &zones[index];
 +            }
 +            for (size_t i = 0; i < COURSES.size(); ++i)
-+                if (!PartyCourse(COURSES[i]) &&
-+                    (token == "any" || token == COURSES[i].key || (zone && *zone == COURSES[i].zone)))
++                if (token == "any" || token == COURSES[i].key || (zone && *zone == COURSES[i].zone))
 +                    mask[i] = true;
 +            // A player track only by its own key.
 +            for (UserTrack const& t : s_userTracks)
@@ -4657,11 +4657,16 @@ index 0000000..e2c55e9
 +    // Whether a racer may be put on `c`'s grid now: off to it from the open world, or, on a party
 +    // course, only from inside the race's copy of its dungeon (`instance`): a teleport within one
 +    // map stays in its copy (Player::TeleportTo's near teleport), so the party never leaves it.
++    static DungeonPersistentState* CopyState(uint32 map, uint32 instance);
++
 +    static bool CanRaceOn(Player* player, Course const& c, uint32 instance)
 +    {
 +        if (!PartyCourse(c))
 +            return CanBeRacedOff(player);
-+        return Settled(player) && player->GetMapId() == c.map && player->GetInstanceId() == instance;
++        // Inside the race's copy already, or off to it from the open world (Race copies).
++        if (Settled(player) && player->GetMapId() == c.map && player->GetInstanceId() == instance)
++            return true;
++        return instance && CopyState(c.map, instance) && CanBeRacedOff(player);
 +    }
 +
 +    // Whether `player` may join `r`: anyone near its start, but a party race only the host's party
@@ -4736,6 +4741,66 @@ index 0000000..e2c55e9
 +            player->m_Events.AddEventAtOffset(new KartAgainEvent(player), KART_AGAIN_DELAY);
 +        return true;
 +    }
++    // ── Race copies ────────────────────────────────────────────────────────────────────────────
++    //
++    // A dungeon course (PartyCourse) is raced in a copy of its dungeon of the race's own, made for
++    // it (RaceCopy) and entered by anyone the race takes, party or not: each racer is bound to it,
++    // not for keeps, just before the grid's teleport (IntoCopy), so the core's own choice of copy
++    // (Player::GetBoundInstanceSaveForSelfOrGroup, a player's own bind first) puts every racer in
++    // the one copy. A player's time trials on a dungeon reuse their copy while it lives
++    // (TrialCopy), so a run after a run counts no new copy against Instance.PerHourLimit. A raid's
++    // copy wants a raid group, so a raid is never raced here.
++
++    static std::unordered_map<uint64, uint32> s_trialCopies; // guid low << 32 | map -> instance
++
++    static DungeonPersistentState* CopyState(uint32 map, uint32 instance)
++    {
++        MapPersistentState* state = instance ? sMapPersistentStateMgr.GetPersistentState(map, instance) : nullptr;
++        return state && state->GetMapEntry() && state->GetMapEntry()->IsDungeon()
++            ? static_cast<DungeonPersistentState*>(state) : nullptr;
++    }
++
++    // A new copy of `c`'s dungeon for a race on it, its instance id; 0 for an open-world course or
++    // a raid.
++    static uint32 RaceCopy(Course const& c)
++    {
++        MapEntry const* entry = sMapStorage.LookupEntry<MapEntry>(c.map);
++        if (!PartyCourse(c) || !entry || !entry->IsDungeon() || entry->IsRaid())
++            return 0;
++        uint32 const instance = sMapMgr.GenerateInstanceId();
++        return sMapPersistentStateMgr.AddPersistentState(entry, instance, 0, true) ? instance : 0;
++    }
++
++    // `player`'s copy of `c`'s dungeon for a time trial: the one they are in, the one their last
++    // trial there made while it lives, else a new one.
++    static uint32 TrialCopy(Player* player, Course const& c)
++    {
++        if (!PartyCourse(c))
++            return 0;
++        if (player->GetMapId() == c.map)
++            return player->GetInstanceId();
++        uint64 const key = (uint64(player->GetGUIDLow()) << 32) | c.map;
++        auto kept = s_trialCopies.find(key);
++        if (kept != s_trialCopies.end() && CopyState(c.map, kept->second))
++            return kept->second;
++        uint32 const instance = RaceCopy(c);
++        if (instance)
++            s_trialCopies[key] = instance;
++        else
++            s_trialCopies.erase(key);
++        return instance;
++    }
++
++    // Bound to copy `instance` of `map`, not for keeps, for the teleport into it to land there.
++    static bool IntoCopy(Player* player, uint32 map, uint32 instance)
++    {
++        DungeonPersistentState* state = CopyState(map, instance);
++        if (!state)
++            return false;
++        player->BindToInstance(state, false);
++        return true;
++    }
++
 +
 +    // `instance`: a party race's (Race::instance), 0 in the open world.
 +    static bool TeleportToGrid(Player* player, Course const& c, size_t slot, uint32 instance)
@@ -4762,6 +4827,10 @@ index 0000000..e2c55e9
 +        float side = GRID_SPACING * (slot % 2 ? 0.5f : -0.5f);
 +        float x = sx - dx * back - dy * side;
 +        float y = sy - dy * back + dx * side;
++        // From outside a dungeon course's copy: bound to it, so the teleport lands in it.
++        if (PartyCourse(c) && !(player->GetMapId() == c.map && player->GetInstanceId() == instance) &&
++            !IntoCopy(player, c.map, instance))
++            return false;
 +        return TeleportOnto(player, c.map, x, y, std::atan2(dy, dx), true);
 +    }
 +
@@ -4872,6 +4941,8 @@ index 0000000..e2c55e9
 +        r.host = pop.members.front().guid;
 +        r.created = now;
 +        r.groundTypes = FINDER_GROUND_TYPES;
++        // A dungeon course's race is run in a copy of its own (Race copies).
++        r.instance = RaceCopy(*pop.course);
 +        size_t slot = 0;
 +        bool far = false;
 +        for (Queued const& q : pop.members)
@@ -4881,7 +4952,7 @@ index 0000000..e2c55e9
 +                r.racers.push_back({ p->GetObjectGuid(), p->GetName() });
 +                Origin from = { p->GetMapId(), p->GetPositionX(), p->GetPositionY(), p->GetPositionZ(),
 +                    p->GetOrientation(), now };
-+                if (TeleportToGrid(p, *pop.course, slot++, 0))
++                if (TeleportToGrid(p, *pop.course, slot++, r.instance))
 +                    s_origins[p->GetGUIDLow()] = from;
 +            }
 +        SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(raceId) + "\t" + Roster(r));
@@ -6149,12 +6220,16 @@ index 0000000..e2c55e9
 +            // back ("R\tRet"). Not a party course: that one is raced inside its dungeon, from
 +            // its Race Marshal.
 +            Course const* course = FindCourse(f[2]);
-+            if (!course || PartyCourse(*course) || !CanBeRacedOff(player) || RefuseOff(player, *course))
++            if (!course || !CanBeRacedOff(player) || RefuseOff(player, *course))
++                return true;
++            // A dungeon course in the player's own copy of it (Race copies).
++            uint32 const instance = TrialCopy(player, *course);
++            if (PartyCourse(*course) && !instance)
 +                return true;
 +            Origin from = { player->GetMapId(), player->GetPositionX(), player->GetPositionY(),
 +                player->GetPositionZ(), player->GetOrientation(), now };
-+            uint32 raceId = OpenTimeTrial(player, *course, 0, now);
-+            if (TeleportToGrid(player, *course, 0, 0))
++            uint32 raceId = OpenTimeTrial(player, *course, instance, now);
++            if (TeleportToGrid(player, *course, 0, instance))
 +                s_origins[player->GetGUIDLow()] = from;
 +            // The countdown waits for them on the grid, however long the teleport takes.
 +            Race& r = s_races[raceId];
@@ -6193,10 +6268,10 @@ index 0000000..e2c55e9
 +            Course const* course = FindCourse(f[2]);
 +            if (!course || InAnyRace(guid) || !CanBeRacedOff(player) || RefuseOff(player, *course))
 +                return true;
-+            bool const party = PartyCourse(*course);
-+            if (party && player->GetMapId() != course->map)
++            // A dungeon course in the player's own copy of it (Race copies), from wherever they are.
++            uint32 const instance = TrialCopy(player, *course);
++            if (PartyCourse(*course) && !instance)
 +                return true;
-+            uint32 const instance = party ? player->GetInstanceId() : 0;
 +            uint32 raceId = OpenTimeTrial(player, *course, instance, now);
 +            TeleportToGrid(player, *course, 0, instance);
 +            // The countdown waits for them on the grid, however long the teleport takes.

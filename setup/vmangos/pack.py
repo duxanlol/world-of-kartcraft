@@ -210,6 +210,8 @@ MARSHAL_SCRIPT = 'npc_kartcraft_marshal'
 HUB_ENTRY = 190011
 # The Caverns of Time's sealing door, CavernDoor01 (stock gameobject 179588), taken out.
 COT_DOOR = 179588
+# The most racers a dungeon course's copy holds: a race's whole field.
+RACE_COPY_PLAYERS = 16
 HUB_GUID = 401000
 HUB_TEXT = 190020
 HUB_SCRIPT = 'npc_kartcraft_hub'
@@ -330,6 +332,17 @@ def marshal_sql(data):
         '-- OPENED_DOODADS).',
         f'DELETE FROM `gameobject` WHERE `id` = {COT_DOOR} AND `map` = 1;',
     ]
+    # A dungeon course's race takes a whole field into one copy of the dungeon (Kartcraft.cpp
+    # "Race copies"), more than a 5- or 10-player dungeon's cap.
+    dungeons = sorted({c['map'] for c in data['courses'] if c.get('map', 0) > 1})
+    if dungeons:
+        out += [
+            '',
+            "-- The dungeons courses are raced in hold a race's whole field (World of Kartcraft's",
+            '-- deviation: Kartcraft.cpp "Race copies").',
+            f'UPDATE `map_template` SET `player_limit` = GREATEST(`player_limit`, {RACE_COPY_PLAYERS}) '
+            f'WHERE `entry` IN ({", ".join(str(m) for m in dungeons)});',
+        ]
     out += ['', 'COMMIT;']
     return '\n'.join(out) + '\n'
 

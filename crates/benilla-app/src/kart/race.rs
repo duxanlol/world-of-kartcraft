@@ -90,10 +90,10 @@ struct CourseCheckpoint {
 }
 
 impl Course {
-    /// Whether it is a party course: in a dungeon, not the open world (1.12's two continents, 0
-    /// and 1). Each party races it inside its own copy, hosted at the marshal there; the Race
-    /// Finder never offers it (`Kartcraft.cpp` `PartyCourse`).
-    pub(crate) fn party(&self) -> bool {
+    /// Whether it is a dungeon course: in a dungeon, not the open world (1.12's two continents, 0
+    /// and 1). The Race Finder and a time trial race it in a copy of the dungeon of the race's
+    /// own; a party inside hosts it at the marshal there (`Kartcraft.cpp` "Race copies").
+    pub(crate) fn dungeon(&self) -> bool {
         self.map > 1
     }
 
@@ -146,8 +146,8 @@ impl Course {
             n => format!("A {series}{n}-lap circuit{place}, {km:.2} km a lap"),
         };
         text += &format!(" through {} checkpoints.", route.len());
-        if self.party() {
-            text += " A party race: your party's leader hosts it at the Race Marshal inside.";
+        if self.dungeon() {
+            text += " A dungeon race: raced in a copy of the dungeon of its own.";
         }
         // The generator's test lap, "test lap 76.1s": a clean lap's time.
         let lap = self
@@ -211,13 +211,13 @@ pub(crate) static COURSES: std::sync::LazyLock<Vec<Course>> = std::sync::LazyLoc
         .courses
 });
 
-/// The Race Finder's zones, in the order the file first names them, but a party course's; the
-/// server keeps the same list, and a queue line asks for a zone by its place in it (`z3`).
+/// The Race Finder's zones, in the order the file first names them; the server keeps the same
+/// list, and a queue line asks for a zone by its place in it (`z3`).
 pub(crate) static ZONES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
     let mut zones: Vec<String> = Vec::new();
     for c in COURSES.iter() {
         let group = c.finder_group();
-        if !group.is_empty() && !c.party() && !zones.iter().any(|z| z == group) {
+        if !group.is_empty() && !zones.iter().any(|z| z == group) {
             zones.push(group.to_string());
         }
     }
@@ -2624,10 +2624,9 @@ mod tests {
         assert_eq!(keys.len(), COURSES.len(), "keys are unique");
         for c in COURSES.iter() {
             assert!(c.checkpoints.len() >= 2, "{} has a course", c.key);
-            assert_eq!(
-                ZONES.iter().any(|z| z == c.finder_group()),
-                !c.party(),
-                "{} is in a Race Finder zone unless it is a party course",
+            assert!(
+                c.finder_group().is_empty() || ZONES.iter().any(|z| z == c.finder_group()),
+                "{} is in a Race Finder zone",
                 c.key
             );
         }
@@ -2655,19 +2654,19 @@ mod tests {
     }
 
     #[test]
-    fn stratholme_is_a_party_course_the_finder_never_lists() {
+    fn stratholme_is_a_dungeon_course_the_finder_lists() {
         let strat = COURSES
             .iter()
             .find(|c| c.key == "stratholme-streets")
             .unwrap();
         assert_eq!(strat.map, 329);
-        assert!(strat.party());
+        assert!(strat.dungeon());
         // Its only loop is King's Square's ring, 18 s a lap: six make a race.
         assert_eq!(strat.laps, 6);
         assert!(strat.marshal.is_some(), "a marshal inside the instance");
-        assert!(!ZONES.contains(&strat.zone));
-        assert!(strat.description().contains("A party race"));
-        assert!(COURSES.iter().filter(|c| c.map <= 1).all(|c| !c.party()));
+        assert!(ZONES.contains(&strat.zone));
+        assert!(strat.description().contains("A dungeon race"));
+        assert!(COURSES.iter().filter(|c| c.map <= 1).all(|c| !c.dungeon()));
     }
 
     #[test]

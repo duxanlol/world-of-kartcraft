@@ -229,4 +229,8 @@ INSERT INTO `creature` (`guid`, `id`, `map`, `position_x`, `position_y`, `positi
 -- OPENED_DOODADS).
 DELETE FROM `gameobject` WHERE `id` = 179588 AND `map` = 1;
 
+-- The dungeons courses are raced in hold a race's whole field (World of Kartcraft's
+-- deviation: Kartcraft.cpp "Race copies").
+UPDATE `map_template` SET `player_limit` = GREATEST(`player_limit`, 16) WHERE `entry` IN (329);
+
 COMMIT;

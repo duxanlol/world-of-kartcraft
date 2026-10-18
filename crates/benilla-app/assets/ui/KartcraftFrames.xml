@@ -1114,8 +1114,8 @@
             end
         end
 
-        -- A time trial on the track shown, from wherever we are: the server takes us to its grid,
-        -- and offers the way back after. A party course is raced inside its dungeon instead.
+        -- A time trial on the track shown, from wherever we are: the server takes us to its grid
+        -- (a dungeon course's in a copy of the dungeon of our own), and offers the way back after.
         function BenillaKartTrackBrowser_TimeTrial()
             local track = BenillaKartTrackBrowser.selected and BenillaKartTrack(BenillaKartTrackBrowser.selected)
             if track and track.mine then
@@ -1129,7 +1129,7 @@
                 BenillaKartTracksFrame:Hide()
                 return
             end
-            if not track or track.map > 1 then return end
+            if not track then return end
             BenillaKart_Send("TB\t" .. track.key)
             BenillaKartTracksFrame:Hide()
         end
