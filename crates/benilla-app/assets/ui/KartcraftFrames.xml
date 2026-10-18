@@ -459,8 +459,43 @@
             BenillaKartFinder_Refresh()
         end
 
+        -- The tab's sorts, cycled by its button: the newest first (as the server lists them), the
+        -- best rated (good less bad votes), or by name.
+        BENILLA_KART_PLAYER_SORTS = { "new", "rating", "name" }
+        BENILLA_KART_PLAYER_SORT_LABELS = { new = "Sort: Newest", rating = "Sort: Rating", name = "Sort: A-Z" }
+
+        function BenillaKartFinder_CycleSort()
+            local f = BenillaKartFinder
+            local sorts = BENILLA_KART_PLAYER_SORTS
+            local now = f.sort or "new"
+            for i = 1, table.getn(sorts) do
+                if sorts[i] == now then
+                    f.sort = sorts[i + 1] or sorts[1]
+                    break
+                end
+            end
+            BenillaKartFinderPlayer_Update()
+        end
+
+        -- The player tracks in the tab's sort, ties the newest first.
+        function BenillaKartFinderPlayer_Shown()
+            local sort = BenillaKartFinder.sort or "new"
+            local list = {}
+            for i = 1, table.getn(BenillaKartPubTracks) do table.insert(list, BenillaKartPubTracks[i]) end
+            table.sort(list, function(a, b)
+                if sort == "rating" and a.good - a.bad ~= b.good - b.bad then
+                    return a.good - a.bad > b.good - b.bad
+                elseif sort == "name" and string.lower(a.name) ~= string.lower(b.name) then
+                    return string.lower(a.name) < string.lower(b.name)
+                end
+                return a.order < b.order
+            end)
+            return list
+        end
+
         function BenillaKartFinderPlayer_Update()
-            local list = BenillaKartPubTracks
+            local list = BenillaKartFinderPlayer_Shown()
+            BenillaKartFinderFramePlayerSort:SetText(BENILLA_KART_PLAYER_SORT_LABELS[BenillaKartFinder.sort or "new"])
             local offset = 0
             if FauxScrollFrame_Update then
                 local scroll = BenillaKartFinderFramePlayerScroll
@@ -474,7 +509,8 @@
                 local track = list[offset + i]
                 if track then
                     row.id = track.id
-                    getglobal(row:GetName() .. "Name"):SetText(track.name)
+                    getglobal(row:GetName() .. "Name"):SetText(track.name .. "  |cff40ff40+" .. track.good
+                        .. "|r |cffff5050-" .. track.bad .. "|r")
                     getglobal(row:GetName() .. "Zone"):SetText("by " .. track.author)
                     if track.id == f.track then row:LockHighlight() else row:UnlockHighlight() end
                     row:Show()
@@ -829,7 +865,7 @@
 
         -- ── Player tracks: published to the server, for everyone's browser (Kartcraft.cpp) ──
         -- From "PTB", "PT" lines and "PTE", each { key = "pub:<id>", id, name, author, map, laps,
-        -- zone, grid, gates, points, text }.
+        -- zone, grid, gates, points, text, good, bad (its votes), order (1 the newest) }.
         BenillaKartPubTracks = {}
         BenillaKartPubIncoming = nil
 
@@ -843,7 +879,9 @@
                 local laps = tonumber(line[7]) or 0
                 local t = { key = "pub:" .. (line[3] or ""), id = line[3], name = line[4] or "",
                     author = line[5] or "", map = tonumber(line[6]) or 0, laps = laps,
-                    zone = line[8] or "", grid = line[9] or "", gates = line[10] or "", pub = 1 }
+                    zone = line[8] or "", grid = line[9] or "", gates = line[10] or "", pub = 1,
+                    good = tonumber(line[11]) or 0, bad = tonumber(line[12]) or 0,
+                    order = table.getn(BenillaKartPubIncoming) + 1 }
                 t.points = BenillaKartTracks_Points(t.gates)
                 local kind = "A sprint"
                 if laps == 1 then kind = "A one-lap circuit" elseif laps > 1 then kind = "A " .. laps .. "-lap circuit" end
@@ -1097,7 +1135,7 @@
         function BenillaKartTrackBrowser_RateClick()
             local track = BenillaKartTrackBrowser.selected and BenillaKartTrack(BenillaKartTrackBrowser.selected)
             if track and track.mine then
-                BenillaKartTrackBrowser.deleting = track.file
+                BenillaKartTrackBrowser.deleting = track
                 StaticPopup_Show("BENILLA_KART_DELETE_TRACK", track.name)
             else
                 BenillaKartRate_Ask(BenillaKartTrackBrowser.selected)
@@ -4328,17 +4366,20 @@
             end
             trial.OnHide = function() BenillaKartRetryButton:Hide() end
             StaticPopupDialogs["BENILLA_KART_RETURN_TRIAL"] = trial
-            -- Our own track's Delete in the track browser: its file goes, published or not.
+            -- Our own track's Delete in the track browser: its published copy is taken down (the
+            -- server knows it by our name and its), then its file goes.
             StaticPopupDialogs["BENILLA_KART_DELETE_TRACK"] = {
-                text = "Delete your track %s?\n\n|cff999999A published copy stays in Player tracks"
-                    .. " until you take it down there.|r",
+                text = "Delete your track %s?\n\n|cff999999If you published it, it is taken down from"
+                    .. " Player tracks too.|r",
                 button1 = "Delete",
                 button2 = CANCEL,
                 timeout = 0,
                 whileDead = 1,
                 hideOnEscape = 1,
                 OnAccept = function()
-                    BenillaKartEditor_Send("delete", BenillaKartTrackBrowser.deleting)
+                    local track = BenillaKartTrackBrowser.deleting
+                    BenillaKart_Send("PubDN\t" .. track.name)
+                    BenillaKartEditor_Send("delete", track.file)
                     BenillaKartTrackBrowser.selected = nil
                 end,
             }
@@ -4555,12 +4596,18 @@
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="20" y="-34"/></Offset></Anchor></Anchors>
                 <Layers>
                     <Layer level="ARTWORK">
-                        <FontString inherits="GameFontNormalSmall" text="Player tracks, newest first">
+                        <FontString inherits="GameFontNormalSmall" text="Player tracks">
                             <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="4" y="-4"/></Offset></Anchor></Anchors>
                         </FontString>
                     </Layer>
                 </Layers>
                 <Frames>
+                    <!-- Newest, rating or A-Z (BenillaKartFinder_CycleSort). -->
+                    <Button name="$parentSort" inherits="UIPanelButtonTemplate" text="Sort: Newest">
+                        <Size><AbsDimension x="100" y="18"/></Size>
+                        <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="142" y="0"/></Offset></Anchor></Anchors>
+                        <Scripts><OnClick>BenillaKartFinder_CycleSort()</OnClick></Scripts>
+                    </Button>
                     <Button name="$parentRow1" inherits="BenillaKartFinderTrackRowTemplate">
                         <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="0" y="-24"/></Offset></Anchor></Anchors>
                     </Button>

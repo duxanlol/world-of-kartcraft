@@ -5781,8 +5781,9 @@ namespace Kartcraft
     // "x,y,o" or empty; points "x,y[,o[,w]];...", the start first, a turned gate's facing and a
     // gate's half-width), our own of that name replaced: "R\tPubOk\t<id>\t<name>" or
     // "R\tPubNo\t<why>". "R\tPubL" lists them,
-    // newest first: "R\tPTB", a "R\tPT\t<id>\t<name>\t<author>\t<map>\t<laps>\t<zone>\t<grid>\t<points>"
-    // each, then "R\tPTE". "R\tPubD\t<id>" takes one of ours down (a GM's, anyone's): "R\tPubGone\t<id>".
+    // newest first: "R\tPTB", a "R\tPT\t<id>\t<name>\t<author>\t<map>\t<laps>\t<zone>\t<grid>\t<points>
+    // \t<good>\t<bad>" each (its votes), then "R\tPTE". "R\tPubD\t<id>" takes one of ours down (a GM's, anyone's): "R\tPubGone\t<id>";
+    // "R\tPubDN\t<name>" ours of that name, if any.
     constexpr size_t USER_TRACKS_MAX = 2000;    // on the server
     constexpr size_t USER_TRACKS_EACH = 20;     // by one character
     constexpr size_t USER_TRACK_GATES = 60;     // checkpoints on one
@@ -5960,10 +5961,27 @@ namespace Kartcraft
         if (last != s_userTracksAsked.end() && WorldTimer::getMSTimeDiff(last->second, now) < USER_TRACKS_ASK_COOLDOWN)
             return;
         s_userTracksAsked[guid] = now;
+        // Each player track's good and bad votes (kartcraft_rating), for the Race Finder's list.
+        // ponytail: counted from the table at each list, once per USER_TRACKS_ASK_COOLDOWN a
+        // player; counts kept in memory by Rate if the list is asked for much more.
+        std::unordered_map<std::string, std::pair<uint32, uint32>> votes;
+        std::unique_ptr<QueryResult> v = CharacterDatabase.Query(
+            "SELECT `course`, SUM(`vote` > 0), SUM(`vote` < 0) FROM `kartcraft_rating` "
+            "WHERE `course` LIKE 'pt-%' GROUP BY `course`");
+        if (v)
+            do
+            {
+                Field* f = v->Fetch();
+                votes[f[0].GetCppString()] = std::make_pair(f[1].GetUInt32(), f[2].GetUInt32());
+            } while (v->NextRow());
         SendLine(player, "KARTCRAFT\tR\tPTB");
         size_t sent = 0;
         for (auto t = s_userTracks.rbegin(); t != s_userTracks.rend() && sent < USER_TRACKS_LISTED; ++t, ++sent)
-            SendLine(player, UserTrackLine(*t));
+        {
+            std::pair<uint32, uint32> const vote = votes[s_userCourses[t->slot].key];
+            SendLine(player, UserTrackLine(*t) + "\t" + std::to_string(vote.first) + "\t" +
+                std::to_string(vote.second));
+        }
         SendLine(player, "KARTCRAFT\tR\tPTE");
     }
 
@@ -5977,6 +5995,18 @@ namespace Kartcraft
         s_userTracks.erase(t);
         CharacterDatabase.PExecute("DELETE FROM `kartcraft_user_tracks` WHERE `id` = %u", id);
         SendLine(player, "KARTCRAFT\tR\tPubGone\t" + std::to_string(id));
+    }
+
+    // Ours called `name` taken down, if one is: the client deleting its saved track, which knows
+    // no id (a publish replaces ours of the same name, so the name is the track).
+    static void UnpublishOurTrack(Player* player, std::string const& name)
+    {
+        std::string const clean = CleanTrackText(name, 40);
+        uint32 const guid = player->GetGUIDLow();
+        auto t = std::find_if(s_userTracks.begin(), s_userTracks.end(),
+            [&](UserTrack const& u) { return u.guid == guid && u.name == clean; });
+        if (t != s_userTracks.end())
+            UnpublishTrack(player, t->id);
     }
 
     static void HandleRace(Player* player, std::string const& body, bool marshal)
@@ -6024,6 +6054,11 @@ namespace Kartcraft
         if (f.size() >= 3 && f[1] == "PubD")
         {
             UnpublishTrack(player, uint32(std::strtoul(f[2].c_str(), nullptr, 10)));
+            return;
+        }
+        if (f.size() >= 3 && f[1] == "PubDN")
+        {
+            UnpublishOurTrack(player, f[2]);
             return;
         }
         // A courier's package goes by kart: none of the verbs that teleport (or queue for one).

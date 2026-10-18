@@ -122,12 +122,14 @@ draft. A saved track is one course object in this file's form, in
 `checkpoints` and `grid` (`x`, `y`, `z`, `o`), with no `marshal`. The track browser lists the
 saved tracks after the courses (right-click the editor's button, "My tracks", for them alone)
 and runs a test lap of one. `grid` is the editor's alone for now: `pack.py` and the server
-ignore it and line a race up behind the start. In the browser our own track's Delete removes
+ignore it and line a race up behind the start. In the browser our own track's Delete takes its
+published copy down (`R\tPubDN\t<name>`: ours of that name, as a publish replaces it) and removes
 its file, and Publish sends it to the server (`R\tPub`, `Kartcraft.cpp` "Player tracks": the
 `kartcraft_user_tracks` table, under the author's character name, 20 a character), where every
 browser's Player tracks (the editor button's right-click menu) lists it for a test lap; its
 author takes it down there. A published track is a course on the server too, `pt-<id>`: the
-Race Finder's Player tracks tab queues for a race on one (by that key; never in "any" or a zone)
+Race Finder's Player tracks tab (each with its good and bad votes, sorted newest first, by
+rating or by name) queues for a race on one (by that key; never in "any" or a zone)
 or opens its time trial (`R\tTB\tpt-<id>`), with records kept as for any course, lined up on its
 own grid where it has one. Q and E, or the middle mouse held, turn the gate about to be placed,
 and the mouse wheel widens or narrows it (`gate`, 6 to 45 yards: the server's reach). A

@@ -4149,12 +4149,13 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
         sent(&mut s),
         ["KARTCRAFT\tR\tPub\tGoldshire Ring\t0\t3\tElwynn Forest\t0.0,1.0,0.500\t1.0,2.0;3.0,4.0,1.500;5.0,6.0"]
     );
-    // Delete: asked first, then the editor deletes the file.
+    // Delete: asked first, then its published copy taken down by name and the file deleted.
     s.run("BenillaKartTracksFrameRate:Click()").unwrap();
     assert!(s
         .eval::<bool>("return StaticPopup_Visible('BENILLA_KART_DELETE_TRACK') ~= nil")
         .unwrap());
     s.run("StaticPopup1Button1:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tPubDN\tGoldshire Ring"]);
     let cmd = s.cvar("KartTrackCmd").unwrap_or_default();
     assert!(cmd.ends_with("\tdelete\tgoldshire-ring"), "{cmd}");
 
@@ -4224,17 +4225,58 @@ fn the_race_finder_s_player_tracks_tab_races_and_time_trials_a_player_track() {
     s.run("BenillaKartFinderFrameTab2:Click()").unwrap();
     assert!(sent(&mut s).contains(&"KARTCRAFT\tR\tPubL".to_string()));
     from_server(&mut s, "R\tPTB");
+    // Newest first, each with its good and bad votes.
     from_server(
         &mut s,
-        "R\tPT\t7\tDune Dash\tZuljin\t1\t0\tDurotar\t\t10.0,20.0;30.0,40.0",
+        "R\tPT\t7\tDune Dash\tZuljin\t1\t0\tDurotar\t\t10.0,20.0;30.0,40.0\t3\t1",
+    );
+    from_server(
+        &mut s,
+        "R\tPT\t5\tbarrens Run\tZuljin\t1\t0\tBarrens\t\t10.0,20.0;30.0,40.0\t9\t0",
+    );
+    from_server(
+        &mut s,
+        "R\tPT\t4\tAzshara Arc\tZuljin\t1\t0\tAzshara\t\t10.0,20.0;30.0,40.0",
     );
     from_server(&mut s, "R\tPTE");
     assert!(shown(&s, "BenillaKartFinderFramePlayer"));
     assert!(!shown(&s, "BenillaKartFinderFrameRow1") && !shown(&s, "BenillaKartFinderFrameAny"));
-    let row: String = s
-        .eval("return BenillaKartFinderFramePlayerRow1Name:GetText()")
-        .unwrap();
-    assert_eq!(row, "Dune Dash");
+    let rows = |s: &UiScript| -> Vec<String> {
+        (1..=3)
+            .map(|i| {
+                s.eval(&format!(
+                    "return BenillaKartFinderFramePlayerRow{i}Name:GetText()"
+                ))
+                .unwrap()
+            })
+            .collect()
+    };
+    let named = |s: &UiScript| -> Vec<String> {
+        rows(s)
+            .iter()
+            .map(|r| r.split("  ").next().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(
+        rows(&s)[0],
+        "Dune Dash  |cff40ff40+3|r |cffff5050-1|r",
+        "the votes beside the name"
+    );
+    assert!(rows(&s)[2].ends_with("+0|r |cffff5050-0|r"), "none yet");
+    assert_eq!(named(&s), ["Dune Dash", "barrens Run", "Azshara Arc"]);
+    let sort = "BenillaKartFinderFramePlayerSort";
+    s.run(&format!("{sort}:Click()")).unwrap();
+    assert_eq!(named(&s), ["barrens Run", "Dune Dash", "Azshara Arc"]);
+    let label: String = s.eval(&format!("return {sort}:GetText()")).unwrap();
+    assert_eq!(label, "Sort: Rating");
+    s.run(&format!("{sort}:Click()")).unwrap();
+    assert_eq!(
+        named(&s),
+        ["Azshara Arc", "barrens Run", "Dune Dash"],
+        "any case"
+    );
+    s.run(&format!("{sort}:Click()")).unwrap();
+    assert_eq!(named(&s), ["Dune Dash", "barrens Run", "Azshara Arc"]);
     // Nothing picked, nothing to queue for or trial.
     assert!(!enabled(&s, "BenillaKartFinderFrameQueue"));
     assert!(!enabled(&s, "BenillaKartFinderFramePlayerTrial"));
