@@ -124,7 +124,8 @@ draft. A saved track is one course object in this file's form, in
 `benilla-config/kart-tracks/<key>.json`: `key`, `name`, `zone`, `map`, `laps`, `note`, the
 `checkpoints` and `grid` (`x`, `y`, `z`, `o`), with no `marshal`. The track browser lists the
 saved tracks after the courses (right-click the editor's button, "My tracks", for them alone)
-and runs a test lap of one, or Edit opens it in the editor again (saved under the same name, it
+and runs a test lap of one, or Edit opens it in the editor again, the kart taken to its start
+first by the test lap's trip (the camera flies once it lands; refused, it edits from where it is) (saved under the same name, it
 replaces the file, after the bar asks; a publish over one of ours of that name asks too). A publish or a take-down sends the author the fresh list at once. `grid` is the editor's alone for now: `pack.py` and the server
 ignore it and line a race up behind the start. In the browser our own track's Delete takes its
 published copy down (`R\tPubDN\t<name>`: ours of that name, as a publish replaces it) and removes

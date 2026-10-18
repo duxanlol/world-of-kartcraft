@@ -33,7 +33,7 @@ pub(super) struct KartAuras {
 
 /// What the profession reads and sends from the kart update.
 #[derive(SystemParam)]
-pub(super) struct Profession<'w, 's> {
+pub(crate) struct Profession<'w, 's> {
     self_q: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
     actions: Option<Res<'w, crate::ui_action::PlayerActions>>,
     commands: Option<Res<'w, NetCommands>>,

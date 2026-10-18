@@ -24,6 +24,10 @@ const TURN_PER_SEC: f32 = 1.5;
 const WIDTH_PER_NOTCH: f32 = 2.0;
 const WIDTH_MIN: f32 = 2.0;
 const WIDTH_MAX: f32 = 45.0;
+/// Edit's trip to a track's start: how near the kart lands (yards), and how long it may take
+/// (the kart's grace through a test lap's teleport, `race.rs`).
+const TRIP_NEAR: f32 = 30.0;
+const TRIP_SECS: f32 = 10.0;
 /// A saved track's note, for whoever adds it to courses.json.
 const NOTE: &str = "Made with the in-game track editor.";
 /// The aim's colour, the grid's, and what the move cursor is over or holds.
@@ -76,6 +80,12 @@ fn grid_spot(grid: Option<Grid>, points: &[[f32; 2]]) -> Option<[f32; 3]> {
         s[1] - dy * back + dx * side,
         dy.atan2(dx),
     ])
+}
+
+/// The kart at `kart` (Bevy world) stands within TRIP_NEAR of `to` (WoW x, y).
+fn near(kart: Vec3, to: [f32; 3]) -> bool {
+    let w = bevy_to_wow(kart);
+    (w[0] - to[0]).hypot(w[1] - to[1]) < TRIP_NEAR
 }
 
 /// A saved track, read back from `kart-tracks/`.
@@ -142,6 +152,9 @@ pub(crate) struct TrackEdit {
     notes: u32,
     /// How often a save found a track of its name saved already: each asks the bar to confirm.
     asks: u32,
+    /// Edit's trip to the track's start (WoW x, y, o), and when it was asked of the server: the
+    /// camera flies from there once the kart lands.
+    trip: Option<([f32; 3], f32)>,
 }
 
 impl Default for TrackEdit {
@@ -167,6 +180,7 @@ impl Default for TrackEdit {
             note: String::new(),
             notes: 0,
             asks: 0,
+            trip: None,
         }
     }
 }
@@ -317,6 +331,7 @@ impl TrackEdit {
         self.held = None;
         self.undone.clear();
         self.picked = None;
+        self.trip = None;
     }
 
     /// What the move cursor at `at` (WoW x, y) would take: the nearest checkpoint's marker, or
@@ -377,7 +392,7 @@ impl TrackEdit {
     /// Editing, not in a test lap: the left button places and drags, so the camera's left-drag
     /// orbit (which locks the cursor) stays off.
     pub(crate) fn owns_left(&self) -> bool {
-        self.on && !self.testing
+        self.on && !self.testing && self.trip.is_none()
     }
 
     /// Lets go of what is held.
@@ -407,6 +422,31 @@ impl TrackEdit {
         (self.points, self.facings, self.widths) = (points, facings, widths);
         (self.grid, self.laps) = (grid, laps);
         Ok(name)
+    }
+
+    /// The draft's start for the kart at `kart` (Bevy world), as a test lap goes to its grid:
+    /// the server's line for the trip, none when the kart is there already.
+    fn go_to_start(&mut self, now: f32, kart: Vec3) -> Option<String> {
+        let to = grid_spot(self.grid, &self.points)?;
+        if near(kart, to) {
+            return None;
+        }
+        self.trip = Some((to, now));
+        Some(format!(
+            "KARTCRAFT\tR\tTG\t{:.1}\t{:.1}\t{:.3}",
+            to[0], to[1], to[2]
+        ))
+    }
+
+    /// Edit's trip a frame on, the kart where it is (Bevy world; `None` out of it): over when
+    /// the kart stands at the start, or after TRIP_SECS (the server refused, or the kart is
+    /// gone, which closes the editor).
+    fn trip_step(&mut self, now: f32, kart: Option<Vec3>) {
+        if let Some((to, at)) = self.trip {
+            if kart.is_some_and(|k| near(k, to)) || now > at + TRIP_SECS {
+                self.trip = None;
+            }
+        }
     }
 
     /// Why the draft cannot be raced yet, if it cannot.
@@ -642,6 +682,7 @@ pub(crate) fn on_cvar(
     mut races: ResMut<Races>,
     drive: Res<super::KartDrive>,
     current_map: Option<Res<benilla_world::world_map::CurrentMap>>,
+    (time, profession): (Res<Time>, super::profession::Profession),
 ) {
     let testing = races.race.as_ref().is_some_and(|r| r.practice);
     let map = current_map.map_or(0, |m| m.0);
@@ -700,7 +741,14 @@ pub(crate) fn on_cvar(
                             if testing {
                                 races.race = None;
                             }
-                            free.set(FreeMode::Fly);
+                            let trip = edit.go_to_start(time.elapsed_secs(), drive.pos);
+                            if let Some(line) = trip {
+                                profession.send(line);
+                            }
+                            free.set(match edit.trip {
+                                Some(_) => FreeMode::Off,
+                                None => FreeMode::Fly,
+                            });
                             edit.say(format!(
                                 "Editing {name}: drag what to move, and save under its name to \
                                  replace it."
@@ -800,6 +848,8 @@ pub(crate) fn on_cvar(
                     }
                 }
                 ["back", ..] if testing => races.race = None,
+                // The server would not make Edit's trip (too far, too soon): edit from here.
+                ["stay", ..] => edit.trip = None,
                 _ => {}
             }
         }
@@ -846,6 +896,9 @@ pub(crate) fn update(
     ),
 ) {
     edit.load();
+    // Edit's trip to the start: over when the kart stands there or after TRIP_SECS (the
+    // server refused, or the kart is gone, which closes the editor below).
+    edit.trip_step(time.elapsed_secs(), drive.active.then_some(drive.pos));
     // The controller's Fire places at the screen's centre; the keyboard's is E, which turns the
     // gate here, so the keyboard places with a click.
     let fired = overlay.pad_just_pressed(super::bindings::FIRE);
@@ -853,7 +906,7 @@ pub(crate) fn update(
     edit.testing = practice.is_some();
     // `KartTrackEdit` may stay "1": the button sets "0" before its "1". A test lap's trip to its
     // grid takes the kart away for the teleport, which closes nothing: the lap ends back here.
-    if edit.on && !edit.testing && !drive.active {
+    if edit.on && !edit.testing && edit.trip.is_none() && !drive.active {
         edit.on = false;
         free.set(FreeMode::Off);
         edit.say("The track editor needs your kart: summon it (J) first.");
@@ -1356,6 +1409,24 @@ mod tests {
         assert_eq!(edit.edit_saved("short-dash"), Ok("Short Dash".to_string()));
         assert_eq!(edit.points.len(), 2);
         assert_eq!(edit.tool, Place::Move);
+        // Taken to its start (a race's first slot, with no grid) from afar, not from near it;
+        // the editor's left button waits for the kart to land there, or for TRIP_SECS.
+        assert!(edit.go_to_start(1.0, Vec3::ZERO).is_none(), "there already");
+        let far = wow_to_bevy([900.0, 0.0, 0.0]);
+        let line = edit.go_to_start(1.0, far).unwrap();
+        assert_eq!(line, "KARTCRAFT\tR\tTG\t-4.0\t-2.0\t0.000");
+        assert!(!edit.owns_left(), "not editing before it lands");
+        edit.trip_step(3.0, None);
+        edit.trip_step(3.0, Some(far));
+        assert!(
+            edit.trip.is_some(),
+            "the kart away for the teleport, or not moved yet"
+        );
+        edit.trip_step(4.0, Some(wow_to_bevy([-4.0, -2.0, 0.0])));
+        assert!(edit.trip.is_none() && edit.owns_left(), "landed");
+        edit.go_to_start(10.0, far);
+        edit.trip_step(10.0 + TRIP_SECS + 0.1, Some(far));
+        assert!(edit.trip.is_none(), "given up on");
         edit.map = 1;
         assert!(edit.edit_saved("short-dash").is_err());
         assert_eq!(edit.points.len(), 2, "a refusal keeps the draft");

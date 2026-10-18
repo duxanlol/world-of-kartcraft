@@ -1527,12 +1527,15 @@
             elseif verb == "PTB" or verb == "PT" or verb == "PTE" or verb == "PubOk" or verb == "PubNo"
                 or verb == "PubGone" then
                 BenillaKartPub_Line(line)
+            -- A trip to a track's start refused: a test lap's, or Edit's, which edits from here.
             elseif verb == "TGx" then
-                BenillaKart_Say(format("The trip to the test lap's grid is ready again in %d seconds:"
-                    .. " drive onto the grid, or Restart then.", tonumber(line[3]) or 0))
+                BenillaKart_Say(format("The trip to the track's start is ready again in %d seconds:"
+                    .. " drive there, or try again then.", tonumber(line[3]) or 0))
+                BenillaKartEditor_Send("stay")
             elseif verb == "TGf" then
-                BenillaKart_Say("The test lap's grid is over 1000 yards away, too far to be taken"
-                    .. " there: drive onto it.")
+                BenillaKart_Say("The track's start is over 1000 yards away, too far to be taken"
+                    .. " there: drive there.")
+                BenillaKartEditor_Send("stay")
             elseif verb == "MTx" then
                 BenillaKart_Say(format("You can travel to a Race Marshal again in %d seconds.",
                     tonumber(line[3]) or 0))

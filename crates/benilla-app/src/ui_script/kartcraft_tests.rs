@@ -4419,6 +4419,10 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
         pubs.len() == 1 && pubs[0].starts_with("KARTCRAFT\tR\tPub\tGoldshire Ring\t"),
         "{pubs:?}"
     );
+    // A trip to a track's start refused (Edit's, or a test lap's): the editor opens in place.
+    from_server(&mut s, "R\tTGf");
+    let cmd = s.cvar("KartTrackCmd").unwrap_or_default();
+    assert!(cmd.ends_with("\tstay"), "{cmd}");
 }
 
 #[test]
