@@ -4877,7 +4877,7 @@
     <!-- The settings: the guide arrow, the camera, the music, the minimap button, the ghost and
          the ground types, each a CVar set as it is clicked, as the stock option boxes are. -->
     <Frame name="BenillaKartSettingsFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="320" y="756"/></Size>
+        <Size><AbsDimension x="320" y="782"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -5004,6 +5004,9 @@
             <CheckButton name="$parentShortcuts" inherits="BenillaKartSettingsCheckTemplate">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-680"/></Offset></Anchor></Anchors>
             </CheckButton>
+            <CheckButton name="$parentPadTriggers" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-706"/></Offset></Anchor></Anchors>
+            </CheckButton>
             <!-- Every kind of guidance on or off, in a window of its own. -->
             <Button name="$parentNavigation" inherits="UIPanelButtonTemplate" text="Navigation...">
                 <Size><AbsDimension x="120" y="22"/></Size>
@@ -5030,6 +5033,7 @@
                     { "Rumble", "KartRumble", "Shake the controller on crashes" },
                     { "WowVoices", "KartWowVoices", "WoW character voices (off: CTR's racers)" },
                     { "Shortcuts", "KartShortcuts", "Show the Time trial and Race Finder bar" },
+                    { "PadTriggers", "KartPadTriggers", "Controller triggers as buttons (off: R2 Shift, L2 Ctrl)" },
                 }
                 for i = 1, table.getn(boxes) do
                     local box = getglobal(this:GetName() .. boxes[i][1])

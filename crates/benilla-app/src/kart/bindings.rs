@@ -138,6 +138,7 @@ pub(super) fn keys(overlay: &BindingOverlay) -> Keys {
         camera: overlay.just_pressed(CAMERA),
         look_back: overlay.held(LOOK_BACK),
         reverse: overlay.held(REVERSE),
+        stick_reverses: false,
     }
 }
 
@@ -155,6 +156,8 @@ pub(super) fn pad_keys(overlay: &BindingOverlay) -> Keys {
         camera: overlay.pad_just_pressed(CAMERA),
         look_back: overlay.pad_held(LOOK_BACK),
         reverse: overlay.pad_held(REVERSE),
+        // The stick's down is reverse's too, while reverse has a button on the pad.
+        stick_reverses: overlay.pad_bound(REVERSE),
     }
 }
 

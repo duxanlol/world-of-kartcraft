@@ -798,6 +798,13 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "",
         "Kartcraft's own — the controller to drive with; 1.12 has no kart",
     ),
+    // R2 and L2 plain buttons, each bound alone (`kartcraft::input::set_triggers_are_buttons`),
+    // instead of the pad's Shift and Ctrl.
+    ours(
+        "KartPadTriggers",
+        "0",
+        "Kartcraft's own — the controller's triggers as buttons; 1.12 has no kart",
+    ),
     ours(
         "KartPads",
         "",

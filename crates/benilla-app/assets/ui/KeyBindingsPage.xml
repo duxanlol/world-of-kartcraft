@@ -459,8 +459,12 @@
             else
                 chord = arg1
             end
-            -- A modifier alone is no key; R2 and L2 are the controller's (Kartcraft's).
-            if chord == "UNKNOWN" or chord == "SHIFT" or chord == "CTRL" or chord == "ALT" or chord == "PADRTRIGGER" or chord == "PADLTRIGGER" then
+            -- A modifier alone is no key; R2 and L2 are the controller's (Kartcraft's), unless the
+            -- triggers are plain buttons (KartPadTriggers).
+            if chord == "UNKNOWN" or chord == "SHIFT" or chord == "CTRL" or chord == "ALT" then
+                return
+            end
+            if (chord == "PADRTRIGGER" or chord == "PADLTRIGGER") and GetCVar("KartPadTriggers") ~= "1" then
                 return
             end
             if IsShiftKeyDown() then chord = "SHIFT-" .. chord end

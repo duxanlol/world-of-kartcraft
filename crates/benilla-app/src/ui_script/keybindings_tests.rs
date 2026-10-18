@@ -392,6 +392,13 @@ fn the_controller_capsule_holds_the_pad_buttons_apart_from_the_keys() {
     assert!(press(&mut s, "CTRL-PADDLEFT"));
     assert_eq!(holder(&s, "CTRL-PADDLEFT"), "MOVEFORWARD");
     assert!(pad_text(&s).contains("L2 + "), "{}", pad_text(&s));
+    // With the triggers plain buttons (KartPadTriggers), R2 alone binds.
+    s.run("SetCVar('KartPadTriggers', '1')").unwrap();
+    s.run(&format!("{ROW}3Key3Button:Click()")).unwrap();
+    assert!(press(&mut s, "PADRTRIGGER"));
+    assert!(!armed(&s), "R2 bound alone");
+    assert_eq!(holder(&s, "PADRTRIGGER"), "MOVEFORWARD");
+    s.run("SetCVar('KartPadTriggers', '0')").unwrap();
     // Escape disarms the Controller capsule.
     s.run(&format!("{ROW}3Key3Button:Click()")).unwrap();
     press(&mut s, "ESCAPE");

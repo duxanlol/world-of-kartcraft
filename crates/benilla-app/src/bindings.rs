@@ -189,6 +189,8 @@ pub(crate) struct BindingOverlay {
     just: Vec<&'static str>,
     pad_held: Vec<&'static str>,
     pad_just: Vec<&'static str>,
+    /// Commands a controller button is bound to, held or not.
+    pad_bound: Vec<&'static str>,
     /// The bound controller buttons down last frame, for a trigger's squeeze to press once.
     pad_was: Vec<bevy::input::gamepad::GamepadButton>,
 }
@@ -223,6 +225,11 @@ impl BindingOverlay {
     /// Did a controller button bound to this command go down this frame?
     pub(crate) fn pad_just_pressed(&self, command: &str) -> bool {
         self.pad_just.contains(&command)
+    }
+
+    /// Is any controller button bound to this command?
+    pub(crate) fn pad_bound(&self, command: &str) -> bool {
+        self.pad_bound.contains(&command)
     }
 
     /// The stock defaults with this plane's own added.
@@ -702,8 +709,13 @@ fn latch_and_dispatch(
     // R2 held is the pad's Shift and L2 its Ctrl (`kartcraft::input::PAD_MODIFIER`, `PAD_CTRL`).
     // Not while typing, not one the interface took first (`UiKeyboardCapture::pad_consumed`: a
     // key-capture frame, the layer's menus and popups), and not one bound in the overlay's plane
-    // while its mode is on (the kart's driving buttons), as a key there is not.
-    let held_on_pad = |m| gamepads.iter().any(|p| kartcraft::input::pad_down(p, m));
+    // while its mode is on (the kart's driving buttons), as a key there is not. With the triggers
+    // plain buttons (`KartPadTriggers`), neither modifies.
+    let held_on_pad = |m| {
+        gamepads
+            .iter()
+            .any(|p| kartcraft::input::modifier_down(p, m))
+    };
     let pad_shift = shift || held_on_pad(kartcraft::input::PAD_MODIFIER);
     let pad_ctrl = ctrl || held_on_pad(kartcraft::input::PAD_CTRL);
     for pad in &gamepads {
@@ -831,6 +843,21 @@ fn poll_overlay(
     overlay.just.clear();
     overlay.pad_held.clear();
     overlay.pad_just.clear();
+    overlay.pad_bound.clear();
+    for (k, command) in &dispatch.overlay {
+        if !matches!(k.key, Some(BindKey::Pad(_))) {
+            continue;
+        }
+        if let Some(&name) = overlay
+            .commands
+            .iter()
+            .find(|c| c.eq_ignore_ascii_case(command))
+        {
+            if !overlay.pad_bound.contains(&name) {
+                overlay.pad_bound.push(name);
+            }
+        }
+    }
     let sup = keys.any_pressed([KeyCode::SuperLeft, KeyCode::SuperRight]);
     let was = std::mem::take(&mut overlay.pad_was);
     if !overlay.active || capture.typing || sup {
@@ -858,7 +885,11 @@ fn poll_overlay(
     let mut pad_was = Vec::new();
     // R2 held is the pad's Shift and L2 its Ctrl; a button is the one chord those make of it
     // ([`BindingDispatch::pad_chord`]): R2 and Left is the ability, not the steer.
-    let held_on_pad = |m| gamepads.iter().any(|p| kartcraft::input::pad_down(p, m));
+    let held_on_pad = |m| {
+        gamepads
+            .iter()
+            .any(|p| kartcraft::input::modifier_down(p, m))
+    };
     let pad_shift = shift || held_on_pad(kartcraft::input::PAD_MODIFIER);
     let pad_ctrl = ctrl || held_on_pad(kartcraft::input::PAD_CTRL);
     for (k, command) in &dispatch.overlay {

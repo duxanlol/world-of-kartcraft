@@ -60,6 +60,9 @@ pub struct Keys {
     pub look_back: bool,
     /// Held: CTR's down, reverse (full speed alone, three quarters with the brake).
     pub reverse: bool,
+    /// Down on the stick reverses too: reverse is bound on the pad (a pad with it unbound
+    /// reverses on neither).
+    pub stick_reverses: bool,
 }
 
 impl Keys {
@@ -68,7 +71,7 @@ impl Keys {
     pub fn from_pad(pad: &Gamepad) -> Keys {
         let pressed = |b| pad_down(pad, b);
         let just = |b| pad.just_pressed(b);
-        let modifier = pressed(PAD_MODIFIER);
+        let modifier = modifier_down(pad, PAD_MODIFIER);
         Keys {
             accelerate: pressed(GamepadButton::South),
             brake: pressed(GamepadButton::West),
@@ -86,6 +89,7 @@ impl Keys {
             camera: just(GamepadButton::Select),
             look_back: pressed(GamepadButton::RightThumb),
             reverse: !modifier && pressed(GamepadButton::DPadDown),
+            stick_reverses: true,
         }
     }
 
@@ -111,6 +115,7 @@ impl Keys {
             look_back: keys.pressed(KeyCode::KeyX),
             // The brake is down too ([`from_keys`]).
             reverse: false,
+            stick_reverses: false,
         }
     }
 }
@@ -198,6 +203,26 @@ pub const PAD_MODIFIER: GamepadButton = GamepadButton::RightTrigger2;
 /// `CTRL-` binding (none by default, the player's to bind).
 pub const PAD_CTRL: GamepadButton = GamepadButton::LeftTrigger2;
 
+static TRIGGERS_ARE_BUTTONS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The host's setting (`KartPadTriggers`): R2 and L2 plain buttons, bound alone, instead of the
+/// pad's modifiers.
+pub fn set_triggers_are_buttons(on: bool) {
+    TRIGGERS_ARE_BUTTONS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether R2 and L2 are plain buttons ([`set_triggers_are_buttons`]).
+pub fn triggers_are_buttons() -> bool {
+    TRIGGERS_ARE_BUTTONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether `pad` holds the modifier `m` ([`PAD_MODIFIER`], [`PAD_CTRL`]): never while the
+/// triggers are plain buttons.
+pub fn modifier_down(pad: &Gamepad, m: GamepadButton) -> bool {
+    !triggers_are_buttons() && pad_down(pad, m)
+}
+
 /// How far a trigger (or any button with an analog travel) must go to count as pressed, as the
 /// kart's triggers always took a light squeeze.
 pub const ANALOG_PRESS: f32 = 0.4;
@@ -279,7 +304,7 @@ fn from_pad(stick_at: Vec2, keys: &Keys) -> Controls {
         },
         accelerate: keys.accelerate,
         brake: keys.brake,
-        reverse: stick_at.y < -0.6 || keys.reverse,
+        reverse: (keys.stick_reverses && stick_at.y < -0.6) || keys.reverse,
         hop: keys.hop,
         hop_alt: keys.boost,
         fire: keys.fire,
@@ -410,6 +435,17 @@ mod tests {
             !k.left && !k.reverse && !k.accelerate,
             "R2 is no longer the gas"
         );
+    }
+
+    #[test]
+    fn down_on_the_stick_reverses_only_while_reverse_is_bound_on_the_pad() {
+        let down = Vec2::new(0.0, -1.0);
+        let bound = Keys {
+            stick_reverses: true,
+            ..Default::default()
+        };
+        assert!(from_pad(down, &bound).reverse);
+        assert!(!from_pad(down, &Keys::default()).reverse, "unbound");
     }
 
     #[test]

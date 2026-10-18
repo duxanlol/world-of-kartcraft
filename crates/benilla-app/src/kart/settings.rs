@@ -24,6 +24,8 @@
 //!   text-emote voices, [`kartcraft::voice::WowLine`]) instead of CTR's cast, on by default.
 //! - `KartRumble`: the controller shakes on crashes, hard landings and wall scrapes
 //!   ([`kartcraft::rumble`]), as CTR's vibration does, on by default.
+//! - `KartPadTriggers`: the controller's R2 and L2 plain buttons, each bound alone, instead of
+//!   its Shift and Ctrl ([`kartcraft::input::set_triggers_are_buttons`]); off by default.
 //! - `KartPadTest`: the controller test window (`/kartpad`) is open, so the pad's state is fed
 //!   to it; `KartPadRumble`: `strong` or `weak` shakes that motor once, from the test's buttons.
 //!   Both held for the session only.
@@ -246,6 +248,7 @@ pub(crate) fn on_cvar(
         "kartghost" => settings.ghost = ev.flag(),
         "kartterrain" => settings.terrain = ev.flag(),
         "kartrumble" => settings.rumble = ev.flag(),
+        "kartpadtriggers" => kartcraft::input::set_triggers_are_buttons(ev.flag()),
         "kartwowvoices" => settings.wow_voices = ev.flag(),
         "karthidehud" => {
             hidden.0 = ev.flag();
