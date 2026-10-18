@@ -238,6 +238,7 @@ impl TrackEdit {
         (self.on && !self.testing && !self.points.is_empty()).then(|| {
             Active::draft(self.laps, self.points.clone(), me)
                 .with_facings(self.facings.clone())
+                .with_heights(self.heights.clone())
                 .with_gates(self.widths.clone())
         })
     }
@@ -812,7 +813,9 @@ pub(crate) fn on_cvar(
                             &races.me,
                         );
                         let race = race.with_facings(edit.facings.clone());
-                        let race = race.with_floor(floor(edit.grid, &edit.heights));
+                        let race = race
+                            .with_floor(floor(edit.grid, &edit.heights))
+                            .with_heights(edit.heights.clone());
                         races.race = Some(race.with_gates(edit.widths.clone()));
                         free.set(FreeMode::Off);
                     }
@@ -841,6 +844,7 @@ pub(crate) fn on_cvar(
                             .with_facings(c.facings())
                             .with_gates(c.gates())
                             .with_floor(s.floor())
+                            .with_heights(c.heights())
                     });
                     if let Some(why) = why {
                         edit.say(why);
@@ -1081,14 +1085,21 @@ pub(crate) fn update(
         let ahead = wow_to_bevy([w[0] + 8.0 * o.cos(), w[1] + 8.0 * o.sin(), 0.0]).with_y(at.y);
         gizmos.arrow(at + Vec3::Y * 0.5, ahead + Vec3::Y * 0.5, AIM_COLOR);
     }
-    // Each checkpoint's small marker and pole on the ground, the start's green.
-    if let Some(eye) = eye {
+    // Each checkpoint's small marker and pole on the floor it was placed on (under a roof, as
+    // the Caverns of Time's way down, not on the roof), the start's green.
+    if eye.is_some() {
         for (i, p) in edit.points.iter().enumerate() {
-            let top = wow_to_bevy([p[0], p[1], 0.0]).with_y(eye.translation.y + 200.0);
-            let Some(hit) = collide.ray_body(top, Dir3::NEG_Y, 4000.0) else {
+            let column = wow_to_bevy([p[0], p[1], 0.0]);
+            let hint = edit
+                .heights
+                .get(i)
+                .copied()
+                .flatten()
+                .map(super::race::bevy_y);
+            let Some(y) = super::race::floor_under(&collide, column, hint).or(hint) else {
                 continue;
             };
-            let foot = top - Vec3::Y * (hit.distance - 0.3);
+            let foot = column.with_y(y + 0.3);
             let color = if i == 0 { START_COLOR } else { MARKER_COLOR };
             gizmos.circle(flat(foot), MARKER, color);
             gizmos.line(foot, foot + Vec3::Y * MARKER_POLE, color);

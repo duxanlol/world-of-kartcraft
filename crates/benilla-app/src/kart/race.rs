@@ -236,6 +236,9 @@ const START_RADIUS: f32 = 55.0;
 /// A checkpoint is a gate: passed on crossing the line through it across the course, within
 /// this many yards of its centre, or on coming this near it (the server allows 45).
 pub(crate) const GATE_HALF_WIDTH: f32 = 20.0;
+/// How near a checkpoint (yards) a spot takes its known height: past the widest gate's posts
+/// (45 yards, the editor's widest), short of most courses' next checkpoint.
+const HEIGHT_REACH: f32 = 50.0;
 const CHECKPOINT_RADIUS: f32 = 8.0;
 /// How far past a gate's posts a crossing still counts (yards): the post's own thickness, half a
 /// kart and a little more, so driving through a post counts.
@@ -352,6 +355,9 @@ pub(crate) struct Active {
     grid_trip: bool,
     /// The grid's height (WoW z) where known: the floor the trip lands on in a dungeon.
     floor: Option<f32>,
+    /// Each checkpoint's height (WoW z) where known (the track editor's, a course's `z`): its gate
+    /// stands on the floor under it, not on a roof over it ([`Active::height_near`]).
+    heights: Vec<Option<f32>>,
     /// The race's ground types (`GT`), the host's choice: every racer drives off-road as CTR's
     /// grounds hold it, or on asphalt everywhere, whatever their own `KartTerrain`.
     ground_types: bool,
@@ -478,6 +484,24 @@ impl Active {
         self
     }
 
+    /// Each checkpoint's height, where known ([`Active::heights`]).
+    pub(crate) fn with_heights(mut self, heights: Vec<Option<f32>>) -> Self {
+        self.heights = heights;
+        self
+    }
+
+    /// The known height (Bevy y) of the checkpoint nearest WoW `p`, within [`HEIGHT_REACH`]: a
+    /// gate, its posts and its arrow have their floor looked for from just over it.
+    pub(crate) fn height_near(&self, p: [f32; 2]) -> Option<f32> {
+        self.points
+            .iter()
+            .zip(&self.heights)
+            .filter_map(|(q, z)| Some(((q[0] - p[0]).hypot(q[1] - p[1]), (*z)?)))
+            .filter(|&(d, _)| d <= HEIGHT_REACH)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, z)| bevy_y(z))
+    }
+
     /// The checkpoints' facings, where set ([`CourseCheckpoint::o`]).
     pub(crate) fn with_facings(mut self, facings: Vec<Option<f32>>) -> Self {
         self.facings = facings;
@@ -498,6 +522,8 @@ impl Active {
             id: self.id,
             facings: std::mem::take(&mut self.facings),
             gates: std::mem::take(&mut self.gates),
+            heights: std::mem::take(&mut self.heights),
+            floor: self.floor,
             ..Active::practice(
                 &self.course,
                 self.laps,
@@ -1125,6 +1151,7 @@ impl Races {
                         .find(|c| c.key == f[2] && c.checkpoints.len() == race.points.len());
                     race.gates = ours.map_or_else(Vec::new, Course::gates);
                     race.facings = ours.map_or_else(Vec::new, Course::facings);
+                    race.heights = ours.map_or_else(Vec::new, Course::heights);
                     // A player track's from its `PT` line, which comes first.
                     let track = self.track_spots.get(&f[2]);
                     let track = track.and_then(|t| super::track_edit::parse_spots(t));
@@ -2145,12 +2172,39 @@ fn pointing(from: Vec3, to: Vec3) -> Quat {
     Quat::from_rotation_y((-d.x).atan2(-d.z))
 }
 
-/// The ground under a WoW x, y, in Bevy world; at height `fallback` where there is none.
-fn ground_at(collide: &WorldCollision, p: [f32; 2], fallback: f32) -> Vec3 {
+/// How far over a checkpoint's known height (yards) the look for its floor starts, and how far
+/// under it the look reaches: a course under a roof (the Caverns of Time's way down, a dungeon's
+/// streets) has its floor found under the roof, where a look from the sky stops on the roof.
+const FLOOR_LOOK_UP: f32 = 4.0;
+const FLOOR_LOOK_DOWN: f32 = 20.0;
+
+/// The floor under Bevy column `column` (its y ignored): looked for from just over `hint` (Bevy
+/// y, a checkpoint's known height) where there is one, else from the sky; `None` where nothing
+/// is there yet (the ground streaming in).
+pub(crate) fn floor_under(
+    collide: &WorldCollision,
+    column: Vec3,
+    hint: Option<f32>,
+) -> Option<f32> {
+    let (from, reach) = match hint {
+        Some(y) => (y + FLOOR_LOOK_UP, FLOOR_LOOK_UP + FLOOR_LOOK_DOWN),
+        None => (2000.0, 4000.0),
+    };
+    collide
+        .ray_body(Vec3::new(column.x, from, column.z), Dir3::NEG_Y, reach)
+        .map(|hit| from - hit.distance)
+}
+
+/// A WoW z as Bevy's y.
+pub(crate) fn bevy_y(z: f32) -> f32 {
+    wow_to_bevy([0.0, 0.0, z]).y
+}
+
+/// The ground under a WoW x, y, in Bevy world, looked for from over `hint` (Bevy y) where known;
+/// at `hint`, else `fallback`, where there is none.
+fn ground_at(collide: &WorldCollision, p: [f32; 2], hint: Option<f32>, fallback: f32) -> Vec3 {
     let column = wow_to_bevy([p[0], p[1], 0.0]);
-    let y = collide
-        .ray_body(Vec3::new(column.x, 2000.0, column.z), Dir3::NEG_Y, 4000.0)
-        .map_or(fallback, |hit| 2000.0 - hit.distance);
+    let y = floor_under(collide, column, hint).unwrap_or(hint.unwrap_or(fallback));
     Vec3::new(column.x, y, column.z)
 }
 
@@ -2176,7 +2230,14 @@ impl Grounds {
     }
 
     /// [`ground_at`], once a spot.
-    fn ground(&mut self, collide: &WorldCollision, p: [f32; 2], fallback: f32, now: f32) -> Vec3 {
+    fn ground(
+        &mut self,
+        collide: &WorldCollision,
+        p: [f32; 2],
+        hint: Option<f32>,
+        fallback: f32,
+        now: f32,
+    ) -> Vec3 {
         let column = wow_to_bevy([p[0], p[1], 0.0]);
         let (y, probed) = self
             .at
@@ -2184,11 +2245,9 @@ impl Grounds {
             .or_insert((None, f32::NEG_INFINITY));
         if y.is_none() && now - *probed >= REPROBE {
             *probed = now;
-            *y = collide
-                .ray_body(Vec3::new(column.x, 2000.0, column.z), Dir3::NEG_Y, 4000.0)
-                .map(|hit| 2000.0 - hit.distance);
+            *y = floor_under(collide, column, hint);
         }
-        Vec3::new(column.x, y.unwrap_or(fallback), column.z)
+        Vec3::new(column.x, y.or(hint).unwrap_or(fallback), column.z)
     }
 }
 
@@ -2280,7 +2339,9 @@ pub(crate) fn beams(
         .clone();
     grounds.for_race(race.id);
     let now = time.elapsed_secs();
-    let mut ground_of = |p: [f32; 2], fallback: f32| grounds.ground(&collide, p, fallback, now);
+    let mut ground_of = |p: [f32; 2], fallback: f32| {
+        grounds.ground(&collide, p, race.height_near(p), fallback, now)
+    };
     let n = race.points.len();
     let mut have = vec![[false; GATE_PARTS.len()]; n];
     let part_index = |part: GatePart| match part {
@@ -2564,7 +2625,8 @@ pub(crate) fn guide(
             Some(cam_at.translation() + wow_to_bevy([100.0, 0.0, 0.0]))
         }
         (Some((race, next)), _) if hud.shown && !hud.clean => {
-            Some(ground_at(&collide, race.points[next], drive.pos.y))
+            let p = race.points[next];
+            Some(ground_at(&collide, p, race.height_near(p), drive.pos.y))
         }
         (None, _) if delivery.is_some() && settings.nav.gps_arrow && !hud.clean => {
             gps.ahead.map(wow_to_bevy)
@@ -3795,6 +3857,21 @@ mod tests {
             Some("KARTCRAFT\tR\tTG\t-20.0\t0.0\t0.000")
         );
         assert!(gridded.grid_trip(7.5).is_none());
+        // Its gates look for their floor from their own checkpoint's height, where known (the
+        // Caverns of Time's way down runs under the rock a look from the sky stops on).
+        let held = Active::practice("Loop", 1, points.clone(), None, "Me").with_heights(vec![
+            Some(-20.0),
+            None,
+            Some(5.0),
+        ]);
+        assert_eq!(held.height_near(points[0]), Some(bevy_y(-20.0)));
+        let post = [points[0][0] + 20.0, points[0][1]];
+        assert_eq!(
+            held.height_near(post),
+            Some(bevy_y(-20.0)),
+            "a post takes its gate's"
+        );
+        assert_eq!(held.height_near([9000.0, 9000.0]), None, "nothing near");
         // A track with a floor (a dungeon's) says where to land.
         let mut floored =
             Active::practice("Loop", 1, points.clone(), Some([-20.0, 0.0, 0.0]), "Me")
