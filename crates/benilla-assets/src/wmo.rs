@@ -8,10 +8,10 @@ use std::sync::Arc;
 
 use benilla_formats::{
     accumulate_wmo_group_camera_collision, accumulate_wmo_group_camera_only_collision,
-    accumulate_wmo_group_collision, parse_wmo_lights, parse_wmo_root, wmo_group_doodad_refs,
-    wmo_group_footprint_tris, wmo_group_header, wmo_group_light_refs, wmo_group_liquid_mesh,
-    wmo_group_submeshes, CollisionMesh, FootprintTris, LiquidMesh, WmoDoodad, WmoDoodadSet, WmoFog,
-    WmoGroupInfo, WmoLight, WmoPortalInfo, WmoPortalRef,
+    accumulate_wmo_group_collision_dropping, parse_wmo_lights, parse_wmo_root,
+    wmo_group_doodad_refs, wmo_group_footprint_tris, wmo_group_header, wmo_group_light_refs,
+    wmo_group_liquid_mesh, wmo_group_submeshes, CollisionMesh, FootprintTris, LiquidMesh,
+    WmoDoodad, WmoDoodadSet, WmoFog, WmoGroupInfo, WmoLight, WmoPortalInfo, WmoPortalRef,
 };
 use bevy::asset::io::Reader;
 use bevy::asset::{Asset, AssetLoader, LoadContext};
@@ -433,7 +433,9 @@ impl AssetLoader for WmoModelLoader {
             // One walking gather feeds both the per-group faces and the flat collider.
             let mut gpos: Vec<[f32; 3]> = Vec::new();
             let mut gidx: Vec<u32> = Vec::new();
-            accumulate_wmo_group_collision(&gbytes, &mut gpos, &mut gidx);
+            accumulate_wmo_group_collision_dropping(&gbytes, &mut gpos, &mut gidx, &|mat, tri| {
+                opened_wall(&stem, gi, mat, tri)
+            });
             if let Some(tris) = group_collision_tris.get_mut(gi as usize) {
                 for t in gidx.as_chunks::<3>().0 {
                     if let (Some(&a), Some(&b), Some(&c)) = (
@@ -559,7 +561,7 @@ impl AssetLoader for WmoModelLoader {
             collision_bounds,
             collision,
             collision_camera,
-            doodads: root.doodads().to_vec(),
+            doodads: root.doodads().iter().map(opened_doodad).collect(),
             doodad_sets: root.doodad_sets().to_vec(),
             lights: parse_wmo_lights(&bytes),
             group_bounds: root.group_infos().to_vec(),
@@ -628,6 +630,52 @@ fn resolve_shared_liquid_cells(group_liquids: &mut [Option<LiquidMesh>]) {
             *slot = None; // every cell this group held belonged to a neighbour
         }
     }
+}
+
+/// World of Kartcraft's deviation: the WMO doodads left out (no model, so neither drawn nor
+/// collided) where the 1.12 data seals a place the karts race, matched by path, any case. The
+/// Caverns of Time's door stands in its cavern's own doodads (and as the `CavernDoor01` object,
+/// which the server no longer spawns).
+pub const OPENED_DOODADS: &[&str] =
+    &[r"world\dungeon\cavernsoftime\activedoodads\cavernsoftimedoor\caverndoor"];
+
+/// World of Kartcraft's deviation: the collision-only faces (MOPY material `0xFF`, never drawn)
+/// left out where the 1.12 data walls off a place the karts race: a WMO by its path stem, a group
+/// and a box in its model space, any face whose centre is in the box. The Caverns of Time's
+/// `Exterior` group walls its mouth a few yards out from its door.
+pub const OPENED_WALLS: &[(&str, u32, [f32; 3], [f32; 3])] = &[(
+    r"world\wmo\dungeon\cavernsoftime\cavernsoftime",
+    0,
+    [18.0, -25.0, -20.0],
+    [28.0, 25.0, 40.0],
+)];
+
+/// Whether two MPQ paths name one file: any case, either slash, the asset path's own prefix
+/// ahead of the archive path allowed.
+fn same_path(path: &str, archive: &str) -> bool {
+    let norm = |p: &str| p.replace('\\', "/").to_ascii_lowercase();
+    norm(path).ends_with(&norm(archive))
+}
+
+/// Whether a face of `stem`'s group `group` is one of [`OPENED_WALLS`].
+fn opened_wall(stem: &str, group: u32, material: u8, tri: [[f32; 3]; 3]) -> bool {
+    material == 0xFF
+        && OPENED_WALLS.iter().any(|(s, g, lo, hi)| {
+            *g == group && same_path(stem, s) && {
+                let c = (0..3).map(|k| (tri[0][k] + tri[1][k] + tri[2][k]) / 3.0);
+                c.zip(lo.iter().zip(hi))
+                    .all(|(v, (l, h))| *l <= v && v <= *h)
+            }
+        })
+}
+
+fn opened_doodad(d: &WmoDoodad) -> WmoDoodad {
+    let mut d = d.clone();
+    let model = d.model.to_ascii_lowercase();
+    if OPENED_DOODADS.iter().any(|o| model.starts_with(o)) {
+        d.model = String::new();
+    }
+    d
 }
 
 #[cfg(test)]
@@ -846,5 +894,44 @@ mod doodad_base_tests {
         // A doodad named twice by one group counts once.
         assert_eq!(&*modr_refs(1, &[vec![0u16, 0u16]])[0], &[0]);
         assert!(modr_refs(2, &[])[0].is_empty());
+    }
+
+    /// Kartcraft's openings: the Caverns of Time's wall at its mouth goes, collision-only faces
+    /// in its box alone, and its door with it; any other WMO, group or face stays.
+    #[test]
+    fn the_caverns_of_time_open_and_nothing_else_does() {
+        let stem = "world/wmo/dungeon/cavernsoftime/cavernsoftime";
+        let wall = [[22.0, -3.0, 0.0], [23.0, 3.0, 0.0], [22.5, 0.0, 9.0]];
+        assert!(opened_wall(stem, 0, 0xFF, wall));
+        assert!(opened_wall(
+            &stem.to_ascii_uppercase().replace('/', "\\"),
+            0,
+            0xFF,
+            wall
+        ));
+        assert!(!opened_wall(stem, 0, 3, wall), "a drawn face stays");
+        assert!(!opened_wall(stem, 1, 0xFF, wall), "another group stays");
+        let far = wall.map(|v| [v[0] + 40.0, v[1], v[2]]);
+        assert!(!opened_wall(stem, 0, 0xFF, far), "out of the box stays");
+        assert!(!opened_wall(
+            "world/wmo/azeroth/buildings/inn",
+            0,
+            0xFF,
+            wall
+        ));
+        let door = WmoDoodad {
+            model: r"WORLD\DUNGEON\CAVERNSOFTIME\ACTIVEDOODADS\CAVERNSOFTIMEDOOR\CAVERNDOOR.M2"
+                .into(),
+            position: [0.0; 3],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+            scale: 1.0,
+            color: [0; 4],
+        };
+        assert!(opened_doodad(&door).model.is_empty());
+        let barrel = WmoDoodad {
+            model: r"WORLD\GENERIC\ORC\BARREL.M2".into(),
+            ..door
+        };
+        assert!(!opened_doodad(&barrel).model.is_empty());
     }
 }

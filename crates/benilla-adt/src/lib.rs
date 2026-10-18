@@ -269,10 +269,11 @@ pub fn parse_adt(cursor: &mut Cursor<&[u8]>) -> Result<ParsedAdt> {
         .iter()
         .map(|&o| cstring_at(&mmdx, o as usize))
         .collect();
-    let wmos = mwid
+    let wmos: Vec<String> = mwid
         .iter()
         .map(|&o| cstring_at(&mwmo, o as usize))
         .collect();
+    wmo_placements.retain(|p| !opened(wmos.get(p.name_id as usize)));
 
     Ok(ParsedAdt::Root(Box::new(RootAdt {
         textures,
@@ -282,6 +283,16 @@ pub fn parse_adt(cursor: &mut Cursor<&[u8]>) -> Result<ParsedAdt> {
         wmo_placements,
         mcnk_chunks,
     })))
+}
+
+/// World of Kartcraft's deviation: the WMOs left out of the world where the 1.12 data seals a
+/// place the karts race, matched by path, any case. `CavernsOfTimeEntrance.wmo` is the rock that
+/// plugs the Caverns of Time's canyon in Tanaris; the cavern behind it ships complete in 1.12.
+pub const OPENED_WMOS: &[&str] = &[r"world\wmo\dungeon\cavernsoftime\cavernsoftimeentrance.wmo"];
+
+/// Whether a placement of `name` is one of [`OPENED_WMOS`].
+fn opened(name: Option<&String>) -> bool {
+    name.is_some_and(|n| OPENED_WMOS.iter().any(|o| n.eq_ignore_ascii_case(o)))
 }
 
 /// Split a NUL-separated, NUL-terminated string blob, dropping empties.

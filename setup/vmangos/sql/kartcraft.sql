@@ -223,4 +223,10 @@ INSERT INTO `creature` (`guid`, `id`, `map`, `position_x`, `position_y`, `positi
   `orientation`, `spawntimesecsmin`, `spawntimesecsmax`, `wander_distance`, `movement_type`) VALUES
 (401000, 190011, 1, -6206, -3896, -58.67, 3.1, 300, 300, 0, 0);
 
+-- The Caverns of Time opened for racing (World of Kartcraft's deviation): the stock spawn
+-- of CavernDoor01 (179588) that seals the cavern is not spawned; the client leaves out the
+-- canyon plug and the cavern door (benilla-adt OPENED_WMOS, benilla-assets
+-- OPENED_DOODADS).
+DELETE FROM `gameobject` WHERE `id` = 179588 AND `map` = 1;
+
 COMMIT;

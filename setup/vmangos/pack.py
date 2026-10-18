@@ -208,6 +208,8 @@ MARSHAL_SCRIPT = 'npc_kartcraft_marshal'
 # the Goblin Pit Boss's look (display 7191); its menu opens the garage, the shop, the tracks and
 # the Race Finder.
 HUB_ENTRY = 190011
+# The Caverns of Time's sealing door, CavernDoor01 (stock gameobject 179588), taken out.
+COT_DOOR = 179588
 HUB_GUID = 401000
 HUB_TEXT = 190020
 HUB_SCRIPT = 'npc_kartcraft_hub'
@@ -321,6 +323,12 @@ def marshal_sql(data):
         'INSERT INTO `creature` (`guid`, `id`, `map`, `position_x`, `position_y`, `position_z`,',
         '  `orientation`, `spawntimesecsmin`, `spawntimesecsmax`, `wander_distance`, `movement_type`) VALUES',
         f'({HUB_GUID}, {HUB_ENTRY}, {m}, {sql_num(x)}, {sql_num(y)}, {sql_num(z)}, {sql_num(o)}, 300, 300, 0, 0);',
+        '',
+        "-- The Caverns of Time opened for racing (World of Kartcraft's deviation): the stock spawn",
+        '-- of CavernDoor01 (179588) that seals the cavern is not spawned; the client leaves out the',
+        '-- canyon plug and the cavern door (benilla-adt OPENED_WMOS, benilla-assets',
+        '-- OPENED_DOODADS).',
+        f'DELETE FROM `gameobject` WHERE `id` = {COT_DOOR} AND `map` = 1;',
     ]
     out += ['', 'COMMIT;']
     return '\n'.join(out) + '\n'

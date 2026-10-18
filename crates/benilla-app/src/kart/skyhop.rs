@@ -196,7 +196,12 @@ pub(crate) fn update(
 
 /// `ms` as a race clock, "0:12.34", as every race time is shown.
 fn clock(ms: u32) -> String {
-    format!("{}:{:02}.{:02}", ms / 60_000, ms / 1000 % 60, ms % 1000 / 10)
+    format!(
+        "{}:{:02}.{:02}",
+        ms / 60_000,
+        ms / 1000 % 60,
+        ms % 1000 / 10
+    )
 }
 
 #[cfg(test)]

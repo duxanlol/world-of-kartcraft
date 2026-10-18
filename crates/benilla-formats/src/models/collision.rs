@@ -113,7 +113,20 @@ pub fn accumulate_wmo_group_collision(
     positions: &mut Vec<[f32; 3]>,
     indices: &mut Vec<u32>,
 ) {
-    accumulate_wmo_group_faces(group_bytes, MOPY_DETAIL, 0, positions, indices);
+    accumulate_wmo_group_faces(group_bytes, MOPY_DETAIL, 0, positions, indices, &|_, _| {
+        false
+    });
+}
+
+/// [`accumulate_wmo_group_collision`] less the faces `drop` names by their MOPY material id
+/// (`0xFF` a collision-only face) and their corners.
+pub fn accumulate_wmo_group_collision_dropping(
+    group_bytes: &[u8],
+    positions: &mut Vec<[f32; 3]>,
+    indices: &mut Vec<u32>,
+    drop: &dyn Fn(u8, [[f32; 3]; 3]) -> bool,
+) {
+    accumulate_wmo_group_faces(group_bytes, MOPY_DETAIL, 0, positions, indices, drop);
 }
 
 /// Append one WMO group file's camera and line-of-sight triangles: every face but `NOCAMCOLLIDE`,
@@ -123,7 +136,14 @@ pub fn accumulate_wmo_group_camera_collision(
     positions: &mut Vec<[f32; 3]>,
     indices: &mut Vec<u32>,
 ) {
-    accumulate_wmo_group_faces(group_bytes, MOPY_NOCAMCOLLIDE, 0, positions, indices);
+    accumulate_wmo_group_faces(
+        group_bytes,
+        MOPY_NOCAMCOLLIDE,
+        0,
+        positions,
+        indices,
+        &|_, _| false,
+    );
 }
 
 /// Append one WMO group file's camera-only triangles (`DETAIL` set, `NOCAMCOLLIDE` clear): the
@@ -139,17 +159,20 @@ pub fn accumulate_wmo_group_camera_only_collision(
         MOPY_DETAIL,
         positions,
         indices,
+        &|_, _| false,
     );
 }
 
-/// Append every triangle whose MOPY flags miss `skip_mask` and carry all of `require_mask`, its
-/// vertices remapped per group (the same index in two groups is two vertices).
+/// Append every triangle whose MOPY flags miss `skip_mask` and carry all of `require_mask` and
+/// that `drop` keeps, its vertices remapped per group (the same index in two groups is two
+/// vertices).
 fn accumulate_wmo_group_faces(
     group_bytes: &[u8],
     skip_mask: u8,
     require_mask: u8,
     positions: &mut Vec<[f32; 3]>,
     indices: &mut Vec<u32>,
+    drop: &dyn Fn(u8, [[f32; 3]; 3]) -> bool,
 ) {
     let Ok(ParsedWmo::Group(group)) = parse_wmo(&mut Cursor::new(group_bytes)) else {
         return;
@@ -162,6 +185,16 @@ fn accumulate_wmo_group_faces(
         };
         if mopy.flags & skip_mask != 0 || mopy.flags & require_mask != require_mask {
             continue;
+        }
+        let corner = |k: usize| {
+            let v = group.vertex_indices.get(t * 3 + k)?;
+            let p = group.vertex_positions.get(*v as usize)?;
+            Some([p.x, p.y, p.z])
+        };
+        if let (Some(a), Some(b), Some(c)) = (corner(0), corner(1), corner(2)) {
+            if drop(mopy.material_id, [a, b, c]) {
+                continue;
+            }
         }
         for k in 0..3 {
             let Some(&vidx) = group.vertex_indices.get(t * 3 + k) else {
