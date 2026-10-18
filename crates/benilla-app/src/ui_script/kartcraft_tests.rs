@@ -2347,8 +2347,12 @@ fn the_garage_shows_the_look_and_wears_only_what_is_earned() {
         text(&mut s, "BenillaKartGarageFrameTrailNeed"),
         "Needs 25 races (12 so far)"
     );
-    // The server's answer is what we wear, and the kart's CVars follow it.
+    // The server's answer is what we wear, and the kart's CVars follow it; the row stays on Gold,
+    // stepped to since, and a step back is Copper, worn.
     from_server(&mut s, "R\tCO\t12,3,0,0,0,0\t1\t0");
+    assert_eq!(text(&mut s, "BenillaKartGarageFramePaintName"), "Gold");
+    s.run("BenillaKartGarageFramePaintPrev:Click()").unwrap();
+    assert!(sent(&mut s).is_empty(), "already worn");
     assert_eq!(
         text(&mut s, "BenillaKartGarageFramePaintName"),
         "Copper (worn)"
@@ -3914,6 +3918,46 @@ fn a_cache_s_hidden_cosmetic_is_closed_until_found() {
         (false, "Found only in Astral Caches".into())
     );
     assert_eq!(earned(&mut s, 2), (true, String::new()));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The garage's Look arrows step where clicked: the server's answer to an earlier step (what we
+/// wear now) leaves the rows where they have stepped since, while the garage is open.
+#[test]
+fn the_look_arrows_hold_their_place_through_the_server_s_answers() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    from_server(
+        &mut s,
+        "R@CC@P@Stock:0:0;Red:0:0;Blue:0:0;Gold:0:9"
+            .replace('@', "\t")
+            .as_str(),
+    );
+    from_server(&mut s, "R@CO@1,0,0,0,0,0,0@0@0".replace('@', "\t").as_str());
+    s.run("BenillaKartGarageFrame:Show()").unwrap();
+    sent(&mut s);
+    let view = |s: &mut UiScript| -> u32 { s.eval("return BenillaKartLook.view.P").unwrap() };
+    // Two steps, the second before the first is answered.
+    s.run("BenillaKartLook_Step('P', 1)").unwrap();
+    s.run("BenillaKartLook_Step('P', 1)").unwrap();
+    assert_eq!(
+        sent(&mut s),
+        ["KARTCRAFT\tR\tCE\tP\t1", "KARTCRAFT\tR\tCE\tP\t2"]
+    );
+    from_server(&mut s, "R@CO@1,0,0,0,0,0,0@1@0".replace('@', "\t").as_str());
+    assert_eq!(view(&mut s), 2, "the first answer takes the rows back");
+    // A step onto a locked one is shown, not worn.
+    s.run("BenillaKartLook_Step('P', 1)").unwrap();
+    assert!(sent(&mut s).is_empty());
+    from_server(&mut s, "R@CO@1,0,0,0,0,0,0@2@0".replace('@', "\t").as_str());
+    assert_eq!(view(&mut s), 3);
+    // Opened again: on what we wear.
+    s.run("BenillaKartGarageFrame:Hide() BenillaKartGarageFrame:Show()")
+        .unwrap();
+    assert_eq!(view(&mut s), 2);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 

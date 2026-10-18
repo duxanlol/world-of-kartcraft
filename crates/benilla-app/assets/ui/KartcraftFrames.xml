@@ -1558,7 +1558,11 @@
                 for n in string.gfind(line[3] or "", "%d+") do table.insert(look.stats, tonumber(n)) end
                 look.worn.P = tonumber(line[4]) or 0
                 look.worn.T = tonumber(line[5]) or 0
-                look.view.P, look.view.T = look.worn.P, look.worn.T
+                -- The arrows show what we wear, but not while the garage is open: the answer to an
+                -- earlier step would take the rows back from where they have stepped since.
+                if not BenillaKartGarageFrame:IsVisible() then
+                    look.view.P, look.view.T = look.worn.P, look.worn.T
+                end
                 SetCVar("KartPaint", look.worn.P)
                 SetCVar("KartTrail", look.worn.T)
                 if BenillaKartGarageFrame:IsVisible() then BenillaKartGarage_Refresh() end
@@ -5570,6 +5574,9 @@
             </OnLoad>
             <OnShow>
                 PlaySound("igMainMenuOpen")
+                -- Opened on what we wear.
+                local look = BenillaKartLook
+                look.view.P, look.view.T = look.worn.P, look.worn.T
                 BenillaKart_Send("CO")
                 BenillaKart_Send("Goods")
                 BenillaKartGarage_Refresh()
