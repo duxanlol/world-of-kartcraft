@@ -997,6 +997,9 @@ namespace Kartcraft
         return above + 1;
     }
 
+    static void ReplayKeepBest(Race const& r, char const* reason, uint32 guid, std::string const& course,
+        uint32 holder, int32 value);
+
     // A race's results all in: the ratings move, are kept, and each racer is told.
     static void RateRace(Race const& r)
     {
@@ -1040,6 +1043,9 @@ namespace Kartcraft
             CharacterDatabase.PExecute("REPLACE INTO `kartcraft_ladder` (`season`, `guid`, `name`, `rating`, "
                 "`races`, `wins`, `at`) VALUES (%u, %u, '%s', %i, %u, %u, %u)", s_season, low, escaped.c_str(),
                 e.rating, e.races, e.wins, now);
+            // The racer's best race of the season, the one they gained the most rating in, keeps
+            // its take (Replays); past the season only its top three's stay.
+            ReplayKeepBest(r, "lb", low, std::to_string(s_season), low, e.rating - before[i]);
         }
         for (size_t i = 0; i < n; ++i)
         {
@@ -2501,13 +2507,15 @@ namespace Kartcraft
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
         CharacterDatabase.DirectExecute(
             "CREATE TABLE IF NOT EXISTS `kartcraft_replay_keeps` ("
-            "`reason` CHAR(2) NOT NULL COMMENT 'pR/pT a personal best, rR/rT a course record (race/trial), cd/cw a challenge best', "
+            "`reason` CHAR(2) NOT NULL COMMENT 'pR/pT a personal best, rR/rT a course record (race/trial), cd/cw a challenge best, lb a ladder season best', "
             "`guid` INT UNSIGNED NOT NULL COMMENT 'whose best; 0 for a record', "
             "`course` VARCHAR(32) NOT NULL COMMENT 'course key, or a challenge period', "
             "`key` VARCHAR(24) NOT NULL, "
             "`holder` INT UNSIGNED NOT NULL COMMENT 'who set it, character low guid', "
             "PRIMARY KEY (`reason`, `guid`, `course`), KEY `key` (`key`)"
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
+        CharacterDatabase.DirectExecute("ALTER TABLE `kartcraft_replay_keeps` ADD COLUMN IF NOT EXISTS `value` INT "
+            "NOT NULL DEFAULT 0 COMMENT 'what a best is measured by (lb: the rating gained), the greater kept'");
         CharacterDatabase.DirectExecute(
             "CREATE TABLE IF NOT EXISTS `kartcraft_replay_pins` ("
             "`key` VARCHAR(24) NOT NULL, "
@@ -2525,6 +2533,21 @@ namespace Kartcraft
         CharacterDatabase.escape_string(escaped);
         CharacterDatabase.PExecute("REPLACE INTO `kartcraft_replay_keeps` (`reason`, `guid`, `course`, `key`, `holder`) "
             "VALUES ('%s', %u, '%s', '%s', %u)", reason, guid, escaped.c_str(), ReplayKey(r).c_str(), holder);
+    }
+
+    // A take holds `reason` for `guid` on `course` while `value` is the best of it: replaced by a
+    // greater one only.
+    static void ReplayKeepBest(Race const& r, char const* reason, uint32 guid, std::string const& course,
+        uint32 holder, int32 value)
+    {
+        std::string escaped = course;
+        CharacterDatabase.escape_string(escaped);
+        CharacterDatabase.PExecute("INSERT INTO `kartcraft_replay_keeps` (`reason`, `guid`, `course`, `key`, `holder`, "
+            "`value`) VALUES ('%s', %u, '%s', '%s', %u, %i) ON DUPLICATE KEY UPDATE "
+            "`key` = IF(VALUES(`value`) > `value`, VALUES(`key`), `key`), "
+            "`holder` = IF(VALUES(`value`) > `value`, VALUES(`holder`), `holder`), "
+            "`value` = GREATEST(`value`, VALUES(`value`))",
+            reason, guid, escaped.c_str(), ReplayKey(r).c_str(), holder, value);
     }
 
     // "KARTCRAFT\tS\t<steer>,<drift>,<fire>,<distortion>,<volume>,<flags>,<racer>,<wheelie>,
@@ -2772,6 +2795,11 @@ namespace Kartcraft
     static void SweepReplays()
     {
         uint32 const before = uint32(std::time(nullptr)) - REPLAY_KEEP;
+        // A finished season's ladder bests: its top three's only (three rated above, gone).
+        CharacterDatabase.DirectPExecute("DELETE k FROM `kartcraft_replay_keeps` k WHERE k.`reason` = 'lb' "
+            "AND k.`course` < '%u' AND (SELECT COUNT(*) FROM `kartcraft_ladder` l WHERE l.`season` = k.`course` "
+            "AND l.`rating` > (SELECT m.`rating` FROM `kartcraft_ladder` m WHERE m.`season` = k.`course` "
+            "AND m.`guid` = k.`guid`)) >= 3", SeasonNow());
         std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
             "SELECT r.`key` FROM `kartcraft_replays` r WHERE r.`at` < %u "
             "AND NOT EXISTS (SELECT 1 FROM `kartcraft_replay_keeps` k WHERE k.`key` = r.`key`) "
