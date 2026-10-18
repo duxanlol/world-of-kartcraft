@@ -3648,18 +3648,25 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     sent(&mut s);
     s.run("BenillaKartShop_Toggle()").unwrap();
     // Opening asks for our purse, and the first skin turns in the pane.
-    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tSkins", "KARTCRAFT\tR\tGoods"]);
+    assert_eq!(
+        sent(&mut s),
+        [
+            "KARTCRAFT\tR\tSkins",
+            "KARTCRAFT\tR\tGoods",
+            "KARTCRAFT\tR\tCrateOdds"
+        ]
+    );
     assert_eq!(preview(&mut s), "3597");
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin1Name"), "Magni");
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin10Name"), "VanCleef");
-    // Ten skins, then the four goods: the grid's last two cells stay empty.
+    // Ten skins, then the four goods, then the crate: the grid's last cell stays empty.
     assert_eq!(
         text(&mut s, "BenillaKartShopFrameSkin11Name"),
         "Student Flag"
     );
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin12Name"), "Fel Kart");
     assert!(!s
-        .eval::<bool>("return BenillaKartShopFrameSkin15:IsVisible() == 1")
+        .eval::<bool>("return BenillaKartShopFrameSkin16:IsVisible() == 1")
         .unwrap());
     assert_eq!(
         text(&mut s, "BenillaKartShopFrameTokens"),
@@ -3735,6 +3742,38 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     );
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin12Price"), "Driven");
 
+    // The Mystery Crate: closed with no prizes in it, then open, its odds said, one opened.
+    s.run("BenillaKartShopFrameSkin15:Click()").unwrap();
+    assert_eq!(
+        text(&mut s, "BenillaKartShopFrameSkin15Name"),
+        "Mystery Crate"
+    );
+    from_server(&mut s, "R\tCrateOdds\t100\t5\t0\t0\t-\t60,28,10,2\t20\t50");
+    assert!(text(&mut s, "BenillaKartShopFrameAbout").starts_with("Coming soon"));
+    assert!(!enabled(&mut s, "BenillaKartShopFrameBuy"));
+    from_server(&mut s, "R\tGoods\t250\tstudent\tfel,student");
+    from_server(
+        &mut s,
+        "R\tCrateOdds\t100\t5\t3\t3\t2,1,1,1\t60,28,10,2\t20\t50",
+    );
+    let about = text(&mut s, "BenillaKartShopFrameAbout");
+    assert!(
+        about.contains("Common 60% (2 to find)") && about.contains("5 left"),
+        "{about}"
+    );
+    assert!(enabled(&mut s, "BenillaKartShopFrameBuy"));
+    s.run("BenillaKartShopFrameBuy:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tCrateBuy"]);
+    // The reel rolls, then stops on the prize.
+    from_server(&mut s, "R\tCrate\tstudent\t2");
+    for _ in 0..40 {
+        s.tick(0.1);
+    }
+    assert_eq!(
+        text(&mut s, "BenillaKartShopFrameAbout"),
+        "You found: Student Flag (Rare)!"
+    );
+
     // Closed, the pane's unit goes.
     s.run("BenillaKartShopFrame:Hide()").unwrap();
     assert_eq!(preview(&mut s), "0");
@@ -3789,19 +3828,25 @@ fn the_shop_sells_the_goods_the_server_sells_and_the_client_draws() {
     let xml =
         std::fs::read_to_string(root.join("crates/benilla-app/assets/ui/KartcraftFrames.xml"))
             .unwrap();
-    // `{ "fel", 'K', 400 },`
-    let server: Vec<(String, String, u32)> = cpp
+    // `{ "fel", 'K', 400, 0 },`: key, kind, price, tier.
+    let server: Vec<(String, String, u32, u32)> = cpp
         .lines()
         .filter_map(|l| {
             let l = l.trim().strip_prefix("{ \"")?.strip_suffix(" },")?;
             let (key, rest) = l.split_once("\", '")?;
-            let (kind, price) = rest.split_once("', ")?;
+            let (kind, rest) = rest.split_once("', ")?;
+            let (price, tier) = rest.split_once(", ")?;
             let kind = match kind {
                 "K" => "kart",
                 "F" => "flag",
                 _ => return None,
             };
-            Some((key.into(), kind.into(), price.parse().ok()?))
+            Some((
+                key.into(),
+                kind.into(),
+                price.parse().ok()?,
+                tier.parse().ok()?,
+            ))
         })
         .collect();
     let field = |l: &str, name: &str| -> Option<String> {
@@ -3809,7 +3854,7 @@ fn the_shop_sells_the_goods_the_server_sells_and_the_client_draws() {
         let v = l[at..].split(',').next()?;
         Some(v.trim().trim_matches('"').to_string())
     };
-    let client: Vec<(String, String, u32)> = xml
+    let client: Vec<(String, String, u32, u32)> = xml
         .lines()
         .filter(|l| l.trim_start().starts_with("{ key = ") && l.contains("kind = "))
         .filter_map(|l| {
@@ -3817,6 +3862,7 @@ fn the_shop_sells_the_goods_the_server_sells_and_the_client_draws() {
                 field(l, "key")?,
                 field(l, "kind")?,
                 field(l, "price")?.parse().ok()?,
+                field(l, "tier")?.parse().ok()?,
             ))
         })
         .collect();
@@ -3826,7 +3872,7 @@ fn the_shop_sells_the_goods_the_server_sells_and_the_client_draws() {
         "every good in the shop"
     );
     assert_eq!(client, server);
-    for (key, kind, _) in &client {
+    for (key, kind, _, _) in &client {
         let good = kartcraft::goods::good(key).unwrap_or_else(|| panic!("{key} built in"));
         let built = match good.kind {
             kartcraft::goods::Kind::Kart => "kart",
@@ -3836,8 +3882,8 @@ fn the_shop_sells_the_goods_the_server_sells_and_the_client_draws() {
     }
     let flags: Vec<&str> = client
         .iter()
-        .filter(|(_, kind, _)| kind == "flag")
-        .map(|(key, _, _)| key.as_str())
+        .filter(|(_, kind, _, _)| kind == "flag")
+        .map(|(key, _, _, _)| key.as_str())
         .collect();
     assert_eq!(flags, kartcraft::goods::FLAGS, "the flags' wire order");
 }

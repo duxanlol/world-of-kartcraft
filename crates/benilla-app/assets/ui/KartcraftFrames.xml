@@ -1530,6 +1530,21 @@
                 if line[4] == line[6] then text = "Skyhop record! " .. text end
                 UIErrorsFrame:AddMessage(text, 1, 0.82, 0, 1, 6)
                 BenillaKart_Say(text)
+            elseif verb == "CrateOdds" then
+                -- The crate's price, opens left today, pity counts, what we lack by tier ("-" closed),
+                -- the odds and the pity's reach.
+                local c = BenillaKartCrate
+                BENILLA_KART_CRATE.price = tonumber(line[3]) or BENILLA_KART_CRATE.price
+                c.left = tonumber(line[4]) or 0
+                c.sinceEpic, c.sinceLegendary = tonumber(line[5]) or 0, tonumber(line[6]) or 0
+                c.open = line[7] ~= nil and line[7] ~= "-"
+                c.lacking, c.weights = {}, {}
+                for n in string.gfind(line[7] or "", "%d+") do table.insert(c.lacking, tonumber(n)) end
+                for n in string.gfind(line[8] or "", "%d+") do table.insert(c.weights, tonumber(n)) end
+                c.pityEpic, c.pityLegendary = tonumber(line[9]) or 0, tonumber(line[10]) or 0
+                if BenillaKartShopFrame:IsVisible() then BenillaKartShop_Refresh() end
+            elseif verb == "Crate" then
+                BenillaKartCrate_Reveal(line[3], line[4])
             elseif verb == "Open" then
                 -- The hub's Quartermaster opens a window: the garage or the shop.
                 if line[3] == "garage" then
@@ -3777,10 +3792,10 @@
         -- kartcraft_tests holds the three alike). A kart, once ours, is picked in the garage; a
         -- flag is flown from here or the garage's Flag row ("R<TAB>FlagWear").
         BENILLA_KART_GOODS = {
-            { key = "student", kind = "flag", name = "Student Flag", short = "Student Flag", price = 100, icon = "INV_BannerPVP_01", about = "A banner on a pole at the back of any kart you drive." },
-            { key = "fel", kind = "kart", name = "Fel Kart", short = "Fel Kart", price = 400, icon = "Spell_Shadow_SummonFelHunter", about = "Dark armour, a horned skull and fel crystals." },
-            { key = "alliance", kind = "kart", name = "Alliance Kart", short = "Alliance", price = 250, icon = "INV_BannerPVP_02", about = "The lion and Ashbringer, in blue and gold." },
-            { key = "wok", kind = "kart", name = "WoK Kart", short = "WoK Kart", price = 500, icon = "INV_Gizmo_01", about = "A blue and silver race car in the WoK livery." },
+            { key = "student", kind = "flag", tier = 0, name = "Student Flag", short = "Student Flag", price = 100, icon = "INV_BannerPVP_01", about = "A banner on a pole at the back of any kart you drive." },
+            { key = "fel", kind = "kart", tier = 0, name = "Fel Kart", short = "Fel Kart", price = 400, icon = "Spell_Shadow_SummonFelHunter", about = "Dark armour, a horned skull and fel crystals." },
+            { key = "alliance", kind = "kart", tier = 0, name = "Alliance Kart", short = "Alliance", price = 250, icon = "INV_BannerPVP_02", about = "The lion and Ashbringer, in blue and gold." },
+            { key = "wok", kind = "kart", tier = 0, name = "WoK Kart", short = "WoK Kart", price = 500, icon = "INV_Gizmo_01", about = "A blue and silver race car in the WoK livery." },
         }
         -- The goods by key.
         function BenillaKartGoods_Find(key)
@@ -3807,18 +3822,89 @@
         -- The grid's cells (BenillaKartShopFrameSkin1..).
         BENILLA_KART_SHOP_CELLS = 16
 
-        -- The shop's `i`th item: a skin, then a good.
+        -- The goods sold in the shop (tier 0); the rest are found only in Mystery Crates.
+        function BenillaKartShop_Sold()
+            local sold = {}
+            for _, g in ipairs(BENILLA_KART_GOODS) do
+                if g.tier == 0 then table.insert(sold, g) end
+            end
+            return sold
+        end
+
+        -- The Mystery Crate, the shop's last item; its price and odds are the server's
+        -- ("R<TAB>CrateOdds", Kartcraft.cpp "Mystery Crates").
+        BENILLA_KART_CRATE = { kind = "crate", key = "crate", name = "Mystery Crate", short = "Mystery Crate", price = 100, icon = "INV_Misc_Gift_02" }
+        BENILLA_KART_CRATE_TIERS = { "Common", "Rare", "Epic", "Legendary" }
+        BenillaKartCrate = { open = false, lacking = {}, weights = {}, left = 0 }
+
+        -- The shop's `i`th item: a skin, then a good sold, then the crate.
         function BenillaKartShop_Item(i)
             local n = table.getn(BENILLA_KART_SKINS)
             if i <= n then
                 local skin = BENILLA_KART_SKINS[i]
                 return { kind = "skin", key = skin.key, name = skin.name, short = skin.short, price = skin.price, icon = skin.icon, display = skin.display }
             end
-            return BENILLA_KART_GOODS[i - n]
+            local sold = BenillaKartShop_Sold()
+            if i - n <= table.getn(sold) then return sold[i - n] end
+            return BENILLA_KART_CRATE
         end
 
         function BenillaKartShop_Count()
-            return table.getn(BENILLA_KART_SKINS) + table.getn(BENILLA_KART_GOODS)
+            return table.getn(BENILLA_KART_SKINS) + table.getn(BenillaKartShop_Sold()) + 1
+        end
+
+        -- The crate's words: closed, or its odds, what is left to find, its pity and today's opens.
+        function BenillaKartCrate_About()
+            local c = BenillaKartCrate
+            if not c.open then
+                return "Coming soon: Mystery Crates open once their prizes are in.\n\nEach holds a cosmetic found nowhere else, never one you already have."
+            end
+            local lines = {}
+            for t = 1, 4 do
+                table.insert(lines, format("%s %d%% (%d to find)", BENILLA_KART_CRATE_TIERS[t], c.weights[t] or 0, c.lacking[t] or 0))
+            end
+            table.insert(lines, "")
+            table.insert(lines, format("An Epic or better within %d crates (%d since), a Legendary within %d (%d since).",
+                c.pityEpic or 0, c.sinceEpic or 0, c.pityLegendary or 0, c.sinceLegendary or 0))
+            table.insert(lines, format("Never a prize you have. %d left to open today.", c.left))
+            return table.concat(lines, "\n")
+        end
+
+        -- The reveal: the crate's names roll by, slowing, and stop on the prize.
+        function BenillaKartCrate_Reveal(key, tier)
+            local c = BenillaKartCrate
+            c.reel = { prize = BenillaKartGoods_Find(key), tier = tonumber(tier) or 1, t = 0, next = 0 }
+            BenillaKartCrateReel:Show()
+        end
+
+        function BenillaKartCrate_OnUpdate(elapsed)
+            local reel = BenillaKartCrate.reel
+            if not reel then
+                this:Hide()
+                return
+            end
+            reel.t = reel.t + elapsed
+            local about = BenillaKartShopFrameAbout
+            if reel.t >= 2.5 then
+                local name = reel.prize and reel.prize.name or "?"
+                about:SetText(format("You found: %s (%s)!", name, BENILLA_KART_CRATE_TIERS[reel.tier] or "?"))
+                PlaySound("QUESTCOMPLETED")
+                BenillaKart_Say(format("Mystery Crate: %s (%s).", name, BENILLA_KART_CRATE_TIERS[reel.tier] or "?"))
+                BenillaKartCrate.reel = nil
+                this:Hide()
+                return
+            end
+            -- Slower toward the end, as CTR's item roulette slows.
+            if reel.t >= reel.next then
+                local pool = {}
+                for _, g in ipairs(BENILLA_KART_GOODS) do
+                    if g.tier > 0 then table.insert(pool, g) end
+                end
+                local pick = pool[math.random(math.max(1, table.getn(pool)))]
+                about:SetText("Opening...\n\n" .. (pick and pick.name or ""))
+                PlaySound("igMainMenuOptionCheckBoxOn")
+                reel.next = reel.t + 0.06 + reel.t * reel.t * 0.04
+            end
         end
 
         -- Whether an item is ours, and whether it is worn (a skin, a flag) or driven (a kart).
@@ -3879,7 +3965,17 @@
             local item = BenillaKartShop_Item(shop.selected)
             local buy, wear = BenillaKartShopFrameBuy, BenillaKartShopFrameWear
             BenillaKartShopFrameSkinName:SetText(item.name)
-            if item.kind == "skin" then
+            if item.kind == "crate" then
+                BenillaKartShopFrameModel:Hide()
+                if not BenillaKartCrate.reel then BenillaKartShopFrameAbout:SetText(BenillaKartCrate_About()) end
+                BenillaKartShopFrameSkinInfo:SetText(item.price .. " Kartcraft Tokens")
+                buy:SetText("Open one")
+                local c = BenillaKartCrate
+                if c.open and c.left > 0 and not (shop.tokens and shop.tokens < item.price) then buy:Enable() else buy:Disable() end
+                wear:SetText("Wear")
+                wear:Disable()
+                return
+            elseif item.kind == "skin" then
                 BenillaKartShopFrameModel:Show()
                 BenillaKartShopFrameAbout:SetText("")
             else
@@ -3913,7 +4009,9 @@
 
         function BenillaKartShop_Buy()
             local item = BenillaKartShop_Item(BenillaKartShop.selected)
-            if item.kind == "skin" then
+            if item.kind == "crate" then
+                BenillaKart_Send("CrateBuy")
+            elseif item.kind == "skin" then
                 BenillaKart_Send("SkinBuy\t" .. item.key)
             else
                 BenillaKart_Send("GoodBuy\t" .. item.key)
@@ -5442,6 +5540,13 @@
         </Scripts>
     </Button>
 
+    <!-- The Mystery Crate's reel, run while a crate opens (BenillaKartCrate_Reveal). -->
+    <Frame name="BenillaKartCrateReel" parent="UIParent" hidden="true">
+        <Scripts>
+            <OnUpdate>BenillaKartCrate_OnUpdate(arg1)</OnUpdate>
+        </Scripts>
+    </Frame>
+
     <!-- The skin shop (/kartshop): the skins on the left, the picked one turning on the right,
          bought and worn with the buttons under it. -->
     <Frame name="BenillaKartShopFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
@@ -5604,6 +5709,7 @@
                 PlaySound("igMainMenuOpen")
                 BenillaKart_Send("Skins")
                 BenillaKart_Send("Goods")
+                BenillaKart_Send("CrateOdds")
                 BenillaKartShop_Select(BenillaKartShop.selected)
             </OnShow>
             <OnHide>

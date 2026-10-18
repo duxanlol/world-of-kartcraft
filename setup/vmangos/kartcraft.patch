@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..5a7d4ed
+index 0000000..51ae2e6
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,6644 @@
+@@ -0,0 +1,6832 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -173,13 +173,14 @@ index 0000000..5a7d4ed
 +        char const* key;
 +        char kind;    // 'K' a kart, 'F' a flag
 +        uint32 price; // tokens
++        uint8 tier;   // 0 sold in the shop; 1 to 4 found only in Mystery Crates (common .. legendary)
 +    };
 +
 +    static Good const GOODS[] = {
-+        { "student", 'F', 100 },
-+        { "fel", 'K', 400 },
-+        { "alliance", 'K', 250 },
-+        { "wok", 'K', 500 },
++        { "student", 'F', 100, 0 },
++        { "fel", 'K', 400, 0 },
++        { "alliance", 'K', 250, 0 },
++        { "wok", 'K', 500, 0 },
 +    };
 +
 +    static Good const* FindGood(std::string const& key)
@@ -2223,7 +2224,9 @@ index 0000000..5a7d4ed
 +        ChatHandler chat(player->GetSession());
 +        uint32 const guid = player->GetGUIDLow();
 +        Good const* good = FindGood(key);
-+        if (verb == "GoodBuy" && good)
++        if (verb == "GoodBuy" && good && good->tier)
++            chat.SendSysMessage("That is found only in Mystery Crates.");
++        else if (verb == "GoodBuy" && good)
 +        {
 +            uint32 const tokens = player->GetItemCount(DELIVERY_TOKEN);
 +            if (OwnedGoods(guid).first.count(good->key))
@@ -2536,6 +2539,179 @@ index 0000000..5a7d4ed
 +        }
 +        SendLine(player, "KARTCRAFT\tR\tHopBest\t" + std::string(course->key) + "\t" + std::to_string(ms) + "\t" +
 +            std::to_string(best) + "\t" + std::to_string(rec) + "\t" + holder);
++    }
++
++    // ── Mystery Crates ─────────────────────────────────────────────────────────────────────────
++    //
++    // A crate for CRATE_PRICE Kartcraft Tokens, at most CRATE_DAILY a day, holds one of the goods
++    // found only in crates (GOODS' tier 1 to 4: common, rare, epic, legendary), rolled here and
++    // never on the client: the tier by CRATE_WEIGHTS among those the opener lacks (none ever
++    // twice; an emptied tier gives way up, then down), an epic or better guaranteed by
++    // CRATE_PITY_EPIC crates without one and a legendary by CRATE_PITY_LEGENDARY, the odds and the
++    // counts said to the shop ("R\tCrateOdds"). With no crate goods yet the crate is closed.
++    // Opened in kartcraft_crates, each roll kept in kartcraft_crate_log; the prize is a good
++    // owned as a bought one is.
++
++    constexpr uint32 CRATE_PRICE = 100;
++    constexpr uint32 CRATE_DAILY = 5;
++    constexpr uint32 CRATE_WEIGHTS[4] = { 60, 28, 10, 2 };
++    constexpr uint32 CRATE_PITY_EPIC = 20;
++    constexpr uint32 CRATE_PITY_LEGENDARY = 50;
++
++    static void CreateCrates()
++    {
++        CharacterDatabase.DirectExecute(
++            "CREATE TABLE IF NOT EXISTS `kartcraft_crates` ("
++            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
++            "`since_epic` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'crates since an epic or better', "
++            "`since_legendary` INT UNSIGNED NOT NULL DEFAULT 0, "
++            "`day` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'unix day of the count', "
++            "`today` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'crates opened that day', "
++            "PRIMARY KEY (`guid`)"
++            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
++        CharacterDatabase.DirectExecute(
++            "CREATE TABLE IF NOT EXISTS `kartcraft_crate_log` ("
++            "`id` INT UNSIGNED NOT NULL AUTO_INCREMENT, "
++            "`guid` INT UNSIGNED NOT NULL, "
++            "`good` VARCHAR(16) NOT NULL, "
++            "`tier` TINYINT UNSIGNED NOT NULL, "
++            "`at` INT UNSIGNED NOT NULL, "
++            "PRIMARY KEY (`id`), KEY `guid` (`guid`)"
++            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
++    }
++
++    struct CrateState
++    {
++        uint32 sinceEpic = 0;
++        uint32 sinceLegendary = 0;
++        uint32 today = 0;
++    };
++
++    static CrateState CrateStateOf(uint32 guid)
++    {
++        CrateState s;
++        std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
++            "SELECT `since_epic`, `since_legendary`, `day`, `today` FROM `kartcraft_crates` WHERE `guid` = %u", guid);
++        if (result)
++        {
++            Field* f = result->Fetch();
++            s.sinceEpic = f[0].GetUInt32();
++            s.sinceLegendary = f[1].GetUInt32();
++            s.today = f[2].GetUInt32() == uint32(std::time(nullptr)) / DAY ? f[3].GetUInt32() : 0;
++        }
++        return s;
++    }
++
++    // The crate goods `guid` lacks, by tier (index 0 the commons).
++    static std::vector<std::vector<Good const*>> CrateLeft(uint32 guid)
++    {
++        std::set<std::string> const owned = OwnedGoods(guid).first;
++        std::vector<std::vector<Good const*>> left(4);
++        for (Good const& g : GOODS)
++            if (g.tier >= 1 && g.tier <= 4 && !owned.count(g.key))
++                left[g.tier - 1].push_back(&g);
++        return left;
++    }
++
++    static bool CrateHasGoods()
++    {
++        for (Good const& g : GOODS)
++            if (g.tier >= 1 && g.tier <= 4)
++                return true;
++        return false;
++    }
++
++    // "KARTCRAFT\tR\tCrateOdds\t<price>\t<left today>\t<since epic>\t<since legendary>\t<lacking
++    // c,r,e,l>\t<weights c,r,e,l>\t<pity epic>\t<pity legendary>"; with no crate goods, lacking is
++    // "-" (closed).
++    static void SendCrateOdds(Player* player)
++    {
++        uint32 const guid = player->GetGUIDLow();
++        CrateState const s = CrateStateOf(guid);
++        std::string lacking = "-";
++        if (CrateHasGoods())
++        {
++            std::vector<std::vector<Good const*>> const left = CrateLeft(guid);
++            lacking.clear();
++            for (size_t t = 0; t < 4; ++t)
++                lacking += (t ? "," : "") + std::to_string(left[t].size());
++        }
++        std::string weights;
++        for (size_t t = 0; t < 4; ++t)
++            weights += (t ? "," : "") + std::to_string(CRATE_WEIGHTS[t]);
++        SendLine(player, "KARTCRAFT\tR\tCrateOdds\t" + std::to_string(CRATE_PRICE) + "\t" +
++            std::to_string(CRATE_DAILY > s.today ? CRATE_DAILY - s.today : 0) + "\t" + std::to_string(s.sinceEpic) +
++            "\t" + std::to_string(s.sinceLegendary) + "\t" + lacking + "\t" + weights + "\t" +
++            std::to_string(CRATE_PITY_EPIC) + "\t" + std::to_string(CRATE_PITY_LEGENDARY));
++    }
++
++    // The tier (0 common .. 3 legendary) a crate gives, among those with goods `left`: the pity's
++    // first, else by weight; an empty tier gives way up, then down. -1 none at all.
++    static int32 CrateTier(std::vector<std::vector<Good const*>> const& left, CrateState const& s)
++    {
++        auto has = [&](int32 t) { return t >= 0 && t < 4 && !left[t].empty(); };
++        auto nearest = [&](int32 t)
++        {
++            for (int32 up = t; up < 4; ++up)
++                if (has(up))
++                    return up;
++            for (int32 down = t - 1; down >= 0; --down)
++                if (has(down))
++                    return down;
++            return int32(-1);
++        };
++        if (s.sinceLegendary + 1 >= CRATE_PITY_LEGENDARY && has(3))
++            return 3;
++        if (s.sinceEpic + 1 >= CRATE_PITY_EPIC && (has(2) || has(3)))
++            return has(2) ? 2 : 3;
++        uint32 total = 0;
++        for (uint32 w : CRATE_WEIGHTS)
++            total += w;
++        uint32 roll = urand(1, total);
++        int32 t = 0;
++        while (t < 3 && roll > CRATE_WEIGHTS[t])
++            roll -= CRATE_WEIGHTS[t++];
++        return nearest(t);
++    }
++
++    // "R\tCrateOdds" asks; "R\tCrateBuy" opens one: the tokens taken, the roll, the good owned, and
++    // "KARTCRAFT\tR\tCrate\t<good>\t<tier 1-4>". On the world thread.
++    static void HandleCrate(Player* player, std::string const& verb)
++    {
++        ChatHandler chat(player->GetSession());
++        uint32 const guid = player->GetGUIDLow();
++        if (verb == "CrateBuy")
++        {
++            CrateState s = CrateStateOf(guid);
++            std::vector<std::vector<Good const*>> const left = CrateLeft(guid);
++            uint32 const tokens = player->GetItemCount(DELIVERY_TOKEN);
++            int32 const tier = CrateTier(left, s);
++            if (!CrateHasGoods())
++                chat.SendSysMessage("Mystery Crates are coming soon.");
++            else if (tier < 0)
++                chat.SendSysMessage("Your collection is complete: every crate's prize is yours.");
++            else if (s.today >= CRATE_DAILY)
++                chat.PSendSysMessage("You have opened %u crates today; more tomorrow.", CRATE_DAILY);
++            else if (tokens < CRATE_PRICE)
++                chat.PSendSysMessage("A Mystery Crate costs %u Kartcraft Tokens; you have %u.", CRATE_PRICE, tokens);
++            else
++            {
++                Good const* prize = left[tier][urand(0, uint32(left[tier].size()) - 1)];
++                player->DestroyItemCount(DELIVERY_TOKEN, CRATE_PRICE, true);
++                CharacterDatabase.DirectPExecute("INSERT INTO `kartcraft_goods` (`guid`, `good`, `worn`, `at`) "
++                    "VALUES (%u, '%s', 0, %u)", guid, prize->key, uint32(std::time(nullptr)));
++                s.sinceEpic = tier >= 2 ? 0 : s.sinceEpic + 1;
++                s.sinceLegendary = tier >= 3 ? 0 : s.sinceLegendary + 1;
++                CharacterDatabase.DirectPExecute("REPLACE INTO `kartcraft_crates` (`guid`, `since_epic`, "
++                    "`since_legendary`, `day`, `today`) VALUES (%u, %u, %u, %u, %u)", guid, s.sinceEpic,
++                    s.sinceLegendary, uint32(std::time(nullptr)) / DAY, s.today + 1);
++                CharacterDatabase.PExecute("INSERT INTO `kartcraft_crate_log` (`guid`, `good`, `tier`, `at`) "
++                    "VALUES (%u, '%s', %u, %u)", guid, prize->key, uint32(tier + 1), uint32(std::time(nullptr)));
++                SendLine(player, "KARTCRAFT\tR\tCrate\t" + std::string(prize->key) + "\t" + std::to_string(tier + 1));
++                SendGoods(player);
++            }
++        }
++        SendCrateOdds(player);
 +    }
 +
 +    static bool HasRated(uint32 guid, char const* course)
@@ -5966,6 +6142,17 @@ index 0000000..5a7d4ed
 +            EquipCosmetic(player, f[2], f[3]);
 +            return;
 +        }
++        if (f.size() >= 2 && (f[1] == "CrateOdds" || f[1] == "CrateBuy"))
++        {
++            ObjectGuid const guid = player->GetObjectGuid();
++            std::string const verb = f[1];
++            sWorld.GetMessager().AddMessage([guid, verb](World*)
++            {
++                if (Player* p = ObjectAccessor::FindPlayer(guid))
++                    HandleCrate(p, verb);
++            });
++            return;
++        }
 +        if (f.size() >= 4 && f[1] == "Hop")
 +        {
 +            ObjectGuid const guid = player->GetObjectGuid();
@@ -6671,6 +6858,7 @@ index 0000000..5a7d4ed
 +        cache->RegisterSelf(true);
 +        CreateCacheClaims();
 +        CreateHops();
++        CreateCrates();
 +        CreateResults();
 +        CreateChallenges();
 +        CreateCosmetics();
