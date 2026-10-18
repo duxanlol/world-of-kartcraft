@@ -190,7 +190,7 @@ fn update(
         Res<crate::bindings::BindingsState>,
         ResMut<crate::cvars::Cvars>,
     ),
-    pads: Query<&Gamepad, Without<input::PadIgnored>>,
+    pads: Query<(&Gamepad, Has<input::StickCentred>), Without<input::PadIgnored>>,
     ui: Res<crate::ui_script::UiKeyboardCapture>,
     player: Res<crate::player::Player>,
     collide: WorldCollision,
@@ -406,7 +406,11 @@ fn update(
         input::read(
             &bindings::keys(&overlay),
             &bindings::pad_keys(&overlay),
-            &pads.iter().collect::<Vec<_>>(),
+            &pads.iter().map(|(p, _)| p).collect::<Vec<_>>(),
+            &pads
+                .iter()
+                .filter_map(|(p, centred)| centred.then_some(p))
+                .collect::<Vec<_>>(),
             ui.pad_all,
         )
     };
@@ -755,7 +759,7 @@ pub(crate) fn plugin(app: &mut App) {
             Update,
             (
                 // The controller chosen, before anything reads the pads.
-                (input::log_pads, pad_choice::update).chain(),
+                (input::log_pads, input::find_centred, pad_choice::update).chain(),
                 race_name,
                 (pads::feed, props::lay).chain(),
                 showcase::hook,

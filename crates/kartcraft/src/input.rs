@@ -117,13 +117,41 @@ impl Keys {
 
 /// The keyboard's controls and the first connected pad's together: `keys` the keyboard's buttons,
 /// `pad_keys` the controller's (the host's bindings resolve both, leaving out a button the
-/// interface holds); `all`: the interface holds the whole pad, its stick too.
-pub fn read(keys: &Keys, pad_keys: &Keys, pads: &[&Gamepad], all: bool) -> Controls {
+/// interface holds), the stick of `sticks` (the pads whose stick has centred,
+/// [`StickCentred`]); `all`: the interface holds the whole pad, its stick too.
+pub fn read(
+    keys: &Keys,
+    pad_keys: &Keys,
+    pads: &[&Gamepad],
+    sticks: &[&Gamepad],
+    all: bool,
+) -> Controls {
     let keyboard = from_keys(keys);
     if all || pads.is_empty() {
         return keyboard;
     }
-    merge(from_pad(stick(pads), pad_keys), keyboard)
+    merge(from_pad(stick(sticks), pad_keys), keyboard)
+}
+
+/// On a controller whose left stick has been seen at rest since it connected. A D-pad-only pad
+/// (a USB SNES pad, an arcade stick) can report a stick it has not, held at one end: it never
+/// rests, so it never steers, where a real stick rests the moment it is plugged in.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct StickCentred;
+
+/// Marks each controller whose stick rests ([`StickCentred`]).
+pub fn find_centred(
+    mut commands: Commands,
+    pads: Query<(Entity, &Gamepad), Without<StickCentred>>,
+) {
+    for (entity, pad) in &pads {
+        let at = |a| pad.get(a).unwrap_or(0.0).abs();
+        if at(GamepadAxis::LeftStickX) <= STICK_OVER_KEYS
+            && at(GamepadAxis::LeftStickY) <= STICK_OVER_KEYS
+        {
+            commands.entity(entity).insert(StickCentred);
+        }
+    }
 }
 
 /// A controller the player did not choose (the host's controller setting): nothing reads it.
@@ -237,14 +265,14 @@ fn merge(pad: Controls, keys: Controls) -> Controls {
     }
 }
 
-/// The pads' controls: the stick ([`stick`]), and the buttons as `keys` resolves them. The stick steers
-/// once it leans (raw: the driving model applies CTR's own dead zone and response curve), else
-/// buttons bound to steering do; down on it reverses, with the brake (CTR's □).
+/// The pads' controls: the stick ([`stick`]), and the buttons as `keys` resolves them. Buttons
+/// bound to steering steer while held, else the stick once it leans (raw: the driving model
+/// applies CTR's own dead zone and response curve); down on it reverses, with the brake (CTR's □).
 fn from_pad(stick_at: Vec2, keys: &Keys) -> Controls {
     let stick = stick_at.x;
     let buttons = f32::from(i8::from(keys.right)) - f32::from(i8::from(keys.left));
     Controls {
-        steer: if stick.abs() > STICK_OVER_KEYS {
+        steer: if buttons == 0.0 && stick.abs() > STICK_OVER_KEYS {
             stick
         } else {
             buttons
@@ -382,6 +410,38 @@ mod tests {
             !k.left && !k.reverse && !k.accelerate,
             "R2 is no longer the gas"
         );
+    }
+
+    #[test]
+    fn the_d_pad_held_steers_over_the_stick() {
+        let left = Keys {
+            left: true,
+            ..Default::default()
+        };
+        assert_eq!(from_pad(Vec2::new(1.0, 0.0), &left).steer, -1.0);
+        // Let go, the leaning stick steers again.
+        assert_eq!(from_pad(Vec2::new(0.7, 0.0), &Keys::default()).steer, 0.7);
+    }
+
+    #[test]
+    fn a_stick_held_at_one_end_since_it_connected_never_steers() {
+        let mut app = App::new();
+        app.add_systems(Update, find_centred);
+        // A D-pad-only pad reporting a stick it has not, full right; a real one at rest.
+        let mut retro = Gamepad::default();
+        retro.analog_mut().set(GamepadAxis::LeftStickX, 1.0);
+        let retro = app.world_mut().spawn(retro).id();
+        let real = app.world_mut().spawn(Gamepad::default()).id();
+        app.update();
+        assert!(app.world().get::<StickCentred>(retro).is_none());
+        assert!(app.world().get::<StickCentred>(real).is_some());
+        // The retro pad's D-pad drives, its phantom stick read by nobody.
+        let retro_pad = app.world().get::<Gamepad>(retro).unwrap();
+        let k = Keys::default();
+        let c = read(&k, &k, &[retro_pad], &[], false);
+        assert_eq!(c.steer, 0.0);
+        let c = read(&k, &Keys { right: true, ..k }, &[retro_pad], &[], false);
+        assert_eq!(c.steer, 1.0);
     }
 
     #[test]

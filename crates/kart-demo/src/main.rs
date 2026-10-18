@@ -257,6 +257,7 @@ fn scene(app: &mut App) {
             Update,
             (
                 input::log_pads,
+                input::find_centred,
                 drive,
                 model::update,
                 dummies,
@@ -339,7 +340,7 @@ fn spawn_hud(mut commands: Commands) {
 fn drive(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
-    pads: Query<&Gamepad>,
+    pads: Query<(&Gamepad, Has<input::StickCentred>)>,
     collide: WorldCollision,
     mut demo: ResMut<Demo>,
     mut view: ResMut<KartView>,
@@ -402,10 +403,17 @@ fn drive(
         let pad_keys = pads
             .iter()
             .next()
-            .map(input::Keys::from_pad)
+            .map(|(p, _)| input::Keys::from_pad(p))
             .unwrap_or_default();
-        let pads: Vec<&Gamepad> = pads.iter().collect();
-        input::read(&input::Keys::from_keyboard(&keys), &pad_keys, &pads, false)
+        let sticks: Vec<&Gamepad> = pads.iter().filter_map(|(p, c)| c.then_some(p)).collect();
+        let pads: Vec<&Gamepad> = pads.iter().map(|(p, _)| p).collect();
+        input::read(
+            &input::Keys::from_keyboard(&keys),
+            &pad_keys,
+            &pads,
+            &sticks,
+            false,
+        )
     };
     // The autopilot fires now and then while it holds an item (a shield or a bomb it keeps).
     let holding = matches!(weapons.held(), HeldView::Item(_) | HeldView::Spinning);
