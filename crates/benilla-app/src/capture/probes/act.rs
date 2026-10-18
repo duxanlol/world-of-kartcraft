@@ -167,6 +167,8 @@ fn probe_key_by_name(name: &str) -> Option<KeyCode> {
         // The SCREENSHOT binding's key; a Lua `TakeScreenshot()` skips the binding. On macOS it
         // arrives as F13 (`bindings::chord`'s fold) under the same token.
         "PrintScreen" => KeyCode::PrintScreen,
+        // World of Kartcraft's summon (`kart::bindings`), the way a player gets into the kart.
+        "J" => KeyCode::KeyJ,
         _ => return None,
     })
 }

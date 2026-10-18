@@ -176,6 +176,8 @@ struct Bones {
     lean: Option<[Held; 2]>,
     /// The skeleton's roots, which a slide moves, and their animated and last-written places.
     roots: Vec<(usize, Vec3, Vec3)>,
+    /// How many bones the rig they were found in has.
+    count: usize,
 }
 
 impl Bones {
@@ -207,12 +209,23 @@ pub(crate) fn hold(
     ring: Ring,
     frame: &FrameCount,
 ) {
-    commands.entity(body).insert(Wheel {
-        steer,
-        ring,
-        frame: frame.0,
-        bones: None,
-    });
+    // Kept, not replaced: its bones hold the animated pose the solve composes on, and a fresh
+    // one would take last frame's slid and turned pose for it, and slide again on top.
+    let frame = frame.0;
+    commands
+        .entity(body)
+        .entry::<Wheel>()
+        .and_modify(move |mut w| {
+            w.steer = steer;
+            w.ring = ring;
+            w.frame = frame;
+        })
+        .or_insert(Wheel {
+            steer,
+            ring,
+            frame,
+            bones: None,
+        });
 }
 
 fn key(rig: &RigPose, k: i16) -> Option<usize> {
@@ -260,7 +273,12 @@ fn find_bones(rig: &RigPose) -> Option<Bones> {
         .filter(|&i| rig.parents[i] < 0)
         .map(|i| (i, Vec3::ZERO, Vec3::NAN))
         .collect();
-    Some(Bones { arms, lean, roots })
+    Some(Bones {
+        arms,
+        lean,
+        roots,
+        count: rig.locals.len(),
+    })
 }
 
 /// Bone `i`'s model-space affine from the locals.
@@ -315,7 +333,12 @@ pub(crate) fn grip_wheel(
 ) {
     for (entity, mut wheel, mut rig) in &mut drivers {
         let (rig, wheel) = (&mut *rig, &mut *wheel);
-        if wheel.bones.is_none() {
+        // A new model under the body (a skin put on in the seat) has bones of its own.
+        if wheel
+            .bones
+            .as_ref()
+            .is_none_or(|b| b.count != rig.locals.len())
+        {
             wheel.bones = find_bones(rig);
         }
         let Some(bones) = wheel.bones.as_mut() else {
@@ -647,5 +670,60 @@ mod tests {
         // All but the gnomes hold it; theirs, a third of the reach to the ring, end a few
         // centimetres short after the lean and the slide.
         assert!(held >= 14, "{held} of 16 hold the wheel");
+    }
+
+    /// Held frame after frame, a body short of its wheel slides forward once, not again each
+    /// frame: its root, which no clip re-keys here, stays a slide from where it stood. (Replacing
+    /// the hold each frame took the slid pose for the animated one, and the body flew off.)
+    #[test]
+    fn a_driver_short_of_the_wheel_slides_once_and_stays() {
+        use bevy::diagnostic::FrameCount;
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("chain");
+        let cat = benilla_formats::load_creature_catalog(&mut chain).expect("creatures");
+        let raw = cat.model(49).expect("display").model_path;
+        let lower = raw.to_ascii_lowercase();
+        let path = lower
+            .strip_suffix(".mdx")
+            .map_or(lower.clone(), |s| format!("{s}.m2"));
+        let bytes = chain.read_file(&path).expect("model");
+        let skel = benilla_formats::parse_m2_skeleton(&bytes).expect("skeleton");
+        let ms = benilla_assets::model_skeleton(&skel);
+        let rig = RigPose::new(Entity::PLACEHOLDER, &ms);
+        let roots: Vec<(usize, Vec3)> = (0..rig.parents.len())
+            .filter(|&i| rig.parents[i] < 0)
+            .map(|i| (i, rig.locals[i].translation))
+            .collect();
+
+        // The ring well ahead of the body, past its reach.
+        let kart = Transform::IDENTITY;
+        let body = Transform::from_rotation(super::super::driver_turn());
+        let ring = Ring::of(&kart, &body, Vec3::new(0.0, 1.0, 1.5));
+        let mut app = App::new();
+        app.insert_resource(FrameCount(0));
+        let driver = app.world_mut().spawn(rig).id();
+        app.add_systems(
+            Update,
+            (
+                |mut f: ResMut<FrameCount>| f.0 += 1,
+                move |mut commands: Commands, f: Res<FrameCount>| {
+                    hold(&mut commands, driver, 0.0, ring, &f);
+                },
+                grip_wheel,
+            )
+                .chain(),
+        );
+        for _ in 0..60 {
+            app.update();
+        }
+        let rig = app.world().get::<RigPose>(driver).expect("rig");
+        for (i, start) in roots {
+            let moved = rig.locals[i].translation.distance(start);
+            assert!(
+                moved <= MAX_SLIDE * ring.radius + 1e-4,
+                "root {i} moved {moved:.3}, more than one slide ({:.3})",
+                MAX_SLIDE * ring.radius
+            );
+        }
     }
 }
