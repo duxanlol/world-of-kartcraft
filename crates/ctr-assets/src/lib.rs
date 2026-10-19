@@ -27,6 +27,7 @@ pub mod hud_draw;
 pub mod kart;
 pub mod mpk;
 pub mod music;
+pub mod props;
 pub mod voice;
 pub mod vram;
 pub mod weapons;

@@ -1,0 +1,24 @@
+[package]
+name = "prop-catalog"
+version.workspace = true
+edition.workspace = true
+# Reads CTR models through `ctr-assets` (GPL-3.0), so GPL-3.0 as well.
+license = "GPL-3.0-or-later"
+description = "Lists the track editor's placeable-object candidates in the player's own WoW install and CTR disc, and writes a local viewer for them"
+
+[lints]
+workspace = true
+
+[features]
+# Forwarded so the install lookup's project-folder fallback follows the build, as for every
+# dependent of `benilla-formats`.
+default = ["dev"]
+dev = ["benilla-formats/dev"]
+
+[dependencies]
+anyhow.workspace = true
+benilla-formats = { path = "../benilla-formats", default-features = false }
+ctr-assets = { path = "../ctr-assets" }
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

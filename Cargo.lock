@@ -5857,6 +5857,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "prop-catalog"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "benilla-formats",
+ "ctr-assets",
+ "image",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pxfm"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
