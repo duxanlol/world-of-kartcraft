@@ -159,6 +159,88 @@ pub fn find_centred(
     }
 }
 
+/// What [`stick_dpad`] has seen of a controller's left stick: a D-pad wired as the stick (a USB
+/// SNES pad's) only ever jumps between rest and full tilt, where a real stick passes the values
+/// between on its way and rests a little off centre.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct StickSeen {
+    /// Whether it was at rest last frame.
+    rested: bool,
+    /// Jumps from rest straight to full tilt.
+    jumps: u8,
+    /// Seen between rest and full tilt: a real stick, never a D-pad.
+    analog: bool,
+    /// The D-pad buttons it holds (up, down, left, right), so it lets go only of its own.
+    held: [bool; 4],
+}
+
+impl StickSeen {
+    /// Whether the stick is a D-pad: only jumps, and enough of them to tell.
+    pub fn digital(&self) -> bool {
+        !self.analog && self.jumps >= DIGITAL_JUMPS
+    }
+}
+
+/// How many jumps from rest to full tilt, with nothing between, tell a D-pad wired as a stick.
+const DIGITAL_JUMPS: u8 = 3;
+/// A stick component at rest under this, at full tilt over [`STICK_FULL`]; between, analog.
+const STICK_REST: f32 = 0.05;
+const STICK_FULL: f32 = 0.95;
+
+/// A D-pad wired as the left stick (a USB SNES pad, some arcade sticks) presses the D-pad's
+/// buttons too, so the menus, the D-pad's bindings and the modifier's (R2 with the D-pad) take it
+/// as every other pad's D-pad: told by [`StickSeen`], after the input set has read the frame's
+/// events and before anything reads the pads.
+pub fn stick_dpad(
+    mut commands: Commands,
+    mut pads: Query<(Entity, &mut Gamepad, Option<&mut StickSeen>)>,
+) {
+    for (entity, mut pad, seen) in &mut pads {
+        let at = [
+            pad.get(GamepadAxis::LeftStickX).unwrap_or(0.0),
+            pad.get(GamepadAxis::LeftStickY).unwrap_or(0.0),
+        ];
+        let Some(mut seen) = seen else {
+            let rested = at.iter().all(|v| v.abs() < STICK_REST);
+            commands.entity(entity).insert(StickSeen {
+                rested,
+                ..Default::default()
+            });
+            continue;
+        };
+        let rest = at.iter().all(|v| v.abs() < STICK_REST);
+        let full = at.iter().any(|v| v.abs() > STICK_FULL);
+        if at
+            .iter()
+            .any(|v| (STICK_REST..=STICK_FULL).contains(&v.abs()))
+        {
+            seen.analog = true;
+        } else if seen.rested && full {
+            seen.jumps = seen.jumps.saturating_add(1);
+        }
+        seen.rested = rest;
+        if !seen.digital() {
+            continue;
+        }
+        let [x, y] = at;
+        let want = [y > 0.5, y < -0.5, x < -0.5, x > 0.5];
+        let buttons = [
+            GamepadButton::DPadUp,
+            GamepadButton::DPadDown,
+            GamepadButton::DPadLeft,
+            GamepadButton::DPadRight,
+        ];
+        for ((button, want), held) in buttons.into_iter().zip(want).zip(&mut seen.held) {
+            if want && !*held {
+                pad.digital_mut().press(button);
+            } else if !want && *held {
+                pad.digital_mut().release(button);
+            }
+            *held = want;
+        }
+    }
+}
+
 /// A controller the player did not choose (the host's controller setting): nothing reads it.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct PadIgnored;
@@ -457,6 +539,52 @@ mod tests {
         assert_eq!(from_pad(Vec2::new(1.0, 0.0), &left).steer, -1.0);
         // Let go, the leaning stick steers again.
         assert_eq!(from_pad(Vec2::new(0.7, 0.0), &Keys::default()).steer, 0.7);
+    }
+
+    /// A D-pad wired as the stick (a NEXT SNES pad's) presses the D-pad's buttons once it has
+    /// jumped from rest to full tilt a few times with nothing between; a real stick never does.
+    #[test]
+    fn a_d_pad_wired_as_the_stick_presses_the_d_pad() {
+        let mut app = App::new();
+        app.add_systems(Update, stick_dpad);
+        let snes = app.world_mut().spawn(Gamepad::default()).id();
+        let real = app.world_mut().spawn(Gamepad::default()).id();
+        let set = |app: &mut App, pad: Entity, x: f32| {
+            let mut p = app.world_mut().get_mut::<Gamepad>(pad).unwrap();
+            p.analog_mut().set(GamepadAxis::LeftStickX, x);
+        };
+        app.update();
+        // The real stick passes through the middle on its way.
+        for (sx, rx) in [
+            (-1.0, -0.4),
+            (0.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 0.0),
+            (-1.0, -1.0),
+            (0.0, 0.0),
+        ] {
+            set(&mut app, snes, sx);
+            set(&mut app, real, rx);
+            app.update();
+        }
+        let seen = |app: &App, pad| *app.world().get::<StickSeen>(pad).unwrap();
+        assert!(seen(&app, snes).digital(), "{:?}", seen(&app, snes));
+        assert!(!seen(&app, real).digital());
+        // Left on the SNES pad's D-pad: DPadLeft down, and up again as it lets go.
+        set(&mut app, snes, -1.0);
+        set(&mut app, real, -1.0);
+        app.update();
+        let pad = |app: &App, e| {
+            app.world()
+                .get::<Gamepad>(e)
+                .unwrap()
+                .pressed(GamepadButton::DPadLeft)
+        };
+        assert!(pad(&app, snes));
+        assert!(!pad(&app, real), "a real stick never presses the D-pad");
+        set(&mut app, snes, 0.0);
+        app.update();
+        assert!(!pad(&app, snes));
     }
 
     #[test]

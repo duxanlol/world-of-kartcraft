@@ -254,6 +254,10 @@ fn scene(app: &mut App) {
             },
         )
         .add_systems(
+            PreUpdate,
+            input::stick_dpad.after(bevy::input::InputSystems),
+        )
+        .add_systems(
             Update,
             (
                 input::log_pads,
