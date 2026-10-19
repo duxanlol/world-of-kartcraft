@@ -44,6 +44,17 @@ use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 #[derive(Resource)]
 pub(crate) struct AreaTableRes(pub(crate) AreaTableCatalog);
 
+impl AreaTableRes {
+    /// The zone (not the subzone) of area `leaf`: `GetRealZoneText`'s name; empty if unknown.
+    pub(crate) fn zone_name(&self, leaf: u32) -> String {
+        let Some(row) = self.0.get(leaf) else {
+            return String::new();
+        };
+        let zone = if row.zone_id == 0 { leaf } else { row.zone_id };
+        self.0.name(zone).unwrap_or_default().to_string()
+    }
+}
+
 fn load_area_table(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
     let Some(assets) = assets else { return };
     let loaded = {

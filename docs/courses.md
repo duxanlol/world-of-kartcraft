@@ -110,14 +110,28 @@ gets its marshal at the start's height, not the terrain's).
 
 ## From the in-game track editor
 
-The track editor (the minimap's map button, `kart/track_edit.rs`) flies the free camera. It
+The track editor (the minimap's map button, `kart/track_edit.rs`) flies the free camera and hides
+the game's interface for its own (`kart/track_edit_ui.rs`): Exit at the top left, Test lap and
+Save at the top right, and named bars of icon buttons, each naming itself on hover: Editor
+controls (Move, Undo, Redo), Checkpoints (place a checkpoint, Edit checkpoint, place the grid)
+and Race type (sprint, one lap or three), and Objects: placeable models from the player's own
+install (`kart/objects.rs`, the planks for now), by group, each a tile with its icon. An object
+goes where the cursor points, turned with Q/E and the middle mouse (across yaws, up and down
+pitches, with Shift rolls); Move drags one and Delete removes it, and Undo takes back gates and
+objects in the order they were placed. Objects are solid: the kart drives on them in the editor,
+in any test lap and in a race on a player track. A saved track keeps them as `objects` (`model`,
+`x`, `y`, `z`, `yaw`, `pitch`, `roll`, radians); a publish sends them as its last field
+(`key,x,y,z,yaw,pitch,roll;...`, at most 40), which the server keeps with the track
+(`kartcraft_user_tracks.objects`) and puts last on its `PT` lines, the list's and a race's.
+`pack.py` and the official courses have none. What cannot be done
+says why in a popup. It
 opens on the Move cursor, which places nothing: a press on the start, a checkpoint or the grid
 drags it (Q/E and the wheel turn and size a dragged gate). Edit checkpoint picks one with a
 click and gives it a new number (1, the start, to the count; the others move up or down a
-place), and Redo puts back what Undo took until a new gate is placed. The bar's tools place where the cursor points (a left click, or Fire at the screen's centre): the checkpoints in driving order, the
+place), and Redo puts back what Undo took until a new gate is placed. The checkpoint tools place where the cursor points (a left click, or Fire at the screen's centre): the checkpoints in driving order, the
 first placed the start, each gate turned with the middle mouse
 held, and optionally a starting grid, facing the way the camera looks. A card on the left lists
-the keys. Its bar names the track, picks sprint, one lap or three, runs a test lap and saves.
+the keys. Save asks for the track's name in a popup, which warns when it replaces one of ours.
 A test lap asks the server to take the kart onto its grid (`R\tTG\t<x>\t<y>\t<o>\t<z>`, the
 placed grid or a race's first slot behind the start, `z` the track's floor; within 1000 yards,
 once every 10 seconds, the checks of a trip to a Race Marshal), runs the lights there and times
@@ -133,7 +147,7 @@ among a dungeon's floors and roofs. The track browser lists the
 saved tracks after the courses (right-click the editor's button, "My tracks", for them alone)
 and runs a test lap of one, or Edit opens it in the editor again, the kart taken to its start
 first by the test lap's trip (the camera flies once it lands; refused, it edits from where it is) (saved under the same name, it
-replaces the file, after the bar asks; a publish over one of ours of that name asks too). A publish or a take-down sends the author the fresh list at once. `grid` is the editor's alone for now: `pack.py` and the server
+replaces the file, as the save popup warns; a publish over one of ours of that name asks too). A publish or a take-down sends the author the fresh list at once. `grid` is the editor's alone for now: `pack.py` and the server
 ignore it and line a race up behind the start. In the browser our own track's Delete takes its
 published copy down (`R\tPubDN\t<name>`: ours of that name, as a publish replaces it) and removes
 its file, and Publish sends it to the server (`R\tPub`, `Kartcraft.cpp` "Player tracks": the

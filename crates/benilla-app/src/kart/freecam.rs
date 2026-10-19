@@ -15,6 +15,8 @@ const FLY_BOOST: f32 = 4.0;
 /// How far a pixel of mouse turns the flying camera (radians), and how far it may pitch.
 const LOOK_PER_PIXEL: f32 = 0.0035;
 const PITCH_LIMIT: f32 = 1.5;
+/// After a flight, how long the kart waits at most for the ground under it to stream back (s).
+const LAND_WAIT_SECS: f32 = 10.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum FreeMode {
@@ -44,6 +46,9 @@ pub(crate) struct FreeCam {
     /// The flying eye and its yaw and pitch; `None` until it takes over from the chase camera.
     eye: Option<(Vec3, f32, f32)>,
     cine: Option<CineCamera>,
+    /// A flight held the kart, which waits after it for its ground, and how long it has.
+    held: bool,
+    waited: f32,
 }
 
 impl FreeCam {
@@ -61,6 +66,19 @@ impl FreeCam {
     #[cfg(test)]
     pub(crate) fn mode(&self) -> FreeMode {
         self.mode
+    }
+
+    /// Whether the kart stands frozen this frame: through a flight, whose stream follows the eye
+    /// and lets the kart's ground go, then until `ground_under` finds it streamed back (or
+    /// LAND_WAIT_SECS), so the kart never drops through ground not yet loaded.
+    pub(crate) fn holds_kart(&mut self, ground_under: impl FnOnce() -> bool, dt: f32) -> bool {
+        if self.flying() {
+            (self.held, self.waited) = (true, 0.0);
+        } else if self.held {
+            self.waited += dt;
+            self.held = !ground_under() && self.waited < LAND_WAIT_SECS;
+        }
+        self.held
     }
 
     /// Whether the camera flies on the kart's controls, the kart held meanwhile.
@@ -139,6 +157,22 @@ mod tests {
             fov: 1.0,
             ..default()
         }
+    }
+
+    #[test]
+    fn a_flight_holds_the_kart_until_its_ground_is_back() {
+        let mut free = FreeCam::default();
+        assert!(!free.holds_kart(|| false, 0.1), "no flight, no hold");
+        free.set(FreeMode::Fly);
+        assert!(free.holds_kart(|| true, 0.1), "held through the flight");
+        free.set(FreeMode::Off);
+        assert!(free.holds_kart(|| false, 0.1), "the ground not back yet");
+        assert!(!free.holds_kart(|| true, 0.1), "landed");
+        assert!(!free.holds_kart(|| false, 0.1), "and done");
+        free.set(FreeMode::Fly);
+        free.holds_kart(|| false, 0.1);
+        free.set(FreeMode::Off);
+        assert!(!free.holds_kart(|| false, LAND_WAIT_SECS), "given up on");
     }
 
     #[test]

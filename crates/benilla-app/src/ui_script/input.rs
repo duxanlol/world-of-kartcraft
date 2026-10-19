@@ -262,12 +262,18 @@ pub(super) fn feed_ui_input(
         ResMut<UiKeyboardCapture>,
         NonSendMut<HostClipboard>,
     ),
-    // The characters the active layout makes, which name a key for a keyboard frame.
-    layout: Res<crate::bindings::LayoutNames>,
+    // The characters the active layout makes, which name a key for a keyboard frame; and an
+    // engine panel's field holding the keys.
+    (layout, engine_typing, engine_keys): (
+        Res<crate::bindings::LayoutNames>,
+        Res<super::EngineTyping>,
+        Res<super::EngineKeys>,
+    ),
     // The uiScale dial folded into the seam scale.
     ui_scale: Res<super::UiScaleCvar>,
 ) {
     let (keyboard, keys, capture, clipboard) = (&mut kbd.0, &kbd.1, &mut kbd.2, &mut kbd.3);
+    let engine_typing = engine_typing.0;
     let world_pick = pointer.world_pick();
     // The OS pointer is not ours while a probe drives a gesture through the real pointer path or a
     // capture pins it: skip the mouse half whole, else-arm included, whose `pointer_left_window`
@@ -375,8 +381,10 @@ pub(super) fn feed_ui_input(
 
     // ── Keyboard capture gate ── read after the mouse feed (a click may have just focused a box)
     // and before the keys (an Escape that clears focus still counts as captured this frame).
-    capture.typing = script.has_keyboard_focus();
+    capture.typing = script.has_keyboard_focus() || engine_typing;
     capture.consumed.clear();
+    // The keys an engine panel holds (`EngineKeys`) are eaten, as a keyboard frame's.
+    capture.consumed.extend(engine_keys.0.iter().copied());
     // ── The alt-arrow exemption ────────────────────────────────────────────────────────────────
     // An EditBox in alt-arrow mode (`ignoreArrows`, set on the chat box at `ChatFrame.xml:21`)
     // passes the arrows on unless ALT is held: its handler returns 0 at `0x77b1c4` and the
@@ -395,7 +403,9 @@ pub(super) fn feed_ui_input(
     };
     let mac = cfg!(target_os = "macos");
     for ev in keyboard.read() {
-        if ev.state != ButtonState::Pressed {
+        // An engine panel's field has them (`EngineTyping`), as a focused box would.
+        if ev.state != ButtonState::Pressed || engine_typing || engine_keys.0.contains(&ev.key_code)
+        {
             continue;
         }
         let named = match ev.key_code {

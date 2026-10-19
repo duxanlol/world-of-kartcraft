@@ -20,17 +20,14 @@
 //!
 //! - `BENILLA_KART_TRACKMAP(name, laps, points)`: the race map's track when it changes, its
 //!   checkpoints `x,y;x,y;...` (WoW x, y); an empty name when there is no race.
-//! - `BENILLA_KART_TRACKEDIT(state, gates, laps, note, notes, grid, tool, picked, asks)`: the
-//!   track editor's bar,
-//!   when it changes: `edit`, `test` (a test lap of the draft), `run` (of a saved track) or
-//!   empty when closed; the draft's gates, the start among them, and laps; the last word for the
-//!   player and how many so far, a new one for the chat; 1 when the draft has its grid; what a
-//!   left click does (`move`, `number`, `checkpoint` or `grid`); the checkpoint Edit checkpoint
-//!   picked, 1 the start, 0 none; how often a save found its name saved already (a new one asks
-//!   to overwrite).
+//! - `BENILLA_KART_TRACKEDIT(state, note, notes)`: the track editor, when it changes (its
+//!   panels and popups are the kart's own, [`crate::kart::track_edit_ui`]): `edit` (the
+//!   interface hidden), `test` (a test lap of the draft), `run` (of a saved track) or empty when
+//!   closed; the last word for the player and how many so far, a new one for the chat.
 //! - `BENILLA_KART_MYTRACKS(list)`: the track editor's saved tracks, as `BENILLA_KART_TRACKS`
-//!   lists courses with two fields more, the grid (`x,y,o` or empty) and the gates with their
-//!   facings (`x,y[,o];...`), at load and after each save or delete.
+//!   lists courses with four fields more, the grid (`x,y,o` or empty), the gates with their
+//!   facings (`x,y[,o];...`), the floor and the placed objects (`key,x,y,z,yaw,pitch,roll;...`),
+//!   at load and after each save or delete.
 //! - `BENILLA_KART_SEATED(seated)`: 1 when we climb into the kart, 0 when we climb out.
 //! - `BENILLA_KART_LEAVE(percent)`: leaving the kart in a race, held for, how far; no arguments
 //!   when let go or done.
@@ -78,7 +75,10 @@ const RACERS_HZ: f32 = 10.0;
 pub(crate) fn feed(
     time: Res<Time>,
     overlay: Res<KartOverlay>,
-    edit: Res<crate::kart::track_edit::TrackEdit>,
+    (edit, mut keys): (
+        Res<crate::kart::track_edit::TrackEdit>,
+        ResMut<crate::kart::track_edit_ui::EditorKeysText>,
+    ),
     script: Option<NonSendMut<UiScript>>,
     mut sent: Local<VmMemo<Sent>>,
 ) {
@@ -92,16 +92,16 @@ pub(crate) fn feed(
             "BENILLA_KART_TRACKEDIT",
             vec![
                 ScriptValue::Str(view.state.into()),
-                ScriptValue::Number(view.gates as f64),
-                ScriptValue::Number(f64::from(view.laps)),
                 ScriptValue::Str(edit.note().into()),
                 ScriptValue::Number(f64::from(view.notes)),
-                ScriptValue::Number(f64::from(u8::from(view.grid))),
-                ScriptValue::Str(view.tool.into()),
-                ScriptValue::Number(view.picked as f64),
-                ScriptValue::Number(f64::from(view.asks)),
             ],
         );
+        // The keys card's, as bound when the editor opens.
+        let opened = sent.track_edit.as_ref().is_none_or(|v| v.state != "edit");
+        if view.state == "edit" && opened {
+            let text = crate::kart::track_edit_ui::keys_text(&script.keybind_snapshot());
+            keys.0 = text;
+        }
         sent.track_edit = Some(view);
     }
     let (mine, saves) = edit.saved();
@@ -109,7 +109,9 @@ pub(crate) fn feed(
         // A course's line, then its grid, its gates with their facings and its floor, for a
         // publish.
         let list: Vec<String> = mine
-            .map(|(c, grid, gates, z)| format!("{}\t{grid}\t{gates}\t{z}", track_line(c)))
+            .map(|(c, grid, gates, z, objects)| {
+                format!("{}\t{grid}\t{gates}\t{z}\t{objects}", track_line(c))
+            })
             .collect();
         script.fire_event(
             "BENILLA_KART_MYTRACKS",

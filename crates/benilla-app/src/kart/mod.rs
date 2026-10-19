@@ -22,6 +22,7 @@ pub(crate) mod goods_preview;
 pub(crate) mod gps;
 mod ground;
 pub(crate) mod marshals;
+pub(crate) mod objects;
 mod pad_choice;
 mod pads;
 mod profession;
@@ -38,6 +39,7 @@ mod skins;
 mod skyhop;
 mod sound;
 pub(crate) mod track_edit;
+pub(crate) mod track_edit_ui;
 mod ui;
 pub(crate) use garage::{class_list, racer_list};
 pub(crate) use race::{Course, RaceMap, COURSES, ZONES};
@@ -62,6 +64,9 @@ const STATE_KEEPALIVE: f32 = 0.3;
 const _: () = assert!(STATE_KEEPALIVE < remote::STATE_TTL);
 /// Other karts this close (yards) are checked for bumps.
 const BUMP_RANGE: f32 = 20.0;
+/// How far below the kart (yards) its ground is looked for after a free-camera flight: past any
+/// drop it could have been parked over.
+const LAND_PROBE: f32 = 2000.0;
 /// Below this speed (yd/s) the kart counts as standing still on the wire.
 const MOVING_SPEED: f32 = 0.5;
 
@@ -481,8 +486,13 @@ fn update(
     // What each nearby kart rams with, as the race's weapons know it.
     let mut nearby = remotes.nearby(drive.pos, BUMP_RANGE);
     arms.arm(&mut nearby);
+    // A flight of the free camera freezes the kart, and after it until its ground streams back.
+    let under = drive.pos + Vec3::Y;
+    let ground_under = || collide.ray_body(under, Dir3::NEG_Y, LAND_PROBE).is_some();
     let events = if showing {
         show.step(&mut host.session, &collide, view.ground, now, dt)
+    } else if free.holds_kart(ground_under, dt) {
+        Vec::new()
     } else {
         host.session.step_with(
             &collide,
@@ -706,6 +716,18 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<freecam::FreeCam>()
         .init_resource::<track_edit::TrackEdit>()
         .add_observer(track_edit::on_cvar)
+        .add_observer(track_edit::on_cmd)
+        .init_resource::<objects::Models>()
+        .init_resource::<objects::Laid>()
+        .init_resource::<track_edit_ui::EditorUi>()
+        .init_resource::<track_edit_ui::EditorKeysText>()
+        // The editor's panels take their clicks and keys before the VM, which must not get them.
+        .add_systems(
+            Update,
+            track_edit_ui::input
+                .before(crate::ui_script::UiInput)
+                .in_set(crate::char_select::InWorldGated),
+        )
         .init_resource::<kartcraft::hud::HudHidden>()
         .init_resource::<race::Races>()
         .init_resource::<race::RaceText>()
@@ -774,7 +796,13 @@ pub(crate) fn plugin(app: &mut App) {
                 kartcraft::pads::lay.after(crate::go_anim::publish_ghost_door_exclusions),
                 update.in_set(KartDriveSet),
                 // The track editor after the race, which a test lap of its draft runs in.
-                (race::update, track_edit::update, skyhop::update).chain(),
+                (
+                    race::update,
+                    track_edit::update,
+                    objects::lay,
+                    skyhop::update,
+                )
+                    .chain(),
                 showcase::banner,
                 sound::overtakes,
                 // After the drive: a replay playing takes its camera.
@@ -788,8 +816,14 @@ pub(crate) fn plugin(app: &mut App) {
                 kartcraft::rumble::send,
                 score::track_skill,
                 (ui::pad_view, ui::publish).chain(),
-                // Into the VM only once the interface is up, or the first frame's events are lost.
-                crate::ui_kart::feed.run_if(crate::ui_script::ingame_ui_up),
+                // Into the VM only once the interface is up, or the first frame's events are lost;
+                // then the editor's panels as the frame left them, their keys card from the feed.
+                (
+                    crate::ui_kart::feed.run_if(crate::ui_script::ingame_ui_up),
+                    // Before the glue visuals, which light its buttons the frame they spawn.
+                    track_edit_ui::draw.before(crate::glue::GlueVisuals),
+                )
+                    .chain(),
                 kartcraft::hud::draw,
             )
                 .chain()

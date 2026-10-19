@@ -1,5 +1,5 @@
 //! The track editor: the minimap's track button (`KartTrackEdit`) flies the free camera, and the
-//! editor's bar (`KartcraftFrames.xml`, through `KartTrackCmd`) places the start, the
+//! editor's panels ([`super::track_edit_ui`], each press a [`TrackCmd`]) place the start, the
 //! checkpoints and the starting grid where the camera aims, drives the draft as a test lap
 //! ([`Active::practice`]) and saves it as a `courses/courses.json` course in
 //! `benilla-config/kart-tracks/` (docs/courses.md). The saved tracks go to the track browser
@@ -10,6 +10,7 @@ use benilla_world::collision::WorldCollision;
 use bevy::prelude::*;
 
 use super::freecam::{FreeCam, FreeMode};
+use super::objects::{Placed, KINDS};
 use super::race::{Active, Course, Races, COURSES, GATE_HALF_WIDTH};
 
 /// How far the camera's aim reaches for the ground (yards).
@@ -34,6 +35,26 @@ const NOTE: &str = "Made with the in-game track editor.";
 const AIM_COLOR: Color = Color::srgb(1.0, 0.85, 0.2);
 const GRID_COLOR: Color = Color::srgb(0.3, 1.0, 0.4);
 const HOVER_COLOR: Color = Color::srgb(0.4, 0.8, 1.0);
+const ERASE_COLOR: Color = Color::srgb(1.0, 0.3, 0.25);
+/// A pinned object's axes (yards each way) and the ring the mouse turns it about (yards), in the
+/// usual colours: yaw green, pitch red, roll blue.
+const AXIS_LENGTH: f32 = 4.0;
+/// The keys an object turns on, held from the game's own bindings while it does: yaw, pitch,
+/// roll, each pair.
+pub(crate) const TURN_KEYS: [KeyCode; 6] = [
+    KeyCode::KeyQ,
+    KeyCode::KeyE,
+    KeyCode::KeyR,
+    KeyCode::KeyF,
+    KeyCode::KeyZ,
+    KeyCode::KeyC,
+];
+/// How far a pixel of the mouse, Ctrl held, raises an object (yards).
+const LIFT_PER_PIXEL: f32 = 0.04;
+const AXIS_RING: f32 = 2.5;
+const YAW_COLOR: Color = Color::srgb(0.3, 1.0, 0.35);
+const PITCH_COLOR: Color = Color::srgb(1.0, 0.3, 0.3);
+const ROLL_COLOR: Color = Color::srgb(0.35, 0.55, 1.0);
 /// How near the grid's spot the move cursor takes it (yards): its circle.
 const GRID_PICK: f32 = 6.0;
 /// Each checkpoint's marker while editing, as big as the cursor's own circle (yards), and how
@@ -41,9 +62,9 @@ const GRID_PICK: f32 = 6.0;
 const MARKER: f32 = 2.0;
 const MARKER_PICK: f32 = 3.0;
 const MARKER_POLE: f32 = 6.0;
-/// The start's marker, and the checkpoints'.
-const START_COLOR: Color = Color::srgb(0.3, 1.0, 0.4);
-const MARKER_COLOR: Color = Color::srgb(1.0, 0.9, 0.3);
+/// The start's marker, and the checkpoints': see-through, so the ground shows under them.
+const START_COLOR: Color = Color::srgba(0.3, 1.0, 0.4, 0.6);
+const MARKER_COLOR: Color = Color::srgba(1.0, 0.9, 0.3, 0.6);
 
 /// A starting grid: its first slot (WoW x, y, z) and the way it faces (radians, WoW's).
 #[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
@@ -103,6 +124,7 @@ const ELSEWHERE: &str = "That track is on another map: go there to test it.";
 struct Saved {
     course: Course,
     grid: Option<Grid>,
+    objects: Vec<Placed>,
 }
 
 impl Saved {
@@ -112,25 +134,33 @@ impl Saved {
 }
 
 /// What a left click in the world places, as the bar's buttons pick it: `Move` nothing, it
-/// takes what is under the cursor to drag; `Number` picks a checkpoint to renumber. The first
-/// checkpoint placed is the start.
+/// takes what is under the cursor to drag; `Number` picks a checkpoint to renumber, `Erase` one
+/// or an object to delete; `Object` places the kind [`KINDS`]`[k]`. The first checkpoint placed
+/// is the start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Place {
     Move,
     Number,
+    Erase,
     Checkpoint,
     Grid,
+    Object(usize),
 }
 
-/// What the move cursor holds: a gate (0 the start) or the grid.
+/// What the move cursor holds: a gate (0 the start), the grid or a placed object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Held {
     Gate(usize),
     Grid,
+    Object(usize),
 }
 
-/// A gate undo took: its spot, facing, half-width and height.
-type Undone = ([f32; 2], Option<f32>, f32, Option<f32>);
+/// What undo took, for redo: a gate (its spot, facing, half-width and height) or an object.
+#[derive(Clone, Debug, PartialEq)]
+enum Undone {
+    Gate([f32; 2], Option<f32>, f32, Option<f32>),
+    Object(Placed),
+}
 
 /// The editor, its draft and the saved tracks. A draft goes once saved or closed; one the kart's
 /// loss closed waits for the editor to open again on its map.
@@ -161,8 +191,20 @@ pub(crate) struct TrackEdit {
     /// y) as taken, so a press without a drag moves nothing.
     held: Option<Held>,
     grab: [f32; 2],
-    /// The gates undo took, the last on top, for redo; a new gate forgets them.
+    /// What undo took, the last on top, for redo; a new gate or object forgets them.
     undone: Vec<Undone>,
+    /// The placed objects, and what was placed in turn (true an object, false a gate), which undo
+    /// takes back last first.
+    objects: Vec<Placed>,
+    placed: Vec<bool>,
+    /// The turn the next object takes (yaw, pitch, roll, radians), and the ghost: the object
+    /// held, or the one a click would place, as of this frame.
+    object_turn: [f32; 3],
+    ghost: Option<Placed>,
+    /// Where the middle mouse or Ctrl held pins the object turned (WoW, its ground), so the mouse
+    /// turns or raises it in place; and how high over its ground it is raised (yards).
+    pin: Option<[f32; 3]>,
+    lift: f32,
     /// The checkpoint the number tool picked, to renumber.
     picked: Option<usize>,
     /// The saved tracks once read, and how often the list changed: each change goes to the
@@ -172,8 +214,14 @@ pub(crate) struct TrackEdit {
     /// The last word for the player, and how many words so far: each new one goes to chat.
     note: String,
     notes: u32,
-    /// How often a save found a track of its name saved already: each asks the bar to confirm.
-    asks: u32,
+    /// The last thing that could not be done and why, and how many so far: each a popup.
+    error: String,
+    errors: u32,
+    /// The name a saved track opened under (My tracks' Edit), for the bar's name box to take.
+    named: Option<String>,
+    /// Each checkpoint shown this frame (0 the start) and the top of its marker's pole (Bevy
+    /// world), where its number hangs.
+    marks: Vec<(usize, Vec3)>,
     /// Edit's trip to the track's start (WoW x, y, o), and when it was asked of the server: the
     /// camera flies from there once the kart lands.
     trip: Option<([f32; 3], f32)>,
@@ -197,12 +245,21 @@ impl Default for TrackEdit {
             held: None,
             grab: [0.0; 2],
             undone: Vec::new(),
+            objects: Vec::new(),
+            placed: Vec::new(),
+            object_turn: [0.0; 3],
+            ghost: None,
+            pin: None,
+            lift: 0.0,
             picked: None,
             saved: None,
             saves: 0,
             note: String::new(),
             notes: 0,
-            asks: 0,
+            error: String::new(),
+            errors: 0,
+            named: None,
+            marks: Vec::new(),
             trip: None,
         }
     }
@@ -223,14 +280,22 @@ pub(crate) struct EditView {
     pub(crate) tool: &'static str,
     /// The checkpoint the number tool picked, 1 the start; 0 none.
     pub(crate) picked: usize,
-    /// How often a save asked to overwrite a track of its name.
-    pub(crate) asks: u32,
+    /// The object kind a click places, with the object tool.
+    pub(crate) object: Option<&'static str>,
+    /// An object turns on the keys ([`TURN_KEYS`]): one is held, or about to be placed.
+    pub(crate) turns_object: bool,
 }
 
 impl TrackEdit {
     fn say(&mut self, note: impl Into<String>) {
         self.note = note.into();
         self.notes += 1;
+    }
+
+    /// What the player asked for cannot be done, and why: a popup.
+    fn fail(&mut self, why: impl Into<String>) {
+        self.error = why.into();
+        self.errors += 1;
     }
 
     /// The draft for its gates and the race map: while editing, not while testing.
@@ -259,53 +324,104 @@ impl TrackEdit {
             tool: match self.tool {
                 Place::Move => "move",
                 Place::Number => "number",
+                Place::Erase => "erase",
+                Place::Object(_) => "object",
                 Place::Checkpoint => "checkpoint",
                 Place::Grid => "grid",
             },
             picked: self.picked.map_or(0, |i| i + 1),
-            asks: self.asks,
+            object: match self.tool {
+                Place::Object(k) => KINDS.get(k).map(|k| k.key),
+                _ => None,
+            },
+            turns_object: self.on
+                && !self.testing
+                && (matches!(self.held, Some(Held::Object(_)))
+                    || matches!(self.tool, Place::Object(_))),
         }
     }
 
     /// The bar's tool: what a left click does from now, nothing picked.
     fn use_tool(&mut self, tool: Place) {
         self.tool = tool;
+        self.lift = 0.0;
         self.picked = None;
     }
 
     /// Takes the last gate away, for redo.
     fn undo(&mut self) {
         self.drop_held();
-        if let Some(p) = self.points.pop() {
+        // What was placed last; a track opened from a file has no order, its gates first.
+        let object = self.placed.pop().unwrap_or(self.points.is_empty());
+        if object {
+            if let Some(o) = self.objects.pop() {
+                self.undone.push(Undone::Object(o));
+            }
+        } else if let Some(p) = self.points.pop() {
             let o = self.facings.pop().flatten();
             let w = self.widths.pop().unwrap_or(GATE_HALF_WIDTH);
             let z = self.heights.pop().flatten();
-            self.undone.push((p, o, w, z));
+            self.undone.push(Undone::Gate(p, o, w, z));
         }
         self.picked = self.picked.filter(|&i| i < self.points.len());
     }
 
-    /// Puts back the gate undo took last.
+    /// Puts back what undo took last.
     fn redo(&mut self) {
         match self.undone.pop() {
-            Some((p, o, w, z)) => {
+            Some(Undone::Gate(p, o, w, z)) => {
                 self.points.push(p);
                 self.facings.push(o);
                 self.widths.push(w);
                 self.heights.push(z);
+                self.placed.push(false);
             }
-            None => self.say("Nothing to redo."),
+            Some(Undone::Object(o)) => {
+                self.objects.push(o);
+                self.placed.push(true);
+            }
+            None => self.fail("Nothing to redo."),
         }
+    }
+
+    /// Deletes placed object `i`.
+    fn remove_object(&mut self, i: usize) {
+        if i >= self.objects.len() {
+            return;
+        }
+        self.drop_held();
+        let o = self.objects.remove(i);
+        forget_one(&mut self.placed, true);
+        self.undone.clear();
+        let name = super::objects::kind(&o.model).map_or("Object", |(_, k)| k.name);
+        self.say(format!("{name} deleted."));
+    }
+
+    /// The objects to lay in the world while the editor is open (with their index), all but the
+    /// one held, which the ghost shows.
+    pub(crate) fn laid_objects(&self) -> Vec<(usize, Placed)> {
+        let held = match self.held {
+            Some(Held::Object(i)) => Some(i),
+            _ => None,
+        };
+        (self.objects.iter().cloned().enumerate())
+            .filter(|(i, _)| self.on && Some(*i) != held)
+            .collect()
+    }
+
+    /// The ghost as of this frame.
+    pub(crate) fn ghost(&self) -> Option<Placed> {
+        self.ghost.clone().filter(|_| self.on && !self.testing)
     }
 
     /// The picked checkpoint as number `to` (1 the start), the others moving up or down a place.
     fn renumber(&mut self, to: usize) {
         let n = self.points.len();
         let Some(i) = self.picked.filter(|&i| i < n) else {
-            return self.say("Click a checkpoint with Edit checkpoint first.");
+            return self.fail("Click a checkpoint with Edit checkpoint first.");
         };
         if !(1..=n).contains(&to) {
-            return self.say(format!("A checkpoint's number is 1 (the start) to {n}."));
+            return self.fail(format!("A checkpoint's number is 1 (the start) to {n}."));
         }
         let j = to - 1;
         self.heights.resize(n, None);
@@ -326,16 +442,100 @@ impl TrackEdit {
         self.say(format!("Checkpoint {} is now {now}.", i + 1));
     }
 
+    /// Deletes checkpoint `i` (0 the start, the next then the start), the others closing up.
+    fn erase(&mut self, i: usize) {
+        let n = self.points.len();
+        if i >= n {
+            return;
+        }
+        self.drop_held();
+        self.heights.resize(n, None);
+        self.points.remove(i);
+        self.facings.remove(i);
+        self.widths.remove(i);
+        self.heights.remove(i);
+        self.picked = None;
+        // Undo and redo take the last gate, which is another one now.
+        self.undone.clear();
+        forget_one(&mut self.placed, false);
+        self.say(match i {
+            0 if n > 1 => "Start deleted: the next checkpoint is the start now.".to_string(),
+            0 => "Start deleted.".to_string(),
+            _ => format!("Checkpoint {} deleted.", i + 1),
+        });
+    }
+
     /// The last note.
     pub(crate) fn note(&self) -> &str {
         &self.note
     }
 
+    /// The last thing that could not be done, and how many so far.
+    pub(crate) fn error(&self) -> (&str, u32) {
+        (&self.error, self.errors)
+    }
+
+    /// The last note and how many so far.
+    pub(crate) fn notes(&self) -> (&str, u32) {
+        (&self.note, self.notes)
+    }
+
+    /// Whether a save as `name` would replace one of ours.
+    pub(crate) fn is_saved(&self, name: &str) -> bool {
+        let key = key_of(&clean(name));
+        self.saved.iter().flatten().any(|s| s.course.key == key)
+    }
+
+    /// Each checkpoint's number's place this frame, while editing.
+    pub(crate) fn marks(&self) -> &[(usize, Vec3)] {
+        &self.marks
+    }
+
+    /// The name a saved track opened under, once.
+    pub(crate) fn take_named(&mut self) -> Option<String> {
+        self.named.take()
+    }
+
+    /// What the bar says a left click does now.
+    pub(crate) fn hint(&self) -> String {
+        match (self.tool, self.picked) {
+            (Place::Number, Some(i)) => format!(
+                "Checkpoint {} of {} (1 is the start). New number:",
+                i + 1,
+                self.points.len()
+            ),
+            (Place::Number, None) => "Click a checkpoint to give it a new number.".into(),
+            (Place::Erase, _) => "Click a checkpoint to delete it.".into(),
+            (Place::Move, _) => "Drag the start, a checkpoint or the grid to move it.".into(),
+            (Place::Checkpoint, _) if self.points.is_empty() => {
+                "Left-click the ground to place the start, the first checkpoint.".into()
+            }
+            (Place::Checkpoint, _) => "Left-click the ground to place the next checkpoint.".into(),
+            (Place::Grid, _) => "Left-click the ground to place the starting grid.".into(),
+            (Place::Object(k), _) => {
+                let [yaw, pitch, roll] = self.object_turn.map(|a| a.to_degrees().round() as i32);
+                format!(
+                    "Left-click to place the {}. Q/E yaw, R/F pitch, Z/C roll; the middle mouse \
+                     turns it as you see it (Shift: rolls it), Ctrl raises it. Yaw {yaw}°, pitch \
+                     {pitch}°, roll {roll}°, {lift:.1} yd up.",
+                    KINDS.get(k).map_or("object", |k| k.name),
+                    lift = self.lift,
+                )
+            }
+        }
+    }
+
     /// The saved tracks as the track browser lists courses ([`crate::ui_kart`]), each with its
-    /// grid (`x,y,o` or empty), its gates as a publish sends them (`x,y[,o[,w]];...`) and its
-    /// floor (`z` or empty, [`floor`]), and how often the list has changed.
+    /// grid (`x,y,o` or empty), its gates as a publish sends them (`x,y[,o[,w]];...`), its
+    /// floor (`z` or empty, [`floor`]) and its objects ([`super::objects::wire`]), and how often
+    /// the list has changed.
     #[allow(clippy::type_complexity)]
-    pub(crate) fn saved(&self) -> (impl Iterator<Item = (&Course, String, String, String)>, u32) {
+    pub(crate) fn saved(
+        &self,
+    ) -> (
+        impl Iterator<Item = (&Course, String, String, String, String)>,
+        u32,
+    ) {
         let list = self.saved.iter().flatten().map(|s| {
             let grid = s
                 .grid
@@ -345,6 +545,7 @@ impl TrackEdit {
                 grid,
                 spots(&s.course.route(), &s.course.facings(), &s.course.gates()),
                 s.floor().map_or_else(String::new, |z| format!("{z:.1}")),
+                super::objects::wire(&s.objects),
             )
         });
         (list, self.saves)
@@ -362,6 +563,11 @@ impl TrackEdit {
         self.tool = Place::Move;
         self.held = None;
         self.undone.clear();
+        self.objects.clear();
+        self.placed.clear();
+        self.ghost = None;
+        self.pin = None;
+        self.lift = 0.0;
         self.picked = None;
         self.trip = None;
     }
@@ -387,6 +593,7 @@ impl TrackEdit {
         let p = match held {
             Held::Gate(i) => self.points.get(i).copied(),
             Held::Grid => self.grid.map(|g| [g.x, g.y]),
+            Held::Object(i) => self.objects.get(i).map(|o| [o.x, o.y]),
         };
         self.grab = p.map_or([0.0; 2], |p| [p[0] - at[0], p[1] - at[1]]);
         match held {
@@ -395,6 +602,7 @@ impl TrackEdit {
                 self.width = self.widths.get(i).copied().unwrap_or(GATE_HALF_WIDTH);
             }
             Held::Grid => self.turn = self.grid.map(|g| g.o),
+            Held::Object(_) => {}
         }
     }
 
@@ -419,6 +627,10 @@ impl TrackEdit {
                     o,
                 });
             }
+            Some(Held::Object(i)) if i < self.objects.len() => {
+                let obj = &mut self.objects[i];
+                (obj.x, obj.y, obj.z) = (w[0], w[1], w[2] + self.lift);
+            }
             _ => self.held = None,
         }
     }
@@ -431,6 +643,9 @@ impl TrackEdit {
 
     /// Lets go of what is held.
     fn drop_held(&mut self) {
+        if let Some(Held::Object(_)) = self.held {
+            self.lift = 0.0;
+        }
         if self.held.take().is_some() {
             self.turn = None;
             self.width = GATE_HALF_WIDTH;
@@ -451,12 +666,15 @@ impl TrackEdit {
         }
         let (points, facings, widths, grid, laps) =
             (c.route(), c.facings(), c.gates(), s.grid, c.laps);
+        let objects = s.objects.clone();
         let heights = c.heights();
         let name = c.name.clone();
         self.clear();
         (self.points, self.facings, self.widths) = (points, facings, widths);
         self.heights = heights;
         (self.grid, self.laps) = (grid, laps);
+        self.objects = objects;
+        self.named = Some(name.clone());
         Ok(name)
     }
 
@@ -549,14 +767,16 @@ impl TrackEdit {
             course["grid"] =
                 serde_json::json!({ "x": tenth(g.x), "y": tenth(g.y), "z": tenth(g.z), "o": o });
         }
+        if !self.objects.is_empty() {
+            course["objects"] = serde_json::to_value(&self.objects).map_err(|e| e.to_string())?;
+        }
         let json = serde_json::to_string_pretty(&course).map_err(|e| e.to_string())?;
         Ok((key, json + "\n"))
     }
 
     /// Saves the draft as `name` in `benilla-config/kart-tracks/<key>.json`, the editor going on
-    /// with a new one; the note says how it went.
-    /// Saves the draft as `name`; a track saved under that name already only with `overwrite`,
-    /// else the bar asks first.
+    /// with a new one; over a track saved under that name only with `overwrite`, which the save
+    /// popup asks for once it has warned.
     fn save(&mut self, name: &str, zone: &str, overwrite: bool) {
         let saved = self.course(name, zone).and_then(|(key, json)| {
             let dir = crate::local_state::kart_tracks_dir()
@@ -569,7 +789,7 @@ impl TrackEdit {
             Ok(Some(path))
         });
         match saved {
-            Ok(None) => self.asks += 1,
+            Ok(None) => self.fail(format!("A track named {} is saved already.", clean(name))),
             Ok(Some(path)) => {
                 info!("kart track editor: saved {}", path.display());
                 self.say(format!(
@@ -579,7 +799,7 @@ impl TrackEdit {
                 self.clear();
                 self.saved = None;
             }
-            Err(why) => self.say(why),
+            Err(why) => self.fail(why),
         }
     }
 
@@ -594,7 +814,7 @@ impl TrackEdit {
                 info!("kart track editor: deleted {key}");
                 self.say("Track deleted.");
             }
-            _ => self.say("That track could not be deleted."),
+            _ => self.fail("That track could not be deleted."),
         }
         self.saved = None;
     }
@@ -605,6 +825,13 @@ impl TrackEdit {
             self.saved = Some(read_saved());
             self.saves += 1;
         }
+    }
+}
+
+/// Drops the last `object` (or gate) from the order things were placed in.
+fn forget_one(placed: &mut Vec<bool>, object: bool) {
+    if let Some(i) = placed.iter().rposition(|&o| o == object) {
+        placed.remove(i);
     }
 }
 
@@ -630,7 +857,14 @@ fn read_saved() -> Vec<Saved> {
                 let grid = value
                     .get("grid")
                     .and_then(|g| serde_json::from_value(g.clone()).ok());
-                Ok(Saved { course, grid })
+                let objects = (value.get("objects"))
+                    .and_then(|o| serde_json::from_value(o.clone()).ok())
+                    .unwrap_or_default();
+                Ok(Saved {
+                    course,
+                    grid,
+                    objects,
+                })
             });
             parsed
                 .inspect_err(|e| warn!("kart track editor: {}: {e}", path.display()))
@@ -712,25 +946,34 @@ fn key_of(name: &str) -> String {
     key.trim_end_matches('-').to_string()
 }
 
-/// `KartTrackEdit` opens and closes the editor; `KartTrackCmd` is the bar's buttons and the track
-/// browser's test lap.
+/// One of the editor's commands, its verb and arguments: from the editor's panels
+/// ([`super::track_edit_ui`]) or from Lua's `KartTrackCmd` (the track browser and the popups).
+#[derive(Event, Clone, Debug)]
+pub(crate) struct TrackCmd(pub(crate) Vec<String>);
+
+impl TrackCmd {
+    pub(crate) fn new(words: &[&str]) -> Self {
+        Self(words.iter().map(|w| w.to_string()).collect())
+    }
+}
+
+/// `KartTrackEdit` opens and closes the editor; `KartTrackCmd` is a [`TrackCmd`] from Lua.
 // ponytail: a CVar per press, `<n>\t<verb>\t<args>` with n counting so a repeat still changes
-// it; a Lua-to-Rust call would do better if the editor grows.
+// it; a Lua-to-Rust call would do better if Lua's half grows again.
 pub(crate) fn on_cvar(
     ev: On<crate::cvars::CvarChanged>,
+    mut commands: Commands,
     mut edit: ResMut<TrackEdit>,
     mut free: ResMut<FreeCam>,
     mut races: ResMut<Races>,
-    drive: Res<super::KartDrive>,
     current_map: Option<Res<benilla_world::world_map::CurrentMap>>,
-    (time, profession): (Res<Time>, super::profession::Profession),
 ) {
     let testing = races.race.as_ref().is_some_and(|r| r.practice);
     let map = current_map.map_or(0, |m| m.0);
     match ev.key().as_str() {
         "karttrackedit" if ev.flag() != edit.on => {
             if ev.flag() && races.in_race() && !testing {
-                edit.say("Leave the race first to edit a track.");
+                edit.fail("Leave the race first to edit a track.");
                 return;
             }
             if !ev.flag() {
@@ -749,153 +992,179 @@ pub(crate) fn on_cvar(
         }
         "karttrackcmd" => {
             let words: Vec<&str> = ev.new.split('\t').skip(1).collect();
-            let editing = edit.on && !testing;
-            match words.as_slice() {
-                // The bar picks what a left click in the world places; it places nothing itself.
-                ["place", ..] if editing => edit.use_tool(Place::Checkpoint),
-                ["grid", ..] if editing => edit.use_tool(Place::Grid),
-                ["move", ..] if editing => edit.use_tool(Place::Move),
-                ["number", ..] if editing => edit.use_tool(Place::Number),
-                ["renumber", to, ..] if editing => edit.renumber(to.parse().unwrap_or(0)),
-                ["undo", ..] if editing => edit.undo(),
-                ["redo", ..] if editing => edit.redo(),
-                ["clear", ..] if editing => edit.clear(),
-                // The bar's Close: by a press, as `KartTrackEdit` may already read "0" (the
-                // editor opened from My tracks' Edit).
-                ["close", ..] => close(&mut edit, &mut free, &mut races, testing),
-                // My tracks' Edit: the saved track as the draft, in the editor.
-                ["edit", key, ..] => {
-                    let why = if !drive.active {
-                        Some("Summon your kart first (J).")
-                    } else if races.in_race() && !testing {
-                        Some("Leave the race first to edit a track.")
-                    } else {
-                        None
-                    };
-                    if let Some(why) = why {
-                        return edit.say(why);
+            commands.trigger(TrackCmd::new(&words));
+        }
+        _ => {}
+    }
+}
+
+/// The editor's commands, whoever sent them.
+pub(crate) fn on_cmd(
+    ev: On<TrackCmd>,
+    mut edit: ResMut<TrackEdit>,
+    mut free: ResMut<FreeCam>,
+    mut races: ResMut<Races>,
+    drive: Res<super::KartDrive>,
+    current_map: Option<Res<benilla_world::world_map::CurrentMap>>,
+    (time, profession): (Res<Time>, super::profession::Profession),
+) {
+    let testing = races.race.as_ref().is_some_and(|r| r.practice);
+    let map = current_map.map_or(0, |m| m.0);
+    let words: Vec<&str> = ev.0.iter().map(String::as_str).collect();
+    let editing = edit.on && !testing;
+    match words.as_slice() {
+        // The bar picks what a left click in the world places; it places nothing itself.
+        ["place", ..] if editing => edit.use_tool(Place::Checkpoint),
+        ["grid", ..] if editing => edit.use_tool(Place::Grid),
+        ["move", ..] if editing => edit.use_tool(Place::Move),
+        ["number", ..] if editing => edit.use_tool(Place::Number),
+        ["erase", ..] if editing => edit.use_tool(Place::Erase),
+        ["object", key, ..] if editing => {
+            if let Some((k, _)) = super::objects::kind(key) {
+                edit.use_tool(Place::Object(k));
+            }
+        }
+        ["renumber", to, ..] if editing => edit.renumber(to.parse().unwrap_or(0)),
+        ["undo", ..] if editing => edit.undo(),
+        ["redo", ..] if editing => edit.redo(),
+        ["clear", ..] if editing => edit.clear(),
+        // The bar's Close: by a press, as `KartTrackEdit` may already read "0" (the
+        // editor opened from My tracks' Edit).
+        ["close", ..] => close(&mut edit, &mut free, &mut races, testing),
+        // My tracks' Edit: the saved track as the draft, in the editor.
+        ["edit", key, ..] => {
+            let why = if !drive.active {
+                Some("Summon your kart first (J).")
+            } else if races.in_race() && !testing {
+                Some("Leave the race first to edit a track.")
+            } else {
+                None
+            };
+            if let Some(why) = why {
+                return edit.fail(why);
+            }
+            edit.map = map;
+            match edit.edit_saved(key) {
+                Ok(name) => {
+                    edit.on = true;
+                    if testing {
+                        races.race = None;
                     }
-                    edit.map = map;
-                    match edit.edit_saved(key) {
-                        Ok(name) => {
-                            edit.on = true;
-                            if testing {
-                                races.race = None;
-                            }
-                            let trip = edit.go_to_start(time.elapsed_secs(), drive.pos);
-                            if let Some(line) = trip {
-                                profession.send(line);
-                            }
-                            free.set(match edit.trip {
-                                Some(_) => FreeMode::Off,
-                                None => FreeMode::Fly,
-                            });
-                            edit.say(format!(
-                                "Editing {name}: drag what to move, and save under its name to \
-                                 replace it."
-                            ));
-                        }
-                        Err(why) => edit.say(why),
+                    let trip = edit.go_to_start(time.elapsed_secs(), drive.pos);
+                    if let Some(line) = trip {
+                        profession.send(line);
                     }
-                }
-                ["laps", n, ..] if editing => edit.laps = n.parse().unwrap_or(0).min(9),
-                ["practice", name, ..] if editing => match edit.unready() {
-                    Some(why) => edit.say(why),
-                    None => {
-                        let name = Some(clean(name)).filter(|n| !n.is_empty());
-                        let name = name.unwrap_or_else(|| "Test lap".into());
-                        let grid = grid_spot(edit.grid, &edit.points);
-                        let race = Active::practice(
-                            &name,
-                            edit.laps,
-                            edit.points.clone(),
-                            grid,
-                            &races.me,
-                        );
-                        let race = race.with_facings(edit.facings.clone());
-                        let race = race
-                            .with_floor(floor(edit.grid, &edit.heights))
-                            .with_heights(edit.heights.clone());
-                        races.race = Some(race.with_gates(edit.widths.clone()));
-                        free.set(FreeMode::Off);
-                    }
-                },
-                ["save", name, rest @ ..] if editing => {
-                    let zone = rest.first().copied().unwrap_or("");
-                    edit.save(name, zone, rest.get(1) == Some(&"overwrite"));
-                }
-                // A saved track's test lap, from the track browser.
-                ["run", key, ..] => {
-                    let run = edit.saved.iter().flatten().find(|s| s.course.key == *key);
-                    let why = match run {
-                        None => Some("That track is not saved any more."),
-                        Some(_) if !drive.active => Some("Summon your kart first (J)."),
-                        Some(_) if races.in_race() && !testing => {
-                            Some("Leave the race first to test a track.")
-                        }
-                        Some(s) if s.course.map != map => Some(ELSEWHERE),
-                        Some(_) => None,
-                    };
-                    let race = run.map(|s| {
-                        let c = &s.course;
-                        let route = c.route();
-                        let grid = grid_spot(s.grid, &route);
-                        Active::practice(&c.name, c.laps, route, grid, &races.me)
-                            .with_facings(c.facings())
-                            .with_gates(c.gates())
-                            .with_floor(s.floor())
-                            .with_heights(c.heights())
+                    free.set(match edit.trip {
+                        Some(_) => FreeMode::Off,
+                        None => FreeMode::Fly,
                     });
-                    if let Some(why) = why {
-                        edit.say(why);
-                        return;
-                    }
-                    // Opened from the editor, the lap's end goes back to it, the draft as it was.
-                    races.race = race;
-                    free.set(FreeMode::Off);
+                    edit.say(format!(
+                        "Editing {name}: drag what to move, and save under its name to \
+                         replace it."
+                    ));
                 }
-                // A saved track gone from the browser: its file deleted, the list read again.
-                ["delete", key, ..] => edit.delete(key),
-                // A player track's test lap, from the track browser's player tracks: its line's
-                // name, laps, map, grid (`x,y,o` or empty), gates and floor (`z`, or empty or
-                // absent where the server sent none).
-                ["runspots", name, laps, track_map, grid, gates, rest @ ..] => {
-                    let floor = rest.first().and_then(|z| z.trim().parse::<f32>().ok());
-                    let route = parse_spots(gates).filter(|(p, ..)| p.len() >= 2);
-                    let grid = parse_spots(grid)
-                        .and_then(|(p, o, _)| Some([p.first()?[0], p[0][1], o[0]?]));
-                    let why = match &route {
-                        None => Some("That track's checkpoints did not arrive whole."),
-                        Some(_) if !drive.active => Some("Summon your kart first (J)."),
-                        Some(_) if races.in_race() && !testing => {
-                            Some("Leave the race first to test a track.")
-                        }
-                        Some(_) if track_map.parse::<u32>().ok() != Some(map) => Some(ELSEWHERE),
-                        Some(_) => None,
-                    };
-                    if let Some(why) = why {
-                        edit.say(why);
-                        return;
-                    }
-                    let Some((points, facings, widths)) = route else {
-                        return;
-                    };
-                    let laps = laps.parse().unwrap_or(0);
-                    let grid = grid.or_else(|| grid_spot(None, &points));
-                    let race = Active::practice(&clean(name), laps, points, grid, &races.me);
-                    let race = race.with_facings(facings).with_floor(floor);
-                    races.race = Some(race.with_gates(widths));
-                    free.set(FreeMode::Off);
+                Err(why) => edit.fail(why),
+            }
+        }
+        ["laps", n, ..] if editing => edit.laps = n.parse().unwrap_or(0).min(9),
+        ["practice", name, ..] if editing => match edit.unready() {
+            Some(why) => edit.fail(why),
+            None => {
+                let name = Some(clean(name)).filter(|n| !n.is_empty());
+                let name = name.unwrap_or_else(|| "Test lap".into());
+                let grid = grid_spot(edit.grid, &edit.points);
+                let race = Active::practice(&name, edit.laps, edit.points.clone(), grid, &races.me);
+                let race = race.with_facings(edit.facings.clone());
+                let race = race
+                    .with_floor(floor(edit.grid, &edit.heights))
+                    .with_heights(edit.heights.clone())
+                    .with_objects(edit.objects.clone());
+                races.race = Some(race.with_gates(edit.widths.clone()));
+                free.set(FreeMode::Off);
+            }
+        },
+        ["save", name, rest @ ..] if editing => {
+            let zone = rest.first().copied().unwrap_or("");
+            edit.save(name, zone, rest.get(1) == Some(&"overwrite"));
+        }
+        // A saved track's test lap, from the track browser.
+        ["run", key, ..] => {
+            let run = edit.saved.iter().flatten().find(|s| s.course.key == *key);
+            let why = match run {
+                None => Some("That track is not saved any more."),
+                Some(_) if !drive.active => Some("Summon your kart first (J)."),
+                Some(_) if races.in_race() && !testing => {
+                    Some("Leave the race first to test a track.")
                 }
-                ["restart", ..] => {
-                    if let Some(race) = races.race.as_mut().filter(|r| r.practice) {
-                        race.restart_practice();
-                    }
+                Some(s) if s.course.map != map => Some(ELSEWHERE),
+                Some(_) => None,
+            };
+            let race = run.map(|s| {
+                let c = &s.course;
+                let route = c.route();
+                let grid = grid_spot(s.grid, &route);
+                Active::practice(&c.name, c.laps, route, grid, &races.me)
+                    .with_facings(c.facings())
+                    .with_gates(c.gates())
+                    .with_floor(s.floor())
+                    .with_heights(c.heights())
+                    .with_objects(s.objects.clone())
+            });
+            if let Some(why) = why {
+                edit.fail(why);
+                return;
+            }
+            // Opened from the editor, the lap's end goes back to it, the draft as it was.
+            races.race = race;
+            free.set(FreeMode::Off);
+        }
+        // A saved track gone from the browser: its file deleted, the list read again.
+        ["delete", key, ..] => edit.delete(key),
+        // A player track's test lap, from the track browser's player tracks: its line's
+        // name, laps, map, grid (`x,y,o` or empty), gates and floor (`z`, or empty or
+        // absent where the server sent none).
+        ["runspots", name, laps, track_map, grid, gates, rest @ ..] => {
+            let floor = rest.first().and_then(|z| z.trim().parse::<f32>().ok());
+            let objects = rest
+                .get(1)
+                .map_or_else(Vec::new, |o| super::objects::parse_wire(o));
+            let route = parse_spots(gates).filter(|(p, ..)| p.len() >= 2);
+            let grid =
+                parse_spots(grid).and_then(|(p, o, _)| Some([p.first()?[0], p[0][1], o[0]?]));
+            let why = match &route {
+                None => Some("That track's checkpoints did not arrive whole."),
+                Some(_) if !drive.active => Some("Summon your kart first (J)."),
+                Some(_) if races.in_race() && !testing => {
+                    Some("Leave the race first to test a track.")
                 }
-                ["back", ..] if testing => races.race = None,
-                // The server would not make Edit's trip (too far, too soon): edit from here.
-                ["stay", ..] => edit.trip = None,
-                _ => {}
+                Some(_) if track_map.parse::<u32>().ok() != Some(map) => Some(ELSEWHERE),
+                Some(_) => None,
+            };
+            if let Some(why) = why {
+                edit.fail(why);
+                return;
+            }
+            let Some((points, facings, widths)) = route else {
+                return;
+            };
+            let laps = laps.parse().unwrap_or(0);
+            let grid = grid.or_else(|| grid_spot(None, &points));
+            let race = Active::practice(&clean(name), laps, points, grid, &races.me);
+            let race = race.with_facings(facings).with_floor(floor);
+            races.race = Some(race.with_gates(widths).with_objects(objects));
+            free.set(FreeMode::Off);
+        }
+        ["restart", ..] => {
+            if let Some(race) = races.race.as_mut().filter(|r| r.practice) {
+                race.restart_practice();
+            }
+        }
+        ["back", ..] if testing => races.race = None,
+        // The server would not make Edit's trip (too far, too soon): edit from here.
+        ["stay", why @ ..] => {
+            edit.trip = None;
+            if let Some(why) = why.first() {
+                edit.fail(*why);
             }
         }
         _ => {}
@@ -925,6 +1194,7 @@ pub(crate) fn update(
     mut edit: ResMut<TrackEdit>,
     mut free: ResMut<FreeCam>,
     mut gizmos: Gizmos,
+    placed_objects: Query<&super::objects::PlacedObject>,
     (buttons, mouse, over_ui, window, camera): (
         Res<ButtonInput<MouseButton>>,
         Res<bevy::input::mouse::AccumulatedMouseMotion>,
@@ -954,7 +1224,7 @@ pub(crate) fn update(
     if edit.on && !edit.testing && edit.trip.is_none() && !drive.active {
         edit.on = false;
         free.set(FreeMode::Off);
-        edit.say("The track editor needs your kart: summon it (J) first.");
+        edit.fail("The track editor needs your kart: summon it (J) first.");
     }
     let editing = edit.owns_left();
     // Back from a test lap, or the camera switched off (/kartfree): the editor flies it.
@@ -978,16 +1248,112 @@ pub(crate) fn update(
         });
         let ahead = collide
             .ray_body(from, way, AIM_REACH)
-            .map(|hit| from + way * hit.distance);
+            .map(|hit| (from + way * hit.distance, Some(hit.entity)));
         ahead.or_else(|| {
             collide
                 .ray_body(eye.translation, Dir3::NEG_Y, 4000.0)
-                .map(|hit| eye.translation - Vec3::Y * hit.distance)
+                .map(|hit| (eye.translation - Vec3::Y * hit.distance, None))
         })
     });
+    // The placed object the aim is on, if any.
+    let aim_object = aim
+        .and_then(|(_, e)| placed_objects.get(e?).ok())
+        .map(|o| o.0);
+    let aim = aim.map(|(at, _)| at);
+    let tool = edit.tool;
+    // An object, held or about to be placed, turns in all three axes: Q/E and the middle mouse
+    // across yaw it, the middle mouse up and down pitches it (Shift: rolls it).
+    let turning_object = match (edit.held, tool) {
+        (Some(Held::Object(i)), _) => Some(Some(i)),
+        (None, Place::Object(_)) => Some(None),
+        _ => None,
+    };
+    // The axes an object turned about this frame (Bevy world), with their colours, for its rings.
+    let mut turned: Vec<(Vec3, Color)> = Vec::new();
+    let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    let middle = buttons.pressed(MouseButton::Middle);
+    if let Some(which) = turning_object.filter(|_| editing) {
+        let key = |k: KeyCode| f32::from(u8::from(keys.pressed(k) && !typing.typing));
+        let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+        let step = TURN_PER_SEC * time.delta_secs();
+        let mut obj = match which.and_then(|i| edit.objects.get(i)) {
+            Some(o) => o.clone(),
+            None => {
+                let [yaw, pitch, roll] = edit.object_turn;
+                Placed {
+                    model: String::new(),
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    yaw,
+                    pitch,
+                    roll,
+                }
+            }
+        };
+        let mut q = obj.turn();
+        // About an axis (WoW, unit), shown with its ring while turned or the mouse holds it.
+        let mut about = |q: &mut Quat, axis: Vec3, angle: f32, color: Color, shown: bool| {
+            if angle != 0.0 {
+                *q = Quat::from_axis_angle(axis, angle) * *q;
+            }
+            if shown || angle != 0.0 {
+                turned.push((wow_to_bevy(axis.to_array()), color));
+            }
+        };
+        // The keys turn it about its own axes: Q/E yaw, R/F pitch (R its front up), Z/C roll.
+        let yaw = (key(KeyCode::KeyQ) - key(KeyCode::KeyE)) * step;
+        about(&mut q, Vec3::Z, yaw, YAW_COLOR, false);
+        let side = q * Vec3::Y;
+        let pitch = -(key(KeyCode::KeyR) - key(KeyCode::KeyF)) * step;
+        about(&mut q, side, pitch, PITCH_COLOR, false);
+        let length = q * Vec3::X;
+        let roll = (key(KeyCode::KeyZ) - key(KeyCode::KeyC)) * step;
+        about(&mut q, length, roll, ROLL_COLOR, false);
+        // The middle mouse turns it as the camera sees it: across about the vertical, up and down
+        // about the view's side (Shift: about the line of sight), so a drag turns it the way the
+        // mouse goes whichever way it faces.
+        if let (true, false, Some(eye)) = (middle, ctrl, eye) {
+            let wow = |v: Vec3| Vec3::from(bevy_to_wow(v)).normalize();
+            let d = mouse.delta * TURN_PER_PIXEL;
+            about(&mut q, Vec3::Z, -d.x, YAW_COLOR, true);
+            match shift {
+                false => about(&mut q, wow(*eye.right()), d.y, PITCH_COLOR, true),
+                true => about(&mut q, wow(*eye.forward()), d.y, ROLL_COLOR, true),
+            }
+        }
+        obj.set_turn(q);
+        let turn = [obj.yaw, obj.pitch, obj.roll];
+        match which.and_then(|i| edit.objects.get_mut(i)) {
+            Some(o) => [o.yaw, o.pitch, o.roll] = turn,
+            None => edit.object_turn = turn,
+        }
+        // Ctrl and the mouse up and down raise it off its ground, or lower it.
+        if ctrl {
+            edit.lift -= mouse.delta.y * LIFT_PER_PIXEL;
+        }
+    }
+    // The middle mouse or Ctrl held pins the object where it is (its ground: where it stands, less
+    // its lift), so the mouse turns or raises it in place; let go, it follows the cursor again.
+    let pinning = editing && turning_object.is_some() && (middle || ctrl);
+    if !pinning {
+        edit.pin = None;
+    } else if edit.pin.is_none() {
+        let lift = edit.lift;
+        edit.pin = match turning_object.flatten().and_then(|i| edit.objects.get(i)) {
+            Some(o) => Some([o.x, o.y, o.z - lift]),
+            None => aim.map(bevy_to_wow),
+        };
+    }
+    // A held object stays where it is pinned, at its lift.
+    if let (Some(pin), Some(Some(i))) = (edit.pin, turning_object) {
+        let lift = edit.lift;
+        if let Some(o) = edit.objects.get_mut(i) {
+            (o.x, o.y, o.z) = (pin[0], pin[1], pin[2] + lift);
+        }
+    }
     // What is about to be placed faces as the middle mouse turns it, else a gate square to the
     // way from the last one, the start and the grid the way the camera looks.
-    let tool = edit.tool;
     let facing = aim.zip(eye).map(|(at, eye)| {
         let w = bevy_to_wow(at);
         let last = match edit.held {
@@ -1002,13 +1368,14 @@ pub(crate) fn update(
             }
         };
         let auto = (w[1] - from[1]).atan2(w[0] - from[0]);
-        if editing && buttons.pressed(MouseButton::Middle) {
+        let gate_turns = editing && turning_object.is_none();
+        if gate_turns && buttons.pressed(MouseButton::Middle) {
             edit.turn = Some(edit.turn.unwrap_or(auto) - mouse.delta.x * TURN_PER_PIXEL);
         }
         // Q turns it left (WoW's facing grows anticlockwise), E right; not while typing a name.
         let held = |k: KeyCode| f32::from(u8::from(keys.pressed(k) && !typing.typing));
         let q_e = held(KeyCode::KeyQ) - held(KeyCode::KeyE);
-        if editing && q_e != 0.0 {
+        if gate_turns && q_e != 0.0 {
             edit.turn = Some(edit.turn.unwrap_or(auto) + q_e * TURN_PER_SEC * time.delta_secs());
         }
         edit.turn.unwrap_or(auto)
@@ -1023,12 +1390,17 @@ pub(crate) fn update(
     // The move cursor: a press on something takes it, held it follows the aim, let go (Fire
     // again on a controller) it stays.
     let at = aim.map(bevy_to_wow).map(|w| [w[0], w[1]]);
-    let hover = at.and_then(|w| edit.under(w));
+    // A placed object under the aim, for the move cursor and delete, before a gate or the grid.
+    let object_tools = matches!(tool, Place::Move | Place::Erase);
+    let hover = aim_object
+        .filter(|_| object_tools)
+        .map(Held::Object)
+        .or_else(|| at.and_then(|w| edit.under(w)));
     let let_go = edit.held.is_some() && (fired || buttons.just_released(MouseButton::Left));
     if !editing || let_go {
         edit.drop_held();
     } else if let Some(held) = edit.held {
-        if let (Some(at), Some(o)) = (aim, facing) {
+        if let (Some(at), Some(o), None) = (aim, facing, edit.pin) {
             edit.drag(at, o);
         }
         if let Some(at) = aim.filter(|_| held == Held::Grid) {
@@ -1037,35 +1409,60 @@ pub(crate) fn update(
     } else if (fired || clicked) && tool == Place::Move {
         if let Some((held, at)) = hover.zip(at) {
             edit.take(held, at);
+            // An object keeps its height over the ground it is dragged across.
+            if let (Held::Object(i), Some(aim)) = (held, aim) {
+                let z = edit.objects.get(i).map_or(0.0, |o| o.z);
+                edit.lift = z - bevy_to_wow(aim)[2];
+            }
         }
     } else if (fired || clicked) && tool == Place::Number {
         edit.picked = match hover {
             Some(Held::Gate(i)) => Some(i),
             _ => None,
         };
+    } else if (fired || clicked) && tool == Place::Erase {
+        match hover {
+            Some(Held::Gate(i)) => edit.erase(i),
+            Some(Held::Object(i)) => edit.remove_object(i),
+            _ => {}
+        }
     } else if fired || clicked {
         match aim.zip(facing) {
-            Some((at, o)) => place(&mut edit, tool, at, o),
-            None => edit.say("Aim at the ground to place it."),
+            // Pinned, it goes where it is pinned.
+            Some((at, o)) => {
+                let at = edit.pin.map_or(at, wow_to_bevy);
+                place(&mut edit, tool, at, o);
+            }
+            None => edit.fail("Aim at the ground to place it."),
         }
     }
-    if let (Some(at), Place::Move | Place::Number) = (aim.filter(|_| editing), tool) {
+    if let (Some(at), Place::Move | Place::Number | Place::Erase) = (aim.filter(|_| editing), tool)
+    {
         // The cursor, and a ring round what a press would take (the number tool's a checkpoint
         // alone) and round the checkpoint picked.
         gizmos.circle(flat(at + Vec3::Y * 0.3), MARKER, HOVER_COLOR);
         let near = edit.held.or(hover);
         let near = near.filter(|h| tool == Place::Move || *h != Held::Grid);
+        let ring_color = if tool == Place::Erase {
+            ERASE_COLOR
+        } else {
+            HOVER_COLOR
+        };
         let ring = match near {
             Some(Held::Gate(i)) => edit.points.get(i).map(|p| (*p, MARKER_PICK)),
             Some(Held::Grid) => edit.grid.map(|g| ([g.x, g.y], GRID_PICK)),
-            None => None,
+            // An object shows itself: held, as the ghost.
+            Some(Held::Object(_)) | None => None,
         };
         let picked = edit.picked.and_then(|i| edit.points.get(i));
         let picked = picked.map(|p| (*p, MARKER_PICK + 1.0));
         for (p, r) in ring.into_iter().chain(picked) {
             let centre = wow_to_bevy([p[0], p[1], 0.0]).with_y(at.y + 0.5);
-            gizmos.circle(flat(centre), r, HOVER_COLOR);
+            gizmos.circle(flat(centre), r, ring_color);
         }
+    } else if let (Some(at), Place::Object(_)) = (aim.filter(|_| editing), tool) {
+        // The ghost shows what goes there; a small ring marks its origin.
+        gizmos.circle(flat(at + Vec3::Y * 0.3), 0.5, AIM_COLOR);
     } else if let (Some(at), Some(o), Place::Grid) = (aim, facing, tool) {
         gizmos.circle(flat(at + Vec3::Y * 0.3), 6.0, GRID_COLOR);
         let w = bevy_to_wow(at);
@@ -1085,8 +1482,56 @@ pub(crate) fn update(
         let ahead = wow_to_bevy([w[0] + 8.0 * o.cos(), w[1] + 8.0 * o.sin(), 0.0]).with_y(at.y);
         gizmos.arrow(at + Vec3::Y * 0.5, ahead + Vec3::Y * 0.5, AIM_COLOR);
     }
+    // The ghost: the object held, or the one a click would place at the aim.
+    edit.ghost = match (edit.held, tool) {
+        (Some(Held::Object(i)), _) => edit.objects.get(i).cloned(),
+        (None, Place::Object(k)) if editing => aim.zip(KINDS.get(k)).map(|(at, kind)| {
+            let w = edit.pin.unwrap_or_else(|| bevy_to_wow(at));
+            let [yaw, pitch, roll] = edit.object_turn;
+            Placed {
+                model: kind.key.into(),
+                x: w[0],
+                y: w[1],
+                z: w[2] + edit.lift,
+                yaw,
+                pitch,
+                roll,
+            }
+        }),
+        _ => None,
+    };
+    // Pinned, its axes show, each with its ring, the ones the mouse turns bright: across yaws,
+    // up and down pitches (with Shift, rolls).
+    if let (true, Some(g)) = (edit.pin.is_some() || !turned.is_empty(), &edit.ghost) {
+        let centre = g.transform().translation;
+        let colors = [YAW_COLOR, PITCH_COLOR, ROLL_COLOR];
+        for (axis, color) in g.axes().into_iter().zip(colors) {
+            let color = color.with_alpha(0.4);
+            gizmos.line(
+                centre - axis * AXIS_LENGTH,
+                centre + axis * AXIS_LENGTH,
+                color,
+            );
+        }
+        for (axis, color) in &turned {
+            let axis = axis.normalize_or_zero();
+            gizmos.line(
+                centre - axis * AXIS_LENGTH,
+                centre + axis * AXIS_LENGTH,
+                *color,
+            );
+            let ring = Isometry3d::new(centre, Quat::from_rotation_arc(Vec3::Z, axis));
+            gizmos.circle(ring, AXIS_RING, *color);
+        }
+        if ctrl {
+            // Raising: a line down to its ground.
+            let ground = centre - Vec3::Y * edit.lift;
+            gizmos.line(ground, centre, AIM_COLOR);
+        }
+    }
     // Each checkpoint's small marker and pole on the floor it was placed on (under a roof, as
-    // the Caverns of Time's way down, not on the roof), the start's green.
+    // the Caverns of Time's way down, not on the roof), the start's green, its number over it.
+    let mut marks = Vec::new();
     if eye.is_some() {
         for (i, p) in edit.points.iter().enumerate() {
             let column = wow_to_bevy([p[0], p[1], 0.0]);
@@ -1103,8 +1548,10 @@ pub(crate) fn update(
             let color = if i == 0 { START_COLOR } else { MARKER_COLOR };
             gizmos.circle(flat(foot), MARKER, color);
             gizmos.line(foot, foot + Vec3::Y * MARKER_POLE, color);
+            marks.push((i, foot + Vec3::Y * (MARKER_POLE + 1.0)));
         }
     }
+    edit.marks = marks;
     // The grid: the draft's while editing, a test lap's until its start.
     let grid = match practice {
         Some(race) => race.grid().map(|g| (g, None)),
@@ -1147,6 +1594,7 @@ fn place(edit: &mut TrackEdit, what: Place, at: Vec3, o: f32) {
             edit.widths.push(edit.width);
             edit.heights.push(Some(w[2]));
             edit.undone.clear();
+            edit.placed.push(false);
         }
         Place::Grid => {
             edit.turn = None;
@@ -1158,7 +1606,24 @@ fn place(edit: &mut TrackEdit, what: Place, at: Vec3, o: f32) {
             });
             edit.say("Starting grid placed.");
         }
-        Place::Move | Place::Number => return,
+        Place::Object(k) => {
+            let Some(kind) = KINDS.get(k) else { return };
+            let [yaw, pitch, roll] = edit.object_turn;
+            edit.objects.push(Placed {
+                model: kind.key.into(),
+                x: w[0],
+                y: w[1],
+                z: w[2] + edit.lift,
+                yaw,
+                pitch,
+                roll,
+            });
+            edit.placed.push(true);
+            edit.undone.clear();
+            // The tool stays: the next click places another.
+            return;
+        }
+        Place::Move | Place::Number | Place::Erase => return,
     }
     edit.tool = Place::Checkpoint;
     info!(
@@ -1318,7 +1783,7 @@ mod tests {
         assert_eq!(edit.points.len(), 3);
         assert_eq!(edit.widths[2], 8.0, "with its width");
         edit.redo();
-        assert_eq!(edit.note(), "Nothing to redo.");
+        assert_eq!(edit.error().0, "Nothing to redo.");
         edit.undo();
         click(&mut edit, at(300.0), 0.0);
         edit.redo();
@@ -1337,14 +1802,17 @@ mod tests {
         edit.widths = vec![20.0, 20.0, 8.0];
         edit.renumber(1);
         assert!(
-            edit.note().starts_with("Click a checkpoint"),
+            edit.error().0.starts_with("Click a checkpoint"),
             "nothing picked"
         );
         edit.use_tool(Place::Number);
         edit.picked = Some(2);
         assert_eq!(edit.view().picked, 3);
         edit.renumber(4);
-        assert_eq!(edit.note(), "A checkpoint's number is 1 (the start) to 3.");
+        assert_eq!(
+            edit.error().0,
+            "A checkpoint's number is 1 (the start) to 3."
+        );
         // 3 to 1: the start, and the others one on, each with its facing and width.
         edit.renumber(1);
         assert_eq!(edit.points, vec![[200.0, 0.0], [0.0, 0.0], [100.0, 0.0]]);
@@ -1356,6 +1824,78 @@ mod tests {
         assert_eq!(edit.points[1], [200.0, 0.0]);
         edit.use_tool(Place::Move);
         assert_eq!(edit.view().picked, 0, "another tool drops the pick");
+    }
+
+    #[test]
+    fn objects_place_turned_and_undo_in_the_order_things_were_placed() {
+        let mut edit = draft(0, &[]);
+        edit.tool = Place::Checkpoint;
+        click(&mut edit, wow_to_bevy([0.0, 0.0, 0.0]), 0.0);
+        edit.use_tool(Place::Object(1));
+        edit.object_turn = [0.5, 0.25, 0.1];
+        click(&mut edit, wow_to_bevy([5.0, 6.0, 7.0]), 0.0);
+        assert_eq!(edit.objects.len(), 1);
+        let o = &edit.objects[0];
+        assert_eq!(
+            (o.model.as_str(), o.yaw, o.pitch, o.roll),
+            (KINDS[1].key, 0.5, 0.25, 0.1)
+        );
+        assert!((o.x - 5.0).abs() < 1e-4 && (o.y - 6.0).abs() < 1e-4 && (o.z - 7.0).abs() < 1e-4);
+        assert_eq!(edit.tool, Place::Object(1), "the tool stays, for another");
+        assert_eq!(edit.view().object, Some(KINDS[1].key));
+        assert_eq!(edit.laid_objects().len(), 1);
+        edit.held = Some(Held::Object(0));
+        assert!(edit.laid_objects().is_empty(), "held, the ghost shows it");
+        edit.held = None;
+        // Undo takes the object, placed last, then the gate; redo puts them back in turn.
+        edit.undo();
+        assert!(edit.objects.is_empty() && edit.points.len() == 1);
+        edit.undo();
+        assert!(edit.points.is_empty());
+        edit.redo();
+        edit.redo();
+        assert_eq!((edit.points.len(), edit.objects.len()), (1, 1));
+        // Deleted, undo goes on to the gate; a new draft has none.
+        edit.remove_object(0);
+        assert!(edit.objects.is_empty());
+        edit.undo();
+        assert!(edit.points.is_empty());
+        edit.objects.push(Placed {
+            model: KINDS[0].key.into(),
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            roll: 0.0,
+        });
+        edit.clear();
+        assert!(edit.objects.is_empty());
+    }
+
+    #[test]
+    fn erase_deletes_a_checkpoint_and_the_rest_close_up() {
+        let mut edit = draft(0, &[[0.0, 0.0], [100.0, 0.0], [200.0, 0.0]]);
+        edit.facings = vec![None, Some(0.5), None];
+        edit.widths = vec![20.0, 8.0, 20.0];
+        edit.undo();
+        edit.erase(1);
+        assert_eq!(edit.points, vec![[0.0, 0.0]]);
+        assert_eq!(
+            (edit.facings.clone(), edit.widths.clone()),
+            (vec![None], vec![20.0])
+        );
+        assert_eq!(edit.note(), "Checkpoint 2 deleted.");
+        edit.redo();
+        assert_eq!(edit.points.len(), 1, "nothing to redo after a delete");
+        edit.points.push([300.0, 0.0]);
+        edit.facings.push(None);
+        edit.widths.push(20.0);
+        edit.erase(0);
+        assert_eq!(edit.points, vec![[300.0, 0.0]], "the next is the start");
+        assert!(edit.note().starts_with("Start deleted"));
+        edit.erase(5);
+        assert_eq!(edit.points.len(), 1, "no such checkpoint");
     }
 
     #[test]
@@ -1465,6 +2005,16 @@ mod tests {
         let _c = EnvGuard::unset("WOW_CAPTURE");
         let _h = EnvGuard::set("BENILLA_HOME", home.to_str().unwrap());
         let mut edit = draft(0, &[[0.0, 0.0], [100.0, 0.0]]);
+        let plank = Placed {
+            model: KINDS[2].key.into(),
+            x: 50.0,
+            y: 2.0,
+            z: 3.0,
+            yaw: 0.5,
+            pitch: 0.25,
+            roll: 0.0,
+        };
+        edit.objects.push(plank.clone());
         edit.load();
         let saves = edit.saved().1;
         assert_eq!(edit.saved().0.count(), 0);
@@ -1482,7 +2032,14 @@ mod tests {
         assert!(now > saves, "the browser hears of it");
         // Edited: back as the draft, on its own map alone.
         assert_eq!(edit.edit_saved("short-dash"), Ok("Short Dash".to_string()));
+        assert_eq!(
+            edit.take_named().as_deref(),
+            Some("Short Dash"),
+            "for the name box"
+        );
+        assert_eq!(edit.take_named(), None, "once");
         assert_eq!(edit.points.len(), 2);
+        assert_eq!(edit.objects, [plank], "its objects as placed and turned");
         assert_eq!(edit.tool, Place::Move);
         // Taken to its start (a race's first slot, with no grid) from afar, not from near it;
         // the editor's left button waits for the kart to land there, or for TRIP_SECS.
@@ -1505,14 +2062,18 @@ mod tests {
         edit.map = 1;
         assert!(edit.edit_saved("short-dash").is_err());
         assert_eq!(edit.points.len(), 2, "a refusal keeps the draft");
-        // Saved again under its name (any spelling of its key): asked first, then written.
-        let asks = edit.view().asks;
+        // Saved again under its name (any spelling of its key): the popup warns, and only an
+        // overwrite writes it.
+        assert!(edit.is_saved("short dash!") && !edit.is_saved("Long Dash"));
+        let errors = edit.error().1;
         edit.save("short dash!", "Durotar", false);
-        assert_eq!(edit.view().asks, asks + 1, "the bar asks to overwrite");
-        assert_eq!(edit.points.len(), 2, "the draft waits for the answer");
+        assert_eq!(
+            edit.error(),
+            ("A track named short dash! is saved already.", errors + 1)
+        );
+        assert_eq!(edit.points.len(), 2, "the draft kept");
         edit.save("short dash!", "Durotar", true);
         assert!(edit.points.is_empty(), "{}", edit.note);
-        assert_eq!(edit.view().asks, asks + 1);
         // Deleted: gone from the folder and the list; a path is no key.
         edit.delete("../short-dash");
         assert!(file.exists());

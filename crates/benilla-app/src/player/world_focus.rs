@@ -63,6 +63,7 @@ pub(super) fn publish_view_focus(
     roster: Option<Res<crate::char_select::Roster>>,
     cinematic: Option<Res<crate::cinematic::Cinematic>>,
     kart: Option<Res<crate::kart::KartDrive>>,
+    free: Option<Res<crate::kart::freecam::FreeCam>>,
     mut was_flying: Local<bool>,
 ) {
     let entry = roster
@@ -98,7 +99,10 @@ pub(super) fn publish_view_focus(
                     Vec3::new(-k.yaw.sin(), 0.0, -k.yaw.cos()) * ahead
                 });
             let wow = benilla_assets::coords::bevy_to_wow(p.pos + lead);
-            if p.detached || flying {
+            // The kart's free camera (the track editor's) flies the eye as free-fly does: the
+            // stream follows it, the held kart waiting for its ground after.
+            let free_flying = free.as_deref().is_some_and(|f| f.flying());
+            if p.detached || flying || free_flying {
                 ViewFocus::detached(wow, paced)
             } else if lead != Vec3::ZERO {
                 // Ahead of the body: its tile loading is the point, not a body off the world, so
@@ -273,6 +277,29 @@ mod tests {
             !p.world_stale,
             "and re-staled a world the streamer had cleared"
         );
+    }
+
+    #[test]
+    fn the_kart_s_free_camera_streams_where_it_flies() {
+        let mut free = crate::kart::freecam::FreeCam::default();
+        free.set(crate::kart::freecam::FreeMode::Fly);
+        let mut app = App::new();
+        app.insert_resource(ViewFocus::default())
+            .insert_resource(Player {
+                active: true,
+                ..Player::default()
+            })
+            .insert_resource(free)
+            .add_systems(Update, publish_view_focus);
+        app.update();
+        assert!(!app.world().resource::<ViewFocus>().follows_body());
+        let p = app.world().resource::<Player>();
+        assert!(!p.settling, "the kart holds itself, not the body's settle");
+        app.world_mut()
+            .resource_mut::<crate::kart::freecam::FreeCam>()
+            .set(crate::kart::freecam::FreeMode::Off);
+        app.update();
+        assert!(app.world().resource::<ViewFocus>().follows_body());
     }
 
     #[test]

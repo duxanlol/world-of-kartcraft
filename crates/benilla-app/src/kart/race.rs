@@ -358,6 +358,9 @@ pub(crate) struct Active {
     /// Each checkpoint's height (WoW z) where known (the track editor's, a course's `z`): its gate
     /// stands on the floor under it, not on a roof over it ([`Active::height_near`]).
     heights: Vec<Option<f32>>,
+    /// The track editor's objects on its track: a test lap's, or a player track's from its `PT`
+    /// line ([`super::objects`]).
+    objects: Vec<super::objects::Placed>,
     /// The race's ground types (`GT`), the host's choice: every racer drives off-road as CTR's
     /// grounds hold it, or on asphalt everywhere, whatever their own `KartTerrain`.
     ground_types: bool,
@@ -482,6 +485,16 @@ impl Active {
     pub(crate) fn with_floor(mut self, floor: Option<f32>) -> Self {
         self.floor = floor;
         self
+    }
+
+    /// The objects on its track.
+    pub(crate) fn with_objects(mut self, objects: Vec<super::objects::Placed>) -> Self {
+        self.objects = objects;
+        self
+    }
+
+    pub(crate) fn objects(&self) -> &[super::objects::Placed] {
+        &self.objects
     }
 
     /// Each checkpoint's height, where known ([`Active::heights`]).
@@ -953,6 +966,8 @@ pub(crate) struct Races {
     track_names: HashMap<String, String>,
     /// And their gates (`x,y[,o[,w]];...`), for the facings and widths the `C` line has not.
     track_spots: HashMap<String, String>,
+    /// And their objects, from the `PT` line's last field.
+    track_objects: HashMap<String, Vec<super::objects::Placed>>,
 }
 
 impl Races {
@@ -1078,6 +1093,10 @@ impl Races {
                 if let Some(spots) = f.get(8) {
                     self.track_spots.insert(key.clone(), spots.clone());
                 }
+                let objects = f
+                    .get(12)
+                    .map_or_else(Vec::new, |o| super::objects::parse_wire(o));
+                self.track_objects.insert(key.clone(), objects);
                 self.track_names.insert(key, f[2].clone());
             }
             // Out of everything (`/leaverace`): the server has let us go, so whatever we
@@ -1159,6 +1178,7 @@ impl Races {
                         race.facings = o;
                         race.gates = w;
                     }
+                    race.objects = self.track_objects.get(&f[2]).cloned().unwrap_or_default();
                     info!(
                         "kart race: course {} — {} checkpoints, {} laps",
                         f[2],
@@ -1856,6 +1876,11 @@ pub(crate) struct Looks {
     line_dim: Handle<StandardMaterial>,
     line_sheet_bright: Handle<StandardMaterial>,
     line_sheet_dim: Handle<StandardMaterial>,
+    /// The track editor's draft: every gate alike and see-through, the start green.
+    draft: Handle<StandardMaterial>,
+    draft_sheet: Handle<StandardMaterial>,
+    draft_line: Handle<StandardMaterial>,
+    draft_line_sheet: Handle<StandardMaterial>,
     guide: Handle<StandardMaterial>,
     /// The guide arrow's outline: its shape grown a little, laid flat just under it.
     guide_outline: Handle<Mesh>,
@@ -1872,8 +1897,23 @@ pub(crate) struct Looks {
 }
 
 impl Looks {
-    /// A gate part's look: bright for the next gate, and the finish line's green for it.
-    fn gate(&self, part: GatePart, next: bool, line: bool) -> Handle<StandardMaterial> {
+    /// A gate part's look: bright for the next gate, and the finish line's green for it; a
+    /// draft's gates all alike.
+    fn gate(
+        &self,
+        part: GatePart,
+        next: bool,
+        line: bool,
+        draft: bool,
+    ) -> Handle<StandardMaterial> {
+        if draft {
+            return match (part, line) {
+                (GatePart::Sheet, false) => self.draft_sheet.clone(),
+                (GatePart::End(_), false) => self.draft.clone(),
+                (GatePart::Sheet, true) => self.draft_line_sheet.clone(),
+                (GatePart::End(_), true) => self.draft_line.clone(),
+            };
+        }
         match (part, next, line) {
             (GatePart::Sheet, true, false) => self.sheet_bright.clone(),
             (GatePart::Sheet, false, false) => self.sheet_dim.clone(),
@@ -1921,6 +1961,11 @@ impl Looks {
             line_dim: materials.add(glow(Color::srgb(0.02, 0.1, 0.04))),
             line_sheet_bright: materials.add(glow(Color::srgb(0.035, 0.18, 0.065))),
             line_sheet_dim: materials.add(glow(Color::srgb(0.007, 0.035, 0.013))),
+            // Blended, not added: as plain over bright ground as over dark, the sheet faint.
+            draft: materials.add(see_through(Color::srgba(1.0, 0.8, 0.2, 0.55))),
+            draft_sheet: materials.add(see_through(Color::srgba(1.0, 0.8, 0.2, 0.15))),
+            draft_line: materials.add(see_through(Color::srgba(0.3, 1.0, 0.4, 0.55))),
+            draft_line_sheet: materials.add(see_through(Color::srgba(0.3, 1.0, 0.4, 0.15))),
             guide: materials.add(solid(Color::srgb(1.0, 0.6, 0.08))),
             guide_outline: meshes.add(guide_outline_mesh()),
             cp_face: meshes.add(face),
@@ -2343,6 +2388,9 @@ pub(crate) fn beams(
         grounds.ground(&collide, p, race.height_near(p), fallback, now)
     };
     let n = race.points.len();
+    // The editor's draft greens its start, as its markers do; a race its finish line.
+    let draft = race.id == PREVIEW_ID;
+    let line = |i: usize| if draft { i == 0 } else { is_line(race, i) };
     let mut have = vec![[false; GATE_PARTS.len()]; n];
     let part_index = |part: GatePart| match part {
         GatePart::Sheet => 0,
@@ -2364,11 +2412,7 @@ pub(crate) fn beams(
             settings.gate_height,
         );
         t.set_if_neq(placed);
-        material.set_if_neq(MeshMaterial3d(looks.gate(
-            part,
-            i == next,
-            is_line(race, i),
-        )));
+        material.set_if_neq(MeshMaterial3d(looks.gate(part, i == next, line(i), draft)));
     }
     for (i, had) in have.iter().enumerate() {
         for part in GATE_PARTS {
@@ -2379,7 +2423,7 @@ pub(crate) fn beams(
                 GatePart::Sheet => looks.sheet.clone(),
                 GatePart::End(_) => looks.beam.clone(),
             };
-            let material = looks.gate(part, false, is_line(race, i));
+            let material = looks.gate(part, false, line(i), draft);
             commands.spawn((
                 Beam(i, part),
                 Mesh3d(mesh),
@@ -3914,6 +3958,16 @@ mod tests {
         assert_eq!(race.gate_half_width(1), 12.0);
         assert_eq!(race.gate_half_width(0), GATE_HALF_WIDTH);
         assert_eq!(race.facings, vec![None, Some(0.5)]);
+        assert!(race.objects().is_empty(), "a line with none");
+        // A race line (`UserTrackRaceLine`): votes empty, then its height and its objects.
+        races.hear(
+            &line("PT\t8\tPlank Run\tSomeone\t1\t0\tDurotar\t\t1,2;3,4\t\t\t\tplank,1.0,2.0,3.0,0.5,0,0"),
+            0.0,
+        );
+        races.hear(&line("C\t3\tpt-8\t0\t1:2;3:4"), 0.0);
+        let objects = races.race.as_ref().unwrap().objects();
+        assert_eq!(objects.len(), 1);
+        assert_eq!((objects[0].model.as_str(), objects[0].yaw), ("plank", 0.5));
     }
 
     #[test]

@@ -5,6 +5,7 @@
 //! mouse ÷s in, and extraction flips to y-down window px.
 
 use bevy::prelude::*;
+use bevy::ui::RelativeCursorPosition;
 
 use benilla_ui::script::{ActionSlot, ScriptValue, UiScript, UnitState};
 
@@ -151,6 +152,21 @@ pub(crate) struct UiPassState {
     pub(crate) solves_before: u64,
     pub(crate) derives_before: u64,
 }
+
+/// A bevy_ui panel over the world (the track editor's), not FrameXML: the pointer over it is over
+/// the UI, as over a mouse-enabled frame.
+#[derive(Component, Default)]
+#[require(RelativeCursorPosition)]
+pub(crate) struct EnginePanel;
+
+/// An engine panel's text field has the keys: the VM gets none, as with a focused EditBox.
+#[derive(Resource, Default)]
+pub(crate) struct EngineTyping(pub(crate) bool);
+
+/// Keys an engine panel holds this frame (the track editor turning an object): the VM and the
+/// key bindings get none of them, as with keys a keyboard frame eats.
+#[derive(Resource, Default)]
+pub(crate) struct EngineKeys(pub(crate) Vec<bevy::input::keyboard::KeyCode>);
 
 /// UI chrome under the pointer: [`PointerOverUi`] minus the nameplates, which take the mouse but
 /// not the wheel. The reference has no such bit: a wheel notch walks the strata and falls through
@@ -328,6 +344,8 @@ impl Plugin for UiScriptPlugin {
             // The input pass hit-tests the rects the tick just resolved, and runs in-world only.
             .init_resource::<UiPassState>()
             .init_resource::<PointerOverUiPanel>()
+            .init_resource::<EngineTyping>()
+            .init_resource::<EngineKeys>()
             .add_systems(
                 Update,
                 (
@@ -374,16 +392,21 @@ fn capture_ui_active(capture: Option<Res<crate::run_mode::CaptureMode>>) -> bool
     capture.is_some() && crate::run_mode::capture_ui_opted_in()
 }
 
-/// `PointerOverUi = egui dev overlay ∨ player-UI hover`; the dev half is optional.
+/// `PointerOverUi = egui dev overlay ∨ player-UI hover ∨ an engine panel`; the dev half is
+/// optional.
 fn arbitrate_pointer_over_ui(
     egui: Option<Res<EguiPointerOver>>,
     hover: Res<PlayerUiHover>,
     plate_hover: Res<crate::vplates::PlateHover>,
+    panels: Query<(&RelativeCursorPosition, &InheritedVisibility), With<EnginePanel>>,
     mut over: ResMut<PointerOverUi>,
     mut panel: ResMut<PointerOverUiPanel>,
 ) {
+    let on_panel = panels
+        .iter()
+        .any(|(at, shown)| shown.get() && at.cursor_over());
     // No cinematic term: the hit test finds the full-screen, mouse-enabled `CinematicFrame`.
-    over.0 = egui.is_some_and(|e| e.0) || hover.0.is_some();
+    over.0 = egui.is_some_and(|e| e.0) || hover.0.is_some() || on_panel;
     // Chrome excludes the plates; the plate hover is last frame's, as the plate driver runs later.
     panel.0 = over.0 && plate_hover.0.is_none();
 }
@@ -1024,6 +1047,37 @@ mod pointer_arbiter_tests {
             .init_resource::<PointerOverUiPanel>()
             .add_systems(Update, arbitrate_pointer_over_ui);
         app
+    }
+
+    #[test]
+    fn a_shown_engine_panel_under_the_pointer_is_ui() {
+        let mut app = app();
+        let at = |over| RelativeCursorPosition {
+            cursor_over: over,
+            normalized: None,
+        };
+        let hidden = (EnginePanel, at(true), InheritedVisibility::HIDDEN);
+        let panel = app.world_mut().spawn(hidden).id();
+        app.update();
+        assert!(
+            !app.world().resource::<PointerOverUi>().0,
+            "a hidden panel is not"
+        );
+        app.world_mut()
+            .entity_mut(panel)
+            .insert(InheritedVisibility::VISIBLE);
+        app.update();
+        assert!(app.world().resource::<PointerOverUi>().0);
+        assert!(
+            app.world().resource::<PointerOverUiPanel>().0,
+            "and it is chrome"
+        );
+        app.world_mut().entity_mut(panel).insert(at(false));
+        app.update();
+        assert!(
+            !app.world().resource::<PointerOverUi>().0,
+            "the pointer off it"
+        );
     }
 
     #[test]

@@ -4103,7 +4103,7 @@ fn every_kartcraft_menu_entry_has_a_button() {
 }
 
 #[test]
-fn the_track_editor_s_button_and_bar_drive_the_kart_s_editor() {
+fn the_track_editor_s_button_opens_it_and_editing_hides_the_interface() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK
         .lock()
@@ -4113,171 +4113,53 @@ fn the_track_editor_s_button_and_bar_drive_the_kart_s_editor() {
         s.eval(&format!("return {name}:IsShown() and true or false"))
             .unwrap()
     };
-    let text = |s: &UiScript, name: &str| -> String {
-        s.eval(&format!("return {name}:GetText()")).unwrap()
-    };
     let cmd = |s: &UiScript| s.cvar("KartTrackCmd").unwrap_or_default();
-    let tell_asks = |s: &mut UiScript, tool: &str, picked: f64, asks: f64| {
-        s.fire_event(
-            "BENILLA_KART_TRACKEDIT",
-            vec![
-                ScriptValue::Str("edit".into()),
-                ScriptValue::Number(3.0),
-                ScriptValue::Number(1.0),
-                ScriptValue::Str(String::new()),
-                ScriptValue::Number(0.0),
-                ScriptValue::Number(0.0),
-                ScriptValue::Str(tool.into()),
-                ScriptValue::Number(picked),
-                ScriptValue::Number(asks),
-            ],
-        );
-    };
-    let tell_tool = |s: &mut UiScript, state: &str, count: f64, laps: f64, tool: &str, picked| {
+    let tell = |s: &mut UiScript, state: &str| {
         s.fire_event(
             "BENILLA_KART_TRACKEDIT",
             vec![
                 ScriptValue::Str(state.into()),
-                ScriptValue::Number(count),
-                ScriptValue::Number(laps),
                 ScriptValue::Str(String::new()),
                 ScriptValue::Number(0.0),
-                ScriptValue::Number(0.0),
-                ScriptValue::Str(tool.into()),
-                ScriptValue::Number(picked),
             ],
         );
     };
-    let tell = |s: &mut UiScript, state: &str, count: f64, laps: f64| {
-        tell_tool(s, state, count, laps, "checkpoint", 0.0);
-    };
 
-    // The minimap button opens the editor; the bar waits for the kart to say it is open.
+    // The minimap button opens the editor; its bars and popups are the kart's, no frame of ours.
     assert!(shown(&s, "BenillaKartEditorMinimapButton"));
     s.run("BenillaKartEditorMinimapButton:Click('LeftButton')")
         .unwrap();
     assert_eq!(s.cvar("KartTrackEdit").as_deref(), Some("1"));
-    assert!(!shown(&s, "BenillaKartEditorBar"));
-
-    // A new draft: the first checkpoint placed is the start, no tool of its own.
-    tell(&mut s, "edit", 0.0, 0.0);
-    assert!(shown(&s, "BenillaKartEditorBar"));
-    // The keys card beside it: the kart's own keys, and the mouse's.
-    assert!(shown(&s, "BenillaKartEditorKeys"));
-    let keys = text(&s, "BenillaKartEditorKeysText");
-    assert!(
-        keys.contains("fly forward, back") && keys.contains("Q / E"),
-        "{keys}"
-    );
-    // The bar says what a left click on the world places; its buttons only pick that.
-    assert_eq!(
-        text(&s, "BenillaKartEditorBarTool"),
-        "Left-click the ground to place the start, the first checkpoint."
-    );
     assert!(s
-        .eval::<bool>("return BenillaKartEditorBarStart == nil")
+        .eval::<bool>("return BenillaKartEditorBar == nil and BenillaKartEditorLap == nil")
         .unwrap());
-    s.run("BenillaKartEditorBarEdit:Click()").unwrap();
-    assert_eq!(cmd(&s), "1\tnumber");
-
-    // Editing: the name, the count, the editor's buttons, each a numbered press.
-    tell(&mut s, "edit", 2.0, 0.0);
-    assert!(shown(&s, "BenillaKartEditorBarPlace") && shown(&s, "BenillaKartEditorBarName"));
-    assert!(
-        !shown(&s, "BenillaKartEditorLap"),
-        "no lap panel while editing"
-    );
-    assert_eq!(
-        text(&s, "BenillaKartEditorBarCount"),
-        "Start + 1 checkpoints"
-    );
-    assert_eq!(
-        text(&s, "BenillaKartEditorBarTool"),
-        "Left-click the ground to place the next checkpoint."
-    );
-    assert!(shown(&s, "BenillaKartEditorBarSprint") && shown(&s, "BenillaKartEditorBarLap3"));
-    s.run("BenillaKartEditorBarPlace:Click()").unwrap();
-    assert_eq!(cmd(&s), "2\tplace");
-    s.run("BenillaKartEditorBarPlace:Click()").unwrap();
-    assert_eq!(cmd(&s), "3\tplace", "a repeat is a change");
-    s.run("BenillaKartEditorBarGrid:Click()").unwrap();
-    assert_eq!(cmd(&s), "4\tgrid");
-    s.run("BenillaKartEditorBarLap1:Click()").unwrap();
-    assert_eq!(cmd(&s), "5\tlaps\t1");
-    s.run("BenillaKartEditorBarName:SetText('Goldshire Ring') BenillaKartEditorBarSave:Click()")
-        .unwrap();
-    assert!(
-        cmd(&s).starts_with("6\tsave\tGoldshire Ring\t"),
-        "{}",
-        cmd(&s)
-    );
-    s.run("BenillaKartEditorBarTest:Click()").unwrap();
-    assert_eq!(cmd(&s), "7\tpractice\tGoldshire Ring");
-
-    // A test lap: back to the editor, or the lap again, and nothing else.
-    tell(&mut s, "test", 2.0, 1.0);
-    assert!(
-        !shown(&s, "BenillaKartEditorKeys"),
-        "no keys card in a test lap"
-    );
-    // Only the lap's small panel: the editor's bar is out of the way.
-    assert!(shown(&s, "BenillaKartEditorLap") && !shown(&s, "BenillaKartEditorBar"));
-    assert_eq!(text(&s, "BenillaKartEditorLapBack"), "Back to editor");
-    s.run("BenillaKartEditorLapRestart:Click()").unwrap();
-    assert_eq!(cmd(&s), "8\trestart");
-    s.run("BenillaKartEditorLapBack:Click()").unwrap();
-    assert_eq!(cmd(&s), "9\tback");
-    // A saved track's lap from the browser: its way out is the lap's end.
-    tell(&mut s, "run", 0.0, 3.0);
-    assert!(shown(&s, "BenillaKartEditorLapBack"));
-    assert_eq!(text(&s, "BenillaKartEditorLapBack"), "End test lap");
-
-    // The move cursor, a tool as the others are.
-    tell(&mut s, "edit", 2.0, 1.0);
-    s.run("BenillaKartEditorBarMove:Click()").unwrap();
-    assert_eq!(cmd(&s), "10\tmove");
-    // Edit checkpoint: its pick shows the number box, its Enter the new number; Redo a press.
-    assert!(!shown(&s, "BenillaKartEditorBarNumber"));
-    tell_tool(&mut s, "edit", 3.0, 1.0, "number", 2.0);
-    assert!(shown(&s, "BenillaKartEditorBarNumber"));
-    assert_eq!(
-        text(&s, "BenillaKartEditorBarTool"),
-        "Checkpoint 2 of 3 (1 is the start). New number:"
-    );
-    s.run("BenillaKartEditorBarNumber:SetText('1') BenillaKartEditor_Renumber()")
-        .unwrap();
-    assert_eq!(cmd(&s), "11\trenumber\t1");
-    s.run("BenillaKartEditorBarRedo:Click()").unwrap();
-    assert_eq!(cmd(&s), "12\tredo");
-    tell_tool(&mut s, "edit", 3.0, 1.0, "move", 0.0);
-    assert!(!shown(&s, "BenillaKartEditorBarNumber"));
-    // A save the kart found saved already under its name: overwrite it only on a yes.
-    let overwrite = "return StaticPopup_Visible('BENILLA_KART_OVERWRITE_TRACK') ~= nil";
-    assert!(!s.eval::<bool>(overwrite).unwrap());
-    tell_asks(&mut s, "move", 0.0, 1.0);
-    assert!(s.eval::<bool>(overwrite).unwrap());
-    assert_eq!(cmd(&s), "12\tredo", "nothing sent before the answer");
-    s.run("StaticPopup1Button1:Click()").unwrap();
-    assert!(
-        cmd(&s).starts_with("13\tsave\tGoldshire Ring\t") && cmd(&s).ends_with("\toverwrite"),
-        "{}",
-        cmd(&s)
-    );
-    tell_asks(&mut s, "move", 0.0, 1.0);
-    assert!(!s.eval::<bool>(overwrite).unwrap(), "the same ask once");
-    // Closed by a press (the CVar may read "0" already, opened from My tracks), the bar goes;
-    // the button opens it again even after a refused open.
-    s.run("BenillaKartEditorBarClose:Click()").unwrap();
-    assert_eq!(cmd(&s), "14\tclose");
+    // Editing hides the interface, as ALT-Z does; a test lap brings it back, for the race.
+    tell(&mut s, "edit");
+    assert!(!shown(&s, "UIParent"));
+    tell(&mut s, "test");
+    assert!(shown(&s, "UIParent"));
+    tell(&mut s, "edit");
+    assert!(!shown(&s, "UIParent"));
+    // Open, the button closes it by a press (the CVar may read "0" already, opened from My
+    // tracks); closed, the interface is back and the button opens it again, even after a
+    // refused open.
     s.run("BenillaKartEditorMinimapButton:Click('LeftButton')")
         .unwrap();
-    assert_eq!(cmd(&s), "15\tclose", "the button closes it the same way");
-    tell(&mut s, "", 2.0, 1.0);
-    assert!(!shown(&s, "BenillaKartEditorBar"));
+    assert_eq!(cmd(&s), "1\tclose");
+    tell(&mut s, "");
+    assert!(shown(&s, "UIParent"));
     s.run("SetCVar('KartTrackEdit', '1')").unwrap();
     s.run("BenillaKartEditorMinimapButton:Click('LeftButton')")
         .unwrap();
     assert_eq!(s.cvar("KartTrackEdit").as_deref(), Some("1"));
+    // The interface was shown by the player when it was hidden by them: it stays theirs.
+    s.run("UIParent:Hide()").unwrap();
+    tell(&mut s, "edit");
+    tell(&mut s, "");
+    assert!(
+        !shown(&s, "UIParent"),
+        "not shown by us, as we did not hide it"
+    );
 }
 
 #[test]
@@ -4297,7 +4179,7 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
     s.fire_event(
         "BENILLA_KART_MYTRACKS",
         vec![ScriptValue::Str(
-            "goldshire-ring\tGoldshire Ring\tElwynn Forest\t0\t3\tA circuit.\t1,2;3,4;5,6\t0.0,1.0,0.500\t1.0,2.0;3.0,4.0,1.500;5.0,6.0\t35.5"
+            "goldshire-ring\tGoldshire Ring\tElwynn Forest\t0\t3\tA circuit.\t1,2;3,4;5,6\t0.0,1.0,0.500\t1.0,2.0;3.0,4.0,1.500;5.0,6.0\t35.5\texcavation-plank,1.0,2.0,3.0,0.500,0.000,0.000"
                 .into(),
         )],
     );
@@ -4334,7 +4216,8 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
     assert!(!s
         .eval::<bool>("return BenillaKartTracksFrame:IsShown() and true or false")
         .unwrap());
-    // Edit: back in the editor under its name, the browser closed; a course has no Edit.
+    // Edit: back in the editor (the kart's bar names it), the browser closed; a course has no
+    // Edit.
     let edit_shown = |s: &UiScript| -> bool {
         s.eval("return BenillaKartTracksFrameEdit:IsShown() and true or false")
             .unwrap()
@@ -4345,8 +4228,6 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
     s.run("BenillaKartTracksFrameEdit:Click()").unwrap();
     let cmd = s.cvar("KartTrackCmd").unwrap_or_default();
     assert!(cmd.ends_with("\tedit\tgoldshire-ring"), "{cmd}");
-    let name: String = s.eval("return BenillaKartEditorBarName:GetText()").unwrap();
-    assert_eq!(name, "Goldshire Ring");
     assert!(!s
         .eval::<bool>("return BenillaKartTracksFrame:IsShown() and true or false")
         .unwrap());
@@ -4365,7 +4246,7 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
     s.run("BenillaKartTracksFrameMarshal:Click()").unwrap();
     assert_eq!(
         sent(&mut s),
-        ["KARTCRAFT\tR\tPub\tGoldshire Ring\t0\t3\tElwynn Forest\t0.0,1.0,0.500\t1.0,2.0;3.0,4.0,1.500;5.0,6.0\t35.5"]
+        ["KARTCRAFT\tR\tPub\tGoldshire Ring\t0\t3\tElwynn Forest\t0.0,1.0,0.500\t1.0,2.0;3.0,4.0,1.500;5.0,6.0\t35.5\texcavation-plank,1.0,2.0,3.0,0.500,0.000,0.000"]
     );
     // Delete: asked first, then its published copy taken down by name and the file deleted.
     s.run("BenillaKartTracksFrameRate:Click()").unwrap();
@@ -4390,7 +4271,7 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
     );
     from_server(
         &mut s,
-        "R\tPT\t5\tCliff Loop\tSomeoneElse\t1\t3\tDurotar\t\t1.0,1.0;2.0,2.0;3.0,3.0\t0\t0\t12.5",
+        "R\tPT\t5\tCliff Loop\tSomeoneElse\t1\t3\tDurotar\t\t1.0,1.0;2.0,2.0;3.0,3.0\t0\t0\t12.5\tplank,1.0,2.0,3.0,0.000,0.000,0.000",
     );
     from_server(&mut s, "R\tPTE");
     assert_eq!(names(&s), ["Dune Dash", "Cliff Loop"]);
@@ -4413,7 +4294,9 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
         .unwrap();
     let cmd = s.cvar("KartTrackCmd").unwrap_or_default();
     assert!(
-        cmd.ends_with("\trunspots\tCliff Loop\t3\t1\t\t1.0,1.0;2.0,2.0;3.0,3.0\t12.5"),
+        cmd.ends_with(
+            "\trunspots\tCliff Loop\t3\t1\t\t1.0,1.0;2.0,2.0;3.0,3.0\t12.5\tplank,1.0,2.0,3.0,0.000,0.000,0.000"
+        ),
         "{cmd}"
     );
     // Published already under its name by us: Publish asks before the server replaces it.
@@ -4436,10 +4319,14 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
         pubs.len() == 1 && pubs[0].starts_with("KARTCRAFT\tR\tPub\tGoldshire Ring\t"),
         "{pubs:?}"
     );
-    // A trip to a track's start refused (Edit's, or a test lap's): the editor opens in place.
+    // A trip to a track's start refused (Edit's, or a test lap's): the editor opens in place,
+    // and the kart's popup says why.
     from_server(&mut s, "R\tTGf");
     let cmd = s.cvar("KartTrackCmd").unwrap_or_default();
-    assert!(cmd.ends_with("\tstay"), "{cmd}");
+    assert!(
+        cmd.contains("\tstay\tThe track's start is over 1000 yards"),
+        "{cmd}"
+    );
 }
 
 #[test]
