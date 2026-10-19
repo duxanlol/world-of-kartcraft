@@ -487,9 +487,9 @@ namespace Kartcraft
         // Gameobject entries a race on it opens near its start while it runs (doors and gates
         // across the course: Stratholme's locked King's Square gates); may be empty.
         std::vector<uint32> doors;
-        // A dungeon course's start height (WoW z), 0 for none: the floor a teleport onto its grid
-        // looks for from a little over it, so a trip in from outside lands on the course's floor,
-        // not a roof over it (TeleportOnto).
+        // Its start height (WoW z), 0 for none (a dungeon course's from pack.py, a player track's
+        // from its maker): the floor a teleport onto its grid looks for from a little over it, so
+        // a trip lands on the course's floor, not a roof over it (TeleportOnto).
         float z = 0.f;
     };
 
@@ -734,7 +734,7 @@ namespace Kartcraft
         std::string objects; // "key,x,y,z,yaw,pitch,roll;..." the track editor's, or empty
         uint32 map = 0;
         uint32 laps = 0;
-        float z = 0.f;   // a dungeon track's start height (Course::z), 0 for none
+        float z = 0.f;   // the track's floor height (Course::z), 0 for none
         size_t slot = 0; // its course in s_userCourses
     };
     struct UserCourse
@@ -4661,12 +4661,13 @@ namespace Kartcraft
     // the sky.
     static bool TeleportOnto(Player* player, uint32 map, float x, float y, float o, bool kart, float z)
     {
-        // The ground under the highest point looked from: in a dungeon, a city of floors and roofs
-        // (Stratholme's), from a little over the floor wanted (`z`, where the course or track says)
-        // or else over the racer, who is on its streets, not from the sky.
+        // The ground under the highest point looked from: from a little over the floor wanted
+        // (`z`, where the course or track says), on any map, so a road under a roof (the Caverns
+        // of Time's way down, a dungeon's floors and roofs) is found under it; in a dungeon without
+        // one, from over the racer, who is on its streets; else from the sky.
         MapEntry const* entry = sMapStorage.LookupEntry<MapEntry>(map);
         bool const dungeon = entry && entry->IsDungeon();
-        float const from = dungeon && z != 0.f ? z + DUNGEON_LOOK_UP :
+        float const from = z != 0.f ? z + DUNGEON_LOOK_UP :
             dungeon && player->GetMapId() == map ? player->GetPositionZ() + DUNGEON_LOOK_UP : 500.f;
         float ground = sTerrainMgr.LoadTerrain(map)->GetHeightStatic(x, y, from);
         if (ground <= INVALID_HEIGHT)
@@ -4740,11 +4741,10 @@ namespace Kartcraft
 
 
     // `instance`: a party race's (Race::instance), 0 in the open world.
-    static bool TeleportToGrid(Player* player, Course const& c, size_t slot, uint32 instance)
+    // Where grid slot `slot` of `c` stands (WoW x, y) and the way it faces: behind the start down
+    // the first leg, or on a player track's own grid where it has one.
+    static void GridSpot(Course const& c, size_t slot, float& x, float& y, float& o)
     {
-        // Their situation may have changed since they said yes: then they stay where they are.
-        if (!CanRaceOn(player, c, instance))
-            return false;
         float sx = c.points[0].first, sy = c.points[0].second;
         float dx = c.points[1].first - sx, dy = c.points[1].second - sy;
         float len = std::max(std::sqrt(dx * dx + dy * dy), 1.f);
@@ -4762,13 +4762,23 @@ namespace Kartcraft
         }
         float back = GRID_SPACING * float(slot / 2 + 1);
         float side = GRID_SPACING * (slot % 2 ? 0.5f : -0.5f);
-        float x = sx - dx * back - dy * side;
-        float y = sy - dy * back + dx * side;
+        x = sx - dx * back - dy * side;
+        y = sy - dy * back + dx * side;
+        o = std::atan2(dy, dx);
+    }
+
+    static bool TeleportToGrid(Player* player, Course const& c, size_t slot, uint32 instance)
+    {
+        // Their situation may have changed since they said yes: then they stay where they are.
+        if (!CanRaceOn(player, c, instance))
+            return false;
+        float x, y, o;
+        GridSpot(c, slot, x, y, o);
         // From outside a dungeon course's copy: bound to it, so the teleport lands in it.
         if (PartyCourse(c) && !(player->GetMapId() == c.map && player->GetInstanceId() == instance) &&
             !IntoCopy(player, c.map, instance))
             return false;
-        return TeleportOnto(player, c.map, x, y, std::atan2(dy, dx), true, c.z);
+        return TeleportOnto(player, c.map, x, y, o, true, c.z);
     }
 
     // Where the Race Finder took each racer from, so they can go back when their race is over, as
@@ -6157,8 +6167,7 @@ namespace Kartcraft
         {
             // A time trial from the track browser, from anywhere, as a Race Finder race: a
             // teleport to the course's grid (a far one settles longer) and, after it, the way
-            // back ("R\tRet"). Not a party course: that one is raced inside its dungeon, from
-            // its Race Marshal.
+            // back ("R\tRet"); a dungeon course's in the player's own copy of the dungeon.
             Course const* course = FindCourse(f[2]);
             if (!course || !CanBeRacedOff(player) || RefuseOff(player, *course))
                 return true;
@@ -6437,7 +6446,7 @@ namespace Kartcraft
     // every track browser to list and to test-lap on its own client: no races, records or rewards
     // on them. "R\tPub\t<name>\t<map>\t<laps>\t<zone>\t<grid>\t<points>[\t<z>]" publishes one
     // (grid "x,y,o" or empty; points "x,y[,o[,w]];...", the start first, a turned gate's facing and
-    // a gate's half-width; `z` a dungeon track's start height; then optionally its objects,
+    // a gate's half-width; `z` its floor height; then optionally its objects,
     // "key,x,y,z,yaw,pitch,roll;..." the track editor's placed models), in the open world or a
     // dungeon, our own of that name replaced: "R\tPubOk\t<id>\t<name>" or "R\tPubNo\t<why>". "R\tPubL"
     // lists them, newest first: "R\tPTB", a "R\tPT\t<id>\t<name>\t<author>\t<map>\t<laps>\t<zone>\t<grid>
@@ -6473,7 +6482,7 @@ namespace Kartcraft
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
         // A dungeon track's height (TeleportOnto), added to a table made before it.
         CharacterDatabase.DirectExecute("ALTER TABLE `kartcraft_user_tracks` ADD COLUMN IF NOT EXISTS `z` FLOAT "
-            "NOT NULL DEFAULT 0 COMMENT 'a dungeon track''s start height, 0 for none'");
+            "NOT NULL DEFAULT 0 COMMENT 'the track''s floor height, 0 for none'");
         // Its placed objects (the track editor's models), added to a table made before them.
         CharacterDatabase.DirectExecute("ALTER TABLE `kartcraft_user_tracks` ADD COLUMN IF NOT EXISTS "
             "`objects` TEXT NOT NULL DEFAULT '' COMMENT 'key,x,y,z,yaw,pitch,roll;... or empty'");
@@ -6631,11 +6640,10 @@ namespace Kartcraft
         MapEntry const* entry = sMapStorage.LookupEntry<MapEntry>(t.map);
         if (t.map > 1 && (!entry || !entry->IsDungeon() || entry->IsRaid()))
             return no("Tracks can be published in the open world and in dungeons, not in raids or battlegrounds.");
-        // A dungeon track's start height, an optional ninth field.
+        // The track's floor height, an optional ninth field: under a roof, in a dungeon or the
+        // open world's (the Caverns of Time's way down), the grid's trip lands on it.
         if (f.size() > 8 && !f[8].empty() && (!ParseFloat(f[8], t.z) || std::fabs(t.z) > 20000.f))
             return no("The track's height is not right.");
-        if (t.map <= 1)
-            t.z = 0.f;
         if (t.laps > 9)
             return no("A track has at most 9 laps.");
         if (!CleanTrackSpots(f[7], false, t.points, gates) || gates < 2 || gates > USER_TRACK_GATES ||
@@ -7150,7 +7158,9 @@ namespace Kartcraft
 
     // A track browser time trial waiting for its racer: their kart state from the course's grid
     // (the teleport and any loading screen behind them) starts the countdown; ARRIVE_WAIT
-    // starts it regardless.
+    // starts it regardless. On the grid is near its first slot, where the trial sent them (a
+    // player track's own grid may stand further than START_RADIUS from its start), or near
+    // the start.
     static void TickArrival(Player* player, bool state, uint32 now)
     {
         for (auto& entry : s_races)
@@ -7161,9 +7171,13 @@ namespace Kartcraft
             bool arrived = false;
             if (state && player->GetObjectGuid() == r.awaiting && player->GetMapId() == r.course->map)
             {
-                float dx = player->GetPositionX() - r.course->points[0].first;
-                float dy = player->GetPositionY() - r.course->points[0].second;
-                arrived = dx * dx + dy * dy <= START_RADIUS * START_RADIUS;
+                auto near = [player](float x, float y) {
+                    float dx = player->GetPositionX() - x, dy = player->GetPositionY() - y;
+                    return dx * dx + dy * dy <= START_RADIUS * START_RADIUS;
+                };
+                float gx, gy, go;
+                GridSpot(*r.course, 0, gx, gy, go);
+                arrived = near(gx, gy) || near(r.course->points[0].first, r.course->points[0].second);
             }
             if (arrived || WorldTimer::getMSTimeDiff(r.awaitSince, now) >= ARRIVE_WAIT)
             {
