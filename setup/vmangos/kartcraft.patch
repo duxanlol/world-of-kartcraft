@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..04765da
+index 0000000..d27e05d
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,7559 @@
+@@ -0,0 +1,7621 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -819,6 +819,7 @@ index 0000000..04765da
 +        uint32 id = 0;
 +        uint32 guid = 0; // the author's low guid
 +        std::string author, name, zone, grid, points;
++        std::string objects; // "key,x,y,z,yaw,pitch,roll;..." the track editor's, or empty
 +        uint32 map = 0;
 +        uint32 laps = 0;
 +        float z = 0.f;   // a dungeon track's start height (Course::z), 0 for none
@@ -877,6 +878,15 @@ index 0000000..04765da
 +        return "KARTCRAFT\tR\tPT\t" + std::to_string(t.id) + "\t" + t.name + "\t" + t.author + "\t" +
 +            std::to_string(t.map) + "\t" + std::to_string(t.laps) + "\t" + t.zone + "\t" + t.grid + "\t" +
 +            t.points;
++    }
++
++    // A player track's line with every field a list line has (its votes empty), its height and its
++    // objects last, for a race on it: the client builds the track's objects from it.
++    static std::string UserTrackRaceLine(UserTrack const& t)
++    {
++        char z[16];
++        std::snprintf(z, sizeof(z), "%.1f", t.z);
++        return UserTrackLine(t) + "\t\t\t" + (t.z != 0.f ? z : "") + "\t" + t.objects;
 +    }
 +
 +    // `t`'s course, new in s_userCourses: its gates from its spots, its Race Marshal's place its
@@ -4509,7 +4519,7 @@ index 0000000..04765da
 +            points += (points.empty() ? "" : ";") + std::to_string(int32(p.first)) + ":" + std::to_string(int32(p.second));
 +        // A player track's name and maker, which the client has no copy of.
 +        if (UserTrackOf(*r.course))
-+            SendRace(r, UserTrackLine(*UserTrackOf(*r.course)));
++            SendRace(r, UserTrackRaceLine(*UserTrackOf(*r.course)));
 +        SendRace(r, "KARTCRAFT\tR\tC\t" + std::to_string(id) + "\t" + r.course->key + "\t" +
 +            std::to_string(r.course->laps) + "\t" + points);
 +        SendRace(r, "KARTCRAFT\tR\tG\t" + std::to_string(id) + "\t" + std::to_string(countdown) + "\t" + Roster(r));
@@ -6515,14 +6525,17 @@ index 0000000..04765da
 +    // every track browser to list and to test-lap on its own client: no races, records or rewards
 +    // on them. "R\tPub\t<name>\t<map>\t<laps>\t<zone>\t<grid>\t<points>[\t<z>]" publishes one
 +    // (grid "x,y,o" or empty; points "x,y[,o[,w]];...", the start first, a turned gate's facing and
-+    // a gate's half-width; `z` a dungeon track's start height), in the open world or a dungeon, our
-+    // own of that name replaced: "R\tPubOk\t<id>\t<name>" or "R\tPubNo\t<why>". "R\tPubL" lists them,
-+    // newest first: "R\tPTB", a "R\tPT\t<id>\t<name>\t<author>\t<map>\t<laps>\t<zone>\t<grid>\t<points>
-+    // \t<good>\t<bad>\t<z>" each (its votes, its height or empty), then "R\tPTE". "R\tPubD\t<id>" takes one of ours down (a GM's, anyone's): "R\tPubGone\t<id>";
++    // a gate's half-width; `z` a dungeon track's start height; then optionally its objects,
++    // "key,x,y,z,yaw,pitch,roll;..." the track editor's placed models), in the open world or a
++    // dungeon, our own of that name replaced: "R\tPubOk\t<id>\t<name>" or "R\tPubNo\t<why>". "R\tPubL"
++    // lists them, newest first: "R\tPTB", a "R\tPT\t<id>\t<name>\t<author>\t<map>\t<laps>\t<zone>\t<grid>
++    // \t<points>\t<good>\t<bad>\t<z>\t<objects>" each (its votes, its height or empty, its objects or
++    // empty), then "R\tPTE"; a race on one sends its line so, the votes empty. "R\tPubD\t<id>" takes one of ours down (a GM's, anyone's): "R\tPubGone\t<id>";
 +    // "R\tPubDN\t<name>" ours of that name, if any.
 +    constexpr size_t USER_TRACKS_MAX = 2000;    // on the server
 +    constexpr size_t USER_TRACKS_EACH = 20;     // by one character
 +    constexpr size_t USER_TRACK_GATES = 60;     // checkpoints on one
++    constexpr size_t USER_TRACK_OBJECTS = 40;   // placed objects on one
 +    constexpr size_t USER_TRACKS_LISTED = 100;  // newest, in a list
 +    constexpr uint32 PUBLISH_COOLDOWN = 20 * IN_MILLISECONDS;
 +    constexpr uint32 USER_TRACKS_ASK_COOLDOWN = 3 * IN_MILLISECONDS;
@@ -6549,8 +6562,11 @@ index 0000000..04765da
 +        // A dungeon track's height (TeleportOnto), added to a table made before it.
 +        CharacterDatabase.DirectExecute("ALTER TABLE `kartcraft_user_tracks` ADD COLUMN IF NOT EXISTS `z` FLOAT "
 +            "NOT NULL DEFAULT 0 COMMENT 'a dungeon track''s start height, 0 for none'");
++        // Its placed objects (the track editor's models), added to a table made before them.
++        CharacterDatabase.DirectExecute("ALTER TABLE `kartcraft_user_tracks` ADD COLUMN IF NOT EXISTS "
++            "`objects` TEXT NOT NULL DEFAULT '' COMMENT 'key,x,y,z,yaw,pitch,roll;... or empty'");
 +        std::unique_ptr<QueryResult> result = CharacterDatabase.Query(
-+            "SELECT `id`, `guid`, `author`, `name`, `map`, `laps`, `zone`, `grid`, `points`, `z` "
++            "SELECT `id`, `guid`, `author`, `name`, `map`, `laps`, `zone`, `grid`, `points`, `z`, `objects` "
 +            "FROM `kartcraft_user_tracks` ORDER BY `at`, `id`");
 +        if (!result)
 +            return;
@@ -6568,6 +6584,7 @@ index 0000000..04765da
 +            t.grid = f[7].GetCppString();
 +            t.points = f[8].GetCppString();
 +            t.z = f[9].GetFloat();
++            t.objects = f[10].GetCppString();
 +            s_userTrackNext = std::max(s_userTrackNext, t.id + 1);
 +            MakeUserCourse(t);
 +            s_userTracks.push_back(t);
@@ -6635,6 +6652,47 @@ index 0000000..04765da
 +        return true;
 +    }
 +
++    // "key,x,y,z,yaw,pitch,roll;..." checked and written back at the wire's decimals: a key of
++    // a-z, 0-9 and '-' (the client knows its models by it; one it does not know it skips), a place
++    // within the world and a turn in radians; false if any object is not so. `count` its objects.
++    static bool CleanTrackObjects(std::string const& text, std::string& out, size_t& count)
++    {
++        out.clear();
++        count = 0;
++        for (size_t at = 0, end; at < text.size(); at = end + 1)
++        {
++            end = text.find(';', at);
++            if (end == std::string::npos)
++                end = text.size();
++            std::string const spot = text.substr(at, end - at);
++            if (spot.empty())
++                continue;
++            std::vector<std::string> v;
++            for (size_t p = 0, c; p <= spot.size(); p = c + 1)
++            {
++                c = spot.find(',', p);
++                if (c == std::string::npos)
++                    c = spot.size();
++                v.push_back(spot.substr(p, c - p));
++            }
++            if (v.size() != 7 || v[0].empty() || v[0].size() > 32)
++                return false;
++            for (char ch : v[0])
++                if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-'))
++                    return false;
++            float n[6];
++            for (size_t k = 0; k < 6; ++k)
++                if (!ParseFloat(v[k + 1], n[k]) || std::fabs(n[k]) > (k < 3 ? 20000.f : 100.f))
++                    return false;
++            char buf[160];
++            std::snprintf(buf, sizeof(buf), "%s,%.1f,%.1f,%.1f,%.3f,%.3f,%.3f", v[0].c_str(), n[0], n[1],
++                n[2], n[3], n[4], n[5]);
++            out += (count ? ";" : "") + std::string(buf);
++            ++count;
++        }
++        return true;
++    }
++
 +    static void ListUserTracks(Player* player, uint32 now, bool now_please = false);
 +
 +    static void PublishTrack(Player* player, std::vector<std::string> const& f, uint32 now)
@@ -6673,6 +6731,10 @@ index 0000000..04765da
 +            return no("The track's checkpoints are not right: 2 to 60 of them (3 for laps).");
 +        if (!CleanTrackSpots(f[6], true, t.grid, grids) || grids > 1)
 +            return no("The track's grid is not right.");
++        // Its placed objects, an optional tenth field.
++        size_t objects = 0;
++        if (f.size() > 9 && (!CleanTrackObjects(f[9], t.objects, objects) || objects > USER_TRACK_OBJECTS))
++            return no("The track's objects are not right: at most 40 of them.");
 +        auto same = std::find_if(s_userTracks.begin(), s_userTracks.end(),
 +            [&t](UserTrack const& u) { return u.guid == t.guid && u.name == t.name; });
 +        if (same != s_userTracks.end())
@@ -6698,10 +6760,10 @@ index 0000000..04765da
 +        CharacterDatabase.escape_string(name);
 +        CharacterDatabase.escape_string(zone);
 +        CharacterDatabase.PExecute("REPLACE INTO `kartcraft_user_tracks` (`id`, `guid`, `author`, `name`, "
-+            "`map`, `laps`, `zone`, `grid`, `points`, `z`, `at`) VALUES (%u, %u, '%s', '%s', %u, %u, '%s', '%s', '%s', "
-+            "%.1f, %u)",
++            "`map`, `laps`, `zone`, `grid`, `points`, `z`, `objects`, `at`) VALUES (%u, %u, '%s', '%s', %u, %u, "
++            "'%s', '%s', '%s', %.1f, '%s', %u)",
 +            t.id, t.guid, author.c_str(), name.c_str(), t.map, t.laps, zone.c_str(), t.grid.c_str(),
-+            t.points.c_str(), t.z, uint32(std::time(nullptr)));
++            t.points.c_str(), t.z, t.objects.c_str(), uint32(std::time(nullptr)));
 +        SendLine(player, "KARTCRAFT\tR\tPubOk\t" + std::to_string(t.id) + "\t" + t.name);
 +        ListUserTracks(player, now, true);
 +    }
@@ -6738,7 +6800,7 @@ index 0000000..04765da
 +            char z[16];
 +            std::snprintf(z, sizeof(z), "%.1f", t->z);
 +            SendLine(player, UserTrackLine(*t) + "\t" + std::to_string(vote.first) + "\t" +
-+                std::to_string(vote.second) + "\t" + (t->z != 0.f ? z : ""));
++                std::to_string(vote.second) + "\t" + (t->z != 0.f ? z : "") + "\t" + t->objects);
 +        }
 +        SendLine(player, "KARTCRAFT\tR\tPTE");
 +    }
