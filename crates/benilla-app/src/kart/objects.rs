@@ -27,8 +27,18 @@ pub(crate) struct Kind {
     path: &'static str,
 }
 
-/// The kinds, in the panel's order: the planks of the prop catalog's ramps (`prop-catalog`).
-pub(crate) const KINDS: [Kind; 10] = [
+/// The turbo pad's key: no model of the install, CTR's pad as [`kartcraft::pads`] draws it, laid
+/// and fired by the pad field (`kart/pads.rs`) on the track it is placed on, never a collider.
+pub(crate) const TURBO_PAD: &str = "turbo-pad";
+
+/// Whether `key` is the turbo pad's ([`TURBO_PAD`]).
+pub(crate) fn is_pad(key: &str) -> bool {
+    key == TURBO_PAD
+}
+
+/// The kinds, in the panel's order: the planks of the prop catalog's ramps (`prop-catalog`), then
+/// the turbo pad.
+pub(crate) const KINDS: [Kind; 11] = [
     Kind {
         key: "redridge-dock-plank",
         name: "Dock plank",
@@ -88,6 +98,12 @@ pub(crate) const KINDS: [Kind; 10] = [
         name: "Gangplank",
         group: "Ramps",
         path: "World\\wmo\\Dungeon\\MD_Pirateship\\Pirateship_plank.wmo",
+    },
+    Kind {
+        key: TURBO_PAD,
+        name: "Turbo pad",
+        group: "Boosts",
+        path: "",
     },
 ];
 
@@ -399,6 +415,9 @@ impl Models {
             .entry(key)
             .or_insert_with(|| {
                 let (_, kind) = kind(key)?;
+                if is_pad(key) {
+                    return Some(pad_kind(meshes, materials, images));
+                }
                 let parts = read_parts(chain, kind.path)
                     .inspect_err(|e| warn!("kart object {key}: {e:#}"))
                     .ok()?;
@@ -451,6 +470,62 @@ impl Models {
             })
             .as_ref()
     }
+}
+
+/// The turbo pad as a kind: its flat chevrons as one part (the ghost's, while it is placed or
+/// dragged; laid, the pad field draws it), no collider, and its icon.
+fn pad_kind(
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+) -> Loaded {
+    // Its own frame: centred, pointing along WoW +x, as a placed object's yaw turns it.
+    let pad = kartcraft::pads::Pad::from_wow(0.0, 0.0, 0.0, 0.0);
+    let mesh = kartcraft::pads::pad_mesh(&pad, |_| Some(0.0))
+        .unwrap_or_else(|| Mesh::from(Plane3d::default()));
+    let material = |alpha: f32| StandardMaterial {
+        base_color: Color::WHITE.with_alpha(alpha),
+        unlit: true,
+        alpha_mode: AlphaMode::Blend,
+        cull_mode: None,
+        double_sided: true,
+        ..default()
+    };
+    Loaded {
+        parts: vec![(
+            meshes.add(mesh),
+            materials.add(material(1.0)),
+            materials.add(material(0.55)),
+        )],
+        collider: None,
+        icon: images.add(benilla_assets::sprite_image(ICON, ICON, pad_icon(ICON))),
+    }
+}
+
+/// The turbo pad's icon: a dark green plate and three bright chevrons pointing up, as the pad.
+fn pad_icon(size: u32) -> Vec<u8> {
+    let n = size as f32;
+    let mut rgba = vec![0u8; (size * size * 4) as usize];
+    for py in 0..size {
+        for px in 0..size {
+            let (x, y) = ((px as f32 + 0.5) / n, (py as f32 + 0.5) / n);
+            let plate = (0.18..=0.82).contains(&x) && (0.06..=0.94).contains(&y);
+            // A chevron's arms: |x - ½| rising as y falls, three of them a third apart.
+            let arm = (0..3).any(|k| {
+                let tip = 0.18 + 0.27 * k as f32;
+                let d = (y - tip) - (x - 0.5).abs() * 0.9;
+                (0.0..0.09).contains(&d) && (x - 0.5).abs() < 0.28
+            });
+            let colour = match (plate, arm) {
+                (_, true) => [120, 255, 90, 255],
+                (true, false) => [20, 70, 30, 230],
+                _ => [0, 0, 0, 0],
+            };
+            let at = ((py * size + px) * 4) as usize;
+            rgba[at..at + 4].copy_from_slice(&colour);
+        }
+    }
+    rgba
 }
 
 /// A placed object in the world, the draft's `objects[i]`; its root carries the collider.
@@ -511,11 +586,16 @@ pub(crate) fn lay(
 ) {
     let Some(assets) = assets else { return };
     // The draft's while editing, else the race's: a test lap's, or a player track's.
-    let want = match (edit.view().state, &races.race) {
+    let want: Vec<(usize, Placed)> = match (edit.view().state, &races.race) {
         ("edit", _) => edit.laid_objects(),
         (_, Some(race)) => race.objects().iter().cloned().enumerate().collect(),
         _ => Vec::new(),
     };
+    // The turbo pads are the pad field's to lay and fire (`kart/pads.rs`).
+    let want: Vec<(usize, Placed)> = want
+        .into_iter()
+        .filter(|(_, p)| !is_pad(&p.model))
+        .collect();
     let ghost = edit.ghost();
     let mut chain = None;
     let mut load = |key: &'static str, models: &mut Models| {
@@ -707,7 +787,8 @@ mod tests {
     fn every_kind_loads_from_the_install() {
         let data = benilla_formats::wow_data_or_skip!();
         let mut chain = benilla_formats::open_chain(&data).expect("the install's archives");
-        for k in &KINDS {
+        // The turbo pad is drawn, not read ([`pad_kind`]).
+        for k in KINDS.iter().filter(|k| !is_pad(k.key)) {
             let parts =
                 read_parts(&mut chain, k.path).unwrap_or_else(|e| panic!("{}: {e:#}", k.key));
             let tris: usize = parts.iter().map(|p| p.idx.len() / 3).sum();

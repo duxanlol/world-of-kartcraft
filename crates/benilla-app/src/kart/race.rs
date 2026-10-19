@@ -497,6 +497,18 @@ impl Active {
         &self.objects
     }
 
+    /// The course's key, as the server's course line names it (empty until it comes, or a test
+    /// lap's name): the pads of `courses.json` it has (`kart/pads.rs`).
+    pub(crate) fn course_key(&self) -> &str {
+        &self.course
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_course_key(mut self, key: &str) -> Self {
+        self.course = key.to_string();
+        self
+    }
+
     /// Each checkpoint's height, where known ([`Active::heights`]).
     pub(crate) fn with_heights(mut self, heights: Vec<Option<f32>>) -> Self {
         self.heights = heights;

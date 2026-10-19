@@ -54,8 +54,9 @@ client's list are both made from it; nothing else holds course data.
   optional `z` (else the ground's).
 - `pads`: optional turbo pads, `x`, `y`, an optional `z` (else the ground under the camera's
   height) and `o`, the way the pad points (radians, as a creature's facing). Client-side only:
-  the client lays them on the ground and fires CTR's turbo pad while a kart is on one; the server
-  and `pack.py` ignore them. `course-gen pads` writes them on each course's straights (legs of at
+  the client lays them on the ground and fires CTR's turbo pad while a kart is on one, only in a
+  race or time trial on that course, never in the open world (a track's pads are its own, as
+  its placed objects are, `kart/pads.rs`); the server and `pack.py` ignore them. `course-gen pads` writes them on each course's straights (legs of at
   least 90 yards turning under 20° at both ends, the straightest three, never on neighbouring
   legs, 30% along the leg).
 - `doors`: optional, gameobject entries (the server's `gameobject_template`) a race on the course
@@ -119,7 +120,9 @@ install (`kart/objects.rs`, the planks for now), by group, each a tile with its 
 goes where the cursor points, turned with Q/E and the middle mouse (across yaws, up and down
 pitches, with Shift rolls); Move drags one and Delete removes it, and Undo takes back gates and
 objects in the order they were placed. Objects are solid: the kart drives on them in the editor,
-in any test lap and in a race on a player track. A saved track keeps them as `objects` (`model`,
+in any test lap and in a race on a player track. The Boosts group's turbo pad (`turbo-pad`) is
+no model and no collider: CTR's pad, draped on the ground under where it is placed and pointing
+as it is yawed, fired as a course's pads are, and picked for Move and Delete by the aim over it. A saved track keeps them as `objects` (`model`,
 `x`, `y`, `z`, `yaw`, `pitch`, `roll`, radians); a publish sends them as its last field
 (`key,x,y,z,yaw,pitch,roll;...`, at most 40), which the server keeps with the track
 (`kartcraft_user_tracks.objects`) and puts last on its `PT` lines, the list's and a race's.

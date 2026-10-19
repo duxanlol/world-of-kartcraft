@@ -409,6 +409,19 @@ impl TrackEdit {
             .collect()
     }
 
+    /// The placed turbo pad lying under WoW `at`, if any (its index among the objects): a pad has
+    /// no collider for the aim to hit.
+    fn pad_under(&self, at: [f32; 3]) -> Option<usize> {
+        let half = kartcraft::pads::PAD_LENGTH * 0.5;
+        (self.objects.iter().enumerate())
+            .filter(|(_, o)| super::objects::is_pad(&o.model))
+            .filter(|(_, o)| (o.z - at[2]).abs() <= kartcraft::pads::PAD_REACH + half)
+            .map(|(i, o)| (i, (o.x - at[0]).hypot(o.y - at[1])))
+            .filter(|&(_, d)| d <= half)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    }
+
     /// The ghost as of this frame.
     pub(crate) fn ghost(&self) -> Option<Placed> {
         self.ghost.clone().filter(|_| self.on && !self.testing)
@@ -1255,10 +1268,15 @@ pub(crate) fn update(
                 .map(|hit| (eye.translation - Vec3::Y * hit.distance, None))
         })
     });
-    // The placed object the aim is on, if any.
+    // The placed object the aim is on, if any: a solid one it hit, else a turbo pad (no collider,
+    // the pad field's to draw) lying under it.
     let aim_object = aim
         .and_then(|(_, e)| placed_objects.get(e?).ok())
-        .map(|o| o.0);
+        .map(|o| o.0)
+        .or_else(|| {
+            let (at, _) = aim?;
+            edit.pad_under(bevy_to_wow(at))
+        });
     let aim = aim.map(|(at, _)| at);
     let tool = edit.tool;
     // An object, held or about to be placed, turns in all three axes: Q/E and the middle mouse
