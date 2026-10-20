@@ -36,9 +36,13 @@ pub(crate) fn is_pad(key: &str) -> bool {
     key == TURBO_PAD
 }
 
+/// The arrow sign's key: no model of the install, a blue panel drawn here ([`sign_part`]) whose
+/// chevrons slide along it, pointing the way it is yawed.
+pub(crate) const ARROW_SIGN: &str = "arrow-sign";
+
 /// The kinds, in the panel's order: the planks of the prop catalog's ramps (`prop-catalog`), then
-/// the turbo pad.
-pub(crate) const KINDS: [Kind; 11] = [
+/// the turbo pad and the arrow sign.
+pub(crate) const KINDS: [Kind; 12] = [
     Kind {
         key: "redridge-dock-plank",
         name: "Dock plank",
@@ -103,6 +107,12 @@ pub(crate) const KINDS: [Kind; 11] = [
         key: TURBO_PAD,
         name: "Turbo pad",
         group: "Boosts",
+        path: "",
+    },
+    Kind {
+        key: ARROW_SIGN,
+        name: "Arrow sign",
+        group: "Signs",
         path: "",
     },
 ];
@@ -618,6 +628,7 @@ impl Models {
                         }
                         vec![piece_parts(shape, m, shape.default_size(), texture)]
                     }
+                    (None, None) if key == ARROW_SIGN => vec![sign_part()],
                     (None, None) => read_parts(chain, kind.path)
                         .inspect_err(|e| warn!("kart object {key}: {e:#}"))
                         .ok()?,
@@ -729,6 +740,86 @@ fn pad_icon(size: u32) -> Vec<u8> {
     rgba
 }
 
+/// The arrow sign's length, height and thickness (yards).
+const SIGN_SIZE: [f32; 3] = [6.0, 2.0, 0.25];
+/// How fast its chevrons slide along it (chevrons a second).
+const SIGN_SPEED: f64 = 1.2;
+
+/// The arrow sign: a thin panel standing on its origin, its length along WoW +x, both faces
+/// tiled with chevrons pointing +x, its edges the frame's blue.
+fn sign_part() -> Part {
+    let [l, h, t] = SIGN_SIZE;
+    let (l, t) = (l / 2.0, t / 2.0);
+    let mut part = Part {
+        pos: Vec::new(),
+        normals: Vec::new(),
+        uvs: Vec::new(),
+        idx: Vec::new(),
+        texture: Some((SIGN_TILE, SIGN_TILE, sign_texture(SIGN_TILE))),
+        blend: ModelBlend::Opaque,
+    };
+    // Its faces lit as from above, so it reads alike from either side.
+    let mut face = |corners: [[f32; 3]; 4], uvs: [[f32; 2]; 4], lit: Option<Vec3>| {
+        let base = part.pos.len() as u32;
+        let p = corners.map(wow_to_bevy);
+        let normal = lit.unwrap_or_else(|| (p[1] - p[0]).cross(p[2] - p[0]));
+        part.pos.extend(p);
+        part.normals.extend([normal; 4]);
+        part.uvs.extend(uvs);
+        part.idx.extend([0, 1, 2, 0, 2, 3].map(|i| base + i));
+    };
+    // One chevron to a square of the face, `u` growing along +x on both sides.
+    let tiled = [[-l / h, 1.0], [l / h, 1.0], [l / h, 0.0], [-l / h, 0.0]];
+    for y in [-t, t] {
+        let c = [[-l, y, 0.0], [l, y, 0.0], [l, y, h], [-l, y, h]];
+        face(c, tiled, Some(Vec3::Y));
+    }
+    // The frame's row, the same at any `u` as the chevrons slide.
+    let frame = [[0.0, 0.02]; 4];
+    for z in [0.0, h] {
+        face(
+            [[-l, -t, z], [l, -t, z], [l, t, z], [-l, t, z]],
+            frame,
+            None,
+        );
+    }
+    for x in [-l, l] {
+        face(
+            [[x, -t, 0.0], [x, t, 0.0], [x, t, h], [x, -t, h]],
+            frame,
+            None,
+        );
+    }
+    part
+}
+
+/// The side of the arrow sign's texture (px): one chevron.
+const SIGN_TILE: u32 = 64;
+
+/// The arrow sign's texture: a blue plate framed darker above and below, a white chevron pointing
+/// right (+u), tiling along `u`.
+fn sign_texture(size: u32) -> Vec<u8> {
+    let n = size as f32;
+    let mut rgba = vec![0u8; (size * size * 4) as usize];
+    for py in 0..size {
+        for px in 0..size {
+            let (x, y) = ((px as f32 + 0.5) / n, (py as f32 + 0.5) / n);
+            let frame = !(0.1..0.9).contains(&y);
+            // The chevron's arms: its tip at the right, falling back as |y - ½| grows.
+            let back = 0.72 - (y - 0.5).abs() * 0.8 - x;
+            let arm = (0.0..0.2).contains(&back) && (y - 0.5).abs() < 0.32;
+            let colour = match (frame, arm) {
+                (true, _) => [12, 34, 110, 255],
+                (false, true) => [240, 248, 255, 255],
+                (false, false) => [36, 110, 235, 255],
+            };
+            let at = ((py * size + px) * 4) as usize;
+            rgba[at..at + 4].copy_from_slice(&colour);
+        }
+    }
+    rgba
+}
+
 /// A placed object in the world, the draft's `objects[i]`; its root carries the collider.
 #[derive(Component)]
 pub(crate) struct PlacedObject(pub(crate) usize);
@@ -800,10 +891,10 @@ type Stores<'w> = (
 
 /// Keeps the world's objects in step with the editor's draft, or the race's: every kind loaded
 /// (for the icons) once the editor opens, the placed ones laid again when they change, the ghost
-/// moved.
+/// moved, the arrow signs' chevrons slid along.
 pub(crate) fn lay(
     mut commands: Commands,
-    (edit, races): (Res<TrackEdit>, Res<super::race::Races>),
+    (edit, races, time): (Res<TrackEdit>, Res<super::race::Races>, Res<Time>),
     mut laid: ResMut<Laid>,
     mut models: ResMut<Models>,
     (assets, mut meshes, mut materials, mut images): Stores,
@@ -869,6 +960,17 @@ pub(crate) fn lay(
                     let e = spawn(&mut commands, &mut meshes, &g, loaded, true);
                     commands.entity(e).insert(Ghost);
                     laid.ghost = Some((g.model, g.size, e));
+                }
+            }
+        }
+    }
+    // Every sign shares its kind's materials: one slide moves them all.
+    if let Some(Some(sign)) = models.0.get(ARROW_SIGN) {
+        let along = -(time.elapsed_secs_f64() * SIGN_SPEED).fract() as f32;
+        for (_, solid, see_through) in &sign.parts {
+            for m in [solid, see_through] {
+                if let Some(m) = materials.get_mut(m) {
+                    m.uv_transform.translation.x = along;
                 }
             }
         }
@@ -1048,6 +1150,33 @@ mod tests {
         assert!(greys.len() >= 2, "{greys:?}");
     }
 
+    /// The arrow sign is a kind of its own, drawn: a closed panel along +x, standing on its
+    /// origin, whose chevron tiles along `u` and points +u (white right of blue along its middle).
+    #[test]
+    fn the_arrow_sign_is_a_panel_of_chevrons_pointing_along_it() {
+        assert_eq!(kind(ARROW_SIGN).unwrap().1.group, "Signs");
+        let part = sign_part();
+        assert_eq!(part.pos.len(), 24, "six faces");
+        let (lo, hi) = part.pos.iter().fold((Vec3::MAX, Vec3::MIN), |(lo, hi), v| {
+            (lo.min(*v), hi.max(*v))
+        });
+        assert_eq!(lo.y, 0.0, "it stands on its origin");
+        assert_eq!(hi.y, SIGN_SIZE[1]);
+        // WoW +x is Bevy -z: its length.
+        assert_eq!(hi.z - lo.z, SIGN_SIZE[0]);
+        let tex = sign_texture(SIGN_TILE);
+        let at = |x: u32, y: u32| tex[((y * SIGN_TILE + x) * 4) as usize];
+        let mid = SIGN_TILE / 2;
+        let row: Vec<u8> = (0..SIGN_TILE).map(|x| at(x, mid)).collect();
+        let white = row.iter().position(|&r| r == 240).expect("a chevron");
+        assert!(
+            white as u32 > mid,
+            "the chevron right of the middle: {white}"
+        );
+        assert_eq!(at(0, 0), at(SIGN_TILE - 1, 0), "the frame tiles");
+        assert_eq!(at(0, 0), 12, "the frame row the edges show");
+    }
+
     /// The player's CTR props (`kart-data/props.json`) are kinds after the install's, by group,
     /// each built from its own surfaces into textured triangles; without the file, none.
     #[test]
@@ -1094,8 +1223,8 @@ mod tests {
     fn every_kind_loads_from_the_install() {
         let data = benilla_formats::wow_data_or_skip!();
         let mut chain = benilla_formats::open_chain(&data).expect("the install's archives");
-        // The turbo pad is drawn, not read ([`pad_kind`]).
-        for k in KINDS.iter().filter(|k| !is_pad(k.key)) {
+        // The turbo pad and the arrow sign are drawn, not read ([`pad_kind`], [`sign_part`]).
+        for k in KINDS.iter().filter(|k| !k.path.is_empty()) {
             let parts =
                 read_parts(&mut chain, k.path).unwrap_or_else(|e| panic!("{}: {e:#}", k.key));
             let tris: usize = parts.iter().map(|p| p.idx.len() / 3).sum();
