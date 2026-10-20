@@ -1547,6 +1547,14 @@
                     tonumber(line[3]) or 0))
             elseif verb == "Un" then
                 BenillaKart_Say("Unstuck: no course starts within 300 yards.")
+            elseif verb == "DLs" then
+                BenillaKartDungeons_Set(line[3])
+            elseif verb == "DTok" then
+                BenillaKart_Say("To " .. (line[3] or "the dungeon") .. ". Race mode is on: nothing there can attack you. Leave dungeon, in the Kartcraft menu, takes you back.")
+            elseif verb == "DTx" then
+                BenillaKart_Say("Dungeon teleporter: " .. (line[3] or ""))
+            elseif verb == "DBok" then
+                BenillaKart_Say("Back from the dungeon.")
             elseif verb == "M" then
                 SetCVar("KartRaceMode", line[3] == "1" and "1" or "0")
                 if line[3] == "1" then
@@ -2166,6 +2174,8 @@
               function() BenillaKartMenu_OpenChallenge("weekly") end },
             { "Race Finder", function() BenillaKart_Open(BenillaKartFinderFrame) end },
             { "Tracks and time trials", function() BenillaKartTrackBrowser_Toggle() end },
+            { "Dungeon teleporter", function() BenillaKartDungeons_Open() end },
+            { "Leave dungeon", function() BenillaKartDungeons_Leave() end },
             { function() return BenillaKartReplays_Playing() and "Stop replay" or "Replays" end,
               function() BenillaKartReplays_MenuClick() end },
             { "Courier jobs", function() BenillaKartJobs_Toggle() end },
@@ -2204,6 +2214,58 @@
                 getglobal("BenillaKartMenuFrameEntry" .. i):SetWidth(widest)
             end
             BenillaKartMenuFrame:SetWidth(widest + BENILLA_KART_MENU_MARGIN)
+        end
+
+        -- ── The dungeon teleporter: any player to any dungeon (Kartcraft.cpp "Dungeon teleporter") ──
+        -- The dungeons from the server ("R<TAB>DLs", map:name:level;...), asked for once; chosen,
+        -- "R<TAB>DT<TAB><map>" goes there in race mode, and Leave dungeon ("R<TAB>DB") comes back.
+        BenillaKartDungeons = { list = nil, opening = nil }
+
+        function BenillaKartDungeons_Open()
+            if BenillaKartDungeons.list then
+                ToggleDropDownMenu(1, nil, BenillaKartDungeonDropDown, "cursor", 0, 0)
+            else
+                BenillaKartDungeons.opening = 1
+                BenillaKart_Send("DL")
+            end
+        end
+
+        function BenillaKartDungeons_Set(text)
+            local list = {}
+            for item in string.gfind(text or "", "[^;]+") do
+                local _, _, map, name, level = string.find(item, "^(%d+):(.-):(%d+)$")
+                if map then
+                    table.insert(list, { map = map, name = name, level = tonumber(level) or 0 })
+                end
+            end
+            BenillaKartDungeons.list = list
+            if BenillaKartDungeons.opening then
+                BenillaKartDungeons.opening = nil
+                ToggleDropDownMenu(1, nil, BenillaKartDungeonDropDown, "cursor", 0, 0)
+            end
+        end
+
+        function BenillaKartDungeons_Go()
+            BenillaKart_Send("DT\t" .. this.value)
+        end
+
+        function BenillaKartDungeons_Leave()
+            BenillaKart_Send("DB")
+        end
+
+        -- The dropdown: a title, Leave dungeon, then every dungeon with its entrance level.
+        function BenillaKartDungeons_Init()
+            UIDropDownMenu_AddButton({ text = "Dungeon teleporter", isTitle = 1, notCheckable = 1 })
+            UIDropDownMenu_AddButton({ text = "Leave dungeon", func = BenillaKartDungeons_Leave, notCheckable = 1 })
+            local list = BenillaKartDungeons.list or {}
+            for i = 1, table.getn(list) do
+                local d = list[i]
+                local text = d.name
+                if d.level > 0 then text = text .. " |cff999999(level " .. d.level .. ")|r" end
+                UIDropDownMenu_AddButton({ text = text, value = d.map, func = BenillaKartDungeons_Go,
+                    notCheckable = 1, tooltipTitle = d.name,
+                    tooltipText = "Go inside, in race mode: nothing there can attack you, and you attack nothing." })
+            end
         end
 
         -- An entry chosen: the menu goes first, so a window it opens takes the controller.
@@ -3343,6 +3405,7 @@
                 { text = "Race mode", func = BenillaKart_RaceModeToggle, checkable = 1, checked = BenillaKartRaceMode,
                   tooltipTitle = "Race mode", tooltipText = "Nobody can target or attack you, and you can't attack anyone: for waiting in the queue. Kept across logins." },
                 { text = "Track browser", func = BenillaKartTrackBrowser_Toggle },
+                { text = "Dungeon teleporter...", func = BenillaKartDungeons_Open },
                 { text = BenillaKartReplays_Playing() and "Stop replay" or "Replays...", func = BenillaKartReplays_MenuClick },
                 { text = "Show Race Marshals", func = BenillaKart_MarshalsToggle, checkable = 1,
                   checked = GetCVar("KartRaceMarshals") ~= "0", keepShownOnClick = 1,
@@ -6667,8 +6730,14 @@
          does what it describes. -->
     <!-- The Kartcraft menu (Options on the controller, KARTCRAFT_MENU): what racing needs, one
          entry each, for a player on the controller alone. -->
+    <!-- The dungeon teleporter's list, at the cursor (BenillaKartDungeons_Open). -->
+    <Frame name="BenillaKartDungeonDropDown" inherits="UIDropDownMenuTemplate" parent="UIParent" hidden="true">
+        <Scripts>
+            <OnLoad>UIDropDownMenu_Initialize(this, BenillaKartDungeons_Init, "MENU")</OnLoad>
+        </Scripts>
+    </Frame>
     <Frame name="BenillaKartMenuFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="280" y="500"/></Size>
+        <Size><AbsDimension x="280" y="552"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -6768,6 +6837,16 @@
             <Button name="$parentEntry16" inherits="UIPanelButtonTemplate" id="16">
                 <Size><AbsDimension x="220" y="22"/></Size>
                 <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-424"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry17" inherits="UIPanelButtonTemplate" id="17">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-450"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
+            </Button>
+            <Button name="$parentEntry18" inherits="UIPanelButtonTemplate" id="18">
+                <Size><AbsDimension x="220" y="22"/></Size>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-476"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
             </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">

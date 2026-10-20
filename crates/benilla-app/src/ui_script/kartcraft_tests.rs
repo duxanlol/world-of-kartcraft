@@ -938,6 +938,7 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
             "Race Finder",
             "Race mode",
             "Track browser",
+            "Dungeon teleporter...",
             "Replays...",
             "Show Race Marshals",
             "Leave race",
@@ -2585,8 +2586,8 @@ fn the_replays_window_lists_the_kept_races_and_plays_one() {
         s.eval(&format!("return BenillaKartMenuFrameEntry{i}:GetText()"))
             .unwrap()
     };
-    assert_eq!(entry(&mut s, 6), "Replays");
-    s.run("BenillaKartMenuFrameEntry6:Click()").unwrap();
+    assert_eq!(entry(&mut s, 8), "Replays");
+    s.run("BenillaKartMenuFrameEntry8:Click()").unwrap();
     assert!(shown(&mut s, "BenillaKartReplaysFrame"));
     let row = |s: &mut UiScript, i: u32| -> (String, bool) {
         (
@@ -2614,8 +2615,8 @@ fn the_replays_window_lists_the_kept_races_and_plays_one() {
     );
     assert!(!shown(&mut s, "BenillaKartReplaysFrame"));
     s.run("BenillaKartMenu_Toggle()").unwrap();
-    assert_eq!(entry(&mut s, 6), "Stop replay");
-    s.run("BenillaKartMenuFrameEntry6:Click()").unwrap();
+    assert_eq!(entry(&mut s, 8), "Stop replay");
+    s.run("BenillaKartMenuFrameEntry8:Click()").unwrap();
     assert_eq!(
         s.eval::<String>("return GetCVar('KartReplay')").unwrap(),
         "0"
@@ -2778,6 +2779,55 @@ fn the_minimap_menu_toggles_the_race_marshals() {
     pick(&mut s, "Show Race Marshals");
     assert_eq!(s.cvar("KartRaceMarshals").as_deref(), Some("1"));
     assert!(ticked(&mut s));
+}
+
+/// The dungeon teleporter asks the server for its dungeons once, lists them at the cursor with
+/// their entrance levels, and goes to the one chosen; Leave dungeon comes back.
+#[test]
+fn the_dungeon_teleporter_lists_the_server_s_dungeons_and_goes_to_one() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let shown = |s: &mut UiScript| -> Vec<String> {
+        s.tick(0.0);
+        s.eval(
+            "local out = {} for i = 1, UIDROPDOWNMENU_MAXBUTTONS do \
+             local b = getglobal('DropDownList1Button' .. i) \
+             if b and b:IsVisible() then table.insert(out, b:GetText()) end \
+             end return out",
+        )
+        .unwrap()
+    };
+    sent(&mut s);
+    // From the minimap's menu: nothing to list yet, so it asks.
+    pick_from_menu(&mut s, "Dungeon teleporter...");
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tDL"]);
+    from_server(&mut s, "R\tDLs\t389:Ragefire Chasm:8;329:Stratholme:45");
+    assert_eq!(
+        shown(&mut s),
+        [
+            "Dungeon teleporter",
+            "Leave dungeon",
+            "Ragefire Chasm |cff999999(level 8)|r",
+            "Stratholme |cff999999(level 45)|r"
+        ]
+    );
+    pick(&mut s, "Stratholme |cff999999(level 45)|r");
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tDT\t329"]);
+    // Asked again, the list is kept: no second ask.
+    s.run("BenillaKartDungeons_Open()").unwrap();
+    assert!(sent(&mut s).is_empty());
+    pick(&mut s, "Leave dungeon");
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tDB"]);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The minimap button's menu opened, and its entry `text` clicked.
+fn pick_from_menu(s: &mut UiScript, text: &str) {
+    menu(s);
+    pick(s, text);
 }
 
 #[test]

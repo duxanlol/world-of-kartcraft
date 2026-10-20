@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..ff0821d
+index 0000000..792a2e9
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,7758 @@
+@@ -0,0 +1,7861 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -120,6 +120,7 @@ index 0000000..ff0821d
 +#include <algorithm>
 +#include <cstdio>
 +#include <deque>
++#include <tuple>
 +#include <cstdlib>
 +#include <atomic>
 +#include <mutex>
@@ -6245,6 +6246,102 @@ index 0000000..ff0821d
 +        TakePackage(player);
 +    }
 +
++    // ── Dungeon teleporter ───────────────────────────────────────────────────────────────────────
++    //
++    // Any player, of any level, to any dungeon (not a raid, whose copy wants a raid group), from
++    // the Kartcraft menu: to build a track there, or race one. "R\tDL" asks for the list, answered
++    // "R\tDLs\t<map>:<name>:<level>;..." (the dungeon's entrance level, its trigger's, as the
++    // client shows it); "R\tDT\t<map>" goes, to where its entrance puts a player inside (its
++    // area trigger's spot, ObjectMgr::GetMapEntranceTrigger), in their own copy or their party's
++    // as an entrance would, race mode on (nobody can attack them, nor they anyone: a low level in
++    // Stratholme stays alive); answered "R\tDTok\t<name>", or "R\tDTx\t<why>". "R\tDB" takes them
++    // back to where the first trip took them from ("R\tDBok", or "R\tDTx\t<why>" with none to go
++    // back from, a relog's client not knowing). No level check stands in the way:
++    // the core asks one only at an entrance, not of a teleport (MapManager::CanPlayerEnter).
++    constexpr uint32 DUNGEON_TRIP_COOLDOWN = 5 * IN_MILLISECONDS;
++    static std::unordered_map<uint32, Origin> s_dungeonOrigins; // guid low -> where from
++    static std::unordered_map<uint32, uint32> s_dungeonTrips;   // guid low -> last trip (ms)
++
++    // The dungeons the teleporter offers, by entrance level then name, once.
++    static std::string const& DungeonList()
++    {
++        static std::string const list = []
++        {
++            std::vector<std::tuple<uint32, std::string, uint32>> found;
++            for (uint32 id = 2; id < 1000; ++id)
++            {
++                MapEntry const* entry = sMapStorage.LookupEntry<MapEntry>(id);
++                if (!entry || !entry->IsNonRaidDungeon() || !entry->name || !*entry->name)
++                    continue;
++                if (AreaTriggerTeleport const* at = sObjectMgr.GetMapEntranceTrigger(id))
++                    found.emplace_back(at->requiredLevel, entry->name, id);
++            }
++            std::sort(found.begin(), found.end());
++            std::string out;
++            for (auto const& d : found)
++            {
++                std::string name = std::get<1>(d);
++                std::replace(name.begin(), name.end(), ':', ' ');
++                std::replace(name.begin(), name.end(), ';', ' ');
++                out += (out.empty() ? "" : ";") + std::to_string(std::get<2>(d)) + ":" + name + ":" +
++                    std::to_string(std::get<0>(d));
++            }
++            return out;
++        }();
++        return list;
++    }
++
++    static void ToDungeon(Player* player, uint32 map, uint32 now)
++    {
++        auto no = [player](char const* why) { SendLine(player, std::string("KARTCRAFT\tR\tDTx\t") + why); };
++        MapEntry const* entry = sMapStorage.LookupEntry<MapEntry>(map);
++        AreaTriggerTeleport const* at = entry && entry->IsNonRaidDungeon() ? sObjectMgr.GetMapEntranceTrigger(map) : nullptr;
++        if (!at)
++            return no("That is no dungeon the teleporter goes to.");
++        if (InAnyRace(player->GetObjectGuid()))
++            return no("Leave the race first.");
++        if (!Settled(player) || player->InBattleGround() || CarryingDelivery(player))
++            return no("Not now: be out of combat, off any flight or boat, and not carrying a delivery.");
++        uint32 const guid = player->GetGUIDLow();
++        auto last = s_dungeonTrips.find(guid);
++        if (last != s_dungeonTrips.end() && WorldTimer::getMSTimeDiff(last->second, now) < DUNGEON_TRIP_COOLDOWN)
++            return no("Wait a few seconds between trips.");
++        s_dungeonTrips[guid] = now;
++        // The first trip's start is the way back: from one dungeon to another it stays.
++        if (!s_dungeonOrigins.count(guid))
++            s_dungeonOrigins[guid] = { player->GetMapId(), player->GetPositionX(), player->GetPositionY(),
++                player->GetPositionZ(), player->GetOrientation(), now };
++        RaceMode(player, true);
++        WorldLocation const to = at->destination;
++        ObjectGuid const g = player->GetObjectGuid();
++        sWorld.GetMessager().AddMessage([g, to](World*)
++        {
++            if (Player* p = ObjectAccessor::FindPlayer(g))
++                if (p->IsInWorld() && Settled(p))
++                    p->TeleportTo(to);
++        });
++        SendLine(player, std::string("KARTCRAFT\tR\tDTok\t") + entry->name);
++    }
++
++    static void FromDungeon(Player* player)
++    {
++        auto found = s_dungeonOrigins.find(player->GetGUIDLow());
++        if (found == s_dungeonOrigins.end())
++            return SendLine(player, "KARTCRAFT\tR\tDTx\tNo teleporter trip to go back from.");
++        if (InAnyRace(player->GetObjectGuid()))
++            return SendLine(player, "KARTCRAFT\tR\tDTx\tLeave the race first.");
++        Origin const to = found->second;
++        s_dungeonOrigins.erase(found);
++        ObjectGuid const g = player->GetObjectGuid();
++        sWorld.GetMessager().AddMessage([g, to](World*)
++        {
++            Player* p = ObjectAccessor::FindPlayer(g);
++            if (p && p->IsInWorld() && Settled(p))
++                p->TeleportTo(to.map, to.x, to.y, to.z, to.o);
++        });
++        SendLine(player, "KARTCRAFT\tR\tDBok");
++    }
++
 +    static bool HandleFinder(Player* player, std::vector<std::string> const& f, uint32 now)
 +    {
 +        std::string const& verb = f[1];
@@ -6410,6 +6507,12 @@ index 0000000..ff0821d
 +            if (Course const* course = FindCourse(f[2]))
 +                ToMarshal(player, *course, now);
 +        }
++        else if (verb == "DL")
++            SendLine(player, "KARTCRAFT\tR\tDLs\t" + DungeonList());
++        else if (verb == "DT" && f.size() > 2)
++            ToDungeon(player, uint32(std::strtoul(f[2].c_str(), nullptr, 10)), now);
++        else if (verb == "DB")
++            FromDungeon(player);
 +        else if (verb == "Sz" && f.size() > 2)
 +        {
 +            // "R\tSz\t<scale>": a track editor test lap's scale, the client's alone to run: the
@@ -7019,7 +7122,7 @@ index 0000000..ff0821d
 +            SendJobs(player);
 +            return;
 +        }
-+        static std::set<std::string> const TELEPORTS = { "TB", "TR", "TA", "TG", "MT", "LJ", "Q+", "Y", "Back", "JT", "Hub" };
++        static std::set<std::string> const TELEPORTS = { "TB", "TR", "TA", "TG", "MT", "LJ", "Q+", "Y", "Back", "JT", "Hub", "DT", "DB" };
 +        if (f.size() >= 2 && TELEPORTS.count(f[1]) && CarryingDelivery(player))
 +        {
 +            ChatHandler(player->GetSession()).SendSysMessage(

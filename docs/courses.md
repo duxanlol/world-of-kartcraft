@@ -202,6 +202,13 @@ leader (or a player with no party) hosts there, and only the host's party in the
 can join; the grid, the unstuck hop and every checkpoint stay in that copy, as a teleport within
 one map does. A player track published on a dungeon's map is a dungeon course too.
 
+To build one there, any player of any level gets in with the Kartcraft menu's Dungeon teleporter
+(and the minimap button's menu): it lists every dungeon but the raids, by its entrance's level
+(`R\tDL`, `R\tDLs`), and takes the player to where its entrance puts one inside, in their own
+copy or their party's, race mode on so nothing there attacks them (`R\tDT\t<map>`,
+`Kartcraft.cpp` "Dungeon teleporter"). Leave dungeon (`R\tDB`) takes them back to where the
+first trip took them from. The core checks a level only at an entrance, never a teleport.
+
 In the kart, a driver springs none of Stratholme's position events: the rat-trap gates (and their
 rat swarm) and The Unforgiven's ambush on Market Row (`instance_stratholme.cpp`, a hunk of
 `kartcraft.patch`). The course's locked King's Square gates open for its race (`doors`).
