@@ -37,6 +37,10 @@ struct Shared {
     converter: Option<String>,
     /// A new launcher started: this one closes.
     restart: bool,
+    /// The game server answers (or need not: the players' launcher, or a wake that cannot be
+    /// asked for), and what the staging launcher's wake is doing ([`crate::wake`]).
+    server_ready: bool,
+    server_status: Option<String>,
 }
 
 struct App {
@@ -115,7 +119,35 @@ impl App {
         };
         app.start_update();
         app.start_search();
+        app.start_wake();
         app
+    }
+
+    /// The testers' launcher wakes the staging server if it sleeps, on a thread; the players'
+    /// server never does.
+    fn start_wake(&self) {
+        let server = self
+            .config
+            .server
+            .clone()
+            .filter(|_| crate::config::staging());
+        let Some(server) = server else {
+            self.shared().server_ready = true;
+            return;
+        };
+        let shared = self.shared.clone();
+        std::thread::spawn(move || {
+            let set =
+                |f: &dyn Fn(&mut Shared)| f(&mut shared.lock().unwrap_or_else(|e| e.into_inner()));
+            let up =
+                crate::wake::until_up(&server, |say| set(&|s| s.server_status = Some(say.clone())));
+            set(&|s| {
+                s.server_ready = true;
+                if up {
+                    s.server_status = Some("The test server is up.".into());
+                }
+            });
+        });
     }
 
     fn shared(&self) -> std::sync::MutexGuard<'_, Shared> {
@@ -386,6 +418,13 @@ impl eframe::App for App {
                 )
             };
             ui.label(egui::RichText::new(&status).color(DIM));
+            let (server_ready, server_status) = {
+                let s = self.shared();
+                (s.server_ready, s.server_status.clone())
+            };
+            if let Some(say) = &server_status {
+                ui.label(egui::RichText::new(say).color(DIM));
+            }
             if let Some((done, total)) = progress {
                 let f = if total > 0 { done as f32 / total as f32 } else { 0.0 };
                 ui.add(
@@ -479,7 +518,8 @@ impl eframe::App for App {
                 && self.converted()
                 && !converting
                 && self.root.join(GAME).is_file()
-                && (updated || self.root.join(GAME).is_file() && update_error.is_some());
+                && (updated || self.root.join(GAME).is_file() && update_error.is_some())
+                && server_ready;
             ui.vertical_centered(|ui| {
                 let button = egui::Button::new(egui::RichText::new("PLAY").size(24.0).strong().color(egui::Color32::BLACK))
                     .fill(if ready { ORANGE } else { egui::Color32::from_gray(70) })

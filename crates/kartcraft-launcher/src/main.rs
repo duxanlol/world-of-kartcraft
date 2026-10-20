@@ -24,6 +24,8 @@ mod launch;
 mod proton;
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 mod update;
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+mod wake;
 
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 fn main() {
