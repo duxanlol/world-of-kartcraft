@@ -141,7 +141,12 @@ fn missing_screen(mut commands: Commands) {
     println!("benilla: cannot start yet: {missing:?}");
     let camera = commands
         .spawn((
+            Name::new("android missing-data camera"),
             Camera2d,
+            // As the debug overlay's: bevy keys the 2D depth texture on the target alone, so a
+            // camera on the window must match the player-UI camera's `Msaa::Off` (the default
+            // `Sample4` failed validation and aborted the app).
+            bevy::render::view::Msaa::Off,
             Camera {
                 order: 1000,
                 clear_color: ClearColorConfig::Custom(Color::BLACK),
@@ -166,7 +171,8 @@ fn missing_screen(mut commands: Commands) {
         .with_child((
             Text::new(missing.text()),
             TextFont {
-                font_size: 30.0,
+                // Logical points: a phone's screen is about 400 of them tall in landscape.
+                font_size: 15.0,
                 ..default()
             },
             TextColor(Color::srgb(1.0, 0.82, 0.0)),
@@ -414,7 +420,10 @@ fn update_banner(
         (Some(line), None) => {
             let camera = commands
                 .spawn((
+                    Name::new("android update-banner camera"),
                     Camera2d,
+                    // `Msaa::Off`, as the missing-data screen's camera and for the same reason.
+                    bevy::render::view::Msaa::Off,
                     Camera {
                         order: 999,
                         clear_color: ClearColorConfig::None,
@@ -426,7 +435,7 @@ fn update_banner(
                 .spawn((
                     Text::new(line),
                     TextFont {
-                        font_size: 24.0,
+                        font_size: 14.0,
                         ..default()
                     },
                     TextColor(Color::srgb(1.0, 0.82, 0.0)),
@@ -554,6 +563,8 @@ fn soft_keyboard(
         ClientState::CharSelect => dialog_edit == Some(true),
         ClientState::InWorld => false,
     } || script.is_some_and(|s| s.has_focused_editbox());
+    // Over the missing-data screen nothing takes typing: the login form under it is out of reach.
+    let typing = typing && MISSING.get().is_none();
     for (entity, mut window) in &mut windows {
         // Only once winit has the window, which on Android is at the first resume: a window
         // made with IME already allowed has no change for bevy to pass on, so it never opens.
