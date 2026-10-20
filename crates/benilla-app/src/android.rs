@@ -74,16 +74,36 @@ fn environment(app: &AndroidApp, own: &Path) {
         }
         shared
     };
-    if MISSING.get().is_none() {
-        if std::fs::File::open(data.join("WoW/Data/dbc.MPQ")).is_err() {
-            let _ = MISSING.set(Missing::Install);
-        } else if !data.join("kart-data/kart.json").is_file() {
-            let _ = MISSING.set(Missing::KartData);
-        }
+    if MISSING.get().is_none() && std::fs::File::open(data.join("WoW/Data/dbc.MPQ")).is_err() {
+        let _ = MISSING.set(Missing::Install);
     }
+    // The kart data: the player's disc converted into the app's own folder, as the launcher does
+    // on a PC (again when this build's converter is another than the one that made it); else a
+    // `kart-data` copied from a PC; else what an earlier disc made, the disc since removed.
+    let converted = own.join("kart-data");
+    let kart = match convert::disc(&data) {
+        Some(disc) if MISSING.get().is_none() => {
+            if convert::needed(&converted) {
+                println!(
+                    "benilla: converting {} into {}",
+                    disc.display(),
+                    converted.display()
+                );
+                let _ = MISSING.set(Missing::Converting);
+                convert::start(app.clone(), disc, converted.clone());
+            }
+            converted
+        }
+        _ if data.join("kart-data/kart.json").is_file() => data.join("kart-data"),
+        _ if converted.join("kart.json").is_file() => converted,
+        _ => {
+            let _ = MISSING.set(Missing::KartData);
+            converted
+        }
+    };
     for (key, path) in [
         ("WOW_DATA", data.join("WoW/Data")),
-        ("WOW_KART_DATA", data.join("kart-data")),
+        ("WOW_KART_DATA", kart),
         ("BENILLA_HOME", own.join("benilla-config")),
     ] {
         if std::env::var_os(key).is_none() {
@@ -104,8 +124,10 @@ enum Missing {
     Access,
     /// No readable install in `WoW/Data`.
     Install,
-    /// No `kart-data`, the disc converter's output.
+    /// No disc image and no `kart-data`.
     KartData,
+    /// The disc is being converted ([`convert`]); the app restarts when it is done.
+    Converting,
 }
 
 static MISSING: std::sync::OnceLock<Missing> = std::sync::OnceLock::new();
@@ -117,8 +139,9 @@ impl Missing {
             "World of Kartcraft plays from your own game files. Copy them from your PC to this \
              phone (plug it in over USB and open it in the file explorer):\n\n\
              - your World of Warcraft 1.12 folder's Data folder, to Internal storage/{SHARED}/WoW/Data\n\
-             - the kart-data folder in your World of Kartcraft folder (made from your Crash Team \
-             Racing disc), to Internal storage/{SHARED}/kart-data\n\n\
+             - your Crash Team Racing disc image (the US version, a .bin and .cue, or an .iso), to \
+             Internal storage/{SHARED}. The app turns it into the kart, its sounds and the music \
+             itself.\n\n\
              Then open the app again."
         );
         match self {
@@ -128,7 +151,37 @@ impl Missing {
                  again.\n\n{copy}"
             ),
             Missing::Install => format!("No World of Warcraft files found.\n\n{copy}"),
-            Missing::KartData => format!("No kart data found.\n\n{copy}"),
+            Missing::KartData => format!("No Crash Team Racing disc image found.\n\n{copy}"),
+            Missing::Converting => match convert::status() {
+                convert::Status::Running(line) => format!(
+                    "Converting your Crash Team Racing disc. This takes a minute or so, once.\n\n\
+                     {line}"
+                ),
+                convert::Status::Done => {
+                    "Your kart is ready. World of Kartcraft starts again...".to_string()
+                }
+                convert::Status::Failed(why) => format!(
+                    "Your Crash Team Racing disc could not be converted.\n\n{why}\n\n\
+                     Put the US version's disc image in Internal storage/{SHARED} and open the app \
+                     again."
+                ),
+            },
+        }
+    }
+}
+
+/// The missing-data screen's text, following a conversion as it goes.
+#[derive(Component)]
+struct MissingText;
+
+fn missing_progress(mut texts: Query<&mut Text, With<MissingText>>) {
+    let Some(missing @ Missing::Converting) = MISSING.get().copied() else {
+        return;
+    };
+    let line = missing.text();
+    for mut text in &mut texts {
+        if text.0 != line {
+            text.0 = line.clone();
         }
     }
 }
@@ -169,6 +222,7 @@ fn missing_screen(mut commands: Commands) {
             UiTargetCamera(camera),
         ))
         .with_child((
+            MissingText,
             Text::new(missing.text()),
             TextFont {
                 // Logical points: a phone's screen is about 400 of them tall in landscape.
@@ -179,6 +233,174 @@ fn missing_screen(mut commands: Commands) {
         ));
 }
 
+/// The player's Crash Team Racing disc into the app's own `kart-data`, on the phone, by the very
+/// converter the PC launcher runs (`ctr_assets::extract`). Kart data is stamped with the converter
+/// that made it (`.converter`, as the launcher stamps it), and a build whose converter is another
+/// converts the disc again; so the disc image stays on the phone. The game loads its kart data
+/// at start, so when it is done the app starts again (`Phoenix.java`).
+mod convert {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    use jni::objects::{JClass, JObject, JValue};
+    use jni::{jni_sig, jni_str};
+
+    use super::AndroidApp;
+
+    /// This build's converter: the last commit to touch `ctr-assets` (`scripts/android-apk.sh`).
+    /// A build without it converts only when there is no kart data.
+    const CONVERTER: Option<&str> = option_env!("KARTCRAFT_CONVERTER");
+    /// The disc image's extensions, as the PC launcher looks for them (`find.rs`).
+    const DISC: [&str; 3] = ["bin", "iso", "img"];
+    /// Folders of [`super::SHARED`] that hold no disc.
+    const NOT_DISC: [&str; 3] = ["WoW", "kart-data", "benilla-config"];
+
+    #[derive(Debug, Clone)]
+    pub enum Status {
+        Running(String),
+        Done,
+        Failed(String),
+    }
+
+    static STATUS: Mutex<Option<Status>> = Mutex::new(None);
+
+    pub fn status() -> Status {
+        STATUS
+            .lock()
+            .ok()
+            .and_then(|s| s.clone())
+            .unwrap_or(Status::Running(String::new()))
+    }
+
+    fn set(status: Status) {
+        *STATUS.lock().unwrap_or_else(|e| e.into_inner()) = Some(status);
+    }
+
+    /// The biggest disc image in `dir` or a folder in it (a disc copied as its own folder).
+    pub fn disc(dir: &Path) -> Option<PathBuf> {
+        let images = |d: &Path| -> Vec<(u64, PathBuf)> {
+            std::fs::read_dir(d)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|e| {
+                    let path = e.path();
+                    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+                    let meta = e.metadata().ok()?;
+                    (meta.is_file() && DISC.contains(&ext.as_str())).then_some((meta.len(), path))
+                })
+                .collect()
+        };
+        let mut found = images(dir);
+        for sub in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let name = sub.file_name();
+            if sub.path().is_dir() && !NOT_DISC.iter().any(|n| name == *n) {
+                found.extend(images(&sub.path()));
+            }
+        }
+        found
+            .into_iter()
+            .max_by_key(|(size, _)| *size)
+            .map(|(_, p)| p)
+    }
+
+    /// Whether `out` needs the disc converted: no kart, or another converter's.
+    pub fn needed(out: &Path) -> bool {
+        if !out.join("kart.json").is_file() {
+            return true;
+        }
+        let stamp = std::fs::read_to_string(out.join(".converter")).unwrap_or_default();
+        CONVERTER.is_some_and(|c| stamp.trim() != c)
+    }
+
+    /// Converts `disc` into `out` on a thread of its own, then starts the app again.
+    pub fn start(app: AndroidApp, disc: PathBuf, out: PathBuf) {
+        std::thread::spawn(move || {
+            set(Status::Running(String::new()));
+            match convert(&disc, &out) {
+                Ok(()) => {
+                    println!("benilla: converted the disc into {}", out.display());
+                    set(Status::Done);
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    if let Err(e) = restart(&app) {
+                        println!("benilla: could not start again: {e}");
+                        set(Status::Failed(
+                            "Done, but the app could not start again by itself: open it again."
+                                .into(),
+                        ));
+                    }
+                }
+                Err(why) => {
+                    println!("benilla: the disc did not convert: {why}");
+                    set(Status::Failed(why));
+                }
+            }
+        });
+    }
+
+    /// Into a fresh folder beside `out`, swapped in once whole: a conversion that fails keeps the
+    /// kart data there was.
+    fn convert(disc: &Path, out: &Path) -> Result<(), String> {
+        let fresh = out.with_file_name("kart-data.new");
+        let old = out.with_file_name("kart-data.old");
+        let _ = std::fs::remove_dir_all(&fresh);
+        let _ = std::fs::remove_dir_all(&old);
+        let parts = ctr_assets::extract::Parts {
+            all: true,
+            ..Default::default()
+        };
+        ctr_assets::extract::run(disc, &fresh, "crash", parts, &mut |line| {
+            println!("benilla: convert: {line}");
+            set(Status::Running(line));
+        })?;
+        if let Some(c) = CONVERTER {
+            std::fs::write(fresh.join(".converter"), c).map_err(|e| e.to_string())?;
+        }
+        if out.exists() {
+            std::fs::rename(out, &old).map_err(|e| e.to_string())?;
+        }
+        std::fs::rename(&fresh, out).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_dir_all(&old);
+        Ok(())
+    }
+
+    /// `Phoenix.rebirth(activity)`, through the activity's class loader as `Updater` is reached.
+    fn restart(app: &AndroidApp) -> Result<(), String> {
+        // SAFETY: the activity's own VM and activity, valid while `app` lives.
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+        let raw_activity = app.activity_as_ptr() as jni::sys::jobject;
+        vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+            // SAFETY: the activity's global reference, not owned here.
+            let activity = unsafe { JObject::from_raw(env, raw_activity) };
+            let loader = env
+                .call_method(
+                    &activity,
+                    jni_str!("getClassLoader"),
+                    jni_sig!("()Ljava/lang/ClassLoader;"),
+                    &[],
+                )?
+                .l()?;
+            let name = env.new_string("com.worldofkartcraft.game.Phoenix")?;
+            let class = env
+                .call_method(
+                    &loader,
+                    jni_str!("loadClass"),
+                    jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
+                    &[JValue::Object(&name)],
+                )?
+                .l()?;
+            let class = env.cast_local::<JClass>(class)?;
+            env.call_static_method(
+                &class,
+                jni_str!("rebirth"),
+                jni_sig!("(Landroid/content/Context;)V"),
+                &[JValue::Object(&activity)],
+            )?;
+            Ok(())
+        })
+        .map_err(|e| format!("{e:?}"))
+    }
+}
 /// The app's own updates, as the PC launcher updates the game: the update host's `android/`
 /// folder (`dist/android-upload.sh`) holds `version.json` and the APK it names. A newer build
 /// downloads in the background, is checked against its SHA-256, and goes to Android's installer
@@ -539,6 +761,7 @@ impl Plugin for AndroidPlugin {
             .add_systems(PreUpdate, read_pads.before(InputSystems))
             .add_systems(Update, soft_keyboard)
             .add_systems(Startup, missing_screen)
+            .add_systems(Update, missing_progress)
             .add_systems(Update, update_banner);
     }
 }

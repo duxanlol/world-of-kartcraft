@@ -113,6 +113,8 @@ cpal = "0.17"
 jni = "0.22"
 # The app's own update is checked against its SHA-256 (`android.rs`), as the launcher checks the game.
 sha2 = "0.10"
+# The disc converter, run on the phone (`android.rs`, convert), the one `ctr-extract` is.
+ctr-assets = { path = "../ctr-assets" }
 
 # The host clipboard (`textinput::clipboard`) off Android, which has none of arboard's backends.
 [target.'cfg(not(target_os = "android"))'.dependencies]

@@ -606,6 +606,7 @@ dependencies = [
  "cosmic-text",
  "cpal",
  "crossbeam-channel",
+ "ctr-assets",
  "ctr-kart",
  "flate2",
  "fontdb",

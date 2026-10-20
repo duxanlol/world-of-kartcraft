@@ -59,7 +59,10 @@ KARTCRAFT_WAKE_URL=""
 # Its own version code, which an update must beat: the commit count, growing with every commit.
 code="$(git rev-list --count HEAD)"
 KARTCRAFT_VERSION_CODE="$code"
-export KARTCRAFT_SERVER KARTCRAFT_UPDATE_URL KARTCRAFT_WAKE_URL KARTCRAFT_VERSION_CODE
+# The disc converter it carries (`ctr-assets`), named by the last commit to touch it: kart data a
+# phone made with another is converted again from the disc (`android.rs`, convert).
+KARTCRAFT_CONVERTER="$(git log -1 --format=%H -- crates/ctr-assets)"
+export KARTCRAFT_SERVER KARTCRAFT_UPDATE_URL KARTCRAFT_WAKE_URL KARTCRAFT_VERSION_CODE KARTCRAFT_CONVERTER
 echo "channel ${channel:-production}: server ${KARTCRAFT_SERVER:-none}, updates ${KARTCRAFT_UPDATE_URL:-none}"
 cargo build -p benilla-android --target aarch64-linux-android --release --no-default-features
 
@@ -101,6 +104,10 @@ cat >"$out/AndroidManifest.xml" <<EOF
         </activity>
         <!-- The installer's answer to an update: shows the player its confirmation. -->
         <receiver android:name="com.worldofkartcraft.game.InstallReceiver" android:exported="false" />
+        <!-- Starts the game again once the disc is converted, from a process of its own. -->
+        <activity android:name="com.worldofkartcraft.game.Phoenix" android:process=":restart"
+            android:exported="false" android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
     </application>
 </manifest>
 EOF
