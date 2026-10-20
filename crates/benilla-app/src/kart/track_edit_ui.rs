@@ -16,7 +16,7 @@ use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use bevy::window::{PrimaryWindow, RawHandleWrapper};
 
-use super::objects::{Models, KINDS};
+use super::objects::{kinds, Models};
 use super::track_edit::{EditView, TrackCmd, TrackEdit, TURN_KEYS};
 use crate::glue::art::{GlueArt, GOLD};
 use crate::glue::backdrop::{backdrop_border, tiled_bg_node};
@@ -259,10 +259,10 @@ struct ObjectsPanel {
     tiles: Vec<(&'static str, &'static str, Option<Handle<Image>>)>,
 }
 
-/// The objects panel's tabs: each group with a kind in it, in [`KINDS`]' order.
+/// The objects panel's tabs: each group with a kind in it, in [`kinds`]' order.
 fn object_groups() -> Vec<&'static str> {
     let mut groups: Vec<&'static str> = Vec::new();
-    for k in &KINDS {
+    for k in kinds() {
         if !groups.contains(&k.group) {
             groups.push(k.group);
         }
@@ -294,7 +294,7 @@ impl Default for EditorUi {
             numbers_of: (Vec::new(), 0.0),
             numbers: Vec::new(),
             objects_open: false,
-            tab: KINDS[0].group,
+            tab: kinds()[0].group,
             moved: [Vec2::ZERO; 2],
             drag_at: None,
         }
@@ -561,7 +561,7 @@ pub(crate) fn draw(
         art: art.tooltip_bg.is_some(),
         objects: ui.objects_open.then(|| ObjectsPanel {
             tab: ui.tab,
-            tiles: (KINDS.iter().filter(|k| k.group == ui.tab))
+            tiles: (kinds().iter().filter(|k| k.group == ui.tab))
                 .map(|k| (k.key, k.name, models.icon(k.key)))
                 .collect(),
         }),
@@ -1423,6 +1423,7 @@ fn field(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kart::objects::KINDS;
 
     fn view(state: &'static str, tool: &'static str, picked: usize) -> EditView {
         EditView {

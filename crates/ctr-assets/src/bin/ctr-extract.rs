@@ -1,11 +1,12 @@
-//! `ctr-extract <disc.bin> <out_dir> [--kart <name>] [--audio] [--effects] [--weapons] [--music] [--hud] [--all]`
+//! `ctr-extract <disc.bin> <out_dir> [--kart <name>] [--audio] [--effects] [--weapons] [--music] [--hud] [--props] [--all]`
 //!
 //! Reads the user's own Crash Team Racing (NTSC-U) disc image and writes `<out_dir>/kart.json`
 //! (the chosen racer's kart, default `crash`). `--audio` also writes the kart sound effects to
 //! `<out_dir>/audio/*.wav` and the characters' voices to `<out_dir>/audio/voice/`; `--effects`
 //! writes `<out_dir>/effects.json` (turbo flames, exhaust smoke, skid marks, particles); `--weapons` writes `<out_dir>/weapons.json` (weapon, crate and
-//! Wumpa models). `--all` writes `<out_dir>/kart-<name>.json` for every kart, the audio, the weapons
-//! and the effects. The disc image is only read.
+//! Wumpa models); `--props` writes `<out_dir>/props.json` (the track editor's CTR objects,
+//! `ctr_assets::props`). `--all` writes `<out_dir>/kart-<name>.json` for every kart, the audio, the
+//! weapons, the effects and the props. The disc image is only read.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -15,7 +16,7 @@ use ctr_assets::disc::Disc;
 use ctr_assets::kart::{self, KARTS};
 
 fn usage() -> ExitCode {
-    eprintln!("usage: ctr-extract <disc.bin|disc.iso> <out_dir> [--kart <name>] [--audio] [--effects] [--weapons] [--music] [--hud] [--all]");
+    eprintln!("usage: ctr-extract <disc.bin|disc.iso> <out_dir> [--kart <name>] [--audio] [--effects] [--weapons] [--music] [--hud] [--props] [--all]");
     eprintln!("karts: {}", KARTS.join(", "));
     ExitCode::from(2)
 }
@@ -37,6 +38,7 @@ fn run(
     weapons: bool,
     music: bool,
     hud: bool,
+    props: bool,
 ) -> Result<(), String> {
     let mut disc = Disc::open(disc).map_err(|e| e.to_string())?;
     // Only the US disc's files sit where the bigfile's indices say (`big.rs`): another version
@@ -100,6 +102,19 @@ fn run(
             w.textures.len()
         );
     }
+    if props || all {
+        let file =
+            ctr_assets::props::file(ctr_assets::props::build(&mut bf).map_err(|e| e.to_string())?);
+        let path = out.join("props.json");
+        let data = serde_json::to_vec(&file).map_err(|e| e.to_string())?;
+        std::fs::write(&path, data).map_err(|e| format!("{}: {e}", path.display()))?;
+        println!(
+            "wrote {} ({} props, {} textures)",
+            path.display(),
+            file.props.len(),
+            file.textures.len()
+        );
+    }
     if audio || all {
         let dir = out.join("audio");
         for r in ctr_assets::audio::extract(&mut disc, &dir).map_err(|e| e.to_string())? {
@@ -154,6 +169,7 @@ fn main() -> ExitCode {
     let mut weapons = false;
     let mut music = false;
     let mut hud = false;
+    let mut props = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -167,6 +183,7 @@ fn main() -> ExitCode {
             "--weapons" => weapons = true,
             "--music" => music = true,
             "--hud" => hud = true,
+            "--props" => props = true,
             "-h" | "--help" => return usage(),
             _ => positional.push(PathBuf::from(a)),
         }
@@ -179,7 +196,7 @@ fn main() -> ExitCode {
         return usage();
     }
     match run(
-        disc, out, &kart_name, all, audio, effects, weapons, music, hud,
+        disc, out, &kart_name, all, audio, effects, weapons, music, hud, props,
     ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

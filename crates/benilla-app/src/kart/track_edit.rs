@@ -10,7 +10,7 @@ use benilla_world::collision::WorldCollision;
 use bevy::prelude::*;
 
 use super::freecam::{FreeCam, FreeMode};
-use super::objects::{Placed, KINDS};
+use super::objects::{kinds, Placed};
 use super::race::{Active, Course, Races, COURSES, GATE_HALF_WIDTH};
 
 /// How far the camera's aim reaches for the ground (yards).
@@ -135,7 +135,7 @@ impl Saved {
 
 /// What a left click in the world places, as the bar's buttons pick it: `Move` nothing, it
 /// takes what is under the cursor to drag; `Number` picks a checkpoint to renumber, `Erase` one
-/// or an object to delete; `Object` places the kind [`KINDS`]`[k]`. The first checkpoint placed
+/// or an object to delete; `Object` places the kind [`kinds`]`()[k]`. The first checkpoint placed
 /// is the start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Place {
@@ -337,7 +337,7 @@ impl TrackEdit {
             },
             picked: self.picked.map_or(0, |i| i + 1),
             object: match self.tool {
-                Place::Object(k) => KINDS.get(k).map(|k| k.key),
+                Place::Object(k) => kinds().get(k).map(|k| k.key),
                 _ => None,
             },
             turns_object: self.on
@@ -537,7 +537,7 @@ impl TrackEdit {
                     "Left-click to place the {}. Q/E yaw, R/F pitch, Z/C roll; the middle mouse \
                      turns it as you see it (Shift: rolls it), Ctrl raises it. Yaw {yaw}°, pitch \
                      {pitch}°, roll {roll}°, {lift:.1} yd up.",
-                    KINDS.get(k).map_or("object", |k| k.name),
+                    kinds().get(k).map_or("object", |k| k.name),
                     lift = self.lift,
                 )
             }
@@ -1524,7 +1524,7 @@ pub(crate) fn update(
     // The ghost: the object held, or the one a click would place at the aim.
     edit.ghost = match (edit.held, tool) {
         (Some(Held::Object(i)), _) => edit.objects.get(i).cloned(),
-        (None, Place::Object(k)) if editing => aim.zip(KINDS.get(k)).map(|(at, kind)| {
+        (None, Place::Object(k)) if editing => aim.zip(kinds().get(k)).map(|(at, kind)| {
             let w = edit.pin.unwrap_or_else(|| bevy_to_wow(at));
             let [yaw, pitch, roll] = edit.object_turn;
             Placed {
@@ -1646,7 +1646,7 @@ fn place(edit: &mut TrackEdit, what: Place, at: Vec3, o: f32) {
             edit.say("Starting grid placed.");
         }
         Place::Object(k) => {
-            let Some(kind) = KINDS.get(k) else { return };
+            let Some(kind) = kinds().get(k) else { return };
             let [yaw, pitch, roll] = edit.object_turn;
             edit.objects.push(Placed {
                 model: kind.key.into(),
@@ -1674,6 +1674,7 @@ fn place(edit: &mut TrackEdit, what: Place, at: Vec3, o: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kart::objects::KINDS;
 
     /// A left click at `at`, the gate or grid facing `o`.
     fn click(edit: &mut TrackEdit, at: Vec3, o: f32) {

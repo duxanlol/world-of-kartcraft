@@ -129,7 +129,11 @@ install (`kart/objects.rs`, the planks for now), by group, each a tile with its 
 goes where the cursor points, turned with Q/E and the middle mouse (across yaws, up and down
 pitches, with Shift rolls); Move drags one and Delete removes it, and Undo takes back gates and
 objects in the order they were placed. Objects are solid: the kart drives on them in the editor,
-in any test lap and in a race on a player track. The Boosts group's turbo pad (`turbo-pad`) is
+in any test lap and in a race on a player track. CTR's own props join them, from the player's
+own disc as the launcher converts it (`ctr-extract --props`, in `--all`: `kart-data/props.json`,
+`ctr_assets::props`): the CTR Hazards (the armadillo, TNT and Nitro crates, barrels...), CTR
+Pickups (the ? crate, Wumpa fruit, the relic...) and CTR Scenery groups, keyed `ctr-<name>`, at
+the kart's own size. The Boosts group's turbo pad (`turbo-pad`) is
 no model and no collider: CTR's pad, draped on the ground under where it is placed and pointing
 as it is yawed, fired as a course's pads are, and picked for Move and Delete by the aim over it. A saved track keeps them as `objects` (`model`,
 `x`, `y`, `z`, `yaw`, `pitch`, `roll`, radians); a publish sends them as its last field

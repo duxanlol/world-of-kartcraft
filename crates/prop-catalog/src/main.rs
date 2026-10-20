@@ -74,79 +74,14 @@ const NOT_PROPS: [&str; 16] = [
     "shrub", "bush", "grass", "hologram", "banner", "fx",
 ];
 
-/// CTR's own groups, ahead of [`GROUPS`]: what bites on a track, and what is picked up there.
-const CTR_GROUPS: [(&str, &[&str]); 2] = [
-    (
-        "Hazards",
-        &[
-            "armadillo",
-            "flamejet",
-            "blades",
-            "barrel",
-            "teeth",
-            "snowball",
-            "minecart",
-            "fireball",
-            "seal",
-            "crab",
-            "spider",
-            "turtle",
-            "bear",
-            "plant",
-            "bomb",
-            "rocket",
-            "tnt",
-            "nitro",
-        ],
-    ),
-    (
-        "Pickups",
-        &[
-            "crate", "fruit", "gem", "crystal", "relic", "key", "trophy", "token",
-        ],
-    ),
-];
-
-/// CTR models that are no prop: the racers, and effects (shockwaves, shields, exhaust, wakes).
-const CTR_NOT_PROPS: [&str; 17] = [
-    "shockwave",
-    "beam",
-    "shield",
-    "cloud",
-    "wake",
-    "highlight",
-    "burst",
-    "warpball",
-    "mouth",
-    "turbo",
-    "shadow",
-    "flash",
-    "particl",
-    "glow",
-    "fruitdisp",
-    "big1",
-    "explosion",
-];
-
-/// The first bigfile entry past the tracks and arenas: the menus, the intro and the ending.
-const CTR_FIRST_NON_TRACK: usize = 216;
-
 /// A CTR model's group, or `None` for no prop.
+/// CTR's own groups (`ctr_assets::props::group_of`: Hazards, Pickups), else the WoW groups
+/// by its name, else Misc.
 fn ctr_group_of(name: &str, level: Option<usize>) -> Option<&'static str> {
-    let lower = name.to_ascii_lowercase();
-    let racer = ctr_assets::big::CHARACTERS.contains(&lower.as_str());
-    let fx = CTR_NOT_PROPS.iter().any(|w| lower.contains(w)) || lower.len() < 3;
-    if racer || fx || level.is_some_and(|l| l >= CTR_FIRST_NON_TRACK) {
-        return None;
+    match ctr_assets::props::group_of(name, level)? {
+        "Scenery" => Some(group_of(name).unwrap_or("Misc")),
+        g => Some(g),
     }
-    let ctr = CTR_GROUPS
-        .iter()
-        .find(|(_, ws)| ws.iter().any(|w| lower.contains(w)));
-    Some(
-        ctr.map(|(g, _)| *g)
-            .or_else(|| group_of(name))
-            .unwrap_or("Misc"),
-    )
 }
 
 /// Past this many triangles a model is a building, not a prop to place.
@@ -502,8 +437,8 @@ fn main() -> Result<()> {
             });
         }
     }
-    let groups: Vec<&str> = (GROUPS.iter().chain(&CTR_GROUPS))
-        .map(|(g, _)| *g)
+    let groups: Vec<&str> = (GROUPS.iter().map(|(g, _)| *g))
+        .chain(["Hazards", "Pickups", "Misc"])
         .filter(|g| entries.iter().any(|e| e.group == *g))
         .collect();
     write_json(

@@ -101,9 +101,139 @@ pub fn build(bf: &mut BigFile) -> Result<Props> {
     })
 }
 
+/// CTR's own groups: what bites on a track, and what is picked up there.
+const GROUPS: [(&str, &[&str]); 2] = [
+    (
+        "Hazards",
+        &[
+            "armadillo",
+            "flamejet",
+            "blades",
+            "barrel",
+            "teeth",
+            "snowball",
+            "minecart",
+            "fireball",
+            "seal",
+            "crab",
+            "spider",
+            "turtle",
+            "bear",
+            "plant",
+            "bomb",
+            "rocket",
+            "tnt",
+            "nitro",
+        ],
+    ),
+    (
+        "Pickups",
+        &[
+            "crate", "fruit", "gem", "crystal", "relic", "key", "trophy", "token",
+        ],
+    ),
+];
+
+/// CTR models that are no prop: effects (shockwaves, shields, exhaust, wakes); the racers are
+/// [`big::CHARACTERS`].
+const NOT_PROPS: [&str; 17] = [
+    "shockwave",
+    "beam",
+    "shield",
+    "cloud",
+    "wake",
+    "highlight",
+    "burst",
+    "warpball",
+    "mouth",
+    "turbo",
+    "shadow",
+    "flash",
+    "particl",
+    "glow",
+    "fruitdisp",
+    "big1",
+    "explosion",
+];
+
+/// The first bigfile entry past the tracks and arenas: the menus, the intro and the ending.
+const FIRST_NON_TRACK: usize = 216;
+
+/// A model's group (`Hazards`, `Pickups`, else `Scenery`), or `None` for no prop: a racer, an
+/// effect, or a model of the menus, the intro or the ending.
+pub fn group_of(name: &str, level: Option<usize>) -> Option<&'static str> {
+    let lower = name.to_ascii_lowercase();
+    let racer = big::CHARACTERS.contains(&lower.as_str());
+    let fx = NOT_PROPS.iter().any(|w| lower.contains(w)) || lower.len() < 3;
+    if racer || fx || level.is_some_and(|l| l >= FIRST_NON_TRACK) {
+        return None;
+    }
+    let group = GROUPS
+        .iter()
+        .find(|(_, ws)| ws.iter().any(|w| lower.contains(w)));
+    Some(group.map_or("Scenery", |(g, _)| *g))
+}
+
+/// `kart-data/props.json`, the track editor's CTR objects: every prop ([`group_of`]) at its
+/// static frame, with its group, and the textures its surfaces index.
+#[derive(serde::Serialize)]
+pub struct PropsFile {
+    pub textures: Vec<Texture>,
+    pub props: Vec<PropEntry>,
+}
+
+#[derive(serde::Serialize)]
+pub struct PropEntry {
+    pub group: &'static str,
+    #[serde(flatten)]
+    pub frame: MeshFrame,
+}
+
+/// The props as `props.json` keeps them, each once by name.
+pub fn file(props: Props) -> PropsFile {
+    let Props { textures, props } = props;
+    let mut props: Vec<PropEntry> = props
+        .into_iter()
+        .filter_map(|p| {
+            let group = group_of(&p.name, p.level)?;
+            Some(PropEntry {
+                group,
+                frame: p.frame,
+            })
+        })
+        .collect();
+    // Only the textures the props kept use, renumbered: the atlas holds every model's.
+    let mut kept: Vec<Texture> = Vec::new();
+    let mut new_index = std::collections::HashMap::new();
+    for s in props.iter_mut().flat_map(|p| p.frame.surfaces.iter_mut()) {
+        if let Some(t) = s.texture {
+            let i = *new_index.entry(t).or_insert_with(|| {
+                kept.push(textures[t].clone());
+                kept.len() - 1
+            });
+            s.texture = Some(i);
+        }
+    }
+    PropsFile {
+        textures: kept,
+        props,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn props_are_hazards_pickups_or_scenery_never_racers_or_effects() {
+        assert_eq!(group_of("armadillo", Some(41)), Some("Hazards"));
+        assert_eq!(group_of("crate_nitro", None), Some("Hazards"));
+        assert_eq!(group_of("crate_question", Some(113)), Some("Pickups"));
+        assert_eq!(group_of("tombstone", Some(145)), Some("Scenery"));
+        assert_eq!(group_of("crash", None), None, "a racer");
+        assert_eq!(group_of("shockwavered", None), None, "an effect");
+        assert_eq!(group_of("introcrash", Some(216)), None, "the intro's");
+    }
 
     #[test]
     fn a_level_has_printable_named_models() {

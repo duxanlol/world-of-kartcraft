@@ -107,9 +107,138 @@ pub(crate) const KINDS: [Kind; 11] = [
     },
 ];
 
-/// The kind of `key`, and its index.
+/// CTR's props as `ctr-extract --props` writes them from the player's own disc
+/// (`kart-data/props.json`, `ctr_assets::props`): meters, +Y up, the kart's own frame.
+#[derive(serde::Deserialize)]
+struct CtrProps {
+    textures: Vec<CtrTexture>,
+    props: Vec<CtrProp>,
+}
+
+#[derive(serde::Deserialize)]
+struct CtrTexture {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
+
+#[derive(serde::Deserialize)]
+struct CtrProp {
+    name: String,
+    group: String,
+    surfaces: Vec<CtrSurface>,
+}
+
+#[derive(serde::Deserialize)]
+struct CtrSurface {
+    texture: Option<usize>,
+    blend: String,
+    vertices: Vec<CtrVertex>,
+    indices: Vec<u32>,
+}
+
+#[derive(serde::Deserialize)]
+struct CtrVertex {
+    position: [f32; 3],
+    uv: [f32; 2],
+}
+
+/// The player's CTR props, read once; none without the file (an older conversion: the launcher
+/// converts again when its converter changes).
+static CTR_PROPS: std::sync::LazyLock<Option<CtrProps>> = std::sync::LazyLock::new(|| {
+    let path = kartcraft::model::data_root()?.join("props.json");
+    let bytes = std::fs::read(&path).ok()?;
+    serde_json::from_slice(&bytes)
+        .inspect_err(|e| warn!("kart objects: {}: {e}", path.display()))
+        .ok()
+});
+
+/// A CTR kind's `path`: its place in `props.json`.
+const CTR_PATH: &str = "ctr:";
+
+/// A CTR prop's name as the objects panel shows it: `crate_question` → `Crate question`.
+fn ctr_name(name: &str) -> String {
+    let words = name.replace('_', " ");
+    let mut c = words.chars();
+    c.next()
+        .map(|f| f.to_uppercase().chain(c).collect())
+        .unwrap_or_default()
+}
+
+/// Every kind: [`KINDS`], then the player's CTR props by group (`CTR Hazards`, `CTR Pickups`,
+/// `CTR Scenery`), keyed `ctr-<name>`.
+pub(crate) fn kinds() -> &'static [Kind] {
+    static ALL: std::sync::LazyLock<Vec<Kind>> = std::sync::LazyLock::new(|| {
+        let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
+        let own = KINDS.iter().map(|k| Kind {
+            key: k.key,
+            name: k.name,
+            group: k.group,
+            path: k.path,
+        });
+        let ctr = CTR_PROPS
+            .iter()
+            .flat_map(|f| f.props.iter().enumerate())
+            .map(|(i, p)| Kind {
+                key: leak(format!("ctr-{}", p.name)),
+                name: leak(ctr_name(&p.name)),
+                group: leak(format!("CTR {}", p.group)),
+                path: leak(format!("{CTR_PATH}{i}")),
+            });
+        own.chain(ctr).collect()
+    });
+    &ALL
+}
+
+/// The kind of `key`, and its index among [`kinds`].
 pub(crate) fn kind(key: &str) -> Option<(usize, &'static Kind)> {
-    KINDS.iter().enumerate().find(|(_, k)| k.key == key)
+    kinds().iter().enumerate().find(|(_, k)| k.key == key)
+}
+
+/// A CTR prop's parts, in yards at the kart's own size (CTR's props stand to its kart as CTR
+/// drew them), each face shaded by its normal.
+fn ctr_parts(index: usize) -> Option<Vec<Part>> {
+    let file = CTR_PROPS.as_ref()?;
+    let prop = file.props.get(index)?;
+    let to_yards = kartcraft::model_scale_at(1.0);
+    let parts = prop
+        .surfaces
+        .iter()
+        .filter(|s| !s.indices.is_empty())
+        .map(|s| {
+            let pos: Vec<Vec3> = s
+                .vertices
+                .iter()
+                .map(|v| Vec3::from(v.position) * to_yards)
+                .collect();
+            // Each vertex's normal: its faces' summed.
+            let mut normals = vec![Vec3::ZERO; pos.len()];
+            for t in s.indices.as_chunks::<3>().0 {
+                let [a, b, c] = t.map(|i| pos.get(i as usize).copied().unwrap_or_default());
+                let n = (b - a).cross(c - a);
+                for &i in t {
+                    if let Some(v) = normals.get_mut(i as usize) {
+                        *v += n;
+                    }
+                }
+            }
+            let texture = s.texture.and_then(|t| file.textures.get(t));
+            Part {
+                normals: normals.iter().map(|n| n.normalize_or(Vec3::Y)).collect(),
+                uvs: s.vertices.iter().map(|v| v.uv).collect(),
+                idx: s.indices.clone(),
+                texture: texture.map(|t| (t.width, t.height, t.rgba.clone())),
+                // PSX semi-transparency blends; an opaque surface cuts out its clear texels.
+                blend: if s.blend == "opaque" {
+                    ModelBlend::AlphaTest
+                } else {
+                    ModelBlend::Blend
+                },
+                pos,
+            }
+        })
+        .collect();
+    Some(parts)
 }
 
 /// An object as placed: its kind, where its origin stands (WoW) and its turn (radians): `yaw`
@@ -418,9 +547,17 @@ impl Models {
                 if is_pad(key) {
                     return Some(pad_kind(meshes, materials, images));
                 }
-                let parts = read_parts(chain, kind.path)
-                    .inspect_err(|e| warn!("kart object {key}: {e:#}"))
-                    .ok()?;
+                // A CTR prop from the player's own disc, else a model of their install.
+                let ctr = kind
+                    .path
+                    .strip_prefix(CTR_PATH)
+                    .and_then(|i| i.parse().ok());
+                let parts = match ctr {
+                    Some(i) => ctr_parts(i)?,
+                    None => read_parts(chain, kind.path)
+                        .inspect_err(|e| warn!("kart object {key}: {e:#}"))
+                        .ok()?,
+                };
                 let mut verts = Vec::new();
                 let mut tris = Vec::new();
                 for p in &parts {
@@ -604,8 +741,8 @@ pub(crate) fn lay(
             .load(key, chain, &mut meshes, &mut materials, &mut images)
             .is_some()
     };
-    if edit.view().state == "edit" && models.0.len() < KINDS.len() {
-        for k in &KINDS {
+    if edit.view().state == "edit" && models.0.len() < kinds().len() {
+        for k in kinds() {
             load(k.key, &mut models);
         }
     }
@@ -781,6 +918,47 @@ mod tests {
             .map(|p| p[0])
             .collect();
         assert!(greys.len() >= 2, "{greys:?}");
+    }
+
+    /// The player's CTR props (`kart-data/props.json`) are kinds after the install's, by group,
+    /// each built from its own surfaces into textured triangles; without the file, none.
+    #[test]
+    fn the_ctr_props_are_kinds_with_textured_triangles() {
+        let ctr: Vec<&Kind> = kinds()
+            .iter()
+            .filter(|k| k.path.starts_with(CTR_PATH))
+            .collect();
+        assert_eq!(kinds().len(), KINDS.len() + ctr.len());
+        let Some(file) = CTR_PROPS.as_ref() else {
+            assert!(ctr.is_empty(), "no props.json, no CTR kinds");
+            // Pointed at a conversion, it must have its props.
+            assert!(
+                std::env::var_os("WOW_KART_DATA").is_none(),
+                "WOW_KART_DATA has no props.json"
+            );
+            return;
+        };
+        assert_eq!(ctr.len(), file.props.len());
+        for k in &ctr {
+            assert!(
+                k.key.starts_with("ctr-") && k.group.starts_with("CTR "),
+                "{}",
+                k.key
+            );
+            let i: usize = k.path[CTR_PATH.len()..].parse().unwrap();
+            let parts = ctr_parts(i).unwrap_or_else(|| panic!("{}", k.key));
+            let tris: usize = parts.iter().map(|p| p.idx.len() / 3).sum();
+            assert!(tris > 0, "{} has no triangles", k.key);
+            assert!(
+                parts.iter().all(|p| p.pos.iter().all(|v| v.is_finite())),
+                "{}",
+                k.key
+            );
+        }
+        // The ? crate is among them, a pickup, textured.
+        let crate_q = kind("ctr-crate_question").expect("the ? crate");
+        assert_eq!(crate_q.1.group, "CTR Pickups");
+        assert_eq!(ctr_name("crate_question"), "Crate question");
     }
 
     #[test]
