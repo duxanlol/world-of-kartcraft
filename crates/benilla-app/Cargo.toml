@@ -20,7 +20,6 @@ trace_chrome = ["bevy/trace_chrome"]
 [dependencies]
 anyhow.workspace = true
 # The EditBox clipboard, on the main thread as NSPasteboard requires; bevy_egui's 3.x.
-arboard = "3"
 benilla-ui = { path = "../benilla-ui" }
 bevy.workspace = true
 wgpu.workspace = true
@@ -107,6 +106,10 @@ objc2-foundation = { version = "0.2", features = ["NSArray", "NSData", "NSGeomet
 # lost default device and drops the IO-cycle timestamp.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 cpal = "0.17"
+
+# The host clipboard (`textinput::clipboard`) off Android, which has none of arboard's backends.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = "3"
 
 # Windows CPU clocks for `perf::clock`; `GetLocalTime` for the log stamp (`ui_chat::logging`); the
 # layout's virtual keys for `bindings::layout`.

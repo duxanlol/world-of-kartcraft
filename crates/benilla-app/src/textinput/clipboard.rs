@@ -19,6 +19,7 @@ trait Pasteboard {
     fn name(&self) -> &'static str;
 }
 
+#[cfg(not(target_os = "android"))]
 impl Pasteboard for arboard::Clipboard {
     fn read_text(&mut self) -> Result<Option<String>, String> {
         // `ContentNotAvailable` is arboard's empty clipboard, not a failure.
@@ -139,6 +140,7 @@ impl HostClipboard {
         self.opened = true;
         self.backend = match wl_display {
             Some(display) => Some(open_wayland(display)),
+            #[cfg(not(target_os = "android"))]
             None => match arboard::Clipboard::new() {
                 Ok(clipboard) => Some(Box::new(clipboard)),
                 Err(e) => {
@@ -146,6 +148,9 @@ impl HostClipboard {
                     None
                 }
             },
+            // Android's clipboard is the system's ClipboardManager, not yet spoken to.
+            #[cfg(target_os = "android")]
+            None => None,
         };
         if let Some(backend) = &self.backend {
             info!("clipboard: {}{}", backend.name(), session_note());
