@@ -156,8 +156,18 @@ enum Place {
     Number,
     Erase,
     Checkpoint,
+    /// A ring checkpoint, hung in the air.
+    Ring,
     Grid,
     Object(usize),
+}
+
+/// What the keys and the middle mouse turn: an object, or a ring checkpoint, held (its index) or
+/// about to be placed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Turning {
+    Object(Option<usize>),
+    Ring(Option<usize>),
 }
 
 /// What the move cursor holds: a gate (0 the start), the grid or a placed object.
@@ -171,7 +181,7 @@ enum Held {
 /// What undo took, for redo: a gate (its spot, facing, half-width and height) or an object.
 #[derive(Clone, Debug, PartialEq)]
 enum Undone {
-    Gate([f32; 2], Option<f32>, f32, Option<f32>),
+    Gate([f32; 2], Option<f32>, f32, Option<f32>, Option<[f32; 2]>),
     Object(Placed),
 }
 
@@ -187,6 +197,10 @@ pub(crate) struct TrackEdit {
     facings: Vec<Option<f32>>,
     /// Each gate's height (WoW z) where placed: a saved track's, and a dungeon trip's floor.
     heights: Vec<Option<f32>>,
+    /// Which checkpoints are rings, each one's pitch and roll (its yaw its facing, its radius its
+    /// half-width, its centre its height); and the tilt the next ring takes.
+    rings: Vec<Option<[f32; 2]>>,
+    tilt: [f32; 2],
     /// Each gate's half-width (yards), and the one the next gate gets (the mouse wheel's).
     widths: Vec<f32>,
     width: f32,
@@ -253,6 +267,8 @@ impl Default for TrackEdit {
             points: Vec::new(),
             facings: Vec::new(),
             heights: Vec::new(),
+            rings: Vec::new(),
+            tilt: [0.0; 2],
             widths: Vec::new(),
             width: GATE_HALF_WIDTH,
             turn: None,
@@ -326,6 +342,7 @@ impl TrackEdit {
             Active::draft(self.laps, self.points.clone(), me)
                 .with_facings(self.facings.clone())
                 .with_heights(self.heights.clone())
+                .with_rings(self.rings.clone())
                 .with_gates(self.widths.clone())
         })
     }
@@ -350,6 +367,7 @@ impl TrackEdit {
                 Place::Erase => "erase",
                 Place::Object(_) => "object",
                 Place::Checkpoint => "checkpoint",
+                Place::Ring => "ring",
                 Place::Grid => "grid",
             },
             picked: self.picked.map_or(0, |i| i + 1),
@@ -357,10 +375,7 @@ impl TrackEdit {
                 Place::Object(k) => kinds().get(k).map(|k| k.key),
                 _ => None,
             },
-            turns_object: self.on
-                && !self.testing
-                && (matches!(self.held, Some(Held::Object(_)))
-                    || matches!(self.tool, Place::Object(_))),
+            turns_object: self.on && !self.testing && self.turning().is_some(),
         }
     }
 
@@ -384,7 +399,9 @@ impl TrackEdit {
             let o = self.facings.pop().flatten();
             let w = self.widths.pop().unwrap_or(GATE_HALF_WIDTH);
             let z = self.heights.pop().flatten();
-            self.undone.push(Undone::Gate(p, o, w, z));
+            self.rings.resize(self.points.len() + 1, None);
+            let r = self.rings.pop().flatten();
+            self.undone.push(Undone::Gate(p, o, w, z, r));
         }
         self.picked = self.picked.filter(|&i| i < self.points.len());
     }
@@ -392,11 +409,13 @@ impl TrackEdit {
     /// Puts back what undo took last.
     fn redo(&mut self) {
         match self.undone.pop() {
-            Some(Undone::Gate(p, o, w, z)) => {
+            Some(Undone::Gate(p, o, w, z, r)) => {
+                self.rings.resize(self.points.len(), None);
                 self.points.push(p);
                 self.facings.push(o);
                 self.widths.push(w);
                 self.heights.push(z);
+                self.rings.push(r);
                 self.placed.push(false);
             }
             Some(Undone::Object(o)) => {
@@ -500,6 +519,9 @@ impl TrackEdit {
         self.widths.insert(j, w);
         let z = self.heights.remove(i);
         self.heights.insert(j, z);
+        self.rings.resize(n, None);
+        let r = self.rings.remove(i);
+        self.rings.insert(j, r);
         self.picked = Some(j);
         let now = if j == 0 {
             "the start".to_string()
@@ -517,10 +539,12 @@ impl TrackEdit {
         }
         self.drop_held();
         self.heights.resize(n, None);
+        self.rings.resize(n, None);
         self.points.remove(i);
         self.facings.remove(i);
         self.widths.remove(i);
         self.heights.remove(i);
+        self.rings.remove(i);
         self.picked = None;
         // Undo and redo take the last gate, which is another one now.
         self.undone.clear();
@@ -579,6 +603,16 @@ impl TrackEdit {
             }
             (Place::Checkpoint, _) => "Left-click the ground to place the next checkpoint.".into(),
             (Place::Grid, _) => "Left-click the ground to place the starting grid.".into(),
+            (Place::Ring, _) => {
+                let [pitch, roll] = self.tilt.map(|a| a.to_degrees().round() as i32);
+                format!(
+                    "Left-click to hang a ring checkpoint, {:.0} yd across (the wheel sizes it). \
+                     Q/E yaw, R/F pitch, Z/C roll, the middle mouse turns it, Ctrl raises it. \
+                     Pitch {pitch}°, roll {roll}°, {:.1} yd up.",
+                    self.width * 2.0,
+                    self.lift
+                )
+            }
             (Place::Object(k), _) => {
                 let [yaw, pitch, roll] = self.object_turn.map(|a| a.to_degrees().round() as i32);
                 format!(
@@ -610,7 +644,13 @@ impl TrackEdit {
             (
                 &s.course,
                 grid,
-                spots(&s.course.route(), &s.course.facings(), &s.course.gates()),
+                spots(
+                    &s.course.route(),
+                    &s.course.facings(),
+                    &s.course.gates(),
+                    &s.course.heights(),
+                    &s.course.rings(),
+                ),
                 s.floor().map_or_else(String::new, |z| format!("{z:.1}")),
                 super::objects::wire(&s.objects),
             )
@@ -624,6 +664,7 @@ impl TrackEdit {
         self.points.clear();
         self.facings.clear();
         self.heights.clear();
+        self.rings.clear();
         self.widths.clear();
         self.width = GATE_HALF_WIDTH;
         self.turn = None;
@@ -668,6 +709,9 @@ impl TrackEdit {
             Held::Gate(i) => {
                 self.turn = self.facings.get(i).copied().flatten();
                 self.width = self.widths.get(i).copied().unwrap_or(GATE_HALF_WIDTH);
+                if let Some(tilt) = self.rings.get(i).copied().flatten() {
+                    self.tilt = tilt;
+                }
             }
             Held::Grid => self.turn = self.grid.map(|g| g.o),
             Held::Object(_) => {}
@@ -680,6 +724,9 @@ impl TrackEdit {
         w[0] += self.grab[0];
         w[1] += self.grab[1];
         match self.held {
+            Some(Held::Gate(i)) if self.is_ring(i) => {
+                self.set_ring(i, [w[0], w[1], w[2] + self.lift])
+            }
             Some(Held::Gate(i)) if i < self.points.len() => {
                 self.points[i] = [w[0], w[1]];
                 self.facings[i] = self.turn;
@@ -700,6 +747,43 @@ impl TrackEdit {
                 (obj.x, obj.y, obj.z) = (w[0], w[1], w[2] + self.lift);
             }
             _ => self.held = None,
+        }
+    }
+
+    /// Whether checkpoint `i` is a ring.
+    fn is_ring(&self, i: usize) -> bool {
+        self.rings.get(i).is_some_and(Option::is_some)
+    }
+
+    /// Ring `i`'s centre (WoW).
+    fn ring_at(&self, i: usize) -> Option<[f32; 3]> {
+        let p = self.points.get(i)?;
+        Some([p[0], p[1], self.heights.get(i).copied().flatten()?])
+    }
+
+    /// Ring `i` with its centre at `at` (WoW), turned and sized as the editor has it now.
+    fn set_ring(&mut self, i: usize, at: [f32; 3]) {
+        let n = self.points.len();
+        if i >= n {
+            return;
+        }
+        self.heights.resize(n, None);
+        self.rings.resize(n, None);
+        self.points[i] = [at[0], at[1]];
+        self.heights[i] = Some(at[2]);
+        self.facings[i] = self.turn;
+        self.widths[i] = self.width;
+        self.rings[i] = Some(self.tilt);
+    }
+
+    /// What the keys and the middle mouse turn now, if anything.
+    fn turning(&self) -> Option<Turning> {
+        match (self.held, self.tool) {
+            (Some(Held::Object(i)), _) => Some(Turning::Object(Some(i))),
+            (Some(Held::Gate(i)), _) if self.is_ring(i) => Some(Turning::Ring(Some(i))),
+            (None, Place::Object(_)) => Some(Turning::Object(None)),
+            (None, Place::Ring) => Some(Turning::Ring(None)),
+            _ => None,
         }
     }
 
@@ -737,10 +821,12 @@ impl TrackEdit {
         let objects = s.objects.clone();
         let heights = c.heights();
         let scale = c.scale();
+        let rings = c.rings();
         let name = c.name.clone();
         self.clear();
         (self.points, self.facings, self.widths) = (points, facings, widths);
         self.heights = heights;
+        self.rings = rings;
         (self.grid, self.laps) = (grid, laps);
         self.scale = scale;
         self.objects = objects;
@@ -819,6 +905,10 @@ impl TrackEdit {
                 }
                 if let Some(z) = self.heights.get(i).copied().flatten() {
                     c["z"] = serde_json::json!(tenth(z));
+                }
+                if let Some([pitch, roll]) = self.rings.get(i).copied().flatten() {
+                    let milli = |a: f32| (f64::from(a) * 1000.0).round() / 1000.0;
+                    c["ring"] = serde_json::json!([milli(pitch), milli(roll)]);
                 }
                 c
             })
@@ -946,14 +1036,28 @@ fn read_saved() -> Vec<Saved> {
         .collect()
 }
 
-/// Gates as a publish and a player track's list line carry them: `x,y[,o[,w]];...`, the start
-/// first, `o` a turned gate's facing (empty where it is not and `w` follows), `w` a half-width
-/// other than `GATE_HALF_WIDTH`.
-fn spots(points: &[[f32; 2]], facings: &[Option<f32>], widths: &[f32]) -> String {
+/// Gates as a publish and a player track's list line carry them: `x,y[,o[,w[,z,p,r]]];...`, the
+/// start first, `o` a turned gate's facing (empty where it is not and `w` follows), `w` a
+/// half-width other than `GATE_HALF_WIDTH`; a ring has them all, `z` its centre's height and `p`,
+/// `r` its pitch and roll.
+fn spots(
+    points: &[[f32; 2]],
+    facings: &[Option<f32>],
+    widths: &[f32],
+    heights: &[Option<f32>],
+    rings: &[Option<[f32; 2]>],
+) -> String {
     let spot = |(i, p): (usize, &[f32; 2])| {
-        let o = facings.get(i).copied().flatten();
-        let w = widths.get(i).copied().filter(|&w| w != GATE_HALF_WIDTH);
         let mut text = format!("{:.1},{:.1}", p[0], p[1]);
+        let o = facings.get(i).copied().flatten();
+        let ring = rings.get(i).copied().flatten();
+        let z = heights.get(i).copied().flatten();
+        if let (Some([pitch, roll]), Some(z)) = (ring, z) {
+            let w = widths.get(i).copied().unwrap_or(GATE_HALF_WIDTH);
+            let o = o.unwrap_or(0.0);
+            return text + &format!(",{o:.3},{w:.1},{z:.1},{pitch:.3},{roll:.3}");
+        }
+        let w = widths.get(i).copied().filter(|&w| w != GATE_HALF_WIDTH);
         match (o, w) {
             (Some(o), _) => text += &format!(",{o:.3}"),
             (None, Some(_)) => text += ",",
@@ -972,15 +1076,20 @@ fn spots(points: &[[f32; 2]], facings: &[Option<f32>], widths: &[f32]) -> String
         .join(";")
 }
 
-/// Gates (WoW x, y), each one's facing where turned, and each one's half-width.
-pub(crate) type Gates = (Vec<[f32; 2]>, Vec<Option<f32>>, Vec<f32>);
+/// Gates as [`parse_spots`] reads them back: each one's spot (WoW x, y), facing where turned,
+/// half-width, and for a ring its centre's height and its pitch and roll.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Gates {
+    pub(crate) points: Vec<[f32; 2]>,
+    pub(crate) facings: Vec<Option<f32>>,
+    pub(crate) widths: Vec<f32>,
+    pub(crate) heights: Vec<Option<f32>>,
+    pub(crate) rings: Vec<Option<[f32; 2]>>,
+}
 
-/// `x,y[,o[,w]];...` back into gates, their facings and widths; `None` if any spot is not
-/// numbers.
+/// [`spots`] back into gates; `None` if any spot is not numbers.
 pub(crate) fn parse_spots(text: &str) -> Option<Gates> {
-    let mut points = Vec::new();
-    let mut facings = Vec::new();
-    let mut widths = Vec::new();
+    let mut g = Gates::default();
     for spot in text.split(';').filter(|s| !s.is_empty()) {
         let v: Vec<&str> = spot.split(',').collect();
         let num = |i: usize| v.get(i).and_then(|t| t.trim().parse::<f32>().ok());
@@ -988,11 +1097,15 @@ pub(crate) fn parse_spots(text: &str) -> Option<Gates> {
             Some(t) if !t.is_empty() => num(i).map(Some),
             _ => Some(None),
         };
-        points.push([num(0)?, num(1)?]);
-        facings.push(opt(2)?);
-        widths.push(opt(3)?.unwrap_or(GATE_HALF_WIDTH));
+        g.points.push([num(0)?, num(1)?]);
+        g.facings.push(opt(2)?);
+        g.widths.push(opt(3)?.unwrap_or(GATE_HALF_WIDTH));
+        let ring = v.len() >= 7;
+        g.heights.push(if ring { Some(num(4)?) } else { None });
+        g.rings
+            .push(if ring { Some([num(5)?, num(6)?]) } else { None });
     }
-    Some((points, facings, widths))
+    Some(g)
 }
 
 /// A name as courses.json takes one: ASCII, no quotes, backslashes or control characters.
@@ -1088,6 +1201,7 @@ pub(crate) fn on_cmd(
     match words.as_slice() {
         // The bar picks what a left click in the world places; it places nothing itself.
         ["place", ..] if editing => edit.use_tool(Place::Checkpoint),
+        ["ring", ..] if editing => edit.use_tool(Place::Ring),
         ["grid", ..] if editing => edit.use_tool(Place::Grid),
         ["move", ..] if editing => edit.use_tool(Place::Move),
         ["number", ..] if editing => edit.use_tool(Place::Number),
@@ -1156,6 +1270,7 @@ pub(crate) fn on_cmd(
                 let race = race
                     .with_floor(floor(edit.grid, &edit.heights))
                     .with_heights(edit.heights.clone())
+                    .with_rings(edit.rings.clone())
                     .with_objects(edit.objects.clone())
                     .with_scale(edit.scale);
                 races.race = Some(race.with_gates(edit.widths.clone()));
@@ -1187,6 +1302,7 @@ pub(crate) fn on_cmd(
                     .with_gates(c.gates())
                     .with_floor(s.floor())
                     .with_heights(c.heights())
+                    .with_rings(c.rings())
                     .with_objects(s.objects.clone())
                     .with_scale(c.scale())
             });
@@ -1209,9 +1325,9 @@ pub(crate) fn on_cmd(
                 .get(1)
                 .map_or_else(Vec::new, |o| super::objects::parse_wire(o));
             let scale = rest.get(2).and_then(|v| v.trim().parse::<f32>().ok());
-            let route = parse_spots(gates).filter(|(p, ..)| p.len() >= 2);
-            let grid =
-                parse_spots(grid).and_then(|(p, o, _)| Some([p.first()?[0], p[0][1], o[0]?]));
+            let route = parse_spots(gates).filter(|g| g.points.len() >= 2);
+            let grid = parse_spots(grid)
+                .and_then(|g| Some([g.points.first()?[0], g.points[0][1], g.facings[0]?]));
             let why = match &route {
                 None => Some("That track's checkpoints did not arrive whole."),
                 Some(_) if !drive.active => Some("Summon your kart first (J)."),
@@ -1225,14 +1341,15 @@ pub(crate) fn on_cmd(
                 edit.fail(why);
                 return;
             }
-            let Some((points, facings, widths)) = route else {
+            let Some(g) = route else {
                 return;
             };
             let laps = laps.parse().unwrap_or(0);
-            let grid = grid.or_else(|| grid_spot(None, &points));
-            let race = Active::practice(&clean(name), laps, points, grid, &races.me);
-            let race = race.with_facings(facings).with_floor(floor);
-            let race = race.with_gates(widths).with_objects(objects);
+            let grid = grid.or_else(|| grid_spot(None, &g.points));
+            let race = Active::practice(&clean(name), laps, g.points, grid, &races.me);
+            let race = race.with_facings(g.facings).with_floor(floor);
+            let race = race.with_heights(g.heights).with_rings(g.rings);
+            let race = race.with_gates(g.widths).with_objects(objects);
             races.race = Some(race.with_scale(scale.unwrap_or(1.0)));
             free.set(FreeMode::Off);
         }
@@ -1350,36 +1467,40 @@ pub(crate) fn update(
     let tool = edit.tool;
     // An object, held or about to be placed, turns in all three axes: Q/E and the middle mouse
     // across yaw it, the middle mouse up and down pitches it (Shift: rolls it).
-    let turning_object = match (edit.held, tool) {
-        (Some(Held::Object(i)), _) => Some(Some(i)),
-        (None, Place::Object(_)) => Some(None),
-        _ => None,
-    };
+    let turning_object = edit.turning();
     // The axes an object turned about this frame (Bevy world), with their colours, for its rings.
     let mut turned: Vec<(Vec3, Color)> = Vec::new();
     let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let middle = buttons.pressed(MouseButton::Middle);
+    // A ring about to be hung faces square to the way from the last checkpoint, as a gate does,
+    // until turned.
+    let ring_auto = aim.zip(eye).map_or(0.0, |(at, eye)| {
+        let w = bevy_to_wow(at);
+        let from = match edit.points.last() {
+            Some(p) => *p,
+            None => {
+                let back = bevy_to_wow(at - eye.forward() * 10.0);
+                [back[0], back[1]]
+            }
+        };
+        (w[1] - from[1]).atan2(w[0] - from[0])
+    });
     if let Some(which) = turning_object.filter(|_| editing) {
         let key = |k: KeyCode| f32::from(u8::from(keys.pressed(k) && !typing.typing));
         let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         let step = TURN_PER_SEC * time.delta_secs();
-        let mut obj = match which.and_then(|i| edit.objects.get(i)) {
-            Some(o) => o.clone(),
-            None => {
-                let [yaw, pitch, roll] = edit.object_turn;
-                Placed {
-                    model: String::new(),
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                    yaw,
-                    pitch,
-                    roll,
-                    size: None,
-                }
+        // Its turn as yaw, pitch and roll: an object's own, a ring's its facing and tilt.
+        let [yaw, pitch, roll] = match which {
+            Turning::Object(i) => match i.and_then(|i| edit.objects.get(i)) {
+                Some(o) => [o.yaw, o.pitch, o.roll],
+                None => edit.object_turn,
+            },
+            Turning::Ring(_) => {
+                let [pitch, roll] = edit.tilt;
+                [edit.turn.unwrap_or(ring_auto), pitch, roll]
             }
         };
-        let mut q = obj.turn();
+        let mut q = super::objects::turn(yaw, pitch, roll);
         // About an axis (WoW, unit), shown with its ring while turned or the mouse holds it.
         let mut about = |q: &mut Quat, axis: Vec3, angle: f32, color: Color, shown: bool| {
             if angle != 0.0 {
@@ -1410,11 +1531,26 @@ pub(crate) fn update(
                 true => about(&mut q, wow(*eye.forward()), d.y, ROLL_COLOR, true),
             }
         }
-        obj.set_turn(q);
-        let turn = [obj.yaw, obj.pitch, obj.roll];
-        match which.and_then(|i| edit.objects.get_mut(i)) {
-            Some(o) => [o.yaw, o.pitch, o.roll] = turn,
-            None => edit.object_turn = turn,
+        let mut turn = Placed {
+            model: String::new(),
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            roll: 0.0,
+            size: None,
+        };
+        turn.set_turn(q);
+        match which {
+            Turning::Object(i) => match i.and_then(|i| edit.objects.get_mut(i)) {
+                Some(o) => (o.yaw, o.pitch, o.roll) = (turn.yaw, turn.pitch, turn.roll),
+                None => edit.object_turn = [turn.yaw, turn.pitch, turn.roll],
+            },
+            Turning::Ring(_) => {
+                edit.turn = Some(turn.yaw);
+                edit.tilt = [turn.pitch, turn.roll];
+            }
         }
         // Ctrl and the mouse up and down raise it off its ground, or lower it.
         if ctrl {
@@ -1427,25 +1563,35 @@ pub(crate) fn update(
             Place::Object(k) => kinds().get(k).map(|k| k.key),
             _ => None,
         };
-        edit.resize_piece(which, next, [pair(0), pair(2), pair(4)]);
+        // Only an object's: a ring is sized with the wheel.
+        if let Turning::Object(held) = which {
+            edit.resize_piece(held, next, [pair(0), pair(2), pair(4)]);
+        }
     }
-    // The middle mouse or Ctrl held pins the object where it is (its ground: where it stands, less
-    // its lift), so the mouse turns or raises it in place; let go, it follows the cursor again.
+    // The middle mouse or Ctrl held pins what turns where it is (its ground: where it stands,
+    // less its lift), so the mouse turns or raises it in place; let go, it follows the cursor.
     let pinning = editing && turning_object.is_some() && (middle || ctrl);
     if !pinning {
         edit.pin = None;
     } else if edit.pin.is_none() {
         let lift = edit.lift;
-        edit.pin = match turning_object.flatten().and_then(|i| edit.objects.get(i)) {
-            Some(o) => Some([o.x, o.y, o.z - lift]),
-            None => aim.map(bevy_to_wow),
+        edit.pin = match turning_object {
+            Some(Turning::Object(Some(i))) => edit.objects.get(i).map(|o| [o.x, o.y, o.z - lift]),
+            Some(Turning::Ring(Some(i))) => edit.ring_at(i).map(|g| [g[0], g[1], g[2] - lift]),
+            _ => aim.map(bevy_to_wow),
         };
     }
-    // A held object stays where it is pinned, at its lift.
-    if let (Some(pin), Some(Some(i))) = (edit.pin, turning_object) {
+    // What is held stays where it is pinned, at its lift.
+    if let Some(pin) = edit.pin {
         let lift = edit.lift;
-        if let Some(o) = edit.objects.get_mut(i) {
-            (o.x, o.y, o.z) = (pin[0], pin[1], pin[2] + lift);
+        match turning_object {
+            Some(Turning::Object(Some(i))) => {
+                if let Some(o) = edit.objects.get_mut(i) {
+                    (o.x, o.y, o.z) = (pin[0], pin[1], pin[2] + lift);
+                }
+            }
+            Some(Turning::Ring(Some(i))) => edit.set_ring(i, [pin[0], pin[1], pin[2] + lift]),
+            _ => {}
         }
     }
     // What is about to be placed faces as the middle mouse turns it, else a gate square to the
@@ -1505,9 +1651,13 @@ pub(crate) fn update(
     } else if (fired || clicked) && tool == Place::Move {
         if let Some((held, at)) = hover.zip(at) {
             edit.take(held, at);
-            // An object keeps its height over the ground it is dragged across.
-            if let (Held::Object(i), Some(aim)) = (held, aim) {
-                let z = edit.objects.get(i).map_or(0.0, |o| o.z);
+            // An object or a ring keeps its height over the ground it is dragged across.
+            let z = match held {
+                Held::Object(i) => edit.objects.get(i).map(|o| o.z),
+                Held::Gate(i) if edit.is_ring(i) => edit.ring_at(i).map(|r| r[2]),
+                _ => None,
+            };
+            if let (Some(z), Some(aim)) = (z, aim) {
                 edit.lift = z - bevy_to_wow(aim)[2];
             }
         }
@@ -1599,7 +1749,40 @@ pub(crate) fn update(
     };
     // Pinned, its axes show, each with its ring, the ones the mouse turns bright: across yaws,
     // up and down pitches (with Shift, rolls).
-    if let (true, Some(g)) = (edit.pin.is_some() || !turned.is_empty(), &edit.ghost) {
+    // What turns, where its axes show: the ghost of an object, else a ring held or to be hung.
+    let ring_turned = |yaw: Option<f32>, at: [f32; 3]| {
+        let [pitch, roll] = edit.tilt;
+        Placed {
+            model: String::new(),
+            x: at[0],
+            y: at[1],
+            z: at[2],
+            yaw: yaw.unwrap_or(ring_auto),
+            pitch,
+            roll,
+            size: None,
+        }
+    };
+    let ring_shown = match turning_object.filter(|_| editing) {
+        Some(Turning::Ring(Some(i))) => edit.ring_at(i).map(|at| ring_turned(edit.turn, at)),
+        Some(Turning::Ring(None)) => {
+            let ground = edit.pin.or(aim.map(bevy_to_wow));
+            let lift = edit.width + edit.lift;
+            ground.map(|g| ring_turned(edit.turn, [g[0], g[1], g[2] + lift]))
+        }
+        _ => None,
+    };
+    // A ring about to be hung: its hoop where a click hangs it, and a line down to its ground.
+    if let (Some(r), Some(Turning::Ring(None))) = (&ring_shown, turning_object) {
+        let t = r.transform();
+        let through = t.rotation * wow_to_bevy([1.0, 0.0, 0.0]);
+        let hoop = Isometry3d::new(t.translation, Quat::from_rotation_arc(Vec3::Z, through));
+        gizmos.circle(hoop, edit.width, AIM_COLOR);
+        let ground = t.translation - Vec3::Y * (edit.width + edit.lift);
+        gizmos.line(ground, t.translation - Vec3::Y * edit.width, AIM_COLOR);
+    }
+    let axes_at = edit.ghost.clone().or(ring_shown);
+    if let (true, Some(g)) = (edit.pin.is_some() || !turned.is_empty(), &axes_at) {
         let centre = g.transform().translation;
         let colors = [YAW_COLOR, PITCH_COLOR, ROLL_COLOR];
         for (axis, color) in g.axes().into_iter().zip(colors) {
@@ -1620,7 +1803,7 @@ pub(crate) fn update(
             let ring = Isometry3d::new(centre, Quat::from_rotation_arc(Vec3::Z, axis));
             gizmos.circle(ring, AXIS_RING, *color);
         }
-        if ctrl {
+        if ctrl && edit.ghost.is_some() {
             // Raising: a line down to its ground.
             let ground = centre - Vec3::Y * edit.lift;
             gizmos.line(ground, centre, AIM_COLOR);
@@ -1645,7 +1828,15 @@ pub(crate) fn update(
             let color = if i == 0 { START_COLOR } else { MARKER_COLOR };
             gizmos.circle(flat(foot), MARKER, color);
             gizmos.line(foot, foot + Vec3::Y * MARKER_POLE, color);
-            marks.push((i, foot + Vec3::Y * (MARKER_POLE + 1.0)));
+            // A ring's number over its hoop, a gate's over its marker.
+            let over = match edit.ring_at(i) {
+                Some(c) => {
+                    let r = edit.widths.get(i).copied().unwrap_or(GATE_HALF_WIDTH);
+                    wow_to_bevy(c) + Vec3::Y * (r + 1.0)
+                }
+                None => foot + Vec3::Y * (MARKER_POLE + 1.0),
+            };
+            marks.push((i, over));
         }
     }
     edit.marks = marks;
@@ -1686,12 +1877,33 @@ fn place(edit: &mut TrackEdit, what: Place, at: Vec3, o: f32) {
             if edit.points.is_empty() {
                 edit.say("Start placed: now click the checkpoints, in driving order.");
             }
+            let n = edit.points.len();
+            edit.rings.resize(n, None);
             edit.points.push([w[0], w[1]]);
             edit.facings.push(edit.turn.take());
             edit.widths.push(edit.width);
             edit.heights.push(Some(w[2]));
+            edit.rings.push(None);
             edit.undone.clear();
             edit.placed.push(false);
+        }
+        Place::Ring => {
+            if edit.points.is_empty() {
+                edit.say("Start placed: now place the checkpoints, in driving order.");
+            }
+            let n = edit.points.len();
+            edit.heights.resize(n, None);
+            edit.rings.resize(n, None);
+            edit.points.push([w[0], w[1]]);
+            edit.facings.push(Some(o));
+            edit.widths.push(edit.width);
+            // It hangs with its bottom on the ground, raised by Ctrl from there.
+            edit.heights.push(Some(w[2] + edit.width + edit.lift));
+            edit.rings.push(Some(edit.tilt));
+            edit.undone.clear();
+            edit.placed.push(false);
+            // The tool stays: the next click hangs another.
+            return;
         }
         Place::Grid => {
             edit.turn = None;
@@ -1756,17 +1968,28 @@ mod tests {
         let points = [[1.0, 2.0], [3.04, -4.0], [5.0, 6.0], [7.0, 8.0]];
         let facings = [None, Some(1.5), None, Some(0.5)];
         let widths = [GATE_HALF_WIDTH, GATE_HALF_WIDTH, 12.0, 30.0];
-        let text = spots(&points, &facings, &widths);
+        let heights = [None, None, None, Some(40.0)];
+        let rings = [None, None, None, Some([0.25, -0.5])];
+        let text = spots(&points, &facings, &widths, &[None; 4], &[None; 4]);
         assert_eq!(
             text,
             "1.0,2.0;3.0,-4.0,1.500;5.0,6.0,,12.0;7.0,8.0,0.500,30.0"
         );
-        let (back, o, w) = parse_spots(&text).unwrap();
-        assert_eq!(back[1], [3.0, -4.0]);
-        assert_eq!(o, facings);
-        assert_eq!(w, widths);
+        let g = parse_spots(&text).unwrap();
+        assert_eq!(g.points[1], [3.0, -4.0]);
+        assert_eq!(g.facings, facings);
+        assert_eq!(g.widths, widths);
+        assert_eq!(g.rings, [None; 4]);
+        // A ring carries all: its facing, radius, centre height, pitch and roll.
+        let text = spots(&points, &facings, &widths, &heights, &rings);
+        assert!(
+            text.ends_with(";7.0,8.0,0.500,30.0,40.0,0.250,-0.500"),
+            "{text}"
+        );
+        let g = parse_spots(&text).unwrap();
+        assert_eq!((g.heights, g.rings), (heights.to_vec(), rings.to_vec()));
         assert!(parse_spots("1,2;x,4").is_none());
-        assert_eq!(parse_spots("").unwrap().0.len(), 0);
+        assert_eq!(parse_spots("").unwrap().points.len(), 0);
     }
 
     #[test]
@@ -1972,6 +2195,40 @@ mod tests {
         });
         edit.clear();
         assert!(edit.objects.is_empty());
+    }
+
+    #[test]
+    fn a_ring_hangs_by_its_radius_turned_and_keeps_its_place_in_the_course() {
+        let mut edit = draft(0, &[]);
+        edit.tool = Place::Checkpoint;
+        click(&mut edit, wow_to_bevy([0.0, 0.0, 5.0]), 0.0);
+        edit.use_tool(Place::Ring);
+        assert_eq!(edit.view().tool, "ring");
+        assert!(edit.view().turns_object, "its keys turn it");
+        (edit.width, edit.lift, edit.tilt) = (6.0, 3.0, [0.4, 0.1]);
+        click(&mut edit, wow_to_bevy([100.0, 0.0, 5.0]), 0.25);
+        assert_eq!(edit.tool, Place::Ring, "the tool stays");
+        assert_eq!(edit.rings, vec![None, Some([0.4, 0.1])]);
+        assert_eq!(edit.facings[1], Some(0.25));
+        let z = edit.heights[1].unwrap();
+        assert!(
+            (z - 14.0).abs() < 1e-3,
+            "its bottom on the ground, raised by Ctrl: {z}"
+        );
+        // Undone and redone, renumbered: its tilt goes with it.
+        edit.undo();
+        assert_eq!(edit.rings, vec![None]);
+        edit.redo();
+        assert_eq!(edit.rings, vec![None, Some([0.4, 0.1])]);
+        edit.picked = Some(1);
+        edit.renumber(1);
+        assert_eq!(edit.rings, vec![Some([0.4, 0.1]), None], "now the start");
+        // Saved and opened again, it is a ring still.
+        let (_, json) = edit.course("Ring Run", "Durotar").unwrap();
+        let course: Course = serde_json::from_str(&json).unwrap();
+        assert_eq!(course.rings(), vec![Some([0.4, 0.1]), None]);
+        assert!((course.heights()[0].unwrap() - 14.0).abs() < 0.1);
+        assert_eq!(course.gates()[0], 6.0);
     }
 
     #[test]

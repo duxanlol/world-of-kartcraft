@@ -741,14 +741,17 @@ pub(crate) mod schedule_tests {
     ///   `kartcraft::model::update`'s pairs (24, against the booths, the UI model tiles, the
     ///   world streamers and the drains over `Assets<Mesh>`, `Assets<StandardMaterial>`,
     ///   `Assets<Image>` and `Transform`): it adds only its own handles and moves only its own
-    ///   ghost.
+    ///   ghost. The race's checkpoints (`kart::race::beams`) swap a gate's pieces' `Mesh3d` for a
+    ///   ring's hoop and disc, against avian's collider constructors (which read it only on an
+    ///   entity with a `ColliderConstructor`, none of a checkpoint's) and the parked-rig reaper
+    ///   (three pairs): each touches its own entities alone.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
     #[cfg(not(target_os = "macos"))]
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_169;
-    /// macOS: eight more (than the 5,169 elsewhere), all the native cursor's (`cursor::macos::drive`, eleven pairs in the
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_172;
+    /// macOS: eight more (than the 5,172 elsewhere), all the native cursor's (`cursor::macos::drive`, eleven pairs in the
     /// dump). Unlike `cursor::other::drive`, it reads `CameraControl`, `Cinematic` and the window
     /// focus to hide the arrow while the camera is dragged or a cinematic plays, against their
     /// writers (`player::controller::control`, `camera::latch_world_mouse`,
@@ -756,7 +759,7 @@ pub(crate) mod schedule_tests {
     /// `ui_logout::drain_logout`, `cinematic::{drive, start_pending, take_trigger}`): a frame-old
     /// value hides or shows the cursor a frame late, which no one sees.
     #[cfg(target_os = "macos")]
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_177;
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_180;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

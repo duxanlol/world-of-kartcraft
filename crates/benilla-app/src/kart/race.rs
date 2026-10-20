@@ -95,9 +95,14 @@ struct CourseCheckpoint {
     /// checkpoint by distance.
     #[serde(default)]
     o: Option<f32>,
-    /// Its height (WoW z) where known: the track editor's, the floor a dungeon's trip lands on.
+    /// Its height (WoW z) where known: the track editor's, the floor a dungeon's trip lands on;
+    /// a ring's, its centre.
     #[serde(default)]
     z: Option<f32>,
+    /// A ring checkpoint, hung in the air at `z`: its pitch and roll (radians, its yaw `o`, its
+    /// radius `gate`), the track editor's.
+    #[serde(default)]
+    ring: Option<[f32; 2]>,
 }
 
 impl Course {
@@ -199,6 +204,11 @@ impl Course {
         self.checkpoints.iter().map(|c| c.z).collect()
     }
 
+    /// Each checkpoint's ring tilt (pitch, roll), `None` for a gate.
+    pub(crate) fn rings(&self) -> Vec<Option<[f32; 2]>> {
+        self.checkpoints.iter().map(|c| c.ring).collect()
+    }
+
     /// Each checkpoint's gate half-width.
     pub(crate) fn gates(&self) -> Vec<f32> {
         self.checkpoints
@@ -256,6 +266,10 @@ const CHECKPOINT_RADIUS: f32 = 8.0;
 /// How far past a gate's posts a crossing still counts (yards): the post's own thickness, half a
 /// kart and a little more, so driving through a post counts.
 const GATE_POST_REACH: f32 = 3.0;
+/// How far past a ring's edge a pass still counts (yards): half a kart.
+const RING_REACH: f32 = 1.0;
+/// A ring's hoop, half its thickness as a share of its radius.
+const RING_TUBE: f32 = 0.035;
 /// The flat arrow floating in the next checkpoint, pointing on to the one after it: its centre's
 /// height above the ground and its length (yards), the one after next's share of that size, and
 /// its bob (yards), pulse (share of its size) and their rate (Hz).
@@ -374,6 +388,8 @@ pub(crate) struct Active {
     /// Each checkpoint's height (WoW z) where known (the track editor's, a course's `z`): its gate
     /// stands on the floor under it, not on a roof over it ([`Active::height_near`]).
     heights: Vec<Option<f32>>,
+    /// Which checkpoints are rings, and each one's pitch and roll ([`Active::ring`]).
+    rings: Vec<Option<[f32; 2]>>,
     /// The track editor's objects on its track: a test lap's, or a player track's from its `PT`
     /// line ([`super::objects`]).
     objects: Vec<super::objects::Placed>,
@@ -385,8 +401,8 @@ pub(crate) struct Active {
     lights: Option<i32>,
     /// The standings, leader first, as last worked out.
     order: Vec<String>,
-    /// Where we were last frame (WoW x, y), to see a gate crossed.
-    last_at: Option<[f32; 2]>,
+    /// Where we were last frame (WoW x, y, z), to see a gate or a ring crossed.
+    last_at: Option<[f32; 3]>,
     /// A race is not left for want of a kart until then (local s): the server summons ours as it
     /// puts us in (and a Race Finder race teleports us), and the aura lands after the roster.
     grace_until: f32,
@@ -452,11 +468,11 @@ impl Active {
 
     /// A test lap's start, as we go from `from` to `to`: on its grid the countdown, else GO
     /// through the start gate; whether it began.
-    fn practice_start(&mut self, from: Option<[f32; 2]>, to: [f32; 2], now: f32) -> bool {
+    fn practice_start(&mut self, from: Option<[f32; 3]>, to: [f32; 3], now: f32) -> bool {
         let ms = match self.grid {
             Some(g) if (g[0] - to[0]).hypot(g[1] - to[1]) <= GRID_REACH => GRID_COUNTDOWN_MS,
             Some(_) => return false,
-            None if self.passes(0, from, to) => 0.0,
+            None if self.passes_3d(0, from, to) => 0.0,
             None => return false,
         };
         self.count_down(now, ms);
@@ -515,6 +531,12 @@ impl Active {
     /// The grid's height, where known ([`Active::floor`]).
     pub(crate) fn with_floor(mut self, floor: Option<f32>) -> Self {
         self.floor = floor;
+        self
+    }
+
+    /// Which checkpoints are rings, and their tilt.
+    pub(crate) fn with_rings(mut self, rings: Vec<Option<[f32; 2]>>) -> Self {
+        self.rings = rings;
         self
     }
 
@@ -951,6 +973,45 @@ impl Active {
         ]
     }
 
+    /// Checkpoint `i` as a ring, if it is one: its centre (WoW), the way through it (unit, WoW)
+    /// and its radius.
+    pub(crate) fn ring(&self, i: usize) -> Option<([f32; 3], Vec3, f32)> {
+        let [pitch, roll] = self.rings.get(i).copied().flatten()?;
+        let z = self.heights.get(i).copied().flatten()?;
+        let p = self.points.get(i)?;
+        let yaw = match self.facings.get(i).copied().flatten() {
+            Some(o) => o,
+            None => {
+                let h = self.heading(i);
+                h[1].atan2(h[0])
+            }
+        };
+        let through = super::objects::turn(yaw, pitch, roll) * Vec3::X;
+        Some(([p[0], p[1], z], through, self.gate_half_width(i)))
+    }
+
+    /// Whether going from `from` to `to` (WoW x, y, z) passes checkpoint `i`: a ring through its
+    /// hoop the way the course runs, or near its centre; a gate as [`Self::passes`] has it.
+    fn passes_3d(&self, i: usize, from: Option<[f32; 3]>, to: [f32; 3]) -> bool {
+        let Some((centre, through, radius)) = self.ring(i) else {
+            let flat = |p: [f32; 3]| [p[0], p[1]];
+            return self.passes(i, from.map(flat), flat(to));
+        };
+        let (c, b) = (Vec3::from(centre), Vec3::from(to));
+        if b.distance(c) <= CHECKPOINT_RADIUS.min(radius) {
+            return true;
+        }
+        let Some(a) = from.map(Vec3::from) else {
+            return false;
+        };
+        let (da, db) = ((a - c).dot(through), (b - c).dot(through));
+        if !(da < 0.0 && db >= 0.0) {
+            return false;
+        }
+        let hit = a + (b - a) * (da / (da - db));
+        hit.distance(c) <= radius + RING_REACH
+    }
+
     /// Whether going from `from` to `to` (WoW x, y) passes checkpoint `i`: through its gate, or
     /// near its centre.
     fn passes(&self, i: usize, from: Option<[f32; 2]>, to: [f32; 2]) -> bool {
@@ -1223,9 +1284,14 @@ impl Races {
                     // A player track's from its `PT` line, which comes first.
                     let track = self.track_spots.get(&f[2]);
                     let track = track.and_then(|t| super::track_edit::parse_spots(t));
-                    if let Some((_, o, w)) = track.filter(|t| t.0.len() == race.points.len()) {
-                        race.facings = o;
-                        race.gates = w;
+                    if let Some(g) = track.filter(|t| t.points.len() == race.points.len()) {
+                        race.facings = g.facings;
+                        race.gates = g.widths;
+                        // Its rings, hung where they were placed.
+                        if g.rings.iter().any(Option::is_some) {
+                            race.heights = g.heights;
+                            race.rings = g.rings;
+                        }
                     }
                     race.objects = self.track_objects.get(&f[2]).cloned().unwrap_or_default();
                     // Its size: a course's own, a player track's from its line.
@@ -1482,6 +1548,7 @@ pub(crate) fn update(
     }
     let wow = bevy_to_wow(drive.pos);
     let at = [wow[0], wow[1]];
+    let at3 = wow;
     let near = |p: [f32; 2], r: f32| (p[0] - at[0]).hypot(p[1] - at[1]) <= r;
 
     // The courses starting here, on this map: Stratholme's streets lie over Eastern Plaguelands'
@@ -1525,8 +1592,8 @@ pub(crate) fn update(
     };
     // A test lap's flying start: GO as the kart goes through the start gate.
     if race.practice && race.go_at.is_none() {
-        let last_at = race.last_at.replace(at);
-        if !race.practice_start(last_at, at, now) {
+        let last_at = race.last_at.replace(at3);
+        if !race.practice_start(last_at, at3, now) {
             text.banner = if race.grid.is_some() {
                 "Test lap: getting to the starting grid...".into()
             } else {
@@ -1570,7 +1637,7 @@ pub(crate) fn update(
     }
 
     // Checkpoints: the next one passed is reported (the server checks it).
-    let last_at = race.last_at.replace(at);
+    let last_at = race.last_at.replace(at3);
     if let Some(next) = race.next().filter(|_| !race.done) {
         if std::env::var_os("WOW_KART_DEBUG").is_some()
             && (now * 2.0) as i32 != ((now - time.delta_secs()) * 2.0) as i32
@@ -1581,7 +1648,7 @@ pub(crate) fn update(
                 (p[0] - at[0]).hypot(p[1] - at[1])
             );
         }
-        if race.passes(next, last_at, at) {
+        if race.passes_3d(next, last_at, at3) {
             info!("kart race: checkpoint {next}, lap {}", race.lap);
             if !race.practice {
                 profession.send(format!("KARTCRAFT\tR\tK\t{}\t{next}", race.id));
@@ -1920,6 +1987,10 @@ pub(crate) struct Looks {
     beam: Handle<Mesh>,
     /// A unit square, facing +Z, scaled to each gate's width and `KartGateHeight`.
     sheet: Handle<Mesh>,
+    /// A ring checkpoint's hoop (radius 1 about +Y) and the disc inside it (radius 1, facing +Z),
+    /// scaled to its radius.
+    hoop: Handle<Mesh>,
+    disc: Handle<Mesh>,
     arrow: Handle<Mesh>,
     bright: Handle<StandardMaterial>,
     dim: Handle<StandardMaterial>,
@@ -2004,6 +2075,8 @@ impl Looks {
         Self {
             beam: meshes.add(Cylinder::new(BEAM_RADIUS, BEAM_HEIGHT)),
             sheet: meshes.add(Rectangle::new(1.0, 1.0)),
+            hoop: meshes.add(Torus::new(1.0 - RING_TUBE, 1.0 + RING_TUBE)),
+            disc: meshes.add(Circle::new(1.0)),
             arrow: meshes.add(arrow_mesh()),
             // Added light, so the colour is how much shows through: the next gate faint, the
             // others fainter still, and the sheets fainter than their beams.
@@ -2400,6 +2473,7 @@ pub(crate) fn beams(
             &Beam,
             &mut Transform,
             &mut MeshMaterial3d<StandardMaterial>,
+            &mut Mesh3d,
         ),
         Without<CheckpointArrow>,
     >,
@@ -2450,22 +2524,42 @@ pub(crate) fn beams(
         GatePart::Sheet => 0,
         GatePart::End(k) => 1 + k,
     };
-    for (_, beam, mut t, mut material) in &mut beams {
+    // A ring's pieces: its disc for the sheet, its hoop for the first end, nothing for the other.
+    let ring_part = |i: usize, part: GatePart| {
+        let (centre, through, radius) = race.ring(i)?;
+        let along = wow_to_bevy(through.to_array());
+        // The disc faces +Z and the hoop lies about +Y: each turned to face the way through.
+        let (mesh, from) = match part {
+            GatePart::Sheet => (looks.disc.clone(), Vec3::Z),
+            GatePart::End(0) => (looks.hoop.clone(), Vec3::Y),
+            GatePart::End(_) => (looks.hoop.clone(), Vec3::ZERO),
+        };
+        let scale = if from == Vec3::ZERO { 0.0 } else { radius };
+        let rotation = Quat::from_rotation_arc(from.normalize_or(Vec3::Y), along);
+        let at = Transform::from_translation(wow_to_bevy(centre))
+            .with_rotation(rotation)
+            .with_scale(Vec3::splat(scale));
+        Some((mesh, at))
+    };
+    let mesh_of = |part: GatePart| match part {
+        GatePart::Sheet => looks.sheet.clone(),
+        GatePart::End(_) => looks.beam.clone(),
+    };
+    for (_, beam, mut t, mut material, mut mesh) in &mut beams {
         let Beam(i, part) = *beam;
         if i >= n {
             continue;
         }
         have[i][part_index(part)] = true;
         // Written only when they change: a write marks them for the renderer again.
-        let placed = gate_part_transform(
-            race,
-            i,
-            part,
-            &mut ground_of,
-            t.translation.y,
-            settings.gate_height,
-        );
+        let (shape, placed) = ring_part(i, part).unwrap_or_else(|| {
+            let ground = &mut ground_of;
+            let at =
+                gate_part_transform(race, i, part, ground, t.translation.y, settings.gate_height);
+            (mesh_of(part), at)
+        });
         t.set_if_neq(placed);
+        mesh.set_if_neq(Mesh3d(shape));
         material.set_if_neq(MeshMaterial3d(looks.gate(part, i == next, line(i), draft)));
     }
     for (i, had) in have.iter().enumerate() {
@@ -2473,16 +2567,17 @@ pub(crate) fn beams(
             if had[part_index(part)] {
                 continue;
             }
-            let mesh = match part {
-                GatePart::Sheet => looks.sheet.clone(),
-                GatePart::End(_) => looks.beam.clone(),
-            };
+            let (mesh, at) = ring_part(i, part).unwrap_or_else(|| {
+                let ground = &mut ground_of;
+                let at = gate_part_transform(race, i, part, ground, 0.0, settings.gate_height);
+                (mesh_of(part), at)
+            });
             let material = looks.gate(part, false, line(i), draft);
             commands.spawn((
                 Beam(i, part),
                 Mesh3d(mesh),
                 MeshMaterial3d(material),
-                gate_part_transform(race, i, part, &mut ground_of, 0.0, settings.gate_height),
+                at,
                 Name::new("race checkpoint"),
             ));
         }
@@ -3927,9 +4022,9 @@ mod tests {
         assert!(restart_line(&races).is_none());
         let race = races.race.as_mut().unwrap();
         assert_eq!(race.next(), Some(0), "the start gate first");
-        assert!(!race.practice_start(Some([-50.0, 30.0]), [-40.0, 30.0], 1.0));
+        assert!(!race.practice_start(Some([-50.0, 30.0, 0.0]), [-40.0, 30.0, 0.0], 1.0));
         assert!(race.go_at.is_none());
-        assert!(race.practice_start(Some([-1.0, 0.0]), [1.0, 0.0], 2.0));
+        assert!(race.practice_start(Some([-1.0, 0.0, 0.0]), [1.0, 0.0, 0.0], 2.0));
         assert_eq!(race.go_at, Some(2.0));
         race.pass(1, 5.0);
         race.pass(2, 8.0);
@@ -3979,8 +4074,8 @@ mod tests {
             Some("KARTCRAFT\tR\tTG\t-20.0\t0.0\t0.000\t133.1")
         );
         assert!(!left_without_kart(Some(false), 9.0, gridded.grace_until));
-        assert!(!gridded.practice_start(Some([-1.0, 0.0]), [1.0, 0.0], 1.0));
-        assert!(gridded.practice_start(Some([-30.0, 0.0]), [-22.0, 1.0], 3.0));
+        assert!(!gridded.practice_start(Some([-1.0, 0.0, 0.0]), [1.0, 0.0, 0.0], 1.0));
+        assert!(gridded.practice_start(Some([-30.0, 0.0, 0.0]), [-22.0, 1.0, 0.0], 3.0));
         assert_eq!(gridded.go_at, Some(3.0 + GRID_COUNTDOWN_MS / 1000.0));
         let races = Races {
             race: Some(gridded),
@@ -4022,6 +4117,40 @@ mod tests {
         let objects = races.race.as_ref().unwrap().objects();
         assert_eq!(objects.len(), 1);
         assert_eq!((objects[0].model.as_str(), objects[0].yaw), ("plank", 0.5));
+    }
+
+    #[test]
+    fn a_ring_is_passed_through_its_hoop_the_way_the_course_runs() {
+        // A sprint: the start on the ground, then a ring 10 yards up facing north, radius 4.
+        let race = Active::practice("Rings", 0, vec![[0.0, 0.0], [100.0, 0.0]], None, "Me")
+            .with_facings(vec![None, Some(0.0)])
+            .with_gates(vec![GATE_HALF_WIDTH, 4.0])
+            .with_heights(vec![None, Some(10.0)])
+            .with_rings(vec![None, Some([0.0, 0.0])]);
+        let (c, through, r) = race.ring(1).unwrap();
+        assert_eq!((c, r), ([100.0, 0.0, 10.0], 4.0));
+        assert!((through - Vec3::X).length() < 1e-5);
+        let pass = |a: [f32; 3], b: [f32; 3]| race.passes_3d(1, Some(a), b);
+        assert!(
+            pass([99.0, 1.0, 11.0], [101.0, 1.0, 11.0]),
+            "through the hoop"
+        );
+        assert!(
+            !pass([99.0, 0.0, 0.0], [101.0, 0.0, 0.0]),
+            "under it, on the ground"
+        );
+        assert!(!pass([99.0, 6.0, 10.0], [101.0, 6.0, 10.0]), "beside it");
+        assert!(
+            !pass([106.0, 1.0, 11.0], [94.0, 1.0, 11.0]),
+            "the wrong way"
+        );
+        assert!(race.passes_3d(1, None, [100.5, 0.0, 10.5]), "at its centre");
+        // The start, a gate, is passed as gates are.
+        assert!(race.passes_3d(0, Some([-1.0, 0.0, 5.0]), [1.0, 0.0, 5.0]));
+        // Pitched a quarter turn, it faces up: dropped through from above.
+        let race = race.with_rings(vec![None, Some([-std::f32::consts::FRAC_PI_2, 0.0])]);
+        assert!(race.passes_3d(1, Some([100.0, 1.0, 12.0]), [100.0, 1.0, 8.0]));
+        assert!(!race.passes_3d(1, Some([95.0, 1.0, 10.0]), [105.0, 1.0, 10.0]));
     }
 
     #[test]

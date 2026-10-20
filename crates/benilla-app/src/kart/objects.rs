@@ -277,6 +277,12 @@ fn ctr_parts(index: usize) -> Option<Vec<Part>> {
     Some(parts)
 }
 
+/// A turn as one rotation, WoW space: `yaw` about the vertical (a gate's facing), then `pitch`
+/// its front up, then `roll` about its length.
+pub(crate) fn turn(yaw: f32, pitch: f32, roll: f32) -> Quat {
+    Quat::from_rotation_z(yaw) * Quat::from_rotation_y(-pitch) * Quat::from_rotation_x(roll)
+}
+
 /// An object as placed: its kind, where its origin stands (WoW) and its turn (radians): `yaw`
 /// about the vertical as a gate's facing, `pitch` its front up, `roll` about its length.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -308,9 +314,7 @@ impl Placed {
 
     /// Its turn as one rotation, WoW space: yaw, then pitch, then roll.
     pub(crate) fn turn(&self) -> Quat {
-        Quat::from_rotation_z(self.yaw)
-            * Quat::from_rotation_y(-self.pitch)
-            * Quat::from_rotation_x(self.roll)
+        turn(self.yaw, self.pitch, self.roll)
     }
 
     /// Turned to `q` (WoW space), kept as its yaw, pitch and roll.

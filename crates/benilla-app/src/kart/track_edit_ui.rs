@@ -69,13 +69,13 @@ mod icon {
     pub(super) const RESTART: &str = "Interface\\Icons\\Spell_Holy_Resurrection";
     pub(super) const OK: &str = "Interface\\Buttons\\UI-CheckBox-Check";
     pub(super) const OBJECTS: &str = "Interface\\Icons\\INV_Box_01";
-
+    pub(super) const RING: &str = "Interface\\Icons\\INV_Jewelry_Ring_03";
     pub(super) const SIZE: &str = "Interface\\Icons\\INV_Misc_Spyglass_02";
 
     #[cfg(test)]
-    pub(super) const ALL: [&str; 17] = [
+    pub(super) const ALL: [&str; 18] = [
         EXIT, SAVE, TEST, MOVE, UNDO, REDO, PLACE, NUMBER, GRID, ERASE, SPRINT, LAPS, BACK,
-        RESTART, OK, OBJECTS, SIZE,
+        RESTART, OK, OBJECTS, RING, SIZE,
     ];
 }
 
@@ -131,7 +131,7 @@ pub(crate) fn keys_text(bindings: &[(String, Vec<String>)]) -> String {
             "|cffffd100Left click|r  place with the tool picked",
             "|cffffd100Left drag|r  with Move: move a gate or the grid",
             "|cffffd100Q / E|r or |cffffd100middle mouse held|r  turn the gate",
-            "|cffffd100Mouse wheel|r  widen or narrow the gate",
+            "|cffffd100Mouse wheel|r  widen or narrow a gate or a ring",
             "|cffffd100Q/E, R/F, Z/C|r  turn an object: yaw, pitch, roll",
             "|cffffd100Middle mouse held|r  turn it as you see it (Shift: roll)",
             "|cffffd100Ctrl, mouse up and down|r  raise or lower it",
@@ -851,6 +851,9 @@ fn spawn(
                             place,
                             lit,
                         );
+                        let (ring, lit) = (Act::Cmd(&["ring"]), tool("ring"));
+                        let name = "Place ring checkpoint";
+                        icon_button(r, icons, font, s, icon::RING, name, ring, lit);
                         let lit = tool("number");
                         let name = "Edit checkpoint";
                         icon_button(r, icons, font, s, icon::NUMBER, name, number, lit);
@@ -1536,6 +1539,7 @@ mod tests {
             "Redo",
             "Objects",
             "Place checkpoint",
+            "Place ring checkpoint",
             "Edit checkpoint",
             "Place grid",
             "Delete checkpoint",

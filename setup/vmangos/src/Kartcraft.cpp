@@ -6741,7 +6741,8 @@ namespace Kartcraft
         return out.substr(first, out.find_last_not_of(' ') - first + 1);
     }
 
-    // "x,y[,o[,w]];..." checked and written back at the wire's decimals (`o` a turned gate's facing,
+    // "x,y[,o[,w[,z,pitch,roll]]];..." checked and written back at the wire's decimals (a ring
+    // checkpoint all seven: its centre's height and its tilt, which the client hangs it by) (`o` a turned gate's facing,
     // empty where only `w` follows; `w` the gate's half-width, which the client draws and passes
     // by: within CHECKPOINT_RADIUS, the reach a report is taken at); false if any spot is not
     // numbers within the world, or `facing` (the grid's: x,y,o alone) is wanted and missing.
@@ -6766,12 +6767,19 @@ namespace Kartcraft
                     c = spot.size();
                 v.push_back(spot.substr(p, c - p));
             }
-            float x, y, o = 0.f, w = 0.f;
+            float x, y, o = 0.f, w = 0.f, z = 0.f, pitch = 0.f, roll = 0.f;
+            // A ring checkpoint has all seven: its facing, radius, centre height, pitch and roll.
+            bool const ring = !facing && v.size() == 7;
             bool const has_o = v.size() >= 3 && !v[2].empty();
-            bool const has_w = v.size() == 4 && !v[3].empty();
-            if (v.size() < 2 || v.size() > (facing ? 3u : 4u) || !ParseFloat(v[0], x) || !ParseFloat(v[1], y) ||
-                std::fabs(x) > 20000.f || std::fabs(y) > 20000.f || (has_o && !ParseFloat(v[2], o)) ||
+            bool const has_w = (v.size() == 4 || ring) && !v[3].empty();
+            if (v.size() < 2 || (v.size() > (facing ? 3u : 4u) && !ring) || !ParseFloat(v[0], x) ||
+                !ParseFloat(v[1], y) || std::fabs(x) > 20000.f || std::fabs(y) > 20000.f ||
+                (has_o && !ParseFloat(v[2], o)) ||
                 (has_w && (!ParseFloat(v[3], w) || w < 1.f || w > CHECKPOINT_RADIUS)) || (facing && !has_o))
+                return false;
+            if (ring && (!has_o || !has_w || !ParseFloat(v[4], z) || std::fabs(z) > 20000.f ||
+                !ParseFloat(v[5], pitch) || std::fabs(pitch) > 100.f || !ParseFloat(v[6], roll) ||
+                std::fabs(roll) > 100.f))
                 return false;
             char buf[80];
             int n = std::snprintf(buf, sizeof(buf), "%.1f,%.1f", x, y);
@@ -6780,7 +6788,9 @@ namespace Kartcraft
             else if (has_w)
                 n += std::snprintf(buf + n, sizeof(buf) - size_t(n), ",");
             if (has_w)
-                std::snprintf(buf + n, sizeof(buf) - size_t(n), ",%.1f", w);
+                n += std::snprintf(buf + n, sizeof(buf) - size_t(n), ",%.1f", w);
+            if (ring)
+                std::snprintf(buf + n, sizeof(buf) - size_t(n), ",%.1f,%.3f,%.3f", z, pitch, roll);
             out += (count ? ";" : "") + std::string(buf);
             ++count;
         }

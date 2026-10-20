@@ -123,7 +123,8 @@ gets its marshal at the start's height, not the terrain's).
 The track editor (the minimap's map button, `kart/track_edit.rs`) flies the free camera and hides
 the game's interface for its own (`kart/track_edit_ui.rs`): Exit at the top left, Test lap and
 Save at the top right, and named bars of icon buttons, each naming itself on hover: Editor
-controls (Move, Undo, Redo), Checkpoints (place a checkpoint, Edit checkpoint, place the grid)
+controls (Move, Undo, Redo), Checkpoints (place a checkpoint or a ring, Edit checkpoint, place
+the grid)
 and Race type (sprint, one lap or three), and Objects: placeable models from the player's own
 install (`kart/objects.rs`, the planks for now), by group, each a tile with its icon. An object
 goes where the cursor points, turned with Q/E and the middle mouse (across yaws, up and down
@@ -154,7 +155,12 @@ click and gives it a new number (1, the start, to the count; the others move up 
 place), and Redo puts back what Undo took until a new gate is placed. The checkpoint tools place where the cursor points (a left click, or Fire at the screen's centre): the checkpoints in driving order, the
 first placed the start, each gate turned with the middle mouse
 held, and optionally a starting grid, facing the way the camera looks. A card on the left lists
-the keys. Save asks for the track's name in a popup, which warns when it replaces one of ours.
+the keys. A ring checkpoint hangs in the air, for a drop or a jump: sized with the wheel, turned
+in all three axes and raised as an object is, and passed through its hoop the way the course
+runs (or near its centre). It is saved as its checkpoint's `ring` (`[pitch, roll]`, radians),
+its `z` its centre's height, its `o` its yaw and its `gate` its radius; a publish carries all
+five (`x,y,o,w,z,p,r`), and the server takes it by distance across the ground, as any
+checkpoint. Save asks for the track's name in a popup, which warns when it replaces one of ours.
 A test lap asks the server to take the kart onto its grid (`R\tTG\t<x>\t<y>\t<o>\t<z>`, the
 placed grid or a race's first slot behind the start, `z` the track's floor; within 1000 yards,
 once every 10 seconds, the checks of a trip to a Race Marshal), runs the lights there and times
