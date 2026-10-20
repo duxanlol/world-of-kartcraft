@@ -4,7 +4,7 @@
 # naming it, so an app never reads a version.json whose APK is not there yet. Build with the same
 # ANDROID_CHANNEL it is uploaded to: the channel is built into the app.
 #
-#   ACCOUNT=<storage account> KEY=<its key> [ANDROID_CHANNEL=staging] dist/android-upload.sh
+#   [ANDROID_CHANNEL=staging] [ACCOUNT=<storage account> KEY=<its key>] dist/android-upload.sh
 #
 # The players' folder is android/, the testers' staging/android/. The APK stays downloadable at
 # <website>/android/WorldOfKartcraft.apk, the link to give a new player.
@@ -12,6 +12,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 channel="${ANDROID_CHANNEL:-}"
 prefix="${channel:+$channel/}android/"
+# The account and its key as publish.ps1 finds them when not given: `.setup/publish.cfg`'s
+# AZURE_STORAGE, and the key from the signed-in Azure CLI.
+ACCOUNT="${ACCOUNT:-$(sed -n 's/^AZURE_STORAGE=//p' .setup/publish.cfg 2>/dev/null | tr -d '\r')}"
+[ -n "$ACCOUNT" ] || { echo "no ACCOUNT, and no AZURE_STORAGE in .setup/publish.cfg"; exit 1; }
+KEY="${KEY:-$(az storage account keys list -n "$ACCOUNT" --query '[0].value' -o tsv | tr -d '\r')}"
 auth=(--account-name "$ACCOUNT" --account-key "$KEY" --only-show-errors)
 # Relative paths: the Azure CLI on Windows takes no /c/... path.
 apk=target/android/kartcraft.apk
