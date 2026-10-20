@@ -1,6 +1,6 @@
-# Builds the game server's image and the clients (Windows, Mac and Linux) from the branch it is
-# started on (the staging branch, by deploy-staging.sh or Actions → "Release" → Run workflow) and
-# publishes the clients to the testers. It runs only when started by hand.
+# Builds the game server's image and the clients (Windows, Mac, Linux and Android) from the
+# branch it is started on (the staging branch, by deploy-staging.sh or Actions → "Release" → Run
+# workflow) and publishes the clients to the testers. It runs only when started by hand.
 #
 # Each platform is built once and packaged twice, with the same version: for staging (its launcher
 # and presets name the staging server; uploaded to the website's staging/ folder, live at once) and
@@ -16,6 +16,8 @@
 #              AZURE_STORAGE — the storage account whose $web container is the website.
 #   secret     AZURE_STORAGE_KEY — that account's key. Without AZURE_STORAGE nothing is uploaded and
 #              the packages are only the run's artifacts.
+#   secrets    ANDROID_KEYSTORE (base64) and ANDROID_KEYSTORE_PASS — the key the Android APKs are
+#              signed with; without them the APKs are only the run's artifacts.
 name: Release
 
 on:
@@ -227,3 +229,85 @@ jobs:
         run: |
           dist/upload.sh dist/linux/out/updates candidate/linux/ "dist/linux/out/Kartcraft Launcher.AppImage" "candidate/linux/Kartcraft Launcher.AppImage"
           dist/upload.sh dist/linux/out/staging/updates staging/linux/ "dist/linux/out/staging/Kartcraft Launcher.AppImage" "staging/linux/Kartcraft Launcher.AppImage"
+
+  # The Android app, an APK for each channel (scripts/android-apk.sh): staging's plays on the staging
+  # server and updates from staging/android/ (uploaded there, live at once); production's plays on
+  # the players' server and updates from android/ (uploaded to candidate/android/ for
+  # dist/promote.sh). Its version code is the commit count, so it needs the whole history. Both are
+  # signed with the key the APKs already given out carry, the ANDROID_KEYSTORE secret (base64)
+  # and ANDROID_KEYSTORE_PASS; without it they are signed with a throwaway key and only kept as
+  # the run's artifacts, since a phone refuses an update signed with another key.
+  android:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      VERSION: ${{ needs.version.outputs.version }}
+      # NDK r27d, the one the maintainer's machine builds with.
+      NDK: "27.3.13750724"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      # The runner's own Android SDK stays (the other Linux jobs remove it for room).
+      - name: Room
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Toolchain
+        run: rustup toolchain install && rustup target add aarch64-linux-android && rustc -V
+      - name: Android SDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK" "build-tools;34.0.0" "platforms;android-34" >/dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-android
+      - name: Presets
+        run: |
+          mkdir -p .setup
+          printf 'SERVER=%s\nUPDATE_URL=%s\nREGISTER_URL=%s\n' "${{ vars.KARTCRAFT_SERVER }}" "${{ vars.KARTCRAFT_UPDATE_URL }}" "${{ vars.KARTCRAFT_REGISTER_URL }}" > .setup/publish.cfg
+          printf 'SERVER=%s\nUPDATE_URL=%s\nREGISTER_URL=%s\n' "${{ vars.KARTCRAFT_STAGING_SERVER }}" "${{ vars.KARTCRAFT_STAGING_UPDATE_URL }}" "${{ vars.KARTCRAFT_STAGING_REGISTER_URL }}" > .setup/publish-staging.cfg
+      - name: Signing key
+        id: key
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+        run: |
+          if [ -n "$KEYSTORE" ]; then
+            echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/kartcraft.keystore"
+            echo "ANDROID_KEYSTORE=$RUNNER_TEMP/kartcraft.keystore" >> "$GITHUB_ENV"
+            echo "signed=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::no ANDROID_KEYSTORE secret: the APKs are signed with a throwaway key and not uploaded"
+          fi
+      - name: Package for staging
+        env:
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+        run: |
+          ANDROID_CHANNEL=staging bash scripts/android-apk.sh
+          mkdir -p dist/android/staging
+          cp target/android/kartcraft.apk target/android/version.json dist/android/staging/
+      - name: Package for production
+        env:
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+        run: |
+          bash scripts/android-apk.sh
+          mkdir -p dist/android/production
+          cp target/android/kartcraft.apk target/android/version.json dist/android/production/
+      - name: Keep the packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: world-of-kartcraft-android-${{ env.VERSION }}
+          path: dist/android
+          retention-days: 30
+          if-no-files-found: error
+      - name: Upload
+        if: vars.AZURE_STORAGE != '' && steps.key.outputs.signed == '1'
+        env:
+          ACCOUNT: ${{ vars.AZURE_STORAGE }}
+          KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+        run: |
+          ANDROID_DIR=dist/android/production ANDROID_PREFIX=candidate/android/ bash dist/android-upload.sh
+          ANDROID_DIR=dist/android/staging ANDROID_CHANNEL=staging bash dist/android-upload.sh

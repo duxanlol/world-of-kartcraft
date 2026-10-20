@@ -11,7 +11,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 channel="${ANDROID_CHANNEL:-}"
-prefix="${channel:+$channel/}android/"
+# ANDROID_PREFIX overrides the folder: the release workflow puts production's in candidate/android/,
+# which dist/promote.sh copies to android/.
+prefix="${ANDROID_PREFIX:-${channel:+$channel/}android/}"
 # The account and its key as publish.ps1 finds them when not given: `.setup/publish.cfg`'s
 # AZURE_STORAGE, and the key from the signed-in Azure CLI.
 ACCOUNT="${ACCOUNT:-$(sed -n 's/^AZURE_STORAGE=//p' .setup/publish.cfg 2>/dev/null | tr -d '\r')}"
@@ -19,8 +21,10 @@ ACCOUNT="${ACCOUNT:-$(sed -n 's/^AZURE_STORAGE=//p' .setup/publish.cfg 2>/dev/nu
 KEY="${KEY:-$(az storage account keys list -n "$ACCOUNT" --query '[0].value' -o tsv | tr -d '\r')}"
 auth=(--account-name "$ACCOUNT" --account-key "$KEY" --only-show-errors)
 # Relative paths: the Azure CLI on Windows takes no /c/... path.
-apk=target/android/kartcraft.apk
-version=target/android/version.json
+# ANDROID_DIR names the build's folder when not the script's own (the workflow keeps two).
+dir="${ANDROID_DIR:-target/android}"
+apk="$dir/kartcraft.apk"
+version="$dir/version.json"
 [ -f "$apk" ] && [ -f "$version" ] || { echo "no APK: run scripts/android-apk.sh first"; exit 1; }
 [ "$(sha256sum "$apk" | cut -d' ' -f1)" = "$(sed -n 's/.*"sha256": "\(.*\)".*/\1/p' "$version")" ] ||
     { echo "$version does not describe $apk: build again"; exit 1; }

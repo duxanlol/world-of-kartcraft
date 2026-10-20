@@ -2,8 +2,8 @@
 # Hands the players what the testers have: GitHub's Release workflow packages each build twice,
 # for staging (live under staging/) and for production (waiting under candidate/, the same game
 # files with the players' launcher and presets). This copies candidate/ to the players' folders,
-# Windows, Mac and Linux, through dist/upload.sh; nothing is built. It refuses when candidate/ is not
-# the build staging serves.
+# Windows, Mac, Linux and Android, through dist/upload.sh; nothing is built. It refuses when
+# candidate/ is not the build staging serves.
 #
 #   ACCOUNT=<storage account> KEY=<its key> WEB=<its website URL> dist/promote.sh
 #
@@ -38,4 +38,26 @@ curl -fsS -o linux.AppImage "$WEB/${FROM}linux/Kartcraft%20Launcher.AppImage"
 bash "$here/upload.sh" updates-linux "${TO}linux/" linux.AppImage "${TO}linux/Kartcraft Launcher.AppImage"
 bash "$here/upload.sh" updates-macos "${TO}macos/" mac.zip "${TO}macos/World of Kartcraft.zip"
 bash "$here/upload.sh" updates- "$TO" launcher.exe "${TO}KartcraftLauncher.exe"
+
+# Android (release.yml's android job): the APK, then the version.json naming it, so a phone never
+# reads a version.json whose APK is not there yet. Skipped while there is none waiting, as when
+# the workflow has no signing key.
+code() { curl -fsS "$WEB/$1android/version.json" | grep -o '"versionCode": *[0-9]*' | grep -o '[0-9]*$'; }
+if waiting="$(code "$FROM")"; then
+    staged="$(code staging/ || echo none)"
+    [ "$staged" = "$waiting" ] || { echo "${FROM}android is build $waiting but staging/android serves $staged: build again"; exit 1; }
+    curl -fsS -o android.apk "$WEB/${FROM}android/WorldOfKartcraft.apk"
+    curl -fsS -o android.json "$WEB/${FROM}android/version.json"
+    auth=(--account-name "$ACCOUNT" --account-key "$KEY" --only-show-errors)
+    az storage blob upload -c '$web' -n "${TO}android/WorldOfKartcraft.apk" -f android.apk \
+        --content-type application/vnd.android.package-archive \
+        --content-disposition "attachment; filename=WorldOfKartcraft.apk" \
+        --content-cache-control no-cache --overwrite --no-progress "${auth[@]}" -o none
+    az storage blob upload -c '$web' -n "${TO}android/version.json" -f android.json \
+        --content-type application/json --content-cache-control no-cache --overwrite --no-progress \
+        "${auth[@]}" -o none
+    echo "android build $waiting"
+else
+    echo "no ${FROM}android/version.json: Android not promoted"
+fi
 echo "promoted"

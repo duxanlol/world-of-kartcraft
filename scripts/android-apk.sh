@@ -123,14 +123,18 @@ javac --release 11 -Xlint:all -Werror -cp "$PLATFORM" -d "$out/classes" \
 
 # The signing key lives in the state folder: machine-local, never committed. Every APK given out
 # must be signed with this same key, or a phone refuses it as an update; keep a copy of it.
-key="$root/benilla-config/android/debug.keystore"
+# ANDROID_KEYSTORE names it elsewhere (the release workflow's, from a secret), and
+# ANDROID_KEYSTORE_PASS its password; only the state folder's is made when missing.
+key="${ANDROID_KEYSTORE:-$root/benilla-config/android/debug.keystore}"
+export ANDROID_KEYSTORE_PASS="${ANDROID_KEYSTORE_PASS:-android}"
 if [ ! -f "$key" ]; then
+    [ -z "${ANDROID_KEYSTORE:-}" ] || { echo "no keystore at $ANDROID_KEYSTORE"; exit 1; }
     mkdir -p "$(dirname "$key")"
     keytool -genkeypair -keystore "$key" -storepass android -keypass android -alias debug \
         -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=World of Kartcraft debug" >/dev/null
 fi
-"$BUILD_TOOLS/apksigner$bat" sign --ks "$key" --ks-pass pass:android --key-pass pass:android \
-    --out "$out/kartcraft.apk" "$out/aligned.apk"
+"$BUILD_TOOLS/apksigner$bat" sign --ks "$key" --ks-pass env:ANDROID_KEYSTORE_PASS \
+    --key-pass env:ANDROID_KEYSTORE_PASS --out "$out/kartcraft.apk" "$out/aligned.apk"
 rm -f "$out/unsigned.apk" "$out/aligned.apk"
 # What `dist/android-upload.sh` puts beside the APK on the update host, for the app to compare.
 sha="$(sha256sum "$out/kartcraft.apk" | cut -d' ' -f1)"
