@@ -49,18 +49,21 @@ pub(crate) struct Relayed {
     pub(crate) trail: u8,
     /// The flag they fly ([`kartcraft::goods::FLAGS`]), 0 none.
     pub(crate) flag: u8,
+    /// The race's scale they drive at ([`kartcraft::race_scale`]), 1 on an older client's line.
+    pub(crate) scale: f32,
 }
 
 /// The line our kart relays:
 /// `S\t<steer>,<drift>,<fire>,<distortion>,<volume>,<flags>,<racer>,<wheelie>,<paint>,<trail>,
-/// <flag>`; an older client reads the first seven and ignores the rest.
+/// <flag>,<scale>` (the race's scale in hundredths); an older client reads the first seven and
+/// ignores the rest.
 pub(crate) fn state_line(view: &KartView) -> String {
     let flags = u8::from(view.grounded)
         | (u8::from(view.state == kartcraft::State::Drifting) << 1)
         | (u8::from(kartcraft::model::boost_window(view.meter)) << 2)
         | (u8::from(view.failed_boost) << 3);
     format!(
-        "KARTCRAFT\tS\t{},{},{},{},{},{},{},{},{},{},{}",
+        "KARTCRAFT\tS\t{},{},{},{},{},{},{},{},{},{},{},{}",
         (view.steer * 100.0).round() as i32,
         (view.drift_yaw * 1000.0).round() as i32,
         view.fire,
@@ -71,7 +74,8 @@ pub(crate) fn state_line(view: &KartView) -> String {
         view.wheelie,
         kartcraft::cosmetic::ours().0,
         kartcraft::cosmetic::ours().1,
-        kartcraft::goods::our_flag()
+        kartcraft::goods::our_flag(),
+        (kartcraft::race_scale() * 100.0).round() as i32
     )
 }
 
@@ -115,6 +119,13 @@ pub(crate) fn parse_state(body: &str) -> Option<Relayed> {
         flag: field(body, 10)
             .filter(|&f| usize::from(f) <= kartcraft::goods::FLAGS.len())
             .unwrap_or(0),
+        scale: body
+            .split(',')
+            .nth(11)
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .map_or(1.0, |h| {
+                (h / 100.0).clamp(kartcraft::MIN_RACE_SCALE, kartcraft::MAX_RACE_SCALE)
+            }),
     })
 }
 
@@ -353,7 +364,7 @@ pub(crate) fn update(
         let mut kart = Transform {
             translation: at,
             rotation,
-            scale: Vec3::splat(kartcraft::model_scale()),
+            scale: Vec3::splat(kartcraft::model_scale_at(state.scale)),
         };
         // A blast's tumble or a squish, shown from the hit the server relayed.
         if let Some(r) = weapons.reaction(super::weapons::low_guid(remote.guid)) {
@@ -362,13 +373,14 @@ pub(crate) fn update(
             kart.scale *= r.scale.max(Vec3::splat(0.01));
         } else if let Some((turn, s, lift)) = kartcraft::wheelie_frame(state.wheelie) {
             // Their boost's wheelie, as ours is drawn (`ctr_kart::Kart::pose`).
-            kart.translation += rotation * (lift / kartcraft::lu_per_yard());
+            kart.translation += rotation * (lift / kartcraft::lu_per_yard_at(state.scale));
             kart.rotation = rotation * Quat::from_mat3(&turn);
             kart.scale *= s;
         }
         let speed = Vec3::new(velocity.x, 0.0, velocity.z).length();
         let forward_speed = velocity.dot(heading);
-        let radius = WHEEL_RADIUS * kartcraft::kart_scale() / kartcraft::METERS_PER_YARD;
+        let radius = WHEEL_RADIUS * kartcraft::kart_scale() / kartcraft::race_scale() * state.scale
+            / kartcraft::METERS_PER_YARD;
         remote.spin = (remote.spin + forward_speed / radius * dt).rem_euclid(std::f32::consts::TAU);
         if let Ok((mut t, mut vis, mut wheels, mut status, mut flag)) =
             kart_parts.get_mut(remote.kart)
@@ -470,6 +482,16 @@ mod tests {
         assert_eq!(s.flag, 1);
         let s = parse_state(&format!("{old},0,3,4,99")).unwrap();
         assert_eq!(s.flag, 0);
+        // The race's scale after the flag, in hundredths: ours on our own line, 1 on an older
+        // client's, bounded.
+        assert_eq!(parse_state(body).unwrap().scale, kartcraft::race_scale());
+        assert_eq!(parse_state(&old).unwrap().scale, 1.0);
+        assert_eq!(
+            parse_state(&format!("{old},0,3,4,1,50")).unwrap().scale,
+            0.5
+        );
+        let tiny = parse_state(&format!("{old},0,3,4,1,1")).unwrap().scale;
+        assert_eq!(tiny, kartcraft::MIN_RACE_SCALE);
         assert!(parse_state("1,2,3").is_none());
         assert!(parse_state("x,2,3,4,5,6").is_none());
     }

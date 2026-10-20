@@ -64,6 +64,17 @@ pub fn set_race_scale(scale: f32) {
     WANTED_SCALE.store(s.to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
+/// [`model_scale`] for a kart driving at race scale `race` (another racer's, as their state line
+/// says), not ours.
+pub fn model_scale_at(race: f32) -> f32 {
+    model_scale() / race_scale() * race
+}
+
+/// [`lu_per_yard`] for a kart driving at race scale `race`.
+pub fn lu_per_yard_at(race: f32) -> f32 {
+    lu_per_yard() * race_scale() / race
+}
+
 /// The race's scale the session drives at.
 pub fn race_scale() -> f32 {
     f32::from_bits(RACE_SCALE.load(std::sync::atomic::Ordering::Relaxed))
