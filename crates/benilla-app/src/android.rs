@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use benilla_ui::script::UiScript;
 pub use bevy::android::android_activity::AndroidApp;
 use bevy::ecs::system::NonSendMarker;
 use bevy::input::gamepad::{
@@ -24,6 +23,7 @@ use winit::platform::android::gamepad::Event;
 
 use crate::char_select::ClientState;
 use crate::glue::dialog::GlueDialog;
+use crate::ui_script::{EditBoxFocused, EngineTyping};
 use crate::{AppExit, BuildId};
 
 /// Runs the client in the activity `app`.
@@ -770,9 +770,9 @@ impl Plugin for AndroidPlugin {
 /// field; winit shows it for a window that allows IME and hides it again. Android keeps it down
 /// while a hardware keyboard is attached. The glue screens' boxes are Rust's: the login form
 /// always has one focused, character creation its name, and a glue dialog may carry one; in the
-/// world, the interface's focused edit box (chat, a search).
+/// world, the interface's focused edit box (chat, a search) and the track editor's fields.
 fn soft_keyboard(
-    script: Option<NonSend<UiScript>>,
+    (edit_box, engine): (Res<EditBoxFocused>, Res<EngineTyping>),
     state: Res<State<ClientState>>,
     dialog: Res<GlueDialog>,
     mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
@@ -785,7 +785,8 @@ fn soft_keyboard(
         ClientState::Login | ClientState::CharCreate => dialog_edit != Some(false),
         ClientState::CharSelect => dialog_edit == Some(true),
         ClientState::InWorld => false,
-    } || script.is_some_and(|s| s.has_focused_editbox());
+    } || edit_box.0
+        || engine.0;
     // Over the missing-data screen nothing takes typing: the login form under it is out of reach.
     let typing = typing && MISSING.get().is_none();
     for (entity, mut window) in &mut windows {

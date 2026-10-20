@@ -187,6 +187,18 @@ pub(crate) const MENU_KEYS: [bevy::input::keyboard::KeyCode; 7] = {
     ]
 };
 
+/// A FrameXML EditBox, named or not, holds the keyboard focus, as of the last UI tick: the model
+/// value for code outside the feed layer (Android opens the phone's keyboard on it).
+#[derive(Resource, Default)]
+pub(crate) struct EditBoxFocused(pub(crate) bool);
+
+fn publish_edit_box_focus(script: Option<NonSend<UiScript>>, mut focused: ResMut<EditBoxFocused>) {
+    let now = script.is_some_and(|s| s.has_focused_editbox());
+    if focused.0 != now {
+        focused.0 = now;
+    }
+}
+
 /// Keys an engine panel holds this frame (the track editor turning an object): the VM and the
 /// key bindings get none of them, as with keys a keyboard frame eats.
 #[derive(Resource, Default)]
@@ -371,6 +383,15 @@ impl Plugin for UiScriptPlugin {
             .init_resource::<EngineTyping>()
             .init_resource::<EngineKeys>()
             .init_resource::<EnginePad>()
+            .init_resource::<EditBoxFocused>()
+            // In the input set, after the feeds that move the focus: before the world stages, as the
+            // rest of the set is.
+            .add_systems(
+                Update,
+                publish_edit_box_focus
+                    .in_set(UiInput)
+                    .after(input::feed_pad),
+            )
             .add_systems(
                 Update,
                 (
