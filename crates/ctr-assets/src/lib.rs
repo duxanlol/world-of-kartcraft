@@ -22,6 +22,7 @@ pub mod big;
 pub mod ctr;
 pub mod disc;
 pub mod effects;
+pub mod extract;
 pub mod hud;
 pub mod hud_draw;
 pub mod kart;
