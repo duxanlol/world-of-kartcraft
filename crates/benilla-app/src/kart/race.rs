@@ -601,6 +601,7 @@ impl Active {
             facings: std::mem::take(&mut self.facings),
             gates: std::mem::take(&mut self.gates),
             heights: std::mem::take(&mut self.heights),
+            rings: std::mem::take(&mut self.rings),
             floor: self.floor,
             scale: self.scale,
             objects: std::mem::take(&mut self.objects),
@@ -4117,6 +4118,33 @@ mod tests {
         let objects = races.race.as_ref().unwrap().objects();
         assert_eq!(objects.len(), 1);
         assert_eq!((objects[0].model.as_str(), objects[0].yaw), ("plank", 0.5));
+    }
+
+    #[test]
+    fn a_test_lap_restarts_on_the_same_track_rings_and_objects_and_all() {
+        let objects = super::super::objects::parse_wire("excavation-plank,1,2,3,0.5,0,0");
+        let mut race = Active::practice("Rings", 1, vec![[0.0, 0.0], [100.0, 0.0]], None, "Me")
+            .with_heights(vec![None, Some(20.0)])
+            .with_rings(vec![None, Some([0.3, 0.1])])
+            .with_facings(vec![None, Some(1.0)])
+            .with_gates(vec![8.0, 6.0])
+            .with_floor(Some(5.0))
+            .with_objects(objects.clone())
+            .with_scale(0.5);
+        let ring = race.ring(1);
+        assert!(ring.is_some());
+        race.pass(0, 1.0);
+        race.restart_practice();
+        assert!(race.practice && race.go_at.is_none());
+        assert_eq!(
+            race.ring(1),
+            ring,
+            "the ring hangs where it did, turned as it was"
+        );
+        assert_eq!(race.objects(), objects.as_slice());
+        assert_eq!(race.gates, vec![8.0, 6.0]);
+        assert_eq!(race.floor, Some(5.0));
+        assert_eq!(race.scale(), 0.5);
     }
 
     #[test]
