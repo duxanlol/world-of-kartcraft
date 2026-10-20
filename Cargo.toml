@@ -59,6 +59,9 @@ gilrs-core = { path = "third_party/gilrs-core" }
 # winit 0.30.13, patched so a mouse on Android is a mouse and not a finger, and a controller's
 # events reach the app instead of turning into touches and keys (`third_party/winit/BENILLA.md`).
 winit = { path = "third_party/winit" }
+# android-activity 0.6.1, patched so the phone's keyboard opens when asked
+# (`third_party/android-activity/BENILLA.md`).
+android-activity = { path = "third_party/android-activity" }
 
 # Dependencies at opt-level 3 in dev: at opt-level 0, avian/parry collision drops a run to <1 fps.
 [profile.dev.package."*"]

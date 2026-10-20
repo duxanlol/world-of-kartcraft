@@ -34,6 +34,12 @@ pub(crate) use crate::cursor::{
 pub(crate) use crate::icon::NoIcon as PlatformIcon;
 
 static HAS_FOCUS: AtomicBool = AtomicBool::new(true);
+// benilla: a keyboard request made before the window had the focus, which Android ignored (no
+// view is served yet), so the focus gain asks once more. Only once: closing the keyboard hands
+// the focus back too, and asking on every gain would reopen what the player put away.
+static IME_PENDING: AtomicBool = AtomicBool::new(false);
+// benilla: whether the window has had the focus since it was made (`HAS_FOCUS` starts true).
+static FOCUSED_ONCE: AtomicBool = AtomicBool::new(false);
 
 /// Returns the minimum `Option<Duration>`, taking into account that `None`
 /// equates to an infinite timeout, not a zero timeout (so can't just use
@@ -230,6 +236,10 @@ impl<T: 'static> EventLoop<T> {
                 },
                 MainEvent::GainedFocus => {
                     HAS_FOCUS.store(true, Ordering::Relaxed);
+                    FOCUSED_ONCE.store(true, Ordering::Relaxed);
+                    if IME_PENDING.swap(false, Ordering::Relaxed) {
+                        self.android_app.show_soft_input(false);
+                    }
                     callback(
                         event::Event::WindowEvent {
                             window_id: window::WindowId(WindowId),
@@ -937,10 +947,14 @@ impl Window {
     pub fn set_ime_cursor_area(&self, _position: Position, _size: Size) {}
 
     pub fn set_ime_allowed(&self, allowed: bool) {
+        // benilla: explicit requests. Android drops an implicit show (upstream's `true`) for a
+        // NativeActivity, which has no text view to have asked for it, and an implicit-only hide
+        // would leave an explicitly shown keyboard up.
+        IME_PENDING.store(allowed && !FOCUSED_ONCE.load(Ordering::Relaxed), Ordering::Relaxed);
         if allowed {
-            self.app.show_soft_input(true);
+            self.app.show_soft_input(false);
         } else {
-            self.app.hide_soft_input(true);
+            self.app.hide_soft_input(false);
         }
     }
 

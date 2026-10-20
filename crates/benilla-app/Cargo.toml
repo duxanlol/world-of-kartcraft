@@ -107,6 +107,13 @@ objc2-foundation = { version = "0.2", features = ["NSArray", "NSData", "NSGeomet
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 cpal = "0.17"
 
+# Android: "All files access" and the app's update, through the activity (`android.rs`), at
+# android-activity's version.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22"
+# The app's own update is checked against its SHA-256 (`android.rs`), as the launcher checks the game.
+sha2 = "0.10"
+
 # The host clipboard (`textinput::clipboard`) off Android, which has none of arboard's backends.
 [target.'cfg(not(target_os = "android"))'.dependencies]
 arboard = "3"

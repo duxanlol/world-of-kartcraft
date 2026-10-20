@@ -134,8 +134,6 @@ dependencies = [
 [[package]]
 name = "android-activity"
 version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f2a1bb052857d5dd49572219344a7332b31b76405648eabac5bc68978251bcd"
 dependencies = [
  "android-properties",
  "bitflags 2.11.1",
@@ -614,6 +612,7 @@ dependencies = [
  "half",
  "image",
  "include_dir",
+ "jni 0.22.4",
  "kart-driver",
  "kart-gps",
  "kartcraft",
@@ -633,6 +632,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "sha2",
  "smithay-clipboard",
  "symphonia",
  "toml",

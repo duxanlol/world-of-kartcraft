@@ -1087,6 +1087,11 @@ impl UiScript {
         model.arena.frame(h)?.name.clone()
     }
 
+    /// Whether an edit box, named or not, holds the keyboard focus.
+    pub fn has_focused_editbox(&self) -> bool {
+        self.model_ref().focused_editbox.is_some()
+    }
+
     /// Resolves the layout change gate let through; a per-frame delta of 0 means a quiet frame.
     pub fn layout_solves(&self) -> u64 {
         self.model_ref().layout_solves
