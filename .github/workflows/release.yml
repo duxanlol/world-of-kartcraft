@@ -6,7 +6,8 @@
 # and presets name the staging server; uploaded to the website's staging/ folder, live at once) and
 # for production (the players' launcher and presets; uploaded to candidate/, where nothing looks).
 # dist/promote.sh later copies candidate/ to the players' folders, so the players get the very
-# files the testers had and promotion builds nothing.
+# files the testers had and promotion builds nothing. Started with only=android it builds the
+# Android app alone: the server image and the PC clients stay as the last full run left them.
 #
 # Settings (Settings → Secrets and variables → Actions):
 #   variables  KARTCRAFT_SERVER, KARTCRAFT_UPDATE_URL, KARTCRAFT_REGISTER_URL — production's
@@ -22,6 +23,12 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      only:
+        description: "What to build: everything, or the Android app alone (the server and the PC clients stay as staging has them)"
+        type: choice
+        options: [all, android]
+        default: all
 
 permissions:
   contents: read
@@ -43,6 +50,7 @@ jobs:
   # GitHub's registry, public: the staging VM pulls it, and promote.sh has production pull the very
   # same tag. Its tag is the patch's hash, so a release that leaves the server alone builds nothing.
   server:
+    if: inputs.only != 'android'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
@@ -85,6 +93,7 @@ jobs:
           docker logout ghcr.io
 
   windows:
+    if: inputs.only != 'android'
     needs: version
     runs-on: windows-latest
     timeout-minutes: 150
@@ -135,6 +144,7 @@ jobs:
           dist/upload.sh dist/staging/updates staging/ "dist/staging/WorldOfKartcraft/Kartcraft Launcher.exe" staging/KartcraftLauncher.exe
 
   macos:
+    if: inputs.only != 'android'
     needs: version
     runs-on: macos-14
     timeout-minutes: 180
@@ -183,6 +193,7 @@ jobs:
   # The Linux launcher, an AppImage (the game a Linux player runs is the Windows one, through
   # Proton, from the Windows updates). Built in Debian 12, so it starts on Ubuntu 22.04 and newer.
   linux:
+    if: inputs.only != 'android'
     needs: version
     runs-on: ubuntu-latest
     timeout-minutes: 60
