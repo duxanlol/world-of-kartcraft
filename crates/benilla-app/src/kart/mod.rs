@@ -25,6 +25,7 @@ pub(crate) mod marshals;
 pub(crate) mod objects;
 mod pad_choice;
 mod pads;
+mod pieces;
 mod profession;
 mod props;
 mod race;

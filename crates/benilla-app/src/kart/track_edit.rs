@@ -41,6 +41,19 @@ const ERASE_COLOR: Color = Color::srgb(1.0, 0.3, 0.25);
 const AXIS_LENGTH: f32 = 4.0;
 /// The keys an object turns on, held from the game's own bindings while it does: yaw, pitch,
 /// roll, each pair.
+/// The keys that size a build piece, held or about to be placed: `[` `]` its length, `;` `'` its
+/// width, `-` `=` its height, each pair shorter then longer.
+pub(crate) const SIZE_KEYS: [KeyCode; 6] = [
+    KeyCode::BracketLeft,
+    KeyCode::BracketRight,
+    KeyCode::Semicolon,
+    KeyCode::Quote,
+    KeyCode::Minus,
+    KeyCode::Equal,
+];
+/// How fast a size key held grows or shrinks a piece (yards a second).
+const SIZE_PER_SEC: f32 = 6.0;
+
 pub(crate) const TURN_KEYS: [KeyCode; 6] = [
     KeyCode::KeyQ,
     KeyCode::KeyE,
@@ -202,6 +215,9 @@ pub(crate) struct TrackEdit {
     /// The turn the next object takes (yaw, pitch, roll, radians), and the ghost: the object
     /// held, or the one a click would place, as of this frame.
     object_turn: [f32; 3],
+    /// The size the next build piece of each shape is placed at (length, width, height), as the
+    /// size keys set it ([`SIZE_KEYS`]); a held one's are its own.
+    piece_sizes: [[f32; 3]; 2],
     ghost: Option<Placed>,
     /// Where the middle mouse or Ctrl held pins the object turned (WoW, its ground), so the mouse
     /// turns or raises it in place; and how high over its ground it is raised (yards).
@@ -251,6 +267,7 @@ impl Default for TrackEdit {
             objects: Vec::new(),
             placed: Vec::new(),
             object_turn: [0.0; 3],
+            piece_sizes: super::pieces::Shape::ALL.map(super::pieces::Shape::default_size),
             ghost: None,
             pin: None,
             lift: 0.0,
@@ -429,6 +446,37 @@ impl TrackEdit {
     }
 
     /// The ghost as of this frame.
+    /// The size a new object of kind `key` is placed at: a build piece's as the size keys set it
+    /// for its shape, none for a model.
+    fn piece_size(&self, key: &str) -> Option<[f32; 3]> {
+        let (shape, _) = super::objects::piece_of(key)?;
+        let i = super::pieces::Shape::ALL.iter().position(|&s| s == shape)?;
+        Some(self.piece_sizes[i])
+    }
+
+    /// The size keys held this frame grow or shrink the build piece held (`held`, its index among
+    /// the objects), or else the next of kind `next` to be placed, by `step` yards each way.
+    fn resize_piece(&mut self, held: Option<usize>, next: Option<&str>, step: [f32; 3]) {
+        if step == [0.0; 3] {
+            return;
+        }
+        let grow = |shape, size: [f32; 3]| {
+            super::pieces::clamp_size(shape, std::array::from_fn(|i| size[i] + step[i]))
+        };
+        if let Some(o) = held.and_then(|i| self.objects.get_mut(i)) {
+            if let Some((shape, _)) = super::objects::piece_of(&o.model) {
+                o.size = Some(grow(shape, o.size.unwrap_or(shape.default_size())));
+            }
+            return;
+        }
+        let Some((shape, _)) = next.and_then(super::objects::piece_of) else {
+            return;
+        };
+        if let Some(i) = super::pieces::Shape::ALL.iter().position(|&s| s == shape) {
+            self.piece_sizes[i] = grow(shape, self.piece_sizes[i]);
+        }
+    }
+
     pub(crate) fn ghost(&self) -> Option<Placed> {
         self.ghost.clone().filter(|_| self.on && !self.testing)
     }
@@ -1327,6 +1375,7 @@ pub(crate) fn update(
                     yaw,
                     pitch,
                     roll,
+                    size: None,
                 }
             }
         };
@@ -1371,6 +1420,14 @@ pub(crate) fn update(
         if ctrl {
             edit.lift -= mouse.delta.y * LIFT_PER_PIXEL;
         }
+        // A build piece's size keys: `[` `]` its length, `;` `'` its width, `-` `=` its height.
+        let grow = SIZE_PER_SEC * time.delta_secs();
+        let pair = |a: usize| (key(SIZE_KEYS[a + 1]) - key(SIZE_KEYS[a])) * grow;
+        let next = match tool {
+            Place::Object(k) => kinds().get(k).map(|k| k.key),
+            _ => None,
+        };
+        edit.resize_piece(which, next, [pair(0), pair(2), pair(4)]);
     }
     // The middle mouse or Ctrl held pins the object where it is (its ground: where it stands, less
     // its lift), so the mouse turns or raises it in place; let go, it follows the cursor again.
@@ -1535,6 +1592,7 @@ pub(crate) fn update(
                 yaw,
                 pitch,
                 roll,
+                size: edit.piece_size(kind.key),
             }
         }),
         _ => None,
@@ -1648,6 +1706,7 @@ fn place(edit: &mut TrackEdit, what: Place, at: Vec3, o: f32) {
         Place::Object(k) => {
             let Some(kind) = kinds().get(k) else { return };
             let [yaw, pitch, roll] = edit.object_turn;
+            let size = edit.piece_size(kind.key);
             edit.objects.push(Placed {
                 model: kind.key.into(),
                 x: w[0],
@@ -1656,6 +1715,7 @@ fn place(edit: &mut TrackEdit, what: Place, at: Vec3, o: f32) {
                 yaw,
                 pitch,
                 roll,
+                size,
             });
             edit.placed.push(true);
             edit.undone.clear();
@@ -1908,6 +1968,7 @@ mod tests {
             yaw: 0.0,
             pitch: 0.0,
             roll: 0.0,
+            size: None,
         });
         edit.clear();
         assert!(edit.objects.is_empty());
@@ -2053,6 +2114,7 @@ mod tests {
             yaw: 0.5,
             pitch: 0.25,
             roll: 0.0,
+            size: None,
         };
         edit.objects.push(plank.clone());
         edit.load();

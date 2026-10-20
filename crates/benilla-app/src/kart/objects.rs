@@ -155,6 +155,33 @@ static CTR_PROPS: std::sync::LazyLock<Option<CtrProps>> = std::sync::LazyLock::n
 
 /// A CTR kind's `path`: its place in `props.json`.
 const CTR_PATH: &str = "ctr:";
+/// A build piece's `path`: its key ([`super::pieces`]).
+const PIECE_PATH: &str = "piece:";
+
+/// The build piece `key` names, if it names one.
+pub(crate) fn piece_of(
+    key: &str,
+) -> Option<(super::pieces::Shape, &'static super::pieces::Material)> {
+    super::pieces::piece(key)
+}
+
+/// A build piece's parts at `size`: its faces in Bevy space, its material's texture tiled over them.
+fn piece_parts(
+    shape: super::pieces::Shape,
+    m: &super::pieces::Material,
+    size: [f32; 3],
+    texture: Option<(u32, u32, Vec<u8>)>,
+) -> Part {
+    let g = super::pieces::geometry(shape, size, m.tile);
+    Part {
+        pos: g.pos.iter().map(|p| wow_to_bevy(*p)).collect(),
+        normals: g.normals.iter().map(|n| wow_to_bevy(*n)).collect(),
+        uvs: g.uvs,
+        idx: g.idx,
+        texture,
+        blend: ModelBlend::Opaque,
+    }
+}
 
 /// A CTR prop's name as the objects panel shows it: `crate_question` → `Crate question`.
 fn ctr_name(name: &str) -> String {
@@ -185,7 +212,16 @@ pub(crate) fn kinds() -> &'static [Kind] {
                 group: leak(format!("CTR {}", p.group)),
                 path: leak(format!("{CTR_PATH}{i}")),
             });
-        own.chain(ctr).collect()
+        let pieces = super::pieces::Shape::ALL
+            .into_iter()
+            .flat_map(|shape| super::pieces::MATERIALS.iter().map(move |m| (shape, m)));
+        let pieces = pieces.map(|(shape, m)| Kind {
+            key: leak(format!("{}-{}", shape.key(), m.key)),
+            name: leak(format!("{} {}", m.name, shape.name())),
+            group: "Build",
+            path: leak(format!("{PIECE_PATH}{}-{}", shape.key(), m.key)),
+        });
+        own.chain(pieces).chain(ctr).collect()
     });
     &ALL
 }
@@ -254,6 +290,10 @@ pub(crate) struct Placed {
     pub(crate) pitch: f32,
     #[serde(default)]
     pub(crate) roll: f32,
+    /// A build piece's length, width and height (yards, [`super::pieces`]); none for a model,
+    /// whose size is its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) size: Option<[f32; 3]>,
 }
 
 impl Placed {
@@ -293,13 +333,17 @@ impl Placed {
     }
 }
 
-/// Objects as a publish and a player track's line carry them: `key,x,y,z,yaw,pitch,roll;...`,
-/// the place at a tenth of a yard and the turn at a thousandth of a radian (`Kartcraft.cpp`
+/// Objects as a publish and a player track's line carry them:
+/// `key,x,y,z,yaw,pitch,roll[,length,width,height];...`, the place at a tenth of a yard, the turn
+/// at a thousandth of a radian and a build piece's size at a tenth of a yard (`Kartcraft.cpp`
 /// `CleanTrackObjects`).
 pub(crate) fn wire(objects: &[Placed]) -> String {
     let one = |o: &Placed| {
+        let size = o
+            .size
+            .map_or_else(String::new, |[l, w, h]| format!(",{l:.1},{w:.1},{h:.1}"));
         format!(
-            "{},{:.1},{:.1},{:.1},{:.3},{:.3},{:.3}",
+            "{},{:.1},{:.1},{:.1},{:.3},{:.3},{:.3}{size}",
             o.model, o.x, o.y, o.z, o.yaw, o.pitch, o.roll
         )
     };
@@ -311,7 +355,11 @@ pub(crate) fn parse_wire(text: &str) -> Vec<Placed> {
     let one = |spot: &str| {
         let v: Vec<&str> = spot.split(',').collect();
         let n = |i: usize| v.get(i)?.trim().parse::<f32>().ok();
-        (v.len() == 7 && !v[0].is_empty()).then_some(())?;
+        ((v.len() == 7 || v.len() == 10) && !v[0].is_empty()).then_some(())?;
+        let size = match v.len() {
+            10 => Some([n(7)?, n(8)?, n(9)?]),
+            _ => None,
+        };
         Some(Placed {
             model: v[0].to_string(),
             x: n(1)?,
@@ -320,6 +368,7 @@ pub(crate) fn parse_wire(text: &str) -> Vec<Placed> {
             yaw: n(4)?,
             pitch: n(5)?,
             roll: n(6)?,
+            size,
         })
     };
     text.split(';').filter_map(one).collect()
@@ -547,14 +596,25 @@ impl Models {
                 if is_pad(key) {
                     return Some(pad_kind(meshes, materials, images));
                 }
-                // A CTR prop from the player's own disc, else a model of their install.
+                // A CTR prop from the player's own disc, a build piece of their install's
+                // texture at its default size, else a model of their install.
                 let ctr = kind
                     .path
                     .strip_prefix(CTR_PATH)
                     .and_then(|i| i.parse().ok());
-                let parts = match ctr {
-                    Some(i) => ctr_parts(i)?,
-                    None => read_parts(chain, kind.path)
+                let parts = match (ctr, piece_of(key)) {
+                    (Some(i), _) => ctr_parts(i)?,
+                    (None, Some((shape, m))) => {
+                        let texture = chain
+                            .read(m.texture)
+                            .ok()
+                            .and_then(|b| benilla_formats::blp_to_rgba(&b).ok());
+                        if texture.is_none() {
+                            warn!("kart object {key}: no texture {}", m.texture);
+                        }
+                        vec![piece_parts(shape, m, shape.default_size(), texture)]
+                    }
+                    (None, None) => read_parts(chain, kind.path)
                         .inspect_err(|e| warn!("kart object {key}: {e:#}"))
                         .ok()?,
                 };
@@ -678,16 +738,40 @@ pub(crate) struct Ghost;
 pub(crate) struct Laid {
     objects: Vec<(usize, Placed)>,
     roots: Vec<Entity>,
-    ghost: Option<(String, Entity)>,
+    ghost: Option<(String, Option<[f32; 3]>, Entity)>,
 }
 
 /// Spawns `placed` as `loaded`'s parts under one root; solid, unless a ghost.
-fn spawn(commands: &mut Commands, placed: &Placed, loaded: &Loaded, ghost: bool) -> Entity {
+fn spawn(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    placed: &Placed,
+    loaded: &Loaded,
+    ghost: bool,
+) -> Entity {
     let mut root = commands.spawn((
         placed.transform(),
         Visibility::default(),
         Name::new(format!("kart object {}", placed.model)),
     ));
+    // A build piece is built at its own size, its collider with it; its kind's part is the
+    // material's.
+    if let (Some((shape, m)), Some((_, solid, see_through))) =
+        (piece_of(&placed.model), loaded.parts.first())
+    {
+        let size = super::pieces::clamp_size(shape, placed.size.unwrap_or(shape.default_size()));
+        let part = piece_parts(shape, m, size, None);
+        if !ghost {
+            let tris = part.idx.as_chunks::<3>().0.to_vec();
+            root.insert((RigidBody::Static, Collider::trimesh(part.pos.clone(), tris)));
+        }
+        let material = if ghost { see_through } else { solid };
+        let mesh = meshes.add(part_mesh(&part));
+        root.with_children(|r| {
+            r.spawn((Mesh3d(mesh), MeshMaterial3d(material.clone())));
+        });
+        return root.id();
+    }
     if !ghost {
         if let Some(c) = &loaded.collider {
             root.insert((RigidBody::Static, c.clone()));
@@ -735,15 +819,15 @@ pub(crate) fn lay(
         .collect();
     let ghost = edit.ghost();
     let mut chain = None;
-    let mut load = |key: &'static str, models: &mut Models| {
+    let mut load = |key: &'static str, models: &mut Models, meshes: &mut Assets<Mesh>| {
         let chain = chain.get_or_insert_with(|| assets.chain.lock_recover());
         models
-            .load(key, chain, &mut meshes, &mut materials, &mut images)
+            .load(key, chain, meshes, &mut materials, &mut images)
             .is_some()
     };
     if edit.view().state == "edit" && models.0.len() < kinds().len() {
         for k in kinds() {
-            load(k.key, &mut models);
+            load(k.key, &mut models, &mut meshes);
         }
     }
     if laid.objects != want {
@@ -754,33 +838,33 @@ pub(crate) fn lay(
             let Some((_, kind)) = kind(&placed.model) else {
                 continue;
             };
-            if !load(kind.key, &mut models) {
+            if !load(kind.key, &mut models, &mut meshes) {
                 continue;
             }
             let loaded = models.0[kind.key].as_ref().unwrap();
-            let root = spawn(&mut commands, placed, loaded, false);
+            let root = spawn(&mut commands, &mut meshes, placed, loaded, false);
             commands.entity(root).insert(PlacedObject(*i));
             laid.roots.push(root);
         }
         laid.objects = want;
     }
     match (ghost, &laid.ghost) {
-        (Some(g), Some((model, e))) if *model == g.model => {
+        (Some(g), Some((model, size, e))) if *model == g.model && *size == g.size => {
             if let Ok(mut t) = ghosts.get_mut(*e) {
                 t.set_if_neq(g.transform());
             }
         }
         (g, _) => {
-            if let Some((_, e)) = laid.ghost.take() {
+            if let Some((_, _, e)) = laid.ghost.take() {
                 commands.entity(e).despawn();
             }
             let kind = g.as_ref().and_then(|g| kind(&g.model));
             if let (Some(g), Some((_, kind))) = (g, kind) {
-                if load(kind.key, &mut models) {
+                if load(kind.key, &mut models, &mut meshes) {
                     let loaded = models.0[kind.key].as_ref().unwrap();
-                    let e = spawn(&mut commands, &g, loaded, true);
+                    let e = spawn(&mut commands, &mut meshes, &g, loaded, true);
                     commands.entity(e).insert(Ghost);
-                    laid.ghost = Some((g.model, e));
+                    laid.ghost = Some((g.model, g.size, e));
                 }
             }
         }
@@ -800,6 +884,7 @@ mod tests {
             yaw,
             pitch,
             roll,
+            size: None,
         }
     }
 
@@ -876,6 +961,45 @@ mod tests {
             1,
             "a bad one passed over"
         );
+        // A build piece's size goes after its turn; an object without one is as it was.
+        let mut ramp = placed(0.0, 0.0, 0.0);
+        ramp.model = "ramp-wood".into();
+        ramp.size = Some([12.0, 8.0, 3.5]);
+        let text = wire(std::slice::from_ref(&ramp));
+        assert_eq!(
+            text,
+            "ramp-wood,10.0,20.0,5.0,0.000,0.000,0.000,12.0,8.0,3.5"
+        );
+        assert_eq!(parse_wire(&text), vec![ramp]);
+        assert!(
+            parse_wire("ramp-wood,1,2,3,0,0,0,1,2").is_empty(),
+            "a size is whole"
+        );
+    }
+
+    /// The build pieces are kinds, every shape in every material, in the Build tab, each
+    /// material's texture in the install.
+    #[test]
+    fn every_build_piece_is_a_kind_with_its_texture_in_the_install() {
+        let build: Vec<&Kind> = kinds().iter().filter(|k| k.group == "Build").collect();
+        assert_eq!(
+            build.len(),
+            super::super::pieces::Shape::ALL.len() * super::super::pieces::MATERIALS.len()
+        );
+        assert!(
+            build.iter().all(|k| piece_of(k.key).is_some()),
+            "every one a piece"
+        );
+        assert_eq!(kind("block-grate").unwrap().1.name, "Grate block");
+        let data = benilla_formats::wow_data_or_skip!();
+        let chain = benilla_formats::open_chain(&data).expect("the install's archives");
+        for m in &super::super::pieces::MATERIALS {
+            let bytes = chain
+                .read(m.texture)
+                .unwrap_or_else(|e| panic!("{}: {e}", m.texture));
+            let (w, h, _) = benilla_formats::blp_to_rgba(&bytes).expect("a texture");
+            assert!(w >= 64 && h >= 64, "{} is {w}x{h}", m.key);
+        }
     }
 
     #[test]
@@ -928,7 +1052,8 @@ mod tests {
             .iter()
             .filter(|k| k.path.starts_with(CTR_PATH))
             .collect();
-        assert_eq!(kinds().len(), KINDS.len() + ctr.len());
+        let build = kinds().iter().filter(|k| k.group == "Build").count();
+        assert_eq!(kinds().len(), KINDS.len() + build + ctr.len());
         let Some(file) = CTR_PROPS.as_ref() else {
             assert!(ctr.is_empty(), "no props.json, no CTR kinds");
             // Pointed at a conversion, it must have its props.

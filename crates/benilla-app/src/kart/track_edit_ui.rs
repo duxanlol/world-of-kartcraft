@@ -135,6 +135,7 @@ pub(crate) fn keys_text(bindings: &[(String, Vec<String>)]) -> String {
             "|cffffd100Q/E, R/F, Z/C|r  turn an object: yaw, pitch, roll",
             "|cffffd100Middle mouse held|r  turn it as you see it (Shift: roll)",
             "|cffffd100Ctrl, mouse up and down|r  raise or lower it",
+            "|cffffd100[ ]  ; '  - =|r  size a build piece: length, width, height",
             "|cffffd100Controller Fire|r  place at the screen's centre",
             "|cffffd100Right mouse held|r  look around",
             "|cff999999The first checkpoint is the start; drag this card to move it.|r",
@@ -938,7 +939,7 @@ fn spawn(
             if let Some(objects) = &built.objects {
                 objects_panel(root, art, font, s, objects, view.object);
             }
-            panel(root, art, Panel::Keys, card(0, (260.0, 204.0), 182.0), s).with_children(|k| {
+            panel(root, art, Panel::Keys, card(0, (260.0, 216.0), 182.0), s).with_children(|k| {
                 label(
                     k,
                     font,
@@ -1745,7 +1746,7 @@ mod tests {
         assert_eq!(lines[0], "|cffffd100W / S|r  fly forward, back");
         assert_eq!(lines[1], "|cffffd100unbound / unbound|r  fly left, right");
         assert_eq!(lines[3], "|cffffd100SHIFT|r  held: fly fast");
-        assert_eq!(lines.len(), 14);
+        assert_eq!(lines.len(), 15);
     }
 
     #[test]

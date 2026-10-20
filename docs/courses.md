@@ -133,7 +133,14 @@ in any test lap and in a race on a player track. CTR's own props join them, from
 own disc as the launcher converts it (`ctr-extract --props`, in `--all`: `kart-data/props.json`,
 `ctr_assets::props`): the CTR Hazards (the armadillo, TNT and Nitro crates, barrels...), CTR
 Pickups (the ? crate, Wumpa fruit, the relic...) and CTR Scenery groups, keyed `ctr-<name>`, at
-the kart's own size. The Boosts group's turbo pad (`turbo-pad`) is
+the kart's own size. The Build group's pieces (`kart/pieces.rs`) fill the world's gaps: a ramp
+(a wedge rising along its length) and a block, each in six materials of the install (wood,
+cobble, dirt, paving, grate, stone; keyed `ramp-wood`, `block-stone`...), of any size from
+0.5 to 200 yards each way, its texture repeating by the yard, never stretched. `[` `]`, `;` `'`
+and `-` `=` size the one held or about to be placed (length, width, height); a saved track keeps
+its `size` (`[length, width, height]`), and a publish sends it after the turn
+(`key,x,y,z,yaw,pitch,roll,l,w,h`), which the server bounds and keeps. Its mesh and collider are
+built at its size. The Boosts group's turbo pad (`turbo-pad`) is
 no model and no collider: CTR's pad, draped on the ground under where it is placed and pointing
 as it is yawed, fired as a course's pads are, and picked for Move and Delete by the aim over it. A saved track keeps them as `objects` (`model`,
 `x`, `y`, `z`, `yaw`, `pitch`, `roll`, radians); a publish sends them as its last field

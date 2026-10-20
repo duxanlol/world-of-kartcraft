@@ -138,6 +138,7 @@ mod tests {
             yaw: 0.5,
             pitch: 0.0,
             roll: 0.0,
+            size: None,
         };
         let race = super::super::race::Active::practice("Loop", 1, vec![[0.0, 0.0]; 3], None, "Me")
             .with_objects(vec![placed(TURBO_PAD), placed("excavation-plank")]);
