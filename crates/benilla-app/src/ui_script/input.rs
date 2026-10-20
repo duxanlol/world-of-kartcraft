@@ -90,9 +90,11 @@ pub(super) fn feed_pad(
     time: Res<Time>,
     cover: Option<Res<crate::loading_screen::LoadingScreen>>,
     mut capture: ResMut<UiKeyboardCapture>,
+    mut engine: ResMut<super::EnginePad>,
     mut gate: Local<PadGate>,
 ) {
     capture.pad_consumed.clear();
+    engine.presses.clear();
     let covered = cover.is_some_and(|c| c.covering());
     let (Some(mut script), false) = (script, covered) else {
         capture.pad_owned.clear();
@@ -117,8 +119,10 @@ pub(super) fn feed_pad(
         .flat_map(|p| p.get_pressed().copied().collect::<Vec<_>>())
         .collect();
     let now = time.elapsed_secs_f64();
-    gate.observe(!owns(&mut script).is_empty(), &held, now);
-    if !capture.typing {
+    // An engine menu up ([`super::EnginePad`]) holds the whole pad: the VM gets none of it.
+    let owning = engine.open || !owns(&mut script).is_empty();
+    gate.observe(owning, &held, now);
+    if !capture.typing || engine.open {
         let pressed: Vec<_> = pads
             .iter()
             .flat_map(|p| p.get_just_pressed().copied().collect::<Vec<_>>())
@@ -130,6 +134,12 @@ pub(super) fn feed_pad(
             // A press the interface may not have yet is no one's: not its, not a binding's.
             if !gate.may_take(b, now) {
                 capture.pad_consumed.push(b);
+                continue;
+            }
+            if engine.open {
+                engine.presses.push(name);
+                capture.pad_consumed.push(b);
+                gate.eat(b);
                 continue;
             }
             // R2 held is the pad's Shift and L2 its Ctrl: a key-capture frame gets that press as
@@ -154,7 +164,11 @@ pub(super) fn feed_pad(
             }
         }
     }
-    let owned = owns(&mut script);
+    let owned = if engine.open {
+        "ALL".to_string()
+    } else {
+        owns(&mut script)
+    };
     capture.pad_all = owned == "ALL";
     capture.pad_owned = crate::bindings::chord::PAD_BUTTONS
         .iter()
@@ -264,10 +278,11 @@ pub(super) fn feed_ui_input(
     ),
     // The characters the active layout makes, which name a key for a keyboard frame; and an
     // engine panel's field holding the keys.
-    (layout, engine_typing, engine_keys): (
+    (layout, engine_typing, engine_keys, engine_pad): (
         Res<crate::bindings::LayoutNames>,
         Res<super::EngineTyping>,
         Res<super::EngineKeys>,
+        Res<super::EnginePad>,
     ),
     // The uiScale dial folded into the seam scale.
     ui_scale: Res<super::UiScaleCvar>,
@@ -385,6 +400,13 @@ pub(super) fn feed_ui_input(
     capture.consumed.clear();
     // The keys an engine panel holds (`EngineKeys`) are eaten, as a keyboard frame's.
     capture.consumed.extend(engine_keys.0.iter().copied());
+    // An engine menu's keys too, while it is up (Escape would open the game menu under it).
+    let menu_keys: &[KeyCode] = if engine_pad.open {
+        &super::MENU_KEYS
+    } else {
+        &[]
+    };
+    capture.consumed.extend(menu_keys.iter().copied());
     // ── The alt-arrow exemption ────────────────────────────────────────────────────────────────
     // An EditBox in alt-arrow mode (`ignoreArrows`, set on the chat box at `ChatFrame.xml:21`)
     // passes the arrows on unless ALT is held: its handler returns 0 at `0x77b1c4` and the
@@ -404,8 +426,8 @@ pub(super) fn feed_ui_input(
     let mac = cfg!(target_os = "macos");
     for ev in keyboard.read() {
         // An engine panel's field has them (`EngineTyping`), as a focused box would.
-        if ev.state != ButtonState::Pressed || engine_typing || engine_keys.0.contains(&ev.key_code)
-        {
+        let held = engine_keys.0.contains(&ev.key_code) || menu_keys.contains(&ev.key_code);
+        if ev.state != ButtonState::Pressed || engine_typing || held {
             continue;
         }
         let named = match ev.key_code {

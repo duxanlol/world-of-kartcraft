@@ -746,7 +746,7 @@ fn the_way_out_of_a_time_trial_offers_a_retry() {
 }
 
 /// In a time trial under way the Kartcraft menu (Options on the controller) restarts it, as the
-/// Restart binding does ("TR"); out of one its entry is greyed and does nothing.
+/// Restart binding does ("TR"); out of one its entry is not in the menu.
 #[test]
 fn the_kartcraft_menu_restarts_a_time_trial_under_way() {
     benilla_formats::wow_data_or_skip!();
@@ -756,18 +756,11 @@ fn the_kartcraft_menu_restarts_a_time_trial_under_way() {
     let mut s = loaded();
     courses(&mut s, 3);
     let me: String = s.eval("return UnitName('player')").unwrap();
-    let entry: String = s
-        .eval(
-            "for i = 1, table.getn(BENILLA_KART_MENU) do \
-             if BENILLA_KART_MENU[i][1] == 'Restart time trial' then return 'BenillaKartMenuFrameEntry' .. i end end",
-        )
-        .unwrap();
     let enabled = |s: &mut UiScript| -> bool {
-        s.run("BenillaKartMenuFrame:Hide() BenillaKart_Open(BenillaKartMenuFrame)")
-            .unwrap();
-        s.eval(&format!("return {entry}:IsEnabled() == 1")).unwrap()
+        let rows: String = s.eval("return BenillaKartMenu_Rows()").unwrap();
+        rows.lines().any(|l| l == "restart\tRestart time trial")
     };
-    assert!(!enabled(&mut s), "no race: greyed");
+    assert!(!enabled(&mut s), "no race: not in the menu");
 
     // On the roster of time trial 7, the kart racing it.
     from_server(&mut s, &format!("R\tL\t7\t{me}"));
@@ -782,16 +775,13 @@ fn the_kartcraft_menu_restarts_a_time_trial_under_way() {
     );
     assert!(enabled(&mut s));
     sent(&mut s);
-    s.run(&format!("{entry}:Click()")).unwrap();
+    s.run("BenillaKartMenu_Run('restart')").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tTR\t7"]);
-    assert!(!s
-        .eval::<bool>("return BenillaKartMenuFrame:IsVisible() == 1")
-        .unwrap());
 
-    // A race that is not a time trial: greyed again.
+    // A race that is not a time trial: gone again.
     from_server(&mut s, &format!("R\tL\t8\t{me}"));
     assert!(!enabled(&mut s));
-    // The race over: greyed.
+    // The race over: gone.
     from_server(&mut s, &format!("R\tL\t9\t{me}"));
     from_server(&mut s, "R\tTT\t9");
     s.fire_event(
@@ -1860,111 +1850,48 @@ fn unstuck_asks_the_server_and_says_why_it_waits() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
+/// The race's track says whether we race, for the entries only a race has (Leave race); the
+/// race map itself is the engine's (`kart/race_map_ui.rs`).
 #[test]
-fn the_race_map_draws_the_track_and_the_racers_on_it() {
+fn the_race_s_track_says_we_race() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut s = loaded();
-    let track = |s: &mut UiScript, name: &str, points: &str| {
+    let track = |s: &mut UiScript, name: &str| {
         s.fire_event(
             "BENILLA_KART_TRACKMAP",
             vec![
                 ScriptValue::Str(name.into()),
                 ScriptValue::Number(3.0),
-                ScriptValue::Str(points.into()),
+                ScriptValue::Str("0,0;100,0;100,100;0,100".into()),
             ],
         );
         s.tick(0.0);
     };
-    let shown = |s: &UiScript| -> bool {
-        s.eval("return BenillaKartMapFrame:IsVisible() == 1")
+    let racing = |s: &UiScript| -> bool {
+        s.eval("return BenillaKartShortcuts.racing == true")
             .unwrap()
     };
-
-    // A square circuit, 100 yd a side: the frame shows, titled, a trail of dots round it.
-    track(&mut s, "Elwynn Loop", "0,0;100,0;100,100;0,100");
-    assert!(shown(&s));
-    assert_eq!(
-        s.eval::<String>("return BenillaKartMapFrameTitle:GetText()")
-            .unwrap(),
-        "Elwynn Loop"
-    );
-    let route: u32 = s
-        .eval(
-            "local n = 0 for i = 1, table.getn(BenillaKartMap.route) do \
-             if BenillaKartMap.route[i]:IsVisible() then n = n + 1 end end return n",
-        )
-        .unwrap();
-    assert!(route > 40, "only {route} dots of route");
-
-    // Us at the start, a rival beside us, one far off at a checkpoint: dimmed.
-    s.fire_event(
-        "BENILLA_KART_RACERS",
-        vec![ScriptValue::Str(
-            "Probesix\t0\t0\t1\t1\t1\nGoblin\t0\t10\t2\t0\t1\nGnome\t100\t100\t3\t0\t0".into(),
-        )],
-    );
-    s.tick(0.0);
-    let (x, y): (f64, f64) = (
-        s.eval("local _, _, _, x = BenillaKartMap.me:GetPoint(1) return x")
-            .unwrap(),
-        s.eval("local _, _, _, _, y = BenillaKartMap.me:GetPoint(1) return y")
-            .unwrap(),
-    );
-    assert!(
-        (0.0..=172.0).contains(&x) && (-172.0..=0.0).contains(&y),
-        "me at {x},{y}"
-    );
-    assert!(s
-        .eval::<bool>("return BenillaKartMap.me:IsVisible() == 1")
-        .unwrap());
-    // Slot 1 is us; 2 the rival, 3 the far one.
-    assert_eq!(
-        s.eval::<f64>("return BenillaKartMap.racers[2]:GetAlpha()")
-            .unwrap(),
-        1.0
-    );
-    assert!(
-        s.eval::<f64>("return BenillaKartMap.racers[3]:GetAlpha()")
-            .unwrap()
-            < 0.5
-    );
-    assert_eq!(
-        s.eval::<String>("return BenillaKartMap.labels[3]:GetText()")
-            .unwrap(),
-        "3"
-    );
-
-    // A smaller field hides the rest; no race, no map.
-    s.fire_event(
-        "BENILLA_KART_RACERS",
-        vec![ScriptValue::Str("Goblin\t0\t10\t1\t0\t1".into())],
-    );
-    s.tick(0.0);
-    assert!(!s
-        .eval::<bool>("return BenillaKartMap.me:IsVisible() == 1")
-        .unwrap());
-    assert!(!s
-        .eval::<bool>("return BenillaKartMap.racers[3]:IsVisible() == 1")
-        .unwrap());
-    track(&mut s, "", "");
-    assert!(!shown(&s));
-    assert!(s
-        .eval::<bool>("return BenillaKartMapFrame:IsMovable() == 1")
-        .unwrap());
+    track(&mut s, "Elwynn Loop");
+    assert!(racing(&s));
+    let rows: String = s.eval("return BenillaKartMenu_Rows()").unwrap();
+    assert!(rows.contains("leave\tLeave race"), "{rows}");
+    track(&mut s, "");
+    assert!(!racing(&s));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
 #[test]
-fn the_results_board_stands_clear_of_the_race_map_and_the_banner() {
+fn the_results_board_stands_whole_under_the_banner() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut s = loaded();
-    // The race map up, then the tallest board: eight racers, three laps, the record, our best
-    // and the ground types (14 lines), as the smoke run's finish showed them over the map.
+    // A race on, then the tallest board: eight racers, three laps, the record, our best and the
+    // ground types (14 lines), as the smoke run's finish showed them.
     s.fire_event(
         "BENILLA_KART_TRACKMAP",
         vec![
@@ -1994,21 +1921,10 @@ fn the_results_board_stands_clear_of_the_race_map_and_the_banner() {
         ["GetLeft", "GetRight", "GetBottom", "GetTop"]
             .map(|m| s.eval::<f64>(&format!("return {frame}:{m}()")).unwrap())
     };
-    for frame in ["BenillaKartMapFrame", "BenillaKartResultsFrame"] {
-        assert!(
-            s.eval::<bool>(&format!("return {frame}:IsVisible() == 1"))
-                .unwrap(),
-            "{frame} is not up"
-        );
-    }
-    let [ml, mr, mb, mt] = rect(&s, "BenillaKartMapFrame");
+    assert!(s
+        .eval::<bool>("return BenillaKartResultsFrame:IsVisible() == 1")
+        .unwrap());
     let [rl, rr, rb, rt] = rect(&s, "BenillaKartResultsFrame");
-    assert!(
-        rr <= ml || mr <= rl || rt <= mb || mt <= rb,
-        "the board {:?} overlaps the map {:?}",
-        [rl, rr, rb, rt],
-        [ml, mr, mb, mt]
-    );
     // Whole on screen, and under the banner's line.
     let (w, h): (f64, f64) = (
         s.eval("return UIParent:GetWidth()").unwrap(),
@@ -2222,22 +2138,13 @@ fn the_controller_drives_the_kartcraft_menu_and_answers_its_popups() {
     assert!(!press(&mut s, "PADDDOWN"));
     assert_eq!(owns(&mut s), "");
 
-    // The menu: the first press finds the top entry, the D-pad moves, Cross chooses.
+    // The menu is the engine's (`kart/menu_ui.rs`), which holds the pad itself: its toggle
+    // counts `KartMenu`, and the layer holds nothing for it.
     s.run("BenillaKartMenu_Toggle()").unwrap();
-    s.tick(0.0);
-    assert_eq!(owns(&mut s), "ALL");
-    assert!(press(&mut s, "PADDDOWN"));
-    assert_eq!(focus(&mut s), "BenillaKartMenuFrameEntry1");
-    assert!(press(&mut s, "PADDDOWN"));
-    assert_eq!(focus(&mut s), "BenillaKartMenuFrameEntry2");
-    assert!(press(&mut s, "PADDUP"));
-    // Down to the fourth, Race Finder (after Find a race and the two challenges).
-    for _ in 0..3 {
-        assert!(press(&mut s, "PADDDOWN"));
-    }
-    assert_eq!(focus(&mut s), "BenillaKartMenuFrameEntry4");
-    assert!(press(&mut s, "PAD1"));
-    assert!(!shown(&mut s, "BenillaKartMenuFrame"));
+    assert_eq!(s.cvar("KartMenu").unwrap_or_default(), "1");
+    assert_eq!(owns(&mut s), "");
+    // Race Finder chosen there.
+    s.run("BenillaKartMenu_Run('finder')").unwrap();
     assert!(
         shown(&mut s, "BenillaKartFinderFrame"),
         "Race Finder chosen"
@@ -2271,7 +2178,7 @@ fn the_controller_drives_the_kartcraft_menu_and_answers_its_popups() {
 }
 
 #[test]
-fn the_menu_names_the_challenges_and_opens_their_course() {
+fn the_menu_names_the_challenges_and_starts_their_time_trial() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK
         .lock()
@@ -2284,26 +2191,32 @@ fn the_menu_names_the_challenges_and_opens_their_course() {
         )],
     );
     sent(&mut s);
-    s.run("BenillaKartMenu_Toggle()").unwrap();
+    s.run("BenillaKartMenu_OnShow()").unwrap();
     // Opening the menu asks the server; its answer names the two courses.
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tCH"]);
     from_server(&mut s, "R\tCH\tstormwind\tsprint\t0\tGoblin\t62400\t0\t\t0");
-    let entry = |s: &mut UiScript, i: u32| -> String {
-        s.eval(&format!("return BenillaKartMenuFrameEntry{i}:GetText()"))
-            .unwrap()
-    };
-    assert_eq!(entry(&mut s, 2), "Daily: Road to Stormwind");
-    assert_eq!(entry(&mut s, 3), "Weekly: Northshire Sprint");
-    // Choosing the day's opens the track browser on its course, for the time trial.
-    s.run("BenillaKartMenuFrameEntry2:Click()").unwrap();
-    assert!(s
-        .eval::<bool>("return BenillaKartTracksFrame:IsVisible() == 1")
-        .unwrap());
-    assert_eq!(
-        s.eval::<String>("return BenillaKartTrackBrowser.selected")
-            .unwrap(),
-        "stormwind"
+    let rows: String = s.eval("return BenillaKartMenu_Rows()").unwrap();
+    assert!(rows.contains("daily\tDaily: Road to Stormwind\n"), "{rows}");
+    assert!(
+        rows.contains("weekly\tWeekly: Northshire Sprint\n"),
+        "{rows}"
     );
+    // Choosing the day's starts its time trial, the week's too.
+    s.run("BenillaKartMenu_Run('daily')").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tTB\tstormwind"]);
+    s.run("BenillaKartMenu_Run('weekly')").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tTB\tsprint"]);
+    // The browser opened at a course (a marshal's "Browse the tracks"), left on My tracks and a
+    // search: every track again, the course among them.
+    s.run("BenillaKartTrackBrowser_OpenMine() BenillaKartTracksFrameSearch:SetText('zzz') BenillaKartTracksFrame:Hide()")
+        .unwrap();
+    s.run("BenillaKartTrackBrowser_Open('stormwind')").unwrap();
+    let mode: Option<String> = s.eval("return BenillaKartTrackBrowser.mode").unwrap();
+    assert_eq!(mode, None);
+    let search: String = s
+        .eval("return BenillaKartTracksFrameSearch:GetText() .. BenillaKartTrackBrowser.search")
+        .unwrap();
+    assert_eq!(search, "");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -2581,13 +2494,13 @@ fn the_replays_window_lists_the_kept_races_and_plays_one() {
     };
     s.run("SetCVar('KartReplays','000000000002-sprint|Northshire Sprint: 1st of 2, 1:02.40;000000000001-stormwind|Road to Stormwind: did not finish')")
         .unwrap();
-    s.run("BenillaKartMenu_Toggle()").unwrap();
-    let entry = |s: &mut UiScript, i: u32| -> String {
-        s.eval(&format!("return BenillaKartMenuFrameEntry{i}:GetText()"))
-            .unwrap()
+    let entry = |s: &mut UiScript| -> String {
+        let rows: String = s.eval("return BenillaKartMenu_Rows()").unwrap();
+        let line = rows.lines().find(|l| l.starts_with("replays\t")).unwrap();
+        line["replays\t".len()..].to_string()
     };
-    assert_eq!(entry(&mut s, 8), "Replays");
-    s.run("BenillaKartMenuFrameEntry8:Click()").unwrap();
+    assert_eq!(entry(&mut s), "Replays");
+    s.run("BenillaKartMenu_Run('replays')").unwrap();
     assert!(shown(&mut s, "BenillaKartReplaysFrame"));
     let row = |s: &mut UiScript, i: u32| -> (String, bool) {
         (
@@ -2614,9 +2527,8 @@ fn the_replays_window_lists_the_kept_races_and_plays_one() {
         "000000000001-stormwind"
     );
     assert!(!shown(&mut s, "BenillaKartReplaysFrame"));
-    s.run("BenillaKartMenu_Toggle()").unwrap();
-    assert_eq!(entry(&mut s, 8), "Stop replay");
-    s.run("BenillaKartMenuFrameEntry8:Click()").unwrap();
+    assert_eq!(entry(&mut s), "Stop replay");
+    s.run("BenillaKartMenu_Run('replays')").unwrap();
     assert_eq!(
         s.eval::<String>("return GetCVar('KartReplay')").unwrap(),
         "0"
@@ -2781,8 +2693,9 @@ fn the_minimap_menu_toggles_the_race_marshals() {
     assert!(ticked(&mut s));
 }
 
-/// The dungeon teleporter asks the server for its dungeons once, lists them at the cursor with
-/// their entrance levels, and goes to the one chosen; Leave dungeon comes back.
+/// The dungeon teleporter is the Kartcraft menu's grid of the server's dungeons: the minimap's
+/// entry opens the menu there, the grid's opening asks for them once, they come as rows with
+/// their entrance levels, and the one chosen goes; Leave dungeon comes back.
 #[test]
 fn the_dungeon_teleporter_lists_the_server_s_dungeons_and_goes_to_one() {
     benilla_formats::wow_data_or_skip!();
@@ -2790,36 +2703,35 @@ fn the_dungeon_teleporter_lists_the_server_s_dungeons_and_goes_to_one() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut s = loaded();
-    let shown = |s: &mut UiScript| -> Vec<String> {
-        s.tick(0.0);
-        s.eval(
-            "local out = {} for i = 1, UIDROPDOWNMENU_MAXBUTTONS do \
-             local b = getglobal('DropDownList1Button' .. i) \
-             if b and b:IsVisible() then table.insert(out, b:GetText()) end \
-             end return out",
-        )
-        .unwrap()
+    let dungeons = |s: &mut UiScript| -> Vec<String> {
+        let rows: String = s.eval("return BenillaKartMenu_Rows()").unwrap();
+        rows.lines()
+            .filter(|l| l.starts_with("dt:"))
+            .map(str::to_string)
+            .collect()
     };
     sent(&mut s);
-    // From the minimap's menu: nothing to list yet, so it asks.
+    // From the minimap's menu: the Kartcraft menu, at its dungeons.
     pick_from_menu(&mut s, "Dungeon teleporter...");
+    let cvar = s.cvar("KartMenu").unwrap_or_default();
+    assert!(cvar.ends_with("\tdungeons"), "{cvar}");
+    // The grid opening: nothing to list yet, so it asks.
+    s.run("BenillaKartMenu_Run('dungeons')").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tDL"]);
     from_server(&mut s, "R\tDLs\t389:Ragefire Chasm:8;329:Stratholme:45");
     assert_eq!(
-        shown(&mut s),
+        dungeons(&mut s),
         [
-            "Dungeon teleporter",
-            "Leave dungeon",
-            "Ragefire Chasm |cff999999(level 8)|r",
-            "Stratholme |cff999999(level 45)|r"
+            "dt:389\tRagefire Chasm |cff999999(level 8)|r",
+            "dt:329\tStratholme |cff999999(level 45)|r"
         ]
     );
-    pick(&mut s, "Stratholme |cff999999(level 45)|r");
+    s.run("BenillaKartMenu_Run('dt:329')").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tDT\t329"]);
-    // Asked again, the list is kept: no second ask.
-    s.run("BenillaKartDungeons_Open()").unwrap();
+    // Opened again, the list is kept: no second ask.
+    s.run("BenillaKartMenu_Run('dungeons')").unwrap();
     assert!(sent(&mut s).is_empty());
-    pick(&mut s, "Leave dungeon");
+    s.run("BenillaKartDungeons_Leave()").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tDB"]);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
@@ -3069,51 +2981,6 @@ fn the_first_drive_shows_its_tip_once() {
         s.eval::<String>("return GetCVar('KartTipSeen')").unwrap(),
         "1"
     );
-}
-
-#[test]
-fn the_kartcraft_menu_widens_to_a_challenge_s_long_course_name() {
-    benilla_formats::wow_data_or_skip!();
-    let _l = ENV_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut s = loaded();
-    // A font that measures: 7 units a character, as the game's font engine answers in the call.
-    s.set_text_measurer(Box::new(super::FixedWidthFont(7.0)));
-    let width = |s: &UiScript, frame: &str| -> f64 {
-        s.eval(&format!("return {frame}:GetWidth()")).unwrap()
-    };
-    // Short names: the menu as it was.
-    s.run("BenillaKartChallenge = { daily = 'd', weekly = 'w' } BenillaKartCourseNames = { d = 'Loop', w = 'Dash' } BenillaKartMenu_Refresh()")
-        .unwrap();
-    assert_eq!(width(&s, "BenillaKartMenuFrameEntry2"), 220.0);
-    assert_eq!(width(&s, "BenillaKartMenuFrame"), 280.0);
-
-    // A long one: every entry as wide as it needs, the window around them.
-    s.run(
-        "BenillaKartCourseNames.w = 'Brackwell Pumpkin Patch to Elwynn Forest Sprint Deluxe' \
-         BenillaKartMenu_Refresh()",
-    )
-    .unwrap();
-    let text: f64 = s
-        .eval("return BenillaKartMenuFrameEntry3:GetTextWidth()")
-        .unwrap();
-    assert_eq!(
-        s.eval::<String>("return BenillaKartMenuFrameEntry3:GetText()")
-            .unwrap(),
-        "Weekly: Brackwell Pumpkin Patch to Elwynn Forest Sprint Deluxe"
-    );
-    let entry = width(&s, "BenillaKartMenuFrameEntry3");
-    assert!(
-        entry > 220.0 && entry >= text + 32.0,
-        "entry {entry} for text {text}"
-    );
-    assert_eq!(
-        width(&s, "BenillaKartMenuFrameEntry1"),
-        entry,
-        "all the same width"
-    );
-    assert_eq!(width(&s, "BenillaKartMenuFrame"), entry + 60.0);
 }
 
 #[test]
@@ -3636,7 +3503,7 @@ fn a_controller_guide_shows_under_the_window_the_pad_drives() {
         legend_top <= tab_bottom + 0.5,
         "{legend_top} over {tab_bottom}"
     );
-    s.run("BenillaKartFinderFrame:Hide() BenillaKartMenu_Toggle()")
+    s.run("BenillaKartFinderFrame:Hide() BenillaKartGarage_Toggle()")
         .unwrap();
     let (shown, text) = legend(&mut s);
     assert!(shown);
@@ -3645,7 +3512,7 @@ fn a_controller_guide_shows_under_the_window_the_pad_drives() {
         "D-pad: move    Cross / A: choose    Circle / B: close"
     );
     // No window the pad drives: no guide.
-    s.run("BenillaKartMenuFrame:Hide()").unwrap();
+    s.run("BenillaKartGarageFrame:Hide()").unwrap();
     assert!(!legend(&mut s).0);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
@@ -4130,26 +3997,34 @@ fn a_claimed_cache_says_what_it_held() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// Every entry of the Kartcraft menu has its button: two branches each adding an entry and the
-/// same next button merge into one button short.
+/// Every entry of the Kartcraft menu has its id, its label and what it does, and one for no mode
+/// is in its rows (the engine's menu lays them out by id, `kart/menu_ui.rs`).
 #[test]
-fn every_kartcraft_menu_entry_has_a_button() {
+fn every_kartcraft_menu_entry_has_its_id_label_and_action() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let s = loaded();
-    let missing: Vec<i64> = s
+    let bad: Vec<i64> = s
         .eval(
-            "local out = {} for i = 1, table.getn(BENILLA_KART_MENU) do \
-             if not getglobal('BenillaKartMenuFrameEntry' .. i) then table.insert(out, i) end end \
+            "local out = {} for i = 1, table.getn(BENILLA_KART_MENU) do local e = BENILLA_KART_MENU[i] \
+             if type(e.id) ~= 'string' or not e.label or type(e.run) ~= 'function' then table.insert(out, i) end end \
              return out",
         )
         .unwrap();
-    assert!(
-        missing.is_empty(),
-        "menu entries without a button: {missing:?}"
-    );
+    assert!(bad.is_empty(), "menu entries not whole: {bad:?}");
+    let rows: String = s.eval("return BenillaKartMenu_Rows()").unwrap();
+    let ids: Vec<&str> = rows.lines().filter_map(|l| l.split('\t').next()).collect();
+    for id in [
+        "find", "finder", "editor", "mytracks", "garage", "settings", "unstuck",
+    ] {
+        assert!(ids.contains(&id), "{id} not in {rows}");
+    }
+    for id in ["leave", "restart", "leavedungeon"] {
+        assert!(!ids.contains(&id), "{id}: not in a race or a dungeon");
+    }
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
 #[test]
@@ -4492,4 +4367,46 @@ fn the_race_finder_s_player_tracks_tab_races_and_time_trials_a_player_track() {
     s.run("BenillaKartFinder_Toggle() BenillaKartFinderFrameTab1:Click()")
         .unwrap();
     assert!(shown(&s, "BenillaKartFinderFrameRow1") && !shown(&s, "BenillaKartFinderFramePlayer"));
+}
+
+/// With the engine's Kartcraft menu up (`EnginePad`), the controller is its alone: a press lands
+/// in its presses, the layer's window under it gets none, and the kart none either.
+#[test]
+fn an_engine_menu_takes_the_controller_from_the_layer() {
+    use bevy::input::gamepad::{Gamepad, GamepadButton};
+    use bevy::prelude::{Time, World};
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let s = loaded();
+    // A window of the layer's up, which would take the D-pad.
+    s.run("BenillaKart_Open(BenillaKartSettingsFrame)").unwrap();
+    let mut world = World::new();
+    world.insert_non_send_resource(s);
+    world.init_resource::<Time>();
+    world.init_resource::<super::UiKeyboardCapture>();
+    world.insert_resource(super::EnginePad {
+        open: true,
+        presses: Vec::new(),
+    });
+    let pad = world.spawn(Gamepad::default()).id();
+    // One system, so its gate is kept: up a moment with nothing held, past the arming gate.
+    let feed = world.register_system(super::input::feed_pad);
+    world.run_system(feed).unwrap();
+    world
+        .resource_mut::<Time>()
+        .advance_by(std::time::Duration::from_millis(500));
+    let mut p = world.get_mut::<Gamepad>(pad).unwrap();
+    p.digital_mut().press(GamepadButton::DPadDown);
+    world.run_system(feed).unwrap();
+    assert_eq!(world.resource::<super::EnginePad>().presses, ["PADDDOWN"]);
+    let capture = world.resource::<super::UiKeyboardCapture>();
+    assert!(capture.pad_all, "the kart leaves the pad alone");
+    assert_eq!(capture.pad_consumed, [GamepadButton::DPadDown]);
+    let s = world.non_send_resource::<UiScript>();
+    let focus: String = s
+        .eval("return BenillaPad.focus and BenillaPad.focus:GetName() or ''")
+        .unwrap();
+    assert_eq!(focus, "", "the layer's window got no press");
 }

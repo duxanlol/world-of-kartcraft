@@ -30,19 +30,19 @@ const Z: i32 = 100;
 const TIP_Z: i32 = Z + 10;
 const POPUP_Z: i32 = Z + 20;
 /// The panels' tooltip backdrop and the boxes', as the glue dialog tints them.
-const FILL: Color = Color::srgba(0.09, 0.09, 0.09, 0.92);
+pub(super) const FILL: Color = Color::srgba(0.09, 0.09, 0.09, 0.92);
 const EDGE: Color = Color::srgb(0.8, 0.8, 0.8);
 /// An icon's frame: plain, under the pointer, and lit for what is picked.
-const FRAME: Color = Color::srgb(0.25, 0.25, 0.25);
-const FRAME_HOVER: Color = Color::WHITE;
+pub(super) const FRAME: Color = Color::srgb(0.25, 0.25, 0.25);
+pub(super) const FRAME_HOVER: Color = Color::WHITE;
 /// The start's number, green as its marker.
 const START_GREEN: Color = Color::srgb(0.3, 1.0, 0.4);
 /// What cannot be done, and a save that replaces a track.
 const WARN: Color = Color::srgb(1.0, 0.35, 0.3);
 /// `GameFontNormal`, `GameFontHighlightSmall`, `GameFontNormalLarge`.
-const FONT: f32 = 12.0;
-const SMALL: f32 = 10.0;
-const TITLE: f32 = 16.0;
+pub(super) const FONT: f32 = 12.0;
+pub(super) const SMALL: f32 = 10.0;
+pub(super) const TITLE: f32 = 16.0;
 /// An icon button's side, and a labelled button's icon.
 const ICON: f32 = 36.0;
 const SMALL_ICON: f32 = 24.0;
@@ -1220,7 +1220,7 @@ fn at(s: f32, left: f32, top: f32) -> Node {
 }
 
 /// The tooltip backdrop behind a box.
-fn backdrop(b: &mut EntityCommands, art: &GlueArt, s: f32) {
+pub(super) fn backdrop(b: &mut EntityCommands, art: &GlueArt, s: f32) {
     b.with_children(|b| match (&art.tooltip_bg, &art.tooltip_border) {
         (Some(bg), Some(border)) => {
             let inset = Val::Px(4.0 * s);
@@ -1373,7 +1373,7 @@ fn labelled_button(
 }
 
 /// A string at `node`, its `|c…|r` colours decoded, with a drop shadow as the game fonts have.
-fn label(
+pub(super) fn label(
     parent: &mut ChildSpawnerCommands,
     font: &Handle<Font>,
     text: &str,

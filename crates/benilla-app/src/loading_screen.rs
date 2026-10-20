@@ -119,7 +119,7 @@ fn count_entry_cover(
 
 /// The `LoadingScreenID` → BLP path table; [`MapCatalogRes`] maps a map to its `LoadingScreenID`.
 #[derive(Resource)]
-struct LoadingScreenCatalogRes(LoadingScreenCatalog);
+pub(crate) struct LoadingScreenCatalogRes(pub(crate) LoadingScreenCatalog);
 
 /// What a raise means for the tip of the day.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

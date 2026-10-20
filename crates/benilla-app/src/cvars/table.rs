@@ -920,6 +920,23 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "",
         "Kartcraft's own — the track editor's bar; 1.12 has no kart",
     ),
+    // Where the race map stands (`kart::race_map_ui`), its centre as fractions of the window.
+    ours(
+        "KartMapX",
+        "0.87",
+        "Kartcraft's own — the race map; 1.12 has no kart",
+    ),
+    ours(
+        "KartMapY",
+        "0.42",
+        "Kartcraft's own — the race map; 1.12 has no kart",
+    ),
+    // The Kartcraft menu's toggle (`kart::menu_ui`), counting presses; for the session only.
+    ours(
+        "KartMenu",
+        "0",
+        "Kartcraft's own — the Kartcraft menu; 1.12 has no kart",
+    ),
     // How tall a race checkpoint's sheet of light stands, yards (`kart::race`); looks only.
     ours(
         "KartGateHeight",

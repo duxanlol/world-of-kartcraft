@@ -995,7 +995,13 @@
         end
 
         -- Opens the browser at `key` (the Race Marshal's own course), its row brought into view.
+        -- Opened at a course: every track listed, no search, so the course is among them.
         function BenillaKartTrackBrowser_Open(key)
+            if key then
+                BenillaKartTrackBrowser.mode = nil
+                BenillaKartTrackBrowser.search = ""
+                BenillaKartTracksFrameSearch:SetText("")
+            end
             BenillaKartTrackBrowser.selected = key or BenillaKartTrackBrowser.selected
             BenillaKart_Open(BenillaKartTracksFrame)
             if not BenillaKartTracksFrame:IsVisible() then return end
@@ -1361,134 +1367,11 @@
         end
 
         -- ── The race map ───────────────────────────────────────────────────────────────────────
-        -- The race's track fitted in a square, north up (WoW x up the screen, y right to left), a
-        -- dot every few pixels along it; the racers on it, us on top: from BENILLA_KART_TRACKMAP
-        -- (the track; an empty name, no race) and BENILLA_KART_RACERS (a line each:
-        -- name, x, y, place, me, near). A racer too far off to be relayed is at their last
-        -- checkpoint, dimmed.
-        BENILLA_KART_MAP_SIZE = 172
-        BENILLA_KART_MAP_STEP = 5
-        BenillaKartMap = { route = {}, racers = {}, labels = {} }
-
-        function BenillaKartMap_At(x, y)
-            local m = BenillaKartMap
-            local half = BENILLA_KART_MAP_SIZE / 2
-            return half + (m.cy - y) * m.scale, half + (m.cx - x) * m.scale
-        end
-
-        function BenillaKartMap_Place(tex, x, y, size, r, g, b, a)
-            local px, py = BenillaKartMap_At(x, y)
-            tex:SetTexture(r, g, b)
-            tex:SetAlpha(a or 1)
-            tex:SetWidth(size)
-            tex:SetHeight(size)
-            tex:ClearAllPoints()
-            tex:SetPoint("CENTER", BenillaKartMapFrameCanvas, "TOPLEFT", px, -py)
-            tex:Show()
-        end
-
-        function BenillaKartMap_Dot(pool, n, parent, layer)
-            if not pool[n] then pool[n] = parent:CreateTexture(nil, layer) end
-            return pool[n]
-        end
-
-        function BenillaKartMap_SetTrack(name, laps, list)
+        -- The race's track (BENILLA_KART_TRACKMAP; an empty name, no race): racing or not, for
+        -- the entries only a race has. The race map is the engine's (`kart/race_map_ui.rs`).
+        function BenillaKartMap_SetTrack(name)
             BenillaKartShortcuts.racing = name ~= nil and name ~= ""
             BenillaKartShortcuts_Update()
-            local m = BenillaKartMap
-            if not name or name == "" then
-                BenillaKartMapFrame:Hide()
-                return
-            end
-            local points = {}
-            local items = BenillaKart_Split(string.gsub(list or "", ";", "\t"))
-            for i = 1, table.getn(items) do
-                local comma = string.find(items[i], ",", 1, 1)
-                if comma then
-                    table.insert(points, { tonumber(string.sub(items[i], 1, comma - 1)),
-                        tonumber(string.sub(items[i], comma + 1)) })
-                end
-            end
-            local count = table.getn(points)
-            if count < 2 then
-                BenillaKartMapFrame:Hide()
-                return
-            end
-            local minx, maxx, miny, maxy = points[1][1], points[1][1], points[1][2], points[1][2]
-            for i = 2, count do
-                minx = math.min(minx, points[i][1]); maxx = math.max(maxx, points[i][1])
-                miny = math.min(miny, points[i][2]); maxy = math.max(maxy, points[i][2])
-            end
-            m.cx, m.cy = (minx + maxx) / 2, (miny + maxy) / 2
-            m.scale = BENILLA_KART_MAP_SIZE * 0.88 / math.max(maxx - minx, maxy - miny, 1)
-            BenillaKartMapFrameTitle:SetText(name)
-            -- The trail: a circuit back round to its start, a sprint to its finish.
-            local legs = count - 1
-            if (tonumber(laps) or 0) > 0 then legs = count end
-            local n = 0
-            for i = 1, legs do
-                local a, b = points[i], points[mod(i, count) + 1]
-                local ax, ay = BenillaKartMap_At(a[1], a[2])
-                local bx, by = BenillaKartMap_At(b[1], b[2])
-                local steps = math.max(1, floor(math.sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay)) / BENILLA_KART_MAP_STEP))
-                for k = 0, steps - 1 do
-                    local t = k / steps
-                    n = n + 1
-                    BenillaKartMap_Place(BenillaKartMap_Dot(m.route, n, BenillaKartMapFrameCanvas, "ARTWORK"),
-                        a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, 2, 0.85, 0.75, 0.55, 0.9)
-                end
-            end
-            if legs < count then
-                n = n + 1
-                BenillaKartMap_Place(BenillaKartMap_Dot(m.route, n, BenillaKartMapFrameCanvas, "ARTWORK"),
-                    points[count][1], points[count][2], 6, 0.9, 0.2, 0.2)
-            end
-            n = n + 1
-            BenillaKartMap_Place(BenillaKartMap_Dot(m.route, n, BenillaKartMapFrameCanvas, "ARTWORK"),
-                points[1][1], points[1][2], 6, 0.2, 1, 0.2)
-            for i = n + 1, table.getn(m.route) do m.route[i]:Hide() end
-            BenillaKartMapFrame:Show()
-        end
-
-        function BenillaKartMap_SetRacers(list)
-            local m = BenillaKartMap
-            local n, seen = 0, nil
-            local lines = BenillaKart_Split(string.gsub(list or "", "\n", "\t"))
-            if m.scale then
-                for i = 1, table.getn(lines) - 5, 6 do
-                    local x, y = tonumber(lines[i + 1]), tonumber(lines[i + 2])
-                    local place, me, near = tonumber(lines[i + 3]) or 0, lines[i + 4] == "1", lines[i + 5] == "1"
-                    if x and y then
-                        n = n + 1
-                        local alpha = 1
-                        if not near then alpha = 0.45 end
-                        if me then
-                            -- Us on a layer of our own, above everyone else.
-                            if not m.me then m.me = BenillaKartMapFrameCanvasTop:CreateTexture(nil, "OVERLAY") end
-                            BenillaKartMap_Place(m.me, x, y, 9, 1, 0.9, 0.2, 1)
-                            seen = 1
-                            if m.racers[n] then m.racers[n]:Hide() end
-                        else
-                            BenillaKartMap_Place(BenillaKartMap_Dot(m.racers, n, BenillaKartMapFrameCanvas, "OVERLAY"),
-                                x, y, 7, 0.95, 0.25, 0.2, alpha)
-                        end
-                        local label = m.labels[n]
-                        if not label then
-                            label = BenillaKartMapFrameCanvasTop:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                            m.labels[n] = label
-                        end
-                        local px, py = BenillaKartMap_At(x, y)
-                        label:ClearAllPoints()
-                        label:SetPoint("LEFT", BenillaKartMapFrameCanvas, "TOPLEFT", px + 6, -py)
-                        if place > 0 then label:SetText(place) else label:SetText("") end
-                        label:SetAlpha(alpha)
-                        label:Show()
-                    end
-                end
-            end
-            for i = n + 1, table.getn(m.racers) do m.racers[i]:Hide() end
-            for i = n + 1, table.getn(m.labels) do m.labels[i]:Hide() end
-            if m.me and not seen then m.me:Hide() end
         end
 
         -- The server's replies.
@@ -1665,7 +1548,6 @@
                     dailyMine = tonumber(line[5]) or 0, dailyLeader = line[6] or "", dailyLeaderMs = tonumber(line[7]) or 0,
                     weeklyMine = tonumber(line[8]) or 0, weeklyLeader = line[9] or "", weeklyLeaderMs = tonumber(line[10]) or 0,
                 }
-                if BenillaKartMenuFrame and BenillaKartMenuFrame:IsVisible() then BenillaKartMenu_Refresh() end
             elseif verb == "Mx" then
                 BenillaKart_Say("Race mode: not while you're in combat.")
             elseif verb == "X" then
@@ -1915,7 +1797,6 @@
         -- `legend` is what the window's controller guide says under it (BenillaPadLegend_Update);
         -- without one, the guide says how the D-pad, Cross and Circle drive it.
         BENILLA_PAD_WINDOWS = {
-            { name = "BenillaKartMenuFrame" },
             { name = "BenillaKartTracksFrame", buttons = "BenillaKartTrackBrowser_Pad",
               legend = "D-pad: pick a track    L1 / R1: page\nCross / A: time trial    Square / X: marshal\nTriangle / Y: map    Select: rate    Circle / B: close" },
             { name = "BenillaKartJobsFrame", buttons = "BenillaKartJobs_Pad",
@@ -2149,7 +2030,7 @@
 
         -- ── The Kartcraft menu (Options on the controller) ──
         -- Its entries: the label (or a function making it) and what choosing it does.
-        -- A challenge's menu entry: its course, opened in the track browser for its time trial.
+        -- A challenge's menu entry: its course's time trial, started as the track browser's is.
         function BenillaKartMenu_Challenge(which)
             local c = BenillaKartChallenge
             local key = c and c[which]
@@ -2161,73 +2042,121 @@
         function BenillaKartMenu_OpenChallenge(which)
             local c = BenillaKartChallenge
             if c and c[which] and c[which] ~= "" then
-                BenillaKartTrackBrowser_Open(c[which])
+                BenillaKart_Send("TB\t" .. c[which])
             end
         end
 
+        -- Each entry: its id (the engine's menu, `kart/menu_ui.rs`, lays the ids out in its
+        -- subcategories), its label (or a function making it), what choosing it does, and, for
+        -- one there only in its mode, when it is shown.
         BENILLA_KART_MENU = {
-            { function() return BenillaKartFinder.queued and "Leave the queue" or "Find a race" end,
-              function() BenillaKartFinder_QueueClick() end },
-            { function() return BenillaKartMenu_Challenge("daily") end,
-              function() BenillaKartMenu_OpenChallenge("daily") end },
-            { function() return BenillaKartMenu_Challenge("weekly") end,
-              function() BenillaKartMenu_OpenChallenge("weekly") end },
-            { "Race Finder", function() BenillaKart_Open(BenillaKartFinderFrame) end },
-            { "Tracks and time trials", function() BenillaKartTrackBrowser_Toggle() end },
-            { "Dungeon teleporter", function() BenillaKartDungeons_Open() end },
-            { "Leave dungeon", function() BenillaKartDungeons_Leave() end },
-            { function() return BenillaKartReplays_Playing() and "Stop replay" or "Replays" end,
-              function() BenillaKartReplays_MenuClick() end },
-            { "Courier jobs", function() BenillaKartJobs_Toggle() end },
-            { function() return BenillaKartRaceMode and "Race mode: on" or "Race mode: off" end,
-              function() BenillaKart_RaceModeToggle() end },
-            { "Leave race", function() BenillaKart_LeaveRace() end },
+            { id = "find", label = function() return BenillaKartFinder.queued and "Leave the queue" or "Find a race" end,
+              run = function() BenillaKartFinder_QueueClick() end },
+            { id = "daily", label = function() return BenillaKartMenu_Challenge("daily") end,
+              run = function() BenillaKartMenu_OpenChallenge("daily") end },
+            { id = "weekly", label = function() return BenillaKartMenu_Challenge("weekly") end,
+              run = function() BenillaKartMenu_OpenChallenge("weekly") end },
+            { id = "finder", label = "Race Finder", run = function() BenillaKart_Open(BenillaKartFinderFrame) end },
+            { id = "tracks", label = "Tracks and time trials", run = function() BenillaKartTrackBrowser_Toggle() end },
+            -- The engine's menu opens its dungeons for this one, which asks for them.
+            { id = "dungeons", label = "Dungeon teleporter", run = function() BenillaKartDungeons_Ask() end },
+            { id = "leavedungeon", label = "Leave dungeon", run = function() BenillaKartDungeons_Leave() end,
+              shown = function() return IsInInstance and IsInInstance() end },
+            { id = "replays", label = function() return BenillaKartReplays_Playing() and "Stop replay" or "Replays" end,
+              run = function() BenillaKartReplays_MenuClick() end },
+            { id = "jobs", label = "Courier jobs", run = function() BenillaKartJobs_Toggle() end },
+            { id = "racemode", label = function() return BenillaKartRaceMode and "Race mode: on" or "Race mode: off" end,
+              run = function() BenillaKart_RaceModeToggle() end },
+            { id = "leave", label = "Leave race", run = function() BenillaKart_LeaveRace() end,
+              shown = function() return BenillaKartShortcuts.racing end },
             -- As the Restart binding does; only in a time trial under way.
-            { "Restart time trial", function() BenillaKart_RestartTrial() end, function() return BenillaKart_TrialRace() end },
-            { "Unstuck", function() BenillaKart_Unstuck() end },
-            { "Kart garage", function() BenillaKartGarage_Toggle() end },
-            { "Skin shop", function() BenillaKartShop_Toggle() end },
-            { "Kartcraft settings", function() BenillaKartSettings_Toggle() end },
-            { "Guide", function() BenillaKartGuide_Toggle() end },
-            { "Controller test", function() BenillaKartPad_Toggle() end },
+            { id = "restart", label = "Restart time trial", run = function() BenillaKart_RestartTrial() end,
+              shown = function() return BenillaKart_TrialRace() end },
+            { id = "unstuck", label = "Unstuck", run = function() BenillaKart_Unstuck() end },
+            { id = "editor", label = function() return BenillaKartEditor.state == "" and "Open the editor" or "Close the editor" end,
+              run = function() BenillaKartEditor_Toggle() end },
+            { id = "mytracks", label = "My tracks", run = function() BenillaKartTrackBrowser_OpenMine() end },
+            { id = "pubtracks", label = "Player tracks", run = function() BenillaKartTrackBrowser_OpenPublished() end },
+            { id = "garage", label = "Kart garage", run = function() BenillaKartGarage_Toggle() end },
+            { id = "shop", label = "Skin shop", run = function() BenillaKartShop_Toggle() end },
+            { id = "settings", label = "Kartcraft settings", run = function() BenillaKartSettings_Toggle() end },
+            { id = "guide", label = "Guide", run = function() BenillaKartGuide_Toggle() end },
+            { id = "pad", label = "Controller test", run = function() BenillaKartPad_Toggle() end },
         }
 
-        -- The menu as wide as its widest entry: a challenge names its course, and a long name
-        -- fits on its button, every button the same width, the window around them.
-        BENILLA_KART_MENU_WIDTH = 220
-        BENILLA_KART_MENU_PADDING = 32
-        BENILLA_KART_MENU_MARGIN = 60
+        -- The entries shown now, one "id<TAB>label" a line, for the engine's menu; then the
+        -- dungeons, "dt:<map>", with their entrance level.
+        function BenillaKartMenu_Rows()
+            local out = {}
+            for i = 1, table.getn(BENILLA_KART_MENU) do
+                local e = BENILLA_KART_MENU[i]
+                if not e.shown or e.shown() then
+                    local label = e.label
+                    if type(label) == "function" then label = label() end
+                    table.insert(out, e.id .. "\t" .. label)
+                end
+            end
+            local dungeons = BenillaKartDungeons.list or {}
+            for i = 1, table.getn(dungeons) do
+                local d = dungeons[i]
+                local label = d.name
+                if d.level > 0 then label = label .. " |cff999999(level " .. d.level .. ")|r" end
+                table.insert(out, "dt:" .. d.map .. "\t" .. label)
+            end
+            return table.concat(out, "\n")
+        end
 
-        function BenillaKartMenu_Refresh()
-            local widest = BENILLA_KART_MENU_WIDTH
-            for i = 1, table.getn(BENILLA_KART_MENU) do
-                local label = BENILLA_KART_MENU[i][1]
-                if type(label) == "function" then label = label() end
-                local entry = getglobal("BenillaKartMenuFrameEntry" .. i)
-                entry:SetText(label)
-                -- An entry with a third field is there only while it says so.
-                local enabled = BENILLA_KART_MENU[i][3]
-                if not enabled or enabled() then entry:Enable() else entry:Disable() end
-                widest = math.max(widest, entry:GetTextWidth() + BENILLA_KART_MENU_PADDING)
+        -- An entry chosen in the engine's menu, which has closed first, so a window it opens
+        -- takes the controller.
+        function BenillaKartMenu_Run(id)
+            local _, _, map = string.find(id, "^dt:(%d+)$")
+            if map then
+                BenillaKart_Send("DT\t" .. map)
+                return
             end
             for i = 1, table.getn(BENILLA_KART_MENU) do
-                getglobal("BenillaKartMenuFrameEntry" .. i):SetWidth(widest)
+                local e = BENILLA_KART_MENU[i]
+                if e.id == id and (not e.shown or e.shown()) then
+                    e.run()
+                    return
+                end
             end
-            BenillaKartMenuFrame:SetWidth(widest + BENILLA_KART_MENU_MARGIN)
+        end
+
+        -- The menu opened by the engine: the challenges asked for, its sound.
+        function BenillaKartMenu_OnShow()
+            BenillaKart_Send("CH")
+            PlaySound("igMainMenuOpen")
+        end
+
+        -- Open or closed by the engine (`KartMenu` counting, so each press is a change), refused
+        -- while a centre panel holds the screen, as our windows are.
+        -- `BenillaKartMenu_Open(id)` opens it at an entry's own grid instead ("dungeons").
+        BenillaKartMenuPresses = 0
+        function BenillaKartMenu_Toggle()
+            BenillaKartMenu_Open(nil)
+        end
+
+        function BenillaKartMenu_Open(at)
+            if CanOpenPanels and not CanOpenPanels() then return end
+            BenillaKartMenuPresses = BenillaKartMenuPresses + 1
+            SetCVar("KartMenu", BenillaKartMenuPresses .. (at and "\t" .. at or ""))
         end
 
         -- ── The dungeon teleporter: any player to any dungeon (Kartcraft.cpp "Dungeon teleporter") ──
-        -- The dungeons from the server ("R<TAB>DLs", map:name:level;...), asked for once; chosen,
-        -- "R<TAB>DT<TAB><map>" goes there in race mode, and Leave dungeon ("R<TAB>DB") comes back.
-        BenillaKartDungeons = { list = nil, opening = nil }
+        -- The dungeons from the server ("R<TAB>DLs", map:name:level;...), asked for as the
+        -- Kartcraft menu first opens its dungeons, each a tile there ("dt:<map>" in
+        -- BenillaKartMenu_Rows); chosen, "R<TAB>DT<TAB><map>" goes there in race mode, and Leave
+        -- dungeon ("R<TAB>DB") comes back.
+        BenillaKartDungeons = { list = nil }
 
+        function BenillaKartDungeons_Ask()
+            if not BenillaKartDungeons.list then BenillaKart_Send("DL") end
+        end
+
+        -- The Kartcraft menu open at its dungeons.
         function BenillaKartDungeons_Open()
-            if BenillaKartDungeons.list then
-                ToggleDropDownMenu(1, nil, BenillaKartDungeonDropDown, "cursor", 0, 0)
-            else
-                BenillaKartDungeons.opening = 1
-                BenillaKart_Send("DL")
-            end
+            BenillaKartMenu_Open("dungeons")
         end
 
         function BenillaKartDungeons_Set(text)
@@ -2239,47 +2168,10 @@
                 end
             end
             BenillaKartDungeons.list = list
-            if BenillaKartDungeons.opening then
-                BenillaKartDungeons.opening = nil
-                ToggleDropDownMenu(1, nil, BenillaKartDungeonDropDown, "cursor", 0, 0)
-            end
-        end
-
-        function BenillaKartDungeons_Go()
-            BenillaKart_Send("DT\t" .. this.value)
         end
 
         function BenillaKartDungeons_Leave()
             BenillaKart_Send("DB")
-        end
-
-        -- The dropdown: a title, Leave dungeon, then every dungeon with its entrance level.
-        function BenillaKartDungeons_Init()
-            UIDropDownMenu_AddButton({ text = "Dungeon teleporter", isTitle = 1, notCheckable = 1 })
-            UIDropDownMenu_AddButton({ text = "Leave dungeon", func = BenillaKartDungeons_Leave, notCheckable = 1 })
-            local list = BenillaKartDungeons.list or {}
-            for i = 1, table.getn(list) do
-                local d = list[i]
-                local text = d.name
-                if d.level > 0 then text = text .. " |cff999999(level " .. d.level .. ")|r" end
-                UIDropDownMenu_AddButton({ text = text, value = d.map, func = BenillaKartDungeons_Go,
-                    notCheckable = 1, tooltipTitle = d.name,
-                    tooltipText = "Go inside, in race mode: nothing there can attack you, and you attack nothing." })
-            end
-        end
-
-        -- An entry chosen: the menu goes first, so a window it opens takes the controller.
-        function BenillaKartMenu_Choose(i)
-            BenillaKartMenuFrame:Hide()
-            BENILLA_KART_MENU[i][2]()
-        end
-
-        function BenillaKartMenu_Toggle()
-            if BenillaKartMenuFrame:IsVisible() then
-                BenillaKartMenuFrame:Hide()
-            else
-                BenillaKart_Open(BenillaKartMenuFrame)
-            end
         end
 
         -- A line of Kartcraft news in the chat, as the system's lines are.
@@ -3147,9 +3039,7 @@
             elseif event == "BENILLA_KART_SCORE" then
                 BenillaKartScore_Show(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11)
             elseif event == "BENILLA_KART_TRACKMAP" then
-                BenillaKartMap_SetTrack(arg1, arg2, arg3)
-            elseif event == "BENILLA_KART_RACERS" then
-                BenillaKartMap_SetRacers(arg1)
+                BenillaKartMap_SetTrack(arg1)
             elseif event == "BENILLA_KART_TRACKS" then
                 BenillaKartTracks_Set(arg1)
             elseif event == "BENILLA_KART_COURSES" then
@@ -6631,43 +6521,6 @@
         </Scripts>
     </Frame>
 
-    <!-- The race map: the track and the racers on it, us on top; dragged to where it suits. -->
-    <Frame name="BenillaKartMapFrame" parent="UIParent" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" frameStrata="MEDIUM">
-        <Size><AbsDimension x="200" y="214"/></Size>
-        <Anchors><Anchor point="RIGHT"><Offset><AbsDimension x="-30" y="60"/></Offset></Anchor></Anchors>
-        <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
-            <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>
-            <TileSize><AbsValue val="16"/></TileSize>
-            <EdgeSize><AbsValue val="16"/></EdgeSize>
-        </Backdrop>
-        <Layers>
-            <Layer level="ARTWORK">
-                <FontString name="$parentTitle" inherits="GameFontNormalSmall">
-                    <Size><AbsDimension x="180" y="14"/></Size>
-                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor></Anchors>
-                </FontString>
-            </Layer>
-        </Layers>
-        <Frames>
-            <Frame name="$parentCanvas">
-                <Size><AbsDimension x="172" y="172"/></Size>
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="14" y="-28"/></Offset></Anchor></Anchors>
-                <Frames>
-                    <Frame name="$parentTop" setAllPoints="true"/>
-                </Frames>
-            </Frame>
-        </Frames>
-        <Scripts>
-            <OnLoad>
-                this:SetBackdropColor(0, 0, 0, 0.75)
-                BenillaKart_Movable(this)
-                BenillaKartMapFrameCanvasTop:SetFrameLevel(BenillaKartMapFrameCanvas:GetFrameLevel() + 2)
-            </OnLoad>
-            <OnDragStart>this:StartMoving()</OnDragStart>
-            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
-        </Scripts>
-    </Frame>
-
     <!-- The turbo chain's score: the trick, the points, then the experience and skill it earned. -->
     <Frame name="BenillaKartScoreFrame" parent="UIParent" hidden="true" frameStrata="LOW">
         <Size><AbsDimension x="400" y="100"/></Size>
@@ -6706,7 +6559,6 @@
                 this:RegisterEvent("BENILLA_KART_COURSES")
                 this:RegisterEvent("BENILLA_KART_TRACKS")
                 this:RegisterEvent("BENILLA_KART_TRACKMAP")
-                this:RegisterEvent("BENILLA_KART_RACERS")
                 this:RegisterEvent("BENILLA_KART_COURSE_NAMES")
                 this:RegisterEvent("BENILLA_KART_GARAGE")
                 this:RegisterEvent("BENILLA_KART_SEATED")
@@ -6728,148 +6580,6 @@
     <!-- The Kartcraft Guide: five pages for a new player, open on the first login (KartGuideSeen),
          and from the minimap menu, /kartguide or its binding after. Each page has one button that
          does what it describes. -->
-    <!-- The Kartcraft menu (Options on the controller, KARTCRAFT_MENU): what racing needs, one
-         entry each, for a player on the controller alone. -->
-    <!-- The dungeon teleporter's list, at the cursor (BenillaKartDungeons_Open). -->
-    <Frame name="BenillaKartDungeonDropDown" inherits="UIDropDownMenuTemplate" parent="UIParent" hidden="true">
-        <Scripts>
-            <OnLoad>UIDropDownMenu_Initialize(this, BenillaKartDungeons_Init, "MENU")</OnLoad>
-        </Scripts>
-    </Frame>
-    <Frame name="BenillaKartMenuFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="280" y="552"/></Size>
-        <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
-        <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
-            <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
-            <TileSize><AbsValue val="32"/></TileSize>
-            <EdgeSize><AbsValue val="32"/></EdgeSize>
-        </Backdrop>
-        <Layers>
-            <Layer level="ARTWORK">
-                <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
-                    <Size><AbsDimension x="256" y="64"/></Size>
-                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
-                </Texture>
-                <FontString inherits="GameFontNormal" text="World of Kartcraft">
-                    <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
-                </FontString>
-                <FontString inherits="GameFontDisableSmall" text="D-pad to move, Cross to choose, Circle to close">
-                    <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="48"/></Offset></Anchor></Anchors>
-                </FontString>
-            </Layer>
-        </Layers>
-        <Frames>
-            <Button name="$parentEntry1" inherits="UIPanelButtonTemplate" id="1">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-34"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry2" inherits="UIPanelButtonTemplate" id="2">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-60"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry3" inherits="UIPanelButtonTemplate" id="3">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-86"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry4" inherits="UIPanelButtonTemplate" id="4">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-112"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry5" inherits="UIPanelButtonTemplate" id="5">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-138"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry6" inherits="UIPanelButtonTemplate" id="6">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-164"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry7" inherits="UIPanelButtonTemplate" id="7">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-190"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry8" inherits="UIPanelButtonTemplate" id="8">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-216"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry9" inherits="UIPanelButtonTemplate" id="9">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-242"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry10" inherits="UIPanelButtonTemplate" id="10">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-268"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry11" inherits="UIPanelButtonTemplate" id="11">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-294"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry12" inherits="UIPanelButtonTemplate" id="12">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-320"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry13" inherits="UIPanelButtonTemplate" id="13">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-346"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry14" inherits="UIPanelButtonTemplate" id="14">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-372"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry15" inherits="UIPanelButtonTemplate" id="15">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-398"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry16" inherits="UIPanelButtonTemplate" id="16">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-424"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry17" inherits="UIPanelButtonTemplate" id="17">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-450"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentEntry18" inherits="UIPanelButtonTemplate" id="18">
-                <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-476"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenu_Choose(this:GetID())</OnClick></Scripts>
-            </Button>
-            <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
-                <Size><AbsDimension x="120" y="22"/></Size>
-                <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="18"/></Offset></Anchor></Anchors>
-                <Scripts><OnClick>BenillaKartMenuFrame:Hide()</OnClick></Scripts>
-            </Button>
-        </Frames>
-        <Scripts>
-            <OnLoad>
-                if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
-                BenillaKart_Movable(this)
-            </OnLoad>
-            <OnShow>
-                BenillaKartMenu_Refresh()
-                BenillaKart_Send("CH")
-                PlaySound("igMainMenuOpen")
-            </OnShow>
-            <OnHide>PlaySound("igMainMenuClose")</OnHide>
-            <OnDragStart>this:StartMoving()</OnDragStart>
-            <OnDragStop>this:StopMovingOrSizing()</OnDragStop>
-        </Scripts>
-    </Frame>
     <!-- After a race (the server's RateAsk) or from the track browser: how was the track. -->
     <Frame name="BenillaKartRateFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
         <Size><AbsDimension x="300" y="260"/></Size>

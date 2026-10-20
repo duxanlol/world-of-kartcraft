@@ -637,6 +637,7 @@ fn load_config(world: &mut World) {
         cvars.own_for_session("KartFreeCam", None);
         cvars.own_for_session("KartTrackEdit", None);
         cvars.own_for_session("KartTrackCmd", None);
+        cvars.own_for_session("KartMenu", None);
         cvars.own_for_session("KartHideHud", None);
         // The controller test is open, and its motor tried, for this run only.
         cvars.own_for_session("KartPadTest", None);

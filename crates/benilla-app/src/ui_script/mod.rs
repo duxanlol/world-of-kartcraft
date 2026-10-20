@@ -163,6 +163,30 @@ pub(crate) struct EnginePanel;
 #[derive(Resource, Default)]
 pub(crate) struct EngineTyping(pub(crate) bool);
 
+/// An engine menu (the Kartcraft menu's) is up and holds the whole controller: `feed_pad` hands
+/// it this frame's presses by their `PAD` names, past the arming gate, and the VM, the bindings
+/// and the kart get none of them.
+#[derive(Resource, Default)]
+pub(crate) struct EnginePad {
+    pub(crate) open: bool,
+    pub(crate) presses: Vec<&'static str>,
+}
+
+/// The keys an engine menu drives itself by while it is up, which the VM and the bindings do not
+/// get.
+pub(crate) const MENU_KEYS: [bevy::input::keyboard::KeyCode; 7] = {
+    use bevy::input::keyboard::KeyCode as K;
+    [
+        K::Escape,
+        K::Enter,
+        K::NumpadEnter,
+        K::ArrowUp,
+        K::ArrowDown,
+        K::ArrowLeft,
+        K::ArrowRight,
+    ]
+};
+
 /// Keys an engine panel holds this frame (the track editor turning an object): the VM and the
 /// key bindings get none of them, as with keys a keyboard frame eats.
 #[derive(Resource, Default)]
@@ -346,6 +370,7 @@ impl Plugin for UiScriptPlugin {
             .init_resource::<PointerOverUiPanel>()
             .init_resource::<EngineTyping>()
             .init_resource::<EngineKeys>()
+            .init_resource::<EnginePad>()
             .add_systems(
                 Update,
                 (

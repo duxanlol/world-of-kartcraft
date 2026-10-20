@@ -22,6 +22,7 @@ pub(crate) mod goods_preview;
 pub(crate) mod gps;
 mod ground;
 pub(crate) mod marshals;
+pub(crate) mod menu_ui;
 pub(crate) mod objects;
 mod pad_choice;
 mod pads;
@@ -29,6 +30,7 @@ mod pieces;
 mod profession;
 mod props;
 mod race;
+pub(crate) mod race_map_ui;
 mod remote;
 mod replay;
 mod score;
@@ -45,7 +47,7 @@ mod ui;
 pub(crate) use garage::{class_list, racer_list};
 pub(crate) use race::{Course, RaceMap, COURSES, ZONES};
 pub(crate) use seat::SEAT_ANIMS;
-pub(crate) use ui::{KartOverlay, PadView, RacerDot, ScoreLines};
+pub(crate) use ui::{KartOverlay, PadView, ScoreLines};
 mod weapons;
 pub(crate) mod wheel;
 
@@ -741,6 +743,10 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<objects::Laid>()
         .init_resource::<track_edit_ui::EditorUi>()
         .init_resource::<track_edit_ui::EditorKeysText>()
+        .init_resource::<menu_ui::KartMenu>()
+        .init_resource::<race_map_ui::RaceMapUi>()
+        .add_observer(race_map_ui::on_cvar)
+        .add_observer(menu_ui::on_cvar)
         // The editor's panels take their clicks and keys before the VM, which must not get them.
         .add_systems(
             Update,
@@ -844,10 +850,15 @@ pub(crate) fn plugin(app: &mut App) {
                 (ui::pad_view, ui::publish).chain(),
                 // Into the VM only once the interface is up, or the first frame's events are lost;
                 // then the editor's panels as the frame left them, their keys card from the feed.
+                // The Kartcraft menu's presses (after `UiInput` hands it the controller's) before
+                // the feed runs what it chose.
                 (
+                    menu_ui::input,
                     crate::ui_kart::feed.run_if(crate::ui_script::ingame_ui_up),
                     // Before the glue visuals, which light its buttons the frame they spawn.
-                    track_edit_ui::draw.before(crate::glue::GlueVisuals),
+                    (track_edit_ui::draw, menu_ui::draw, race_map_ui::draw)
+                        .chain()
+                        .before(crate::glue::GlueVisuals),
                 )
                     .chain(),
                 kartcraft::hud::draw,
