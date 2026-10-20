@@ -7,7 +7,7 @@
 //! keys ([`kartcraft::input::PAD_LAYOUT`]), rebindable on the Key Bindings page's Controller
 //! column: the D-pad steers and reverses as the left stick does, and R2 is the pad's Shift and L2
 //! its Ctrl, so the abilities are R2 with the D-pad (`SHIFT-PADDUP`, ...). Summon Kart is an ordinary binding,
-//! read by its press.
+//! read by its press. ✕ also jumps on foot (the stock `JUMP`), as Space hops and jumps.
 
 use kartcraft::input::Keys;
 
@@ -99,6 +99,8 @@ const DEFAULTS: &[(&str, &str)] = &[
     // And its free ones: △ or Y summons the kart, Options or Menu opens the Kartcraft menu.
     ("PAD4", SUMMON),
     ("PADFORWARD", "KARTCRAFT_MENU"),
+    // On foot, ✕ or A jumps, as Space does beside its hop.
+    ("PAD1", "JUMP"),
 ];
 
 /// The command a [`kartcraft::input::PadControl`] is.
@@ -253,5 +255,18 @@ mod tests {
             benilla_ui::bindings_xml::parse(xml).unwrap().len(),
             DRIVING.len() + 13
         );
+    }
+
+    /// ✕ is the kart's gas and, on foot, the stock jump beside Space.
+    #[test]
+    fn cross_drives_the_kart_and_jumps_on_foot() {
+        let overlay = BindingOverlay::new(DRIVING, DEFAULTS);
+        let all = overlay.defaults_over(vec![("SPACE".into(), "JUMP".into())]);
+        let keys = |c: &str| -> Vec<String> {
+            let on = all.iter().filter(|(_, n)| n == c);
+            on.map(|(k, _)| k.clone()).collect()
+        };
+        assert_eq!(keys("JUMP"), ["SPACE", "PAD1"]);
+        assert!(keys(ACCELERATE).contains(&"PAD1".to_string()));
     }
 }

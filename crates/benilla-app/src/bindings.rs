@@ -237,9 +237,14 @@ impl BindingOverlay {
         &self,
         mut stock: Vec<benilla_ui::script::keybind::KeyBinding>,
     ) -> Vec<benilla_ui::script::keybind::KeyBinding> {
+        // A stock key is one of the stock defaults', not one this plane's own added took.
+        let stock_len = stock.len();
         for &(key, command) in self.defaults {
             let stock_plane = !self.commands.contains(&command);
-            if stock_plane && stock.iter().any(|(k, _)| k.eq_ignore_ascii_case(key)) {
+            let taken = stock[..stock_len]
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case(key));
+            if stock_plane && taken {
                 continue;
             }
             stock.push((key.to_owned(), command.to_owned()));
