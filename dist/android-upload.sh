@@ -19,6 +19,9 @@ version=target/android/version.json
 [ -f "$apk" ] && [ -f "$version" ] || { echo "no APK: run scripts/android-apk.sh first"; exit 1; }
 [ "$(sha256sum "$apk" | cut -d' ' -f1)" = "$(sed -n 's/.*"sha256": "\(.*\)".*/\1/p' "$version")" ] ||
     { echo "$version does not describe $apk: build again"; exit 1; }
+built="$(sed -n 's/.*"channel": "\(.*\)".*/\1/p' "$version")"
+[ "$built" = "${channel:-production}" ] ||
+    { echo "the APK was built for $built, not ${channel:-production}: build it with this ANDROID_CHANNEL"; exit 1; }
 
 az storage blob upload -c '$web' -n "${prefix}WorldOfKartcraft.apk" -f "$apk" \
     --content-type application/vnd.android.package-archive \

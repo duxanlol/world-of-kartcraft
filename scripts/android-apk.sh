@@ -41,20 +41,26 @@ export CXX_aarch64_linux_android="$llvm/aarch64-linux-android$API-clang++$cmd"
 export AR_aarch64_linux_android="$llvm/llvm-ar"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
 
-# The server the APK plays on, built in as the launcher's preset is (`.setup/publish.cfg`'s SERVER).
-KARTCRAFT_SERVER="$(sed -n "s/^SERVER=//p" .setup/publish.cfg 2>/dev/null | tr -d '\r')"
-export KARTCRAFT_SERVER
-[ -n "$KARTCRAFT_SERVER" ] || echo "no SERVER in .setup/publish.cfg: the APK asks for none"
-# Where it updates itself from: the update host's `android/` folder (`dist/android-upload.sh`),
-# `staging/android/` with ANDROID_CHANNEL=staging; and its own version code, which an update
-# must beat. A code that grows with every commit, so a phone takes a newer build as an update.
-updates="$(sed -n "s/^UPDATE_URL=//p" .setup/publish.cfg 2>/dev/null | tr -d '\r')"
+# The channel's presets, as publish.ps1 reads them: `.setup/publish.cfg`, and for
+# ANDROID_CHANNEL=staging `.setup/publish-staging.cfg` over it (the staging server and its
+# update folder). Built in: the server it plays on, and where it updates itself from, the update
+# folder's `android/` (`dist/android-upload.sh`).
 channel="${ANDROID_CHANNEL:-}"
-KARTCRAFT_UPDATE_URL="${updates:+${updates%/}/${channel:+$channel/}android}"
+cfgs=(.setup/publish.cfg)
+[ "$channel" = staging ] && cfgs=(.setup/publish-staging.cfg .setup/publish.cfg)
+[ -z "$channel" ] || [ -f "${cfgs[0]}" ] || { echo "${cfgs[0]} is missing: it names the $channel server"; exit 1; }
+preset() { cat "${cfgs[@]}" 2>/dev/null | sed -n "s/^$1=//p" | head -1 | tr -d '\r'; }
+KARTCRAFT_SERVER="$(preset SERVER)"
+updates="$(preset UPDATE_URL)"
+KARTCRAFT_UPDATE_URL="${updates:+${updates%/}/android}"
+# Staging sleeps when nobody plays (benilla-config/staging/idle): its build wakes it first.
+KARTCRAFT_WAKE_URL=""
+[ "$channel" = staging ] && KARTCRAFT_WAKE_URL="https://worldofkartcraft.com/staging/wake"
+# Its own version code, which an update must beat: the commit count, growing with every commit.
 code="$(git rev-list --count HEAD)"
 KARTCRAFT_VERSION_CODE="$code"
-export KARTCRAFT_UPDATE_URL KARTCRAFT_VERSION_CODE
-[ -n "$KARTCRAFT_UPDATE_URL" ] || echo "no UPDATE_URL in .setup/publish.cfg: the APK never updates"
+export KARTCRAFT_SERVER KARTCRAFT_UPDATE_URL KARTCRAFT_WAKE_URL KARTCRAFT_VERSION_CODE
+echo "channel ${channel:-production}: server ${KARTCRAFT_SERVER:-none}, updates ${KARTCRAFT_UPDATE_URL:-none}"
 cargo build -p benilla-android --target aarch64-linux-android --release --no-default-features
 
 out="$root/target/android"
@@ -128,9 +134,9 @@ fi
 rm -f "$out/unsigned.apk" "$out/aligned.apk"
 # What `dist/android-upload.sh` puts beside the APK on the update host, for the app to compare.
 sha="$(sha256sum "$out/kartcraft.apk" | cut -d' ' -f1)"
-printf '{\n  "versionCode": %s,\n  "versionName": "%s",\n  "apk": "WorldOfKartcraft.apk",\n  "sha256": "%s"\n}\n' \
-    "$code" "$version" "$sha" >"$out/version.json"
-echo "built $out/kartcraft.apk ($(du -h "$out/kartcraft.apk" | cut -f1)), build $code ($version)"
+printf '{\n  "versionCode": %s,\n  "versionName": "%s",\n  "channel": "%s",\n  "apk": "WorldOfKartcraft.apk",\n  "sha256": "%s"\n}\n' \
+    "$code" "$version" "${channel:-production}" "$sha" >"$out/version.json"
+echo "built $out/kartcraft.apk ($(du -h "$out/kartcraft.apk" | cut -f1)), build $code ($version, ${channel:-production})"
 
 for arg in "$@"; do
     case "$arg" in

@@ -192,11 +192,18 @@ mod update {
     /// `scripts/android-apk.sh`; a build without them never updates.
     const BASE: Option<&str> = option_env!("KARTCRAFT_UPDATE_URL");
     const CODE: Option<&str> = option_env!("KARTCRAFT_VERSION_CODE");
+    /// A staging build's wake: staging sleeps when nobody plays, and the players' site starts it
+    /// (`kartcraft-launcher/src/wake.rs` does the same for the testers' PC launcher).
+    const WAKE: Option<&str> = option_env!("KARTCRAFT_WAKE_URL");
+    /// How long a woken server takes at most, and the login port that says it is up.
+    const PATIENCE: std::time::Duration = std::time::Duration::from_secs(300);
+    const LOGIN_PORT: u16 = 3724;
 
-    /// Where an update stands, for the banner.
+    /// Where the server and an update stand, for the banner.
     #[derive(Debug, Clone, PartialEq)]
     pub enum Status {
         None,
+        Waking { secs: u64 },
         Downloading { got: u64, size: u64 },
         Confirm,
     }
@@ -207,9 +214,12 @@ mod update {
         *STATUS.lock().unwrap_or_else(|e| e.into_inner()) = status;
     }
 
-    /// Looks for an update on a thread of its own.
+    /// Wakes a sleeping staging server, then looks for an update, on a thread of its own.
     pub fn start(app: AndroidApp, own: PathBuf) {
         std::thread::spawn(move || {
+            if let Some(url) = WAKE.filter(|u| !u.is_empty()) {
+                wake(url);
+            }
             if let Err(e) = run(&app, &own) {
                 println!("benilla: update: {e}");
                 set(Status::None);
@@ -217,8 +227,46 @@ mod update {
         });
     }
 
+    /// Whether the server's login port answers.
+    fn up() -> bool {
+        use std::net::ToSocketAddrs;
+        let Ok(host) = std::env::var("WOW_HOST") else {
+            return true;
+        };
+        (host.as_str(), LOGIN_PORT)
+            .to_socket_addrs()
+            .into_iter()
+            .flatten()
+            .any(|a| {
+                std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_secs(3)).is_ok()
+            })
+    }
+
+    /// Asks the site to start the server (at most once a minute, the site's own limit) and
+    /// waits for its login port, the banner counting.
+    fn wake(url: &str) {
+        let start = std::time::Instant::now();
+        let mut asked: Option<std::time::Instant> = None;
+        while !up() && start.elapsed() < PATIENCE {
+            if asked.is_none_or(|a| a.elapsed().as_secs() >= 60) {
+                asked = Some(std::time::Instant::now());
+                println!("benilla: the test server is asleep: waking it");
+                if let Err(e) = ureq::post(url).call() {
+                    println!("benilla: could not wake the test server: {e}");
+                    break;
+                }
+            }
+            set(Status::Waking {
+                secs: start.elapsed().as_secs(),
+            });
+            std::thread::sleep(std::time::Duration::from_secs(5));
+        }
+        set(Status::None);
+    }
+
     fn run(app: &AndroidApp, own: &Path) -> Result<(), String> {
-        let (Some(base), Some(ours)) = (BASE, CODE.and_then(|c| c.parse::<u64>().ok())) else {
+        let base = BASE.filter(|b| !b.is_empty());
+        let (Some(base), Some(ours)) = (base, CODE.and_then(|c| c.parse::<u64>().ok())) else {
             return Ok(());
         };
         let agent = ureq::AgentBuilder::new()
@@ -338,6 +386,11 @@ fn update_banner(
         .unwrap_or(update::Status::None);
     let line = match status {
         update::Status::None => None,
+        update::Status::Waking { secs } => Some(format!(
+            "Waking the test server... {}:{:02} (usually about two minutes)",
+            secs / 60,
+            secs % 60
+        )),
         update::Status::Downloading { got, size } if size > 0 => Some(format!(
             "Downloading an update of World of Kartcraft: {}%",
             got * 100 / size
