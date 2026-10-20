@@ -64,6 +64,14 @@ pub(crate) struct Course {
     #[serde(default)]
     note: String,
     checkpoints: Vec<CourseCheckpoint>,
+    /// The karts' and racers' size on it, 1 their own (`docs/courses.md`, `scale`).
+    #[serde(default = "own_size")]
+    scale: f32,
+}
+
+/// A course's scale where it names none: the kart's own size.
+fn own_size() -> f32 {
+    1.0
 }
 
 /// Where a course's Race Marshal stands: WoW x, y, z and facing.
@@ -179,6 +187,11 @@ impl Course {
     /// Each checkpoint's facing, where one is set.
     pub(crate) fn facings(&self) -> Vec<Option<f32>> {
         self.checkpoints.iter().map(|c| c.o).collect()
+    }
+
+    /// The karts' and racers' size on it, 1 their own.
+    pub(crate) fn scale(&self) -> f32 {
+        self.scale
     }
 
     /// Each checkpoint's height, where known.
@@ -355,6 +368,9 @@ pub(crate) struct Active {
     grid_trip: bool,
     /// The grid's height (WoW z) where known: the floor the trip lands on in a dungeon.
     floor: Option<f32>,
+    /// The karts' and racers' size on its course (0 for its own, as 1): the kart and its physics
+    /// are sized by it while the race lasts ([`kartcraft::set_race_scale`]).
+    scale: f32,
     /// Each checkpoint's height (WoW z) where known (the track editor's, a course's `z`): its gate
     /// stands on the floor under it, not on a roof over it ([`Active::height_near`]).
     heights: Vec<Option<f32>>,
@@ -481,6 +497,21 @@ impl Active {
         }
     }
 
+    /// Its course's scale ([`Active::scale`]).
+    pub(crate) fn with_scale(mut self, scale: f32) -> Self {
+        self.scale = scale;
+        self
+    }
+
+    /// The karts' size on its course, 1 their own.
+    pub(crate) fn scale(&self) -> f32 {
+        if self.scale > 0.0 {
+            self.scale
+        } else {
+            1.0
+        }
+    }
+
     /// The grid's height, where known ([`Active::floor`]).
     pub(crate) fn with_floor(mut self, floor: Option<f32>) -> Self {
         self.floor = floor;
@@ -549,6 +580,8 @@ impl Active {
             gates: std::mem::take(&mut self.gates),
             heights: std::mem::take(&mut self.heights),
             floor: self.floor,
+            scale: self.scale,
+            objects: std::mem::take(&mut self.objects),
             ..Active::practice(
                 &self.course,
                 self.laps,
@@ -978,8 +1011,10 @@ pub(crate) struct Races {
     track_names: HashMap<String, String>,
     /// And their gates (`x,y[,o[,w]];...`), for the facings and widths the `C` line has not.
     track_spots: HashMap<String, String>,
-    /// And their objects, from the `PT` line's last field.
+    /// And their objects, from the `PT` line's objects field.
     track_objects: HashMap<String, Vec<super::objects::Placed>>,
+    /// And their scale, from its last (empty: their own size).
+    track_scales: HashMap<String, f32>,
 }
 
 impl Races {
@@ -1109,6 +1144,8 @@ impl Races {
                     .get(12)
                     .map_or_else(Vec::new, |o| super::objects::parse_wire(o));
                 self.track_objects.insert(key.clone(), objects);
+                let scale = f.get(13).and_then(|v| v.trim().parse::<f32>().ok());
+                self.track_scales.insert(key.clone(), scale.unwrap_or(1.0));
                 self.track_names.insert(key, f[2].clone());
             }
             // Out of everything (`/leaverace`): the server has let us go, so whatever we
@@ -1191,6 +1228,11 @@ impl Races {
                         race.gates = w;
                     }
                     race.objects = self.track_objects.get(&f[2]).cloned().unwrap_or_default();
+                    // Its size: a course's own, a player track's from its line.
+                    race.scale = ours
+                        .map(Course::scale)
+                        .or_else(|| self.track_scales.get(&f[2]).copied())
+                        .unwrap_or(1.0);
                     info!(
                         "kart race: course {} — {} checkpoints, {} laps",
                         f[2],

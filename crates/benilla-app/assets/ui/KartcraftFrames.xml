@@ -819,7 +819,7 @@
         -- "my:<key>", each with its file's key: a test lap of one runs on this client alone.
         BenillaKartMyTracks = {}
         function BenillaKartMyTracks_Set(list)
-            BenillaKartMyTracks = BenillaKartTracks_Parse(list, 11)
+            BenillaKartMyTracks = BenillaKartTracks_Parse(list, 12)
             for i = 1, table.getn(BenillaKartMyTracks) do
                 local t = BenillaKartMyTracks[i]
                 t.mine, t.file, t.key = 1, t.key, "my:" .. t.key
@@ -848,7 +848,7 @@
                     zone = lines[i + 2], map = tonumber(lines[i + 3]) or 0,
                     laps = tonumber(lines[i + 4]) or 0, text = lines[i + 5], points = points,
                     grid = lines[i + 7], gates = lines[i + 8], z = lines[i + 9],
-                    objects = lines[i + 10] })
+                    objects = lines[i + 10], scale = lines[i + 11] })
             end
             return tracks
         end
@@ -884,7 +884,7 @@
                     author = line[5] or "", map = tonumber(line[6]) or 0, laps = laps,
                     zone = line[8] or "", grid = line[9] or "", gates = line[10] or "", pub = 1,
                     good = tonumber(line[11]) or 0, bad = tonumber(line[12]) or 0, z = line[13] or "",
-                    objects = line[14] or "",
+                    objects = line[14] or "", scale = line[15] or "",
                     order = table.getn(BenillaKartPubIncoming) + 1 }
                 t.points = BenillaKartTracks_Points(t.gates)
                 local kind = "A sprint"
@@ -931,7 +931,7 @@
         function BenillaKartPub_Publish(track)
             BenillaKart_Send("Pub\t" .. track.name .. "\t" .. track.map .. "\t" .. track.laps .. "\t"
                 .. (track.zone or "") .. "\t" .. (track.grid or "") .. "\t" .. (track.gates or "")
-                .. "\t" .. (track.z or "") .. "\t" .. (track.objects or ""))
+                .. "\t" .. (track.z or "") .. "\t" .. (track.objects or "") .. "\t" .. (track.scale or ""))
         end
 
         function BenillaKartTrack(key)
@@ -1132,7 +1132,7 @@
             if track and track.pub then
                 BenillaKartEditor_Send("runspots", track.name, track.laps .. "\t" .. track.map .. "\t"
                     .. track.grid .. "\t" .. track.gates .. "\t" .. (track.z or "") .. "\t"
-                    .. (track.objects or ""))
+                    .. (track.objects or "") .. "\t" .. (track.scale or ""))
                 BenillaKartTracksFrame:Hide()
                 return
             end

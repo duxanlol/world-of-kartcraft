@@ -318,18 +318,22 @@ impl Session {
             self.build = Some(send);
             self.built = Some(Mutex::new(built));
         }
-        self.epoch = self.epoch.wrapping_add(1);
-        self.origin = at;
-        self.centre = at;
-        self.gathered_at = now;
+        // The race's scale asked for, before the world is gathered at it.
+        let was = crate::latch_scale();
         let pieces = collide.colliders_near_body(at, GATHER_HALF);
         let world = Collision::new(triangles(&pieces, &self.props, at, at), CELL_LU);
         let faces = world.len();
         // The ground under us, from a little above the feet: a body the server put a little under
-        // the terrain (its positions are not exact) must not start the kart beneath it.
+        // the terrain (its positions are not exact) must not start the kart beneath it. Without
+        // it nothing starts, and a kart already driving keeps its own scale.
         let Some(ground) = world.ground(Vec3::Y * 200.0, 800.0) else {
+            crate::restore_scale(was);
             return Ok(0);
         };
+        self.epoch = self.epoch.wrapping_add(1);
+        self.origin = at;
+        self.centre = at;
+        self.gathered_at = now;
         // A little above the ground: the first ticks settle the kart onto it.
         let kart = Kart::new(class, ground.point + Vec3::Y * 4.0, heading_of(yaw));
         self.current = Some(kart.pose());

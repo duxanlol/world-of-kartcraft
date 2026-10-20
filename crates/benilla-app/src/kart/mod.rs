@@ -135,6 +135,9 @@ struct Host {
     class: kartcraft::Class,
     /// Since when the Summon binding has been held to leave the kart in a race (LEAVE_HOLD_SECS).
     leave_since: Option<f32>,
+    /// The test lap's scale last told the server (`R\tSz`), which sizes our body for it as a race
+    /// would; `None` none told yet (as 1).
+    test_lap_scale: Option<f32>,
 }
 
 /// How long the Summon binding is held to leave the kart in a race, so a stray press does not
@@ -324,6 +327,22 @@ fn update(
         } else if !host.dismissing && !drive.active && player.may_drive() {
             started = start(&time, &collide, &player, host, class);
         }
+    }
+    // A race's scale other than the kart's (a course's `scale`, or back to 1 after it): the
+    // session starts again where the kart stands, its world gathered at the new size. A race's
+    // grid trip does it anyway, the kart summoned again on the grid.
+    kartcraft::set_race_scale(races.race.as_ref().map_or(1.0, race::Active::scale));
+    // A test lap is the client's alone: the server sizes our body for it when told, as it does
+    // for a race on a scaled course.
+    let test_lap = races.race.as_ref().filter(|r| r.practice);
+    let test_lap = test_lap.map_or(1.0, race::Active::scale);
+    if host.test_lap_scale.unwrap_or(1.0) != test_lap {
+        profession.send(format!("KARTCRAFT\tR\tSz\t{test_lap:.2}"));
+        host.test_lap_scale = Some(test_lap);
+    }
+    if drive.active && host.session.active() && kartcraft::scale_pending() {
+        info!("kart: to race scale");
+        start(&time, &collide, &player, host, class);
     }
     if started {
         drive.active = true;

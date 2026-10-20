@@ -40,6 +40,15 @@ client's list are both made from it; nothing else holds course data.
   `z`, else its marshal's), the floor a teleport onto its grid lands on from outside, not a roof
   over it.
 - `laps`: 0 for a sprint from the first checkpoint to the last; else laps back through the first.
+- `scale`: optional, 0.2 to 3, default 1: the karts' and racers' size on the course. The world
+  stays as it is, so a small kart makes it drive bigger (Stormwind's streets as a kart's city):
+  the client sizes the kart and its physics by it for the race (`kartcraft::set_race_scale`; the
+  session starts again at the new size, as at the race's grid), and the server sizes each
+  racer's body as everyone sees it (`Kartcraft.cpp` "Race scale"), back to its own once out of
+  the race. A kerb or a step keeps its height, so a small kart climbs less of one: line a small
+  course round them. The track editor's Size buttons set a player track's, which it saves,
+  publishes (`R\tPub`'s last field, the `PT` lines' last) and runs its test laps at (`R\tSz`
+  asks the server to size the body for one).
 - `checkpoints`: at least two, WoW world `x`, `y` (yards); the first is the start, where a
   driver hosts or joins. Optional `z` (the server finds the ground itself). Optional `gate`:
   the gate's half-width in yards. The client passes a checkpoint through a gate this wide

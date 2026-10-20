@@ -27,17 +27,65 @@ pub const METERS_PER_YARD: f32 = 0.9144;
 /// kart model (in meters, from `kart.json`) fits CTR's collision sphere.
 const METERS_PER_LU: f32 = 0.025;
 
-/// How much bigger than CTR's own the kart is: `WOW_KART_SCALE`, default 1. The model and the
-/// physics scale together, so a bigger kart is also a faster one, as it would be.
+/// How much bigger than CTR's own the kart is: `WOW_KART_SCALE` (default 1) times the race's scale
+/// as the session took it on ([`race_scale`]). The model and the physics scale together, so a
+/// smaller kart is also a slower one in the world's yards, and the world drives bigger round it.
 pub fn kart_scale() -> f32 {
     static SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
-    *SCALE.get_or_init(|| {
+    let env = *SCALE.get_or_init(|| {
         std::env::var("WOW_KART_SCALE")
             .ok()
             .and_then(|v| v.parse().ok())
             .filter(|v: &f32| *v > 0.0)
             .unwrap_or(1.0)
-    })
+    });
+    env * race_scale()
+}
+
+/// The race's scale the host wants (a course's `scale`, 1 out of a race), and the one the session
+/// has taken on: the session's world is gathered at its scale, so a new one waits for the
+/// session to start again ([`latch_scale`]), as at a race's grid.
+static WANTED_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3f80_0000);
+static RACE_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3f80_0000);
+
+/// The smallest and largest race scale: below, a kart is too small to climb a kerb; above, too
+/// big for a street.
+pub const MIN_RACE_SCALE: f32 = 0.2;
+pub const MAX_RACE_SCALE: f32 = 3.0;
+
+/// Asks for the race's scale `scale` (1 the kart's own size), clamped to the bounds; the session
+/// takes it on as it starts again ([`scale_pending`]).
+pub fn set_race_scale(scale: f32) {
+    let s = if scale.is_finite() {
+        scale.clamp(MIN_RACE_SCALE, MAX_RACE_SCALE)
+    } else {
+        1.0
+    };
+    WANTED_SCALE.store(s.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The race's scale the session drives at.
+pub fn race_scale() -> f32 {
+    f32::from_bits(RACE_SCALE.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Whether a scale other than the session's is asked for: the host starts the session again
+/// where the kart stands.
+pub fn scale_pending() -> bool {
+    WANTED_SCALE.load(std::sync::atomic::Ordering::Relaxed)
+        != RACE_SCALE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The scale asked for becomes the session's: called as the session starts, before its world
+/// is gathered; returns the one it had, for [`restore_scale`] where the start comes to nothing.
+pub(crate) fn latch_scale() -> u32 {
+    let wanted = WANTED_SCALE.load(std::sync::atomic::Ordering::Relaxed);
+    RACE_SCALE.swap(wanted, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The session's scale back to `was` ([`latch_scale`]'s).
+pub(crate) fn restore_scale(was: u32) {
+    RACE_SCALE.store(was, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Level units per yard.
@@ -165,6 +213,26 @@ pub const METERS_PER_UNIT: f32 = 1.0 / 51.2;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A race's scale asked for waits for the session to start to take it on, bounded. (The
+    /// session's own scale is left alone here: every other test's lengths are measured by it.)
+    #[test]
+    fn a_race_s_scale_waits_for_the_session_and_is_bounded() {
+        set_race_scale(0.5);
+        assert!(scale_pending());
+        assert_eq!(race_scale(), 1.0, "not before the session starts");
+        set_race_scale(f32::NAN);
+        assert_eq!(
+            f32::from_bits(WANTED_SCALE.load(std::sync::atomic::Ordering::Relaxed)),
+            1.0
+        );
+        set_race_scale(0.01);
+        assert_eq!(
+            f32::from_bits(WANTED_SCALE.load(std::sync::atomic::Ordering::Relaxed)),
+            MIN_RACE_SCALE
+        );
+        set_race_scale(1.0);
+    }
 
     #[test]
     fn headings_and_yaws_agree_on_forward() {

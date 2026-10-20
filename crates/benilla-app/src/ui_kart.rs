@@ -106,11 +106,18 @@ pub(crate) fn feed(
     }
     let (mine, saves) = edit.saved();
     if sent.my_tracks != Some(saves) {
-        // A course's line, then its grid, its gates with their facings and its floor, for a
-        // publish.
+        // A course's line, then its grid, its gates with their facings, its floor, its objects and
+        // its scale (empty for its own size), for a publish.
         let list: Vec<String> = mine
             .map(|(c, grid, gates, z, objects)| {
-                format!("{}\t{grid}\t{gates}\t{z}\t{objects}", track_line(c))
+                let scale = match c.scale() {
+                    s if s != 1.0 => format!("{s:.2}"),
+                    _ => String::new(),
+                };
+                format!(
+                    "{}\t{grid}\t{gates}\t{z}\t{objects}\t{scale}",
+                    track_line(c)
+                )
             })
             .collect();
         script.fire_event(

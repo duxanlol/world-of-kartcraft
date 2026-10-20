@@ -192,12 +192,18 @@ def courses_header(data):
         out.append(f'          {{ {rows(crates, 3)} }},' if crates else '          {},')
         mx, my, mz, _ = marshal_of(c, key)
         doors_c = '{ ' + ', '.join(f'{d}u' for d in doors) + ' }' if doors else '{}'
-        # A dungeon course's start height (Course::z): the start's z, else its marshal's beside it.
+        # A dungeon course's start height (Course::z): the start's z, else its marshal's beside it;
+        # and its scale (Course::scale), the karts' and racers' size on it.
+        scale = num(c.get('scale', 1), f'course {key}: scale')
+        if not 0.2 <= scale <= 3:
+            fail(f'course {key}: scale must be 0.2 to 3')
+        sz = 0
         if cmap > 1:
             sz = num(points[0]['z'], f'course {key}: checkpoint 0 z') if 'z' in points[0] else mz
-            out.append(f'          {{ {cfloat(mx)}, {cfloat(my)} }}, {doors_c}, {cfloat(sz)} }},')
-        else:
-            out.append(f'          {{ {cfloat(mx)}, {cfloat(my)} }}, {doors_c} }},')
+        tail = ''
+        if cmap > 1 or scale != 1:
+            tail = f', {cfloat(sz)}' + (f', {cfloat(scale)}' if scale != 1 else '')
+        out.append(f'          {{ {cfloat(mx)}, {cfloat(my)} }}, {doors_c}{tail} }},')
     out.append('    };')
     return '\n'.join(out) + '\n'
 

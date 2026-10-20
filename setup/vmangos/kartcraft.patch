@@ -82,10 +82,10 @@ index 47f576d..2004e85 100644
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..09aeeeb
+index 0000000..be19438
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,7635 @@
+@@ -0,0 +1,7748 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -579,7 +579,22 @@ index 0000000..09aeeeb
 +        // from its maker): the floor a teleport onto its grid looks for from a little over it, so
 +        // a trip lands on the course's floor, not a roof over it (TeleportOnto).
 +        float z = 0.f;
++        // The kart's and the racers' size on it, 1 their own: a small one makes the world drive
++        // bigger round them (Stormwind's streets as a kart's city). The client sizes the kart and
++        // its physics; the server sizes each racer's body for the race (TickRaceScales).
++        float scale = 1.f;
 +    };
++
++    // A course's scale's bounds, as the client's (kartcraft MIN_RACE_SCALE, MAX_RACE_SCALE).
++    constexpr float MIN_RACE_SCALE = 0.2f;
++    constexpr float MAX_RACE_SCALE = 3.f;
++    // Each racer the race's scale sizes, and their body's scale before it (raw guid -> scale), to
++    // give back as they leave its race (TickRaceScales); a skin put on meanwhile is the new one's.
++    static std::unordered_map<uint64, float> s_raceScaleBase;
++    static std::mutex s_raceScaleMutex; // over s_raceScaleBase; taken after s_mutex, never before
++    // A track editor test lap's scale by racer (raw guid), as its client asks ("R\tSz"): no race
++    // of the server's, the body sized all the same while they drive. Under s_mutex.
++    static std::unordered_map<uint64, float> s_testLapScale;
 +
 +    // The courses: courses/courses.json, made into this table by setup/vmangos/pack.py.
 +#include "KartcraftCourses.h"
@@ -823,6 +838,7 @@ index 0000000..09aeeeb
 +        uint32 map = 0;
 +        uint32 laps = 0;
 +        float z = 0.f;   // the track's floor height (Course::z), 0 for none
++        float scale = 1.f; // the karts' and racers' size on it (Course::scale)
 +        size_t slot = 0; // its course in s_userCourses
 +    };
 +    struct UserCourse
@@ -880,13 +896,22 @@ index 0000000..09aeeeb
 +            t.points;
 +    }
 +
-+    // A player track's line with every field a list line has (its votes empty), its height and its
-+    // objects last, for a race on it: the client builds the track's objects from it.
++    // A player track's scale as its lines carry it: empty for its own size.
++    static std::string ScaleField(float scale)
++    {
++        char s[16];
++        std::snprintf(s, sizeof(s), "%.2f", scale);
++        return scale != 1.f ? s : "";
++    }
++
++    // A player track's line with every field a list line has (its votes empty), its height, its
++    // objects and its scale last, for a race on it: the client builds the track's objects from it.
 +    static std::string UserTrackRaceLine(UserTrack const& t)
 +    {
 +        char z[16];
 +        std::snprintf(z, sizeof(z), "%.1f", t.z);
-+        return UserTrackLine(t) + "\t\t\t" + (t.z != 0.f ? z : "") + "\t" + t.objects;
++        return UserTrackLine(t) + "\t\t\t" + (t.z != 0.f ? z : "") + "\t" + t.objects + "\t" +
++            ScaleField(t.scale);
 +    }
 +
 +    // `t`'s course, new in s_userCourses: its gates from its spots, its Race Marshal's place its
@@ -915,6 +940,7 @@ index 0000000..09aeeeb
 +        }
 +        c.marshal = c.points.empty() ? std::make_pair(0.f, 0.f) : c.points[0];
 +        c.z = t.z;
++        c.scale = t.scale;
 +        t.slot = s_userCourses.size() - 1;
 +    }
 +
@@ -2168,6 +2194,12 @@ index 0000000..09aeeeb
 +            player->InitPlayerDisplayIds();
 +        if (morphed)
 +            player->SetDisplayId(shown);
++        // In a scaled race: the skin's scale is the one to give back, the race's on it again next
++        // tick (TickRaceScales).
++        std::lock_guard<std::mutex> lock(s_raceScaleMutex);
++        auto base = s_raceScaleBase.find(player->GetObjectGuid().GetRawValue());
++        if (base != s_raceScaleBase.end())
++            base->second = player->GetObjectScale();
 +    }
 +
 +    static void SkinLogin(Player* player)
@@ -5869,6 +5901,58 @@ index 0000000..09aeeeb
 +        TickShields(now);
 +    }
 +
++    // ── Race scale ─────────────────────────────────────────────────────────────────────────────
++    //
++    // A course's scale (Course::scale) sizes its racers: each one's body, as everyone sees it, is
++    // its own scale times the course's while they are in a race on it, and its own again once they
++    // are out of it (finished and gone, left, or their race over). The client sizes the kart, its
++    // physics and the driver in its seat from the same scale. Every SCALE_TICK, under s_mutex.
++    constexpr uint32 SCALE_TICK = 500;
++    static uint32 s_scaleTicked = 0;
++
++    static void TickRaceScales()
++    {
++        std::unordered_map<uint64, float> want;
++        for (auto const& entry : s_races)
++            if (entry.second.course && entry.second.course->scale != 1.f)
++                for (Racer const& r : entry.second.racers)
++                    want[r.guid.GetRawValue()] = entry.second.course->scale;
++        // A test lap's, while its driver is still in the kart; out of it, it is over.
++        for (auto it = s_testLapScale.begin(); it != s_testLapScale.end();)
++        {
++            Player* player = ObjectAccessor::FindPlayer(ObjectGuid(it->first));
++            if (!player || !player->HasAura(SPELL_SUMMON_KART))
++            {
++                it = s_testLapScale.erase(it);
++                continue;
++            }
++            want.emplace(it->first, it->second);
++            ++it;
++        }
++        std::lock_guard<std::mutex> lock(s_raceScaleMutex);
++        for (auto const& w : want)
++        {
++            Player* player = ObjectAccessor::FindPlayer(ObjectGuid(w.first));
++            if (!player || !player->IsInWorld())
++                continue;
++            auto base = s_raceScaleBase.emplace(w.first, player->GetObjectScale()).first;
++            float const target = base->second * w.second;
++            if (std::fabs(player->GetObjectScale() - target) > 0.001f)
++                player->SetObjectScale(target);
++        }
++        for (auto it = s_raceScaleBase.begin(); it != s_raceScaleBase.end();)
++        {
++            if (want.count(it->first))
++            {
++                ++it;
++                continue;
++            }
++            if (Player* player = ObjectAccessor::FindPlayer(ObjectGuid(it->first)))
++                player->SetObjectScale(it->second);
++            it = s_raceScaleBase.erase(it);
++        }
++    }
++
 +    void Update(uint32 /*diff*/)
 +    {
 +        uint32 const now = WorldTimer::getMSTime();
@@ -5876,6 +5960,11 @@ index 0000000..09aeeeb
 +            std::lock_guard<std::mutex> races(s_mutex);
 +            SampleReplays(now);
 +            FinishTakes();
++            if (!s_scaleTicked || WorldTimer::getMSTimeDiff(s_scaleTicked, now) >= SCALE_TICK)
++            {
++                s_scaleTicked = now;
++                TickRaceScales();
++            }
 +            // Today's and this week's courses chosen as the period turns, nobody racing or not,
 +            // so the website shows them from the first minute.
 +            ChallengesNow();
@@ -6321,6 +6410,20 @@ index 0000000..09aeeeb
 +            if (Course const* course = FindCourse(f[2]))
 +                ToMarshal(player, *course, now);
 +        }
++        else if (verb == "Sz" && f.size() > 2)
++        {
++            // "R\tSz\t<scale>": a track editor test lap's scale, the client's alone to run: the
++            // body sized as a race on it would size it (TickRaceScales), 1 to give it back.
++            float scale = 1.f;
++            if (ParseFloat(f[2], scale))
++            {
++                scale = std::max(MIN_RACE_SCALE, std::min(MAX_RACE_SCALE, scale));
++                if (scale == 1.f)
++                    s_testLapScale.erase(guid.GetRawValue());
++                else
++                    s_testLapScale[guid.GetRawValue()] = scale;
++            }
++        }
 +        else if (verb == "TG" && f.size() > 4)
 +        {
 +            // An optional fifth field: the grid's height, the floor to land on in a dungeon.
@@ -6535,11 +6638,12 @@ index 0000000..09aeeeb
 +    // on them. "R\tPub\t<name>\t<map>\t<laps>\t<zone>\t<grid>\t<points>[\t<z>]" publishes one
 +    // (grid "x,y,o" or empty; points "x,y[,o[,w]];...", the start first, a turned gate's facing and
 +    // a gate's half-width; `z` its floor height; then optionally its objects,
-+    // "key,x,y,z,yaw,pitch,roll;..." the track editor's placed models), in the open world or a
-+    // dungeon, our own of that name replaced: "R\tPubOk\t<id>\t<name>" or "R\tPubNo\t<why>". "R\tPubL"
-+    // lists them, newest first: "R\tPTB", a "R\tPT\t<id>\t<name>\t<author>\t<map>\t<laps>\t<zone>\t<grid>
-+    // \t<points>\t<good>\t<bad>\t<z>\t<objects>" each (its votes, its height or empty, its objects or
-+    // empty), then "R\tPTE"; a race on one sends its line so, the votes empty. "R\tPubD\t<id>" takes one of ours down (a GM's, anyone's): "R\tPubGone\t<id>";
++    // "key,x,y,z,yaw,pitch,roll;..." the track editor's placed models, and its scale, 0.2 to 3), in
++    // the open world or a dungeon, our own of that name replaced: "R\tPubOk\t<id>\t<name>" or
++    // "R\tPubNo\t<why>". "R\tPubL" lists them, newest first: "R\tPTB", a "R\tPT\t<id>\t<name>\t<author>
++    // \t<map>\t<laps>\t<zone>\t<grid>\t<points>\t<good>\t<bad>\t<z>\t<objects>\t<scale>" each (its
++    // votes, its height, objects and scale or empty), then "R\tPTE"; a race on one sends its line
++    // so, the votes empty. "R\tPubD\t<id>" takes one of ours down (a GM's, anyone's): "R\tPubGone\t<id>";
 +    // "R\tPubDN\t<name>" ours of that name, if any.
 +    constexpr size_t USER_TRACKS_MAX = 2000;    // on the server
 +    constexpr size_t USER_TRACKS_EACH = 20;     // by one character
@@ -6574,8 +6678,11 @@ index 0000000..09aeeeb
 +        // Its placed objects (the track editor's models), added to a table made before them.
 +        CharacterDatabase.DirectExecute("ALTER TABLE `kartcraft_user_tracks` ADD COLUMN IF NOT EXISTS "
 +            "`objects` TEXT NOT NULL DEFAULT '' COMMENT 'key,x,y,z,yaw,pitch,roll;... or empty'");
++        // Its scale (Course::scale), added to a table made before it.
++        CharacterDatabase.DirectExecute("ALTER TABLE `kartcraft_user_tracks` ADD COLUMN IF NOT EXISTS "
++            "`scale` FLOAT NOT NULL DEFAULT 1 COMMENT 'the karts'' and racers'' size, 1 their own'");
 +        std::unique_ptr<QueryResult> result = CharacterDatabase.Query(
-+            "SELECT `id`, `guid`, `author`, `name`, `map`, `laps`, `zone`, `grid`, `points`, `z`, `objects` "
++            "SELECT `id`, `guid`, `author`, `name`, `map`, `laps`, `zone`, `grid`, `points`, `z`, `objects`, `scale` "
 +            "FROM `kartcraft_user_tracks` ORDER BY `at`, `id`");
 +        if (!result)
 +            return;
@@ -6594,6 +6701,7 @@ index 0000000..09aeeeb
 +            t.points = f[8].GetCppString();
 +            t.z = f[9].GetFloat();
 +            t.objects = f[10].GetCppString();
++            t.scale = f[11].GetFloat();
 +            s_userTrackNext = std::max(s_userTrackNext, t.id + 1);
 +            MakeUserCourse(t);
 +            s_userTracks.push_back(t);
@@ -6743,6 +6851,10 @@ index 0000000..09aeeeb
 +        size_t objects = 0;
 +        if (f.size() > 9 && (!CleanTrackObjects(f[9], t.objects, objects) || objects > USER_TRACK_OBJECTS))
 +            return no("The track's objects are not right: at most 40 of them.");
++        // Its scale, an optional eleventh field: the karts' and racers' size on it.
++        if (f.size() > 10 && !f[10].empty() &&
++            (!ParseFloat(f[10], t.scale) || t.scale < MIN_RACE_SCALE || t.scale > MAX_RACE_SCALE))
++            return no("The track's scale is not right: 0.2 to 3.");
 +        auto same = std::find_if(s_userTracks.begin(), s_userTracks.end(),
 +            [&t](UserTrack const& u) { return u.guid == t.guid && u.name == t.name; });
 +        if (same != s_userTracks.end())
@@ -6768,10 +6880,10 @@ index 0000000..09aeeeb
 +        CharacterDatabase.escape_string(name);
 +        CharacterDatabase.escape_string(zone);
 +        CharacterDatabase.PExecute("REPLACE INTO `kartcraft_user_tracks` (`id`, `guid`, `author`, `name`, "
-+            "`map`, `laps`, `zone`, `grid`, `points`, `z`, `objects`, `at`) VALUES (%u, %u, '%s', '%s', %u, %u, "
-+            "'%s', '%s', '%s', %.1f, '%s', %u)",
++            "`map`, `laps`, `zone`, `grid`, `points`, `z`, `objects`, `scale`, `at`) VALUES (%u, %u, '%s', '%s', "
++            "%u, %u, '%s', '%s', '%s', %.1f, '%s', %.2f, %u)",
 +            t.id, t.guid, author.c_str(), name.c_str(), t.map, t.laps, zone.c_str(), t.grid.c_str(),
-+            t.points.c_str(), t.z, t.objects.c_str(), uint32(std::time(nullptr)));
++            t.points.c_str(), t.z, t.objects.c_str(), t.scale, uint32(std::time(nullptr)));
 +        SendLine(player, "KARTCRAFT\tR\tPubOk\t" + std::to_string(t.id) + "\t" + t.name);
 +        ListUserTracks(player, now, true);
 +    }
@@ -6808,7 +6920,8 @@ index 0000000..09aeeeb
 +            char z[16];
 +            std::snprintf(z, sizeof(z), "%.1f", t->z);
 +            SendLine(player, UserTrackLine(*t) + "\t" + std::to_string(vote.first) + "\t" +
-+                std::to_string(vote.second) + "\t" + (t->z != 0.f ? z : "") + "\t" + t->objects);
++                std::to_string(vote.second) + "\t" + (t->z != 0.f ? z : "") + "\t" + t->objects + "\t" +
++                ScaleField(t->scale));
 +        }
 +        SendLine(player, "KARTCRAFT\tR\tPTE");
 +    }

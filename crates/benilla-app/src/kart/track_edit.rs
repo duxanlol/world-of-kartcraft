@@ -183,6 +183,8 @@ pub(crate) struct TrackEdit {
     grid: Option<Grid>,
     /// 0 a sprint, else the laps.
     laps: u8,
+    /// The karts' and racers' size on the track, 1 their own (`docs/courses.md`, `scale`).
+    scale: f32,
     /// The map the draft is on, from where the editor opened.
     map: u32,
     /// The tool picked; [`TrackEdit::tool`] is the one a click uses.
@@ -240,6 +242,7 @@ impl Default for TrackEdit {
             turn: None,
             grid: None,
             laps: 3,
+            scale: 1.0,
             map: 0,
             tool: Place::Move,
             held: None,
@@ -274,6 +277,8 @@ pub(crate) struct EditView {
     pub(crate) gates: usize,
     pub(crate) grid: bool,
     pub(crate) laps: u8,
+    /// The karts' size on the track.
+    pub(crate) scale: f32,
     pub(crate) notes: u32,
     /// What a click does: `move`, `number` (picks a checkpoint), or places a `checkpoint` (the
     /// start when there is none) or the `grid`.
@@ -320,6 +325,7 @@ impl TrackEdit {
             gates: self.points.len(),
             grid: self.grid.is_some(),
             laps: self.laps,
+            scale: self.scale,
             notes: self.notes,
             tool: match self.tool {
                 Place::Move => "move",
@@ -566,6 +572,7 @@ impl TrackEdit {
 
     /// A new draft: no gates, no grid.
     fn clear(&mut self) {
+        self.scale = 1.0;
         self.points.clear();
         self.facings.clear();
         self.heights.clear();
@@ -681,11 +688,13 @@ impl TrackEdit {
             (c.route(), c.facings(), c.gates(), s.grid, c.laps);
         let objects = s.objects.clone();
         let heights = c.heights();
+        let scale = c.scale();
         let name = c.name.clone();
         self.clear();
         (self.points, self.facings, self.widths) = (points, facings, widths);
         self.heights = heights;
         (self.grid, self.laps) = (grid, laps);
+        self.scale = scale;
         self.objects = objects;
         self.named = Some(name.clone());
         Ok(name)
@@ -782,6 +791,9 @@ impl TrackEdit {
         }
         if !self.objects.is_empty() {
             course["objects"] = serde_json::to_value(&self.objects).map_err(|e| e.to_string())?;
+        }
+        if self.scale != 1.0 {
+            course["scale"] = serde_json::json!((f64::from(self.scale) * 100.0).round() / 100.0);
         }
         let json = serde_json::to_string_pretty(&course).map_err(|e| e.to_string())?;
         Ok((key, json + "\n"))
@@ -1080,6 +1092,11 @@ pub(crate) fn on_cmd(
             }
         }
         ["laps", n, ..] if editing => edit.laps = n.parse().unwrap_or(0).min(9),
+        // The karts' size on the track (the bar's Size), within the race scale's bounds.
+        ["scale", n, ..] if editing => {
+            let n: f32 = n.parse().unwrap_or(1.0);
+            edit.scale = n.clamp(kartcraft::MIN_RACE_SCALE, kartcraft::MAX_RACE_SCALE);
+        }
         ["practice", name, ..] if editing => match edit.unready() {
             Some(why) => edit.fail(why),
             None => {
@@ -1091,7 +1108,8 @@ pub(crate) fn on_cmd(
                 let race = race
                     .with_floor(floor(edit.grid, &edit.heights))
                     .with_heights(edit.heights.clone())
-                    .with_objects(edit.objects.clone());
+                    .with_objects(edit.objects.clone())
+                    .with_scale(edit.scale);
                 races.race = Some(race.with_gates(edit.widths.clone()));
                 free.set(FreeMode::Off);
             }
@@ -1122,6 +1140,7 @@ pub(crate) fn on_cmd(
                     .with_floor(s.floor())
                     .with_heights(c.heights())
                     .with_objects(s.objects.clone())
+                    .with_scale(c.scale())
             });
             if let Some(why) = why {
                 edit.fail(why);
@@ -1141,6 +1160,7 @@ pub(crate) fn on_cmd(
             let objects = rest
                 .get(1)
                 .map_or_else(Vec::new, |o| super::objects::parse_wire(o));
+            let scale = rest.get(2).and_then(|v| v.trim().parse::<f32>().ok());
             let route = parse_spots(gates).filter(|(p, ..)| p.len() >= 2);
             let grid =
                 parse_spots(grid).and_then(|(p, o, _)| Some([p.first()?[0], p[0][1], o[0]?]));
@@ -1164,7 +1184,8 @@ pub(crate) fn on_cmd(
             let grid = grid.or_else(|| grid_spot(None, &points));
             let race = Active::practice(&clean(name), laps, points, grid, &races.me);
             let race = race.with_facings(facings).with_floor(floor);
-            races.race = Some(race.with_gates(widths).with_objects(objects));
+            let race = race.with_gates(widths).with_objects(objects);
+            races.race = Some(race.with_scale(scale.unwrap_or(1.0)));
             free.set(FreeMode::Off);
         }
         ["restart", ..] => {

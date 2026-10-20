@@ -70,12 +70,23 @@ mod icon {
     pub(super) const OK: &str = "Interface\\Buttons\\UI-CheckBox-Check";
     pub(super) const OBJECTS: &str = "Interface\\Icons\\INV_Box_01";
 
+    pub(super) const SIZE: &str = "Interface\\Icons\\INV_Misc_Spyglass_02";
+
     #[cfg(test)]
-    pub(super) const ALL: [&str; 16] = [
+    pub(super) const ALL: [&str; 17] = [
         EXIT, SAVE, TEST, MOVE, UNDO, REDO, PLACE, NUMBER, GRID, ERASE, SPRINT, LAPS, BACK,
-        RESTART, OK, OBJECTS,
+        RESTART, OK, OBJECTS, SIZE,
     ];
 }
+
+/// The Race type bar's sizes: the karts' scale on the track, its own then smaller, each with
+/// its name (the hover's) and its command.
+const SIZES: [(f32, &str, &[&str]); 4] = [
+    (1.0, "Size x1", &["scale", "1"]),
+    (0.75, "Size x0.75", &["scale", "0.75"]),
+    (0.5, "Size x0.5", &["scale", "0.5"]),
+    (0.35, "Size x0.35", &["scale", "0.35"]),
+];
 
 /// The keys card's text, from the bindings as they are when the editor opens
 /// ([`crate::ui_kart`], which holds the VM).
@@ -896,6 +907,32 @@ fn spawn(
                             });
                         }
                     });
+                    // The karts' size on the track: a small one makes the world drive bigger.
+                    row(b, s, Node::default(), |r| {
+                        for (scale, name, words) in SIZES {
+                            let lit = (view.scale - scale).abs() < 0.005;
+                            let b = icon_button(
+                                r,
+                                icons,
+                                font,
+                                s,
+                                icon::SIZE,
+                                name,
+                                Act::Cmd(words),
+                                lit,
+                            );
+                            r.commands().entity(b).with_children(|b| {
+                                let corner = Node {
+                                    position_type: PositionType::Absolute,
+                                    right: px(2.0),
+                                    bottom: px(1.0),
+                                    ..default()
+                                };
+                                let short = name.trim_start_matches("Size ");
+                                label(b, font, short, SMALL, Color::WHITE, corner, s);
+                            });
+                        }
+                    });
                 });
             });
             if let Some(objects) = &built.objects {
@@ -1393,6 +1430,7 @@ mod tests {
             gates: 3,
             grid: false,
             laps: 3,
+            scale: 1.0,
             notes: 0,
             tool,
             picked,
@@ -1473,7 +1511,14 @@ mod tests {
             t.fields.is_empty(),
             "no number box without a pick, the name in the popup"
         );
-        assert_eq!(lit(&t), [Act::Cmd(&["place"]), Act::Cmd(&["laps", "3"])]);
+        assert_eq!(
+            lit(&t),
+            [
+                Act::Cmd(&["place"]),
+                Act::Cmd(&["laps", "3"]),
+                Act::Cmd(&["scale", "1"])
+            ]
+        );
         for act in [
             Act::Cmd(&["close"]),
             Act::Practice,
@@ -1495,6 +1540,10 @@ mod tests {
             "Sprint",
             "1 lap",
             "3 laps",
+            "Size x1",
+            "Size x0.75",
+            "Size x0.5",
+            "Size x0.35",
         ];
         let mut tips = t.tips.clone();
         tips.sort();
@@ -1587,7 +1636,14 @@ mod tests {
     fn a_pick_shows_the_number_box() {
         let t = build(view("edit", "number", 2));
         assert_eq!(t.fields, [Field::Number]);
-        assert_eq!(lit(&t), [Act::Cmd(&["number"]), Act::Cmd(&["laps", "3"])]);
+        assert_eq!(
+            lit(&t),
+            [
+                Act::Cmd(&["number"]),
+                Act::Cmd(&["laps", "3"]),
+                Act::Cmd(&["scale", "1"])
+            ]
+        );
     }
 
     #[test]
