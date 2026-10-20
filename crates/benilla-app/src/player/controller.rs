@@ -5,6 +5,10 @@
 
 use super::*;
 
+/// The right stick's camera turn at full lean, radians a second.
+const STICK_YAW_RATE: f32 = 3.0;
+const STICK_PITCH_RATE: f32 = 1.8;
+
 /// Free-flies until the server places us, then drives the avatar and streams its movement as the
 /// mover; the dev chord with `F` toggles free fly.
 #[allow(clippy::type_complexity)]
@@ -252,6 +256,23 @@ pub(super) fn control(
         time.elapsed_secs(),
         focused,
     );
+    // The right stick turns the camera as a mouse drag does, and while the left stick walks us
+    // the facing follows it, as right-mouse held does (`BindingsState::stick_moving`).
+    let look = binds.look_stick() * dt;
+    if look != Vec2::ZERO {
+        cam.yaw -= look.x * STICK_YAW_RATE;
+        let up = if look_cfg.invert_pitch {
+            -look.y
+        } else {
+            look.y
+        };
+        cam.pitch = (cam.pitch + up * STICK_PITCH_RATE)
+            .clamp(-camera::CAM_PITCH_LIMIT, camera::CAM_PITCH_LIMIT);
+    }
+    if binds.stick_moving() {
+        player.face_yaw = cam.yaw;
+        rig.freelook = true;
+    }
     // The mouse turns the view, but the body hand-off (`0x514474`) skips a body that is stunned,
     // dead or seated (`0x5145e0`) or not ours to drive (`control_lost`, `reseat`), while the
     // camera rotate (`0x514444`) still runs. The reference never writes the facing; writing and

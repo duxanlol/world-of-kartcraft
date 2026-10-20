@@ -272,6 +272,12 @@ pub(crate) struct BindingsState {
     /// pass, so a window deactivate empties it and a key held across an alt-tab resumes, as in
     /// the reference. Keyboard only: mouse edges cannot repeat.
     down: Vec<KeyCode>,
+    /// The left stick's directions, held as their keys are, and those it took this frame
+    /// ([`read_sticks`]).
+    stick: Vec<Input>,
+    stick_just: Vec<Input>,
+    /// The right stick, turning the camera: x right, y up, each -1 to 1.
+    look_stick: Vec2,
 }
 
 /// The physical input a latch waits on: a keyboard key by its code, not its name, so its release
@@ -287,11 +293,19 @@ enum Held {
 impl BindingsState {
     /// Is a held bit set right now (the reference's `[InputControl+4]`)?
     pub(crate) fn pressed(&self, i: Input) -> bool {
-        self.held.contains(&i)
+        self.held.contains(&i) || self.stick.contains(&i)
     }
     /// Did this bit's Start, or this one-shot, come this frame (the key-down edge)?
     pub(crate) fn just_pressed(&self, i: Input) -> bool {
-        self.just.contains(&i)
+        self.just.contains(&i) || self.stick_just.contains(&i)
+    }
+    /// The left stick is walking us: the facing follows the camera, as with right-mouse held.
+    pub(crate) fn stick_moving(&self) -> bool {
+        !self.stick.is_empty()
+    }
+    /// The right stick, for the camera to turn by.
+    pub(crate) fn look_stick(&self) -> Vec2 {
+        self.look_stick
     }
     /// Did this one-shot fire this frame?
     pub(crate) fn fired(&self, i: Input) -> bool {
@@ -356,7 +370,7 @@ impl Plugin for BindingsPlugin {
                     // The key sets are seeded at the VM's birth, not here: `seed_bindings_for_vm`
                     // runs in `load_ingame_ui_on_world_entry`, before FrameXML and every addon;
                     // the commands come with the load.
-                    (sync_dispatch, latch_and_dispatch, poll_overlay)
+                    (sync_dispatch, latch_and_dispatch, poll_overlay, read_sticks)
                         .chain()
                         .in_set(crate::ui_script::UiInput)
                         .in_set(BindingSet)
@@ -367,6 +381,70 @@ impl Plugin for BindingsPlugin {
                 ),
             );
     }
+}
+
+/// A stick under this is at rest: a worn one drifts a little off centre.
+const STICK_DEAD: f32 = 0.3;
+
+/// The sticks on foot: the left presses the move bits as WASD does (1.12 moves at one speed, so
+/// any lean past the dead zone is the whole key, eight ways), the right turns the camera. Not
+/// while the kart drives (the overlay's, which reads the sticks itself), a menu holds the pad, an
+/// EditBox types or the loading cover is up.
+fn read_sticks(
+    gamepads: Query<&bevy::input::gamepad::Gamepad, Without<kartcraft::input::PadIgnored>>,
+    (overlay, capture): (Res<BindingOverlay>, Res<UiKeyboardCapture>),
+    cover: Option<Res<crate::loading_screen::LoadingScreen>>,
+    mut state: ResMut<BindingsState>,
+) {
+    use bevy::input::gamepad::GamepadAxis;
+    let free = !overlay.active
+        && !capture.pad_all
+        && !capture.typing
+        && !cover.is_some_and(|c| c.covering());
+    // The furthest-leaning pad's stick, so a resting second pad never hides the first's.
+    let stick = |x, y| {
+        gamepads
+            .iter()
+            .map(|p| Vec2::new(p.get(x).unwrap_or(0.0), p.get(y).unwrap_or(0.0)))
+            .map(|v| v.clamp(Vec2::splat(-1.0), Vec2::ONE))
+            .max_by(|a, b| a.length_squared().total_cmp(&b.length_squared()))
+            .filter(|v| free && v.length() > STICK_DEAD)
+            .unwrap_or(Vec2::ZERO)
+    };
+    let walk = stick(GamepadAxis::LeftStickX, GamepadAxis::LeftStickY);
+    state.look_stick = stick(GamepadAxis::RightStickX, GamepadAxis::RightStickY);
+    let now = stick_directions(walk);
+    state.stick_just = now
+        .iter()
+        .filter(|i| !state.stick.contains(i))
+        .copied()
+        .collect();
+    state.stick = now;
+}
+
+/// The move bits a left stick leaning `at` holds: each axis past half the lean of the other, so
+/// a diagonal holds two and a lean mostly one way holds one.
+fn stick_directions(at: Vec2) -> Vec<Input> {
+    let lean = at.abs();
+    let mut out = Vec::new();
+    if at == Vec2::ZERO {
+        return out;
+    }
+    if lean.y >= lean.x * 0.5 {
+        out.push(if at.y > 0.0 {
+            Input::MoveForward
+        } else {
+            Input::MoveBackward
+        });
+    }
+    if lean.x >= lean.y * 0.5 {
+        out.push(if at.x > 0.0 {
+            Input::StrafeRight
+        } else {
+            Input::StrafeLeft
+        });
+    }
+    out
 }
 
 /// Seed the key sets at the VM's birth, before any interface file runs: the defaults off the
@@ -1154,6 +1232,72 @@ mod tests {
     </Bindings>"#;
 
     /// [`harness`] with the plane seeded as `seed_bindings_for_vm` seeds it.
+    /// The left stick holds the move bits as WASD would, eight ways, its first frame an edge; the
+    /// right stick is the camera's. While the kart drives they are its, and nothing is held.
+    #[test]
+    fn the_sticks_walk_and_look_on_foot_and_leave_the_kart_its_own() {
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::input::gamepad::{Gamepad, GamepadAxis};
+        let mut world = World::new();
+        world.init_resource::<BindingsState>();
+        world.init_resource::<BindingOverlay>();
+        world.init_resource::<UiKeyboardCapture>();
+        let pad = world.spawn(Gamepad::default()).id();
+        let lean = |world: &mut World, axes: [f32; 4]| {
+            let mut p = world.get_mut::<Gamepad>(pad).unwrap();
+            for (a, v) in [
+                GamepadAxis::LeftStickX,
+                GamepadAxis::LeftStickY,
+                GamepadAxis::RightStickX,
+                GamepadAxis::RightStickY,
+            ]
+            .into_iter()
+            .zip(axes)
+            {
+                p.analog_mut().set(a, v);
+            }
+            world.run_system_once(read_sticks).unwrap();
+        };
+        let state = |world: &World| {
+            let s = world.resource::<BindingsState>();
+            [
+                Input::MoveForward,
+                Input::MoveBackward,
+                Input::StrafeLeft,
+                Input::StrafeRight,
+            ]
+            .map(|i| s.pressed(i))
+        };
+        lean(&mut world, [0.1, 0.9, 0.0, 0.0]);
+        assert_eq!(state(&world), [true, false, false, false], "forward");
+        assert!(world
+            .resource::<BindingsState>()
+            .just_pressed(Input::MoveForward));
+        assert!(world.resource::<BindingsState>().stick_moving());
+        lean(&mut world, [0.7, 0.7, 0.0, 0.0]);
+        assert_eq!(
+            state(&world),
+            [true, false, false, true],
+            "forward and right"
+        );
+        let s = world.resource::<BindingsState>();
+        assert!(!s.just_pressed(Input::MoveForward) && s.just_pressed(Input::StrafeRight));
+        lean(&mut world, [-0.8, -0.2, 0.0, 0.0]);
+        assert_eq!(state(&world), [false, false, true, false], "mostly left");
+        lean(&mut world, [0.1, -0.2, 0.0, 0.0]);
+        assert_eq!(state(&world), [false; 4], "a drifting stick rests");
+        assert!(!world.resource::<BindingsState>().stick_moving());
+        lean(&mut world, [0.0, 0.0, 1.0, -0.5]);
+        assert_eq!(
+            world.resource::<BindingsState>().look_stick(),
+            Vec2::new(1.0, -0.5)
+        );
+        world.resource_mut::<BindingOverlay>().active = true;
+        lean(&mut world, [0.0, 1.0, 1.0, 0.0]);
+        assert_eq!(state(&world), [false; 4], "the kart's stick");
+        assert_eq!(world.resource::<BindingsState>().look_stick(), Vec2::ZERO);
+    }
+
     fn plane_harness() -> App {
         let overlay = BindingOverlay::new(PLANE, PLANE_KEYS);
         let mut script = UiScript::new().expect("VM");

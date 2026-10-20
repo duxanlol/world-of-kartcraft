@@ -164,7 +164,8 @@ pub(super) fn move_axes(
     // The 1.12 control model (`0x7c5360`): A/D turn the character unless right-mouse is held,
     // when they strafe and the facing tracks the camera; Q/E always strafe. W walks along the
     // character's facing, so a left-drag orbit does not change it.
-    let mouselook = both_buttons || rig.look == Some(LookButton::Right);
+    // The left stick walks as right-mouse looks: it strafes, the facing on the camera's.
+    let mouselook = both_buttons || rig.look == Some(LookButton::Right) || binds.stick_moving();
     // The strafe axis nets like `fwd_axis`: vmangos relays no packet carrying both strafe bits,
     // and the reference's 1.12.1 capture sends none.
     let strafe_left = binds.pressed(crate::bindings::Input::StrafeLeft);
