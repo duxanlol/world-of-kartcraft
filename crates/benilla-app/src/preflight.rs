@@ -6,9 +6,7 @@
 //! 2. GM mode on: vmangos's `Player::SetGameMaster` re-templates the player to faction template 35
 //!    (FactionTemplate.dbc: faction 31, group and enemy masks 0) and freezes the mirror timers, so
 //!    nothing is hostile, nothing aggros, environmental damage is skipped and breath never ticks.
-//!    It also keeps outdoor-only auras on indoors (`Player.cpp:6284` is `!IsGameMaster()`-gated),
-//!    so a GM stays mounted inside. It is on by default for a probe body; [`crate::probe_shield`]
-//!    makes dropping it safe.
+//!    It is on by default for a probe body; [`crate::probe_shield`] makes dropping it safe.
 //! 3. Movement server-blocked: rooted, stunned, confused, fleeing or on a taxi.
 //! 4. No server at all ([`offline_notice`]): a capture run spawns no IO thread, so nothing on the
 //!    packet path executes and a clean exit proves nothing about it. This fires at startup, since
@@ -319,9 +317,7 @@ fn findings(
              (\"Friendly\", enemy mask 0) and freezes the mirror timers, so NOTHING is hostile, \
              nothing aggros, fall/environmental damage is skipped and breath/fatigue never tick. \
              Any hostility, reaction-colour, nameplate, threat, aggro, damage or drowning reading \
-             taken now is wrong. It ALSO suspends the INDOOR DISMOUNT: \
-             `CheckAreaExploreAndOutdoor` drops outdoor-only auras only `if (… && \
-             !IsGameMaster())`, so a GM rides into a building and stays mounted. {}",
+             taken now is wrong. {}",
             match shield {
                 // The default on a probe body, so this warning shows on most runs.
                 ShieldReport::Arming | ShieldReport::Armed =>
@@ -502,18 +498,6 @@ mod tests {
             line.contains(".gm off") && !line.contains("WOW_GM=off"),
             "{line}"
         );
-    }
-
-    #[test]
-    fn the_gm_warning_names_the_indoor_dismount() {
-        // The server's outdoor-only aura sweep skips a GM, so a GM stays mounted indoors.
-        let gm = player(&[
-            (HEALTH, 60),
-            (MAXHEALTH, 60),
-            (PLAYER_FLAGS, PLAYER_FLAGS_GM),
-        ]);
-        let line = findings(&gm, ShieldReport::Armed).remove(0);
-        assert!(line.contains("INDOOR DISMOUNT"), "{line}");
     }
 
     #[test]

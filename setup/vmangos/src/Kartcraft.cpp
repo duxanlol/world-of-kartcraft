@@ -217,6 +217,13 @@ namespace Kartcraft
         }
         else
             sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "Kartcraft: no mechanostrider mount found; other players will not see karts.");
+        // A mount goes anywhere, indoors too: no mount is outdoors-only, so neither Spell::CheckCast
+        // nor the indoor sweep (Player::CheckAreaExploreAndOutdoor) refuses or drops one. The
+        // map, ship and Booty Bay refusals are gone from Spell::CheckCast (kartcraft.patch).
+        for (uint32 id = 1; id < sSpellMgr.GetMaxSpellId(); ++id)
+            if (SpellEntry const* spell = sSpellMgr.GetSpellEntry(id))
+                if (spell->HasAura(SPELL_AURA_MOUNTED))
+                    const_cast<SpellEntry*>(spell)->Attributes &= ~SPELL_ATTR_ONLY_OUTDOORS;
         // The abilities are used from the kart, which is a mount: casting must not dismount.
         for (SpellEntry* ability : {
                  AddSpell(SPELL_WUMPA_JUICE, "Wumpa Juice", ICON_BOOTS, 1, 2, 2 * MINUTE * IN_MILLISECONDS, true),
@@ -7776,8 +7783,7 @@ namespace Kartcraft
                 return;
             }
             // Hosting, joining or a time trial on foot: into the kart first, as a Race Finder pop
-            // does; in a dungeon too, where only a triggered cast mounts (Spell::CheckCast's
-            // MapEntry::IsMountAllowed), and a marshal there has only party courses.
+            // does; in a dungeon too, where a marshal has only party courses.
             bool const enters = line.compare(0, 4, "R\tH\t") == 0 || line.compare(0, 4, "R\tJ\t") == 0 ||
                 line.compare(0, 4, "R\tT\t") == 0;
             if (enters && (CanBeRacedOff(p) || (p->GetMap()->IsDungeon() && Settled(p))))

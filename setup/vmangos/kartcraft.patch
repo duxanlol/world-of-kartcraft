@@ -80,12 +80,27 @@ index 47f576d..2004e85 100644
      if (!IsLanguageAllowedForChatType(packet.lang, packet.type))
      {
          sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "CHAT: Wrong language %u received for chat type %u.", packet.lang, packet.type);
+diff --git a/src/game/Handlers/MovementHandler.cpp b/src/game/Handlers/MovementHandler.cpp
+index 69cb8c9..7729a6b 100644
+--- a/src/game/Handlers/MovementHandler.cpp
++++ b/src/game/Handlers/MovementHandler.cpp
+@@ -186,9 +186,7 @@ void WorldSession::HandleMoveWorldportAck()
+ 
+     GetPlayer()->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_ENTER_WORLD_CANCELS);
+ 
+-    // mount allow check
+-    if (!mEntry->IsMountAllowed())
+-        _player->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
++    // Kartcraft: no mount allow check, a mount goes into any map.
+ 
+     // honorless target
+     if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..fbb8d8b
+index 0000000..eb7ecc0
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,7871 @@
+@@ -0,0 +1,7877 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -305,6 +320,13 @@ index 0000000..fbb8d8b
 +        }
 +        else
 +            sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "Kartcraft: no mechanostrider mount found; other players will not see karts.");
++        // A mount goes anywhere, indoors too: no mount is outdoors-only, so neither Spell::CheckCast
++        // nor the indoor sweep (Player::CheckAreaExploreAndOutdoor) refuses or drops one. The
++        // map, ship and Booty Bay refusals are gone from Spell::CheckCast (kartcraft.patch).
++        for (uint32 id = 1; id < sSpellMgr.GetMaxSpellId(); ++id)
++            if (SpellEntry const* spell = sSpellMgr.GetSpellEntry(id))
++                if (spell->HasAura(SPELL_AURA_MOUNTED))
++                    const_cast<SpellEntry*>(spell)->Attributes &= ~SPELL_ATTR_ONLY_OUTDOORS;
 +        // The abilities are used from the kart, which is a mount: casting must not dismount.
 +        for (SpellEntry* ability : {
 +                 AddSpell(SPELL_WUMPA_JUICE, "Wumpa Juice", ICON_BOOTS, 1, 2, 2 * MINUTE * IN_MILLISECONDS, true),
@@ -7864,8 +7886,7 @@ index 0000000..fbb8d8b
 +                return;
 +            }
 +            // Hosting, joining or a time trial on foot: into the kart first, as a Race Finder pop
-+            // does; in a dungeon too, where only a triggered cast mounts (Spell::CheckCast's
-+            // MapEntry::IsMountAllowed), and a marshal there has only party courses.
++            // does; in a dungeon too, where a marshal has only party courses.
 +            bool const enters = line.compare(0, 4, "R\tH\t") == 0 || line.compare(0, 4, "R\tJ\t") == 0 ||
 +                line.compare(0, 4, "R\tT\t") == 0;
 +            if (enters && (CanBeRacedOff(p) || (p->GetMap()->IsDungeon() && Settled(p))))
@@ -11143,7 +11164,7 @@ index c45726e..24a04e2 100644
      if (IsInSameRaidWith(pl))
          return true;
 diff --git a/src/game/Spells/Spell.cpp b/src/game/Spells/Spell.cpp
-index eaaaaf1..abd1b5d 100644
+index eaaaaf1..9219d68 100644
 --- a/src/game/Spells/Spell.cpp
 +++ b/src/game/Spells/Spell.cpp
 @@ -20,6 +20,7 @@
@@ -11168,6 +11189,25 @@ index eaaaaf1..abd1b5d 100644
      if (m_caster->IsPlayer() && m_caster->ToPlayer()->HasCheatOption(PLAYER_CHEAT_NO_CHECK_CAST))
          return SPELL_CAST_OK;
  
+@@ -6375,16 +6383,8 @@ SpellCastResult Spell::CheckCast(bool strict)
+                 if (!m_casterUnit)
+                     return SPELL_FAILED_BAD_TARGETS;
+ 
+-                if (m_casterUnit->IsPlayer() && m_casterUnit->GetTransport() && !static_cast<Player*>(m_casterUnit)->IsOutdoorOnTransport())
+-                    return SPELL_FAILED_NO_MOUNTS_ALLOWED;
+-
+-                // Ignore map check if spell have AreaId. AreaId already checked and this prevent special mount spells
+-                if (!sSpellMgr.GetRequiredAreaForSpell(m_spellInfo->Id) && m_casterUnit->IsPlayer() &&
+-                    !sMapStorage.LookupEntry<MapEntry>(m_casterUnit->GetMapId())->IsMountAllowed() && !m_IsTriggeredSpell)
+-                    return SPELL_FAILED_NO_MOUNTS_ALLOWED;
+-
+-                if (m_casterUnit->GetAreaId() == 35)
+-                    return SPELL_FAILED_NO_MOUNTS_ALLOWED;
++                // Kartcraft: a mount goes anywhere: below deck, in a dungeon and in Booty Bay too
++                // (and indoors: Kartcraft::LoadSpells clears the mounts' outdoors-only bit).
+ 
+                 if (m_casterUnit->IsInDisallowedMountForm())
+                     return SPELL_FAILED_NOT_SHAPESHIFT;
 diff --git a/src/game/Spells/SpellAuras.cpp b/src/game/Spells/SpellAuras.cpp
 index e4e3005..a4acf3f 100644
 --- a/src/game/Spells/SpellAuras.cpp
