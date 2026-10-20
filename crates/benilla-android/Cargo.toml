@@ -1,0 +1,27 @@
+[package]
+name = "benilla-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The Android launcher: the shared library an APK's NativeActivity loads (`scripts/android-apk.sh`), the `benilla` shim's twin"
+
+[lints]
+workspace = true
+
+[lib]
+# `libbenilla.so`, the name the APK's manifest gives NativeActivity.
+name = "benilla"
+crate-type = ["cdylib"]
+# Nothing to test, and off Android the library is empty.
+test = false
+
+[features]
+default = ["dev"]
+dev = ["benilla-app/dev"]
+
+# Android only: elsewhere the library is empty and links in no time.
+[target.'cfg(target_os = "android")'.dependencies]
+benilla-app = { path = "../benilla-app", default-features = false }
+
+[build-dependencies]
+benilla-buildstamp = { path = "../benilla-buildstamp" }

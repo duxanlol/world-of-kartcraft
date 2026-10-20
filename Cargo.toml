@@ -22,7 +22,18 @@ anyhow = "1.0.102"
 # plugin that takes bevy with its default features brings the audio stack back too.
 bevy = { version = "0.18.1", default-features = false, features = [
     "default_app",
-    "default_platform",
+    # `default_platform` spelled out with Android's NativeActivity for its GameActivity, which
+    # needs Java classes in the package; the APK (`scripts/android-apk.sh`) carries no code.
+    "std",
+    "android-native-activity",
+    "bevy_gilrs",
+    "bevy_winit",
+    "default_font",
+    "multi_threaded",
+    "webgl2",
+    "x11",
+    "wayland",
+    "sysinfo_plugin",
     "2d_bevy_render",
     "3d_bevy_render",
     "ui_api",
@@ -45,6 +56,9 @@ kira = { path = "third_party/kira" }
 # gilrs-core 0.6.7, patched so a controller under Wine/Proton, which lacks
 # RawGameController.NonRoamableId, does not panic (`third_party/gilrs-core/BENILLA.md`).
 gilrs-core = { path = "third_party/gilrs-core" }
+# winit 0.30.13, patched so a mouse on Android is a mouse and not a finger, and a controller's
+# events reach the app instead of turning into touches and keys (`third_party/winit/BENILLA.md`).
+winit = { path = "third_party/winit" }
 
 # Dependencies at opt-level 3 in dev: at opt-level 0, avian/parry collision drops a run to <1 fps.
 [profile.dev.package."*"]

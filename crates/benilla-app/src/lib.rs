@@ -20,6 +20,8 @@
 static ALLOC: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
 pub mod addon_harness;
+#[cfg(target_os = "android")]
+pub mod android;
 mod area;
 mod area_poi;
 mod area_trigger;
@@ -406,6 +408,9 @@ fn launch(build: BuildId, extend: Option<Extension<'_>>) -> AppExit {
         connect: !capturing,
         start: run_mode::start_state(),
     });
+    // Android's controllers (`android.rs`).
+    #[cfg(target_os = "android")]
+    app.add_plugins(android::AndroidPlugin);
 
     // benilla-assets' loaders go into the live `AssetServer`, so they register after `AssetPlugin`.
     benilla_assets::register_asset_loaders(&mut app);
