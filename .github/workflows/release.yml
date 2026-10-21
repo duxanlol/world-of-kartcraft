@@ -143,11 +143,54 @@ jobs:
           dist/upload.sh dist/updates candidate/ "dist/WorldOfKartcraft/Kartcraft Launcher.exe" candidate/KartcraftLauncher.exe
           dist/upload.sh dist/staging/updates staging/ "dist/staging/WorldOfKartcraft/Kartcraft Launcher.exe" staging/KartcraftLauncher.exe
 
-  macos:
+  # The Mac client's game programs, one runner per architecture at once (they took turns in one
+  # job, its slowest): the client, the demo and the disc converter, for the `macos` job below to
+  # join into universal binaries.
+  macos-build:
     if: inputs.only != 'android'
     needs: version
     runs-on: macos-14
-    timeout-minutes: 180
+    timeout-minutes: 150
+    strategy:
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      CARGO_TARGET_DIR: target-dist
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: rustup toolchain install && rustup target add ${{ matrix.target }} && rustc -V
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-macos-${{ matrix.target }}
+          workspaces: ". -> target-dist"
+      - name: Build
+        run: |
+          cargo build --release --target ${{ matrix.target }} -p benilla --no-default-features
+          cargo build --release --target ${{ matrix.target }} -p kart-demo -p ctr-assets
+      - name: Keep the programs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-programs-${{ matrix.target }}
+          path: |
+            target-dist/${{ matrix.target }}/release/benilla
+            target-dist/${{ matrix.target }}/release/kartcraft-demo
+            target-dist/${{ matrix.target }}/release/ctr-extract
+          retention-days: 1
+          if-no-files-found: error
+
+  # The Mac packages from both architectures' programs: dist/macos/package.sh --launcher-only
+  # builds the launcher (it carries each channel's presets) and joins, bundles, signs and zips.
+  macos:
+    if: inputs.only != 'android'
+    needs: [version, macos-build]
+    runs-on: macos-14
+    timeout-minutes: 60
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: 0
@@ -160,15 +203,26 @@ jobs:
         run: rustup toolchain install && rustup target add x86_64-apple-darwin && rustc -V
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: release-macos
+          key: release-macos-launcher
           workspaces: ". -> target-dist"
+      - name: The programs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: macos-programs-*
+          path: macos-programs
+      - name: Into place
+        run: |
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            mkdir -p "target-dist/$t/release"
+            cp "macos-programs/macos-programs-$t/"* "target-dist/$t/release/"
+          done
       - name: Presets
         run: |
           mkdir -p .setup
           printf 'SERVER=%s\nUPDATE_URL=%s\nREGISTER_URL=%s\n' "${{ vars.KARTCRAFT_SERVER }}" "${{ vars.KARTCRAFT_UPDATE_URL }}" "${{ vars.KARTCRAFT_REGISTER_URL }}" > .setup/production.cfg
           printf 'SERVER=%s\nUPDATE_URL=%s\nREGISTER_URL=%s\nCHANNEL=staging\n' "${{ vars.KARTCRAFT_STAGING_SERVER }}" "${{ vars.KARTCRAFT_STAGING_UPDATE_URL }}" "${{ vars.KARTCRAFT_STAGING_REGISTER_URL }}" > .setup/staging.cfg
       - name: Package for staging
-        run: PUBLISH_CFG=.setup/staging.cfg KARTCRAFT_OUT=dist/macos/out/staging dist/macos/package.sh
+        run: PUBLISH_CFG=.setup/staging.cfg KARTCRAFT_OUT=dist/macos/out/staging dist/macos/package.sh --launcher-only
       - name: Package for production
         run: PUBLISH_CFG=.setup/production.cfg dist/macos/package.sh --launcher-only
       - name: Keep the packages
