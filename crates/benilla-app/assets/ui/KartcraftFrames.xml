@@ -2223,7 +2223,7 @@
         -- The server's replays (Kartcraft.cpp "Replays"): our races' ("RL" lines, then "RL-") and
         -- the courses' records ("RR", then "RR-"), each played as KartReplay "s<key>"; ours are
         -- kept 2 days unless pinned ("RPin") or they hold a best or a record.
-        BenillaKartReplays = { tab = "local", ours = {}, records = {}, asked = {} }
+        BenillaKartReplays = { tab = "local", page = 1, ours = {}, records = {}, asked = {} }
 
         function BenillaKartReplays_Clock(ms)
             ms = tonumber(ms) or 0
@@ -2266,7 +2266,7 @@
 
         function BenillaKartReplays_Tab(tab)
             local rp = BenillaKartReplays
-            rp.tab = tab
+            rp.tab, rp.page = tab, 1
             if tab == "server" then
                 BenillaKart_Send("RList")
             elseif tab == "records" then
@@ -2282,8 +2282,25 @@
             BenillaKartReplays_Refresh()
         end
 
+        -- The row a button shows: the list's, past the pages before this one.
+        function BenillaKartReplays_At(i)
+            local list = BenillaKartReplayList
+            return list and list[(BenillaKartReplays.page - 1) * BENILLA_KART_REPLAY_ROWS + i]
+        end
+
+        -- The tab's pages, ten rows a page.
+        function BenillaKartReplays_Pages()
+            return math.max(1, math.ceil(table.getn(BenillaKartReplayList or {}) / BENILLA_KART_REPLAY_ROWS))
+        end
+
+        function BenillaKartReplays_Turn(d)
+            local rp = BenillaKartReplays
+            rp.page = math.max(1, math.min(BenillaKartReplays_Pages(), rp.page + d))
+            BenillaKartReplays_Refresh()
+        end
+
         function BenillaKartReplays_Pin(i)
-            local r = BenillaKartReplayList and BenillaKartReplayList[i]
+            local r = BenillaKartReplays_At(i)
             if not r or not r.key then return end
             BenillaKart_Send("RPin\t" .. r.key .. "\t" .. (r.pinned and "0" or "1"))
         end
@@ -2292,17 +2309,27 @@
             local rp = BenillaKartReplays
             local list = BenillaKartReplays_Rows()
             BenillaKartReplayList = list
+            -- The page, kept on the list's last when it shrinks, its buttons as the shop's.
+            local pages = BenillaKartReplays_Pages()
+            if rp.page > pages then rp.page = pages end
+            BenillaKartReplaysFramePageText:SetText(pages > 1 and format("Page %d of %d", rp.page, pages) or "")
+            for _, b in ipairs({ BenillaKartReplaysFramePrevPage, BenillaKartReplaysFrameNextPage }) do
+                if pages > 1 then b:Show() else b:Hide() end
+            end
+            if rp.page > 1 then BenillaKartReplaysFramePrevPage:Enable() else BenillaKartReplaysFramePrevPage:Disable() end
+            if rp.page < pages then BenillaKartReplaysFrameNextPage:Enable() else BenillaKartReplaysFrameNextPage:Disable() end
             for i = 1, BENILLA_KART_REPLAY_ROWS do
                 local b = getglobal("BenillaKartReplaysFrameEntry" .. i)
                 local pin = getglobal("BenillaKartReplaysFramePin" .. i)
-                if list[i] then
-                    b:SetText(list[i].label)
+                local r = BenillaKartReplays_At(i)
+                if r then
+                    b:SetText(r.label)
                     b:Show()
                 else
                     b:Hide()
                 end
-                if list[i] and list[i].key then
-                    pin:SetChecked(list[i].pinned and 1 or nil)
+                if r and r.key then
+                    pin:SetChecked(r.pinned and 1 or nil)
                     pin:Show()
                 else
                     pin:Hide()
@@ -2354,7 +2381,7 @@
         end
 
         function BenillaKartReplays_Choose(i)
-            local r = BenillaKartReplayList and BenillaKartReplayList[i]
+            local r = BenillaKartReplays_At(i)
             if not r then return end
             BenillaKartReplaysFrame:Hide()
             SetCVar("KartReplay", r.token)
@@ -6681,7 +6708,7 @@
         </Scripts>
     </Frame>
     <Frame name="BenillaKartReplaysFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="400" y="396"/></Size>
+        <Size><AbsDimension x="400" y="416"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -6704,9 +6731,31 @@
                 <FontString inherits="GameFontDisableSmall" text="Plays while you sit in your kart. Steer to watch another racer.">
                     <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="48"/></Offset></Anchor></Anchors>
                 </FontString>
+                <FontString name="$parentPageText" inherits="GameFontNormalSmall">
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-324"/></Offset></Anchor></Anchors>
+                </FontString>
             </Layer>
         </Layers>
         <Frames>
+            <!-- The list's pages, turned as the spellbook's (SpellBookFrame.xml's page buttons). -->
+            <Button name="$parentPrevPage" hidden="true">
+                <Size><AbsDimension x="32" y="32"/></Size>
+                <Anchors><Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="24" y="12"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartReplays_Turn(-1)</OnClick></Scripts>
+                <NormalTexture file="Interface\Buttons\UI-SpellbookIcon-PrevPage-Up"/>
+                <PushedTexture file="Interface\Buttons\UI-SpellbookIcon-PrevPage-Down"/>
+                <DisabledTexture file="Interface\Buttons\UI-SpellbookIcon-PrevPage-Disabled"/>
+                <HighlightTexture file="Interface\Buttons\UI-Common-MouseHilight" alphaMode="ADD"/>
+            </Button>
+            <Button name="$parentNextPage" hidden="true">
+                <Size><AbsDimension x="32" y="32"/></Size>
+                <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-24" y="12"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartReplays_Turn(1)</OnClick></Scripts>
+                <NormalTexture file="Interface\Buttons\UI-SpellbookIcon-NextPage-Up"/>
+                <PushedTexture file="Interface\Buttons\UI-SpellbookIcon-NextPage-Down"/>
+                <DisabledTexture file="Interface\Buttons\UI-SpellbookIcon-NextPage-Disabled"/>
+                <HighlightTexture file="Interface\Buttons\UI-Common-MouseHilight" alphaMode="ADD"/>
+            </Button>
             <Button name="$parentEntry1" inherits="UIPanelButtonTemplate" id="1">
                 <Size><AbsDimension x="320" y="22"/></Size>
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-60"/></Offset></Anchor></Anchors>

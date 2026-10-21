@@ -2481,6 +2481,69 @@ fn the_replays_window_lists_our_server_races_pins_one_and_plays_a_record() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
+/// More races than the window's ten rows turn its pages, as the shop's: the arrows show only
+/// where there are two, a row plays the race it shows on its page, and a new tab starts at one.
+#[test]
+fn the_replays_window_pages_by_ten() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let text = |s: &mut UiScript, f: &str| -> String {
+        s.eval(&format!("return {f}:GetText() or ''")).unwrap()
+    };
+    let shown = |s: &mut UiScript, f: &str| {
+        s.eval::<bool>(&format!("return {f}:IsVisible() == 1"))
+            .unwrap()
+    };
+    s.run("BenillaKartReplaysFrame:Show()").unwrap();
+    s.run("BenillaKartReplaysFrameTabServer:Click()").unwrap();
+    for i in 0..23 {
+        from_server(
+            &mut s,
+            &format!(
+                "R\tRL\t{i}-1\tgp-azora\t1\t1792320000\t1\t1\t{}\t0\t0",
+                60000 + i
+            ),
+        );
+    }
+    from_server(&mut s, "R\tRL-");
+    assert_eq!(
+        text(&mut s, "BenillaKartReplaysFramePageText"),
+        "Page 1 of 3"
+    );
+    assert!(shown(&mut s, "BenillaKartReplaysFrameNextPage"));
+    assert!(s
+        .eval::<bool>("return BenillaKartReplaysFramePrevPage:IsEnabled() ~= 1")
+        .unwrap());
+    s.run("BenillaKartReplaysFrameNextPage:Click()").unwrap();
+    assert_eq!(
+        text(&mut s, "BenillaKartReplaysFramePageText"),
+        "Page 2 of 3"
+    );
+    assert!(text(&mut s, "BenillaKartReplaysFrameEntry1").ends_with("1:00.01"));
+    s.run("BenillaKartReplaysFrameNextPage:Click()").unwrap();
+    assert!(shown(&mut s, "BenillaKartReplaysFrameEntry3"));
+    assert!(
+        !shown(&mut s, "BenillaKartReplaysFrameEntry4"),
+        "three on the last page"
+    );
+    s.run("BenillaKartReplaysFrameEntry3:Click()").unwrap();
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartReplay')").unwrap(),
+        "s22-1"
+    );
+    s.run("BenillaKartReplaysFrame:Show() BenillaKartReplaysFrameTabLocal:Click()")
+        .unwrap();
+    assert_eq!(text(&mut s, "BenillaKartReplaysFramePageText"), "");
+    assert!(
+        !shown(&mut s, "BenillaKartReplaysFrameNextPage"),
+        "one page: no arrows"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 #[test]
 fn the_replays_window_lists_the_kept_races_and_plays_one() {
     benilla_formats::wow_data_or_skip!();
