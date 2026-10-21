@@ -156,6 +156,9 @@
                 end
                 return "a player track"
             end
+            -- One of our own tracks, or any the browser lists.
+            local track = BenillaKartTrack(key)
+            if track and track.name then return track.name end
             return key
         end
 
@@ -2237,7 +2240,13 @@
             local list = {}
             for entry in string.gfind(GetCVar("KartReplays") or "", "[^;]+") do
                 local _, _, token, label = string.find(entry, "^([^|]+)|(.*)$")
-                if token then table.insert(list, { token = token, label = label }) end
+                if token then
+                    -- The engine names the courses it ships; a player track's or one of ours
+                    -- comes as its key, named here.
+                    local _, _, head, rest = string.find(label, "^([^:]+): (.*)$")
+                    if head then label = BenillaKart_CourseName(head) .. ": " .. rest end
+                    table.insert(list, { token = token, label = label })
+                end
             end
             return list
         end

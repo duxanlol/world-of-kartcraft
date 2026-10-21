@@ -2564,7 +2564,10 @@ fn the_replays_window_lists_the_kept_races_and_plays_one() {
         s.eval::<bool>(&format!("return {frame}:IsVisible() == 1"))
             .unwrap()
     };
-    s.run("SetCVar('KartReplays','000000000002-sprint|Northshire Sprint: 1st of 2, 1:02.40;000000000001-stormwind|Road to Stormwind: did not finish')")
+    // The third on one of our own tracks, which the engine names by its key.
+    s.run("table.insert(BenillaKartMyTracks, { key = 'mine-7', name = 'Goldshire Loop', zone = '', map = 0 })")
+        .unwrap();
+    s.run("SetCVar('KartReplays','000000000002-sprint|Northshire Sprint: 1st of 2, 1:02.40;000000000001-stormwind|Road to Stormwind: did not finish;000000000000-mine|mine-7: time trial, did not finish')")
         .unwrap();
     let entry = |s: &mut UiScript| -> String {
         let rows: String = s.eval("return BenillaKartMenu_Rows()").unwrap();
@@ -2591,7 +2594,11 @@ fn the_replays_window_lists_the_kept_races_and_plays_one() {
         ("Northshire Sprint: 1st of 2, 1:02.40".to_string(), true)
     );
     assert_eq!(row(&mut s, 2).0, "Road to Stormwind: did not finish");
-    assert!(!row(&mut s, 3).1, "only the kept ones");
+    assert_eq!(
+        row(&mut s, 3).0,
+        "Goldshire Loop: time trial, did not finish"
+    );
+    assert!(!row(&mut s, 4).1, "only the kept ones");
     // Choosing one plays it; the menu then offers to stop it.
     s.run("BenillaKartReplaysFrameEntry2:Click()").unwrap();
     assert_eq!(

@@ -191,7 +191,7 @@ impl Replay {
             .map_or(self.course.as_str(), |c| c.name.as_str());
         let how = match (self.time_trial, self.place, self.ms) {
             (true, _, ms) if ms > 0 => format!("time trial, {}", clock(ms)),
-            (true, ..) => "time trial".to_string(),
+            (true, ..) => "time trial, did not finish".to_string(),
             (false, 0, _) => "did not finish".to_string(),
             (false, place, ms) => format!("{} of {}, {}", ordinal(place), self.field, clock(ms)),
         };
@@ -958,6 +958,11 @@ mod tests {
         assert_eq!(
             r.label(),
             "The Maclure Vineyards & Crystal Lake: time trial, 1:23.45"
+        );
+        r.ms = 0;
+        assert_eq!(
+            r.label(),
+            "The Maclure Vineyards & Crystal Lake: time trial, did not finish"
         );
         assert_eq!(
             [1, 2, 3, 4, 11, 12, 13, 21, 22].map(ordinal),
