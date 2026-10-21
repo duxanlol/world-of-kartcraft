@@ -15,7 +15,6 @@ use bevy::input::gamepad::{
     GamepadAxis, GamepadButton, GamepadConnection, GamepadConnectionEvent,
     RawGamepadAxisChangedEvent, RawGamepadButtonChangedEvent, RawGamepadEvent,
 };
-use bevy::input::touch::{TouchInput, TouchPhase};
 use bevy::input::InputSystems;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -793,7 +792,6 @@ fn soft_keyboard(
     dialog: Res<GlueDialog>,
     mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
     clicks: Res<ButtonInput<MouseButton>>,
-    mut touches: MessageReader<TouchInput>,
     _main: NonSendMarker,
 ) {
     let dialog_edit = dialog.kind.map(|k| k.has_edit_box());
@@ -813,9 +811,9 @@ fn soft_keyboard(
             window.ime_enabled = typing;
         }
         // A tap or click while typing asks again, as tapping a phone app's text field does: the
-        // player may have put the keyboard away, and bevy passes on only a change.
-        let tapped = clicks.get_just_pressed().next().is_some()
-            || touches.read().any(|t| t.phase == TouchPhase::Started);
+        // player may have put the keyboard away, and bevy passes on only a change. A finger is
+        // the mouse's left button (the patched winit's `Mouse::finger`).
+        let tapped = clicks.get_just_pressed().next().is_some();
         if made && typing && tapped {
             bevy::winit::WINIT_WINDOWS.with_borrow(|w| {
                 if let Some(w) = w.get_window(entity) {

@@ -16,7 +16,7 @@ use crate::cursor::Cursor;
 use crate::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
 use crate::error;
 use crate::error::EventLoopError;
-use crate::event::{self, Force, InnerSizeWriter, StartCause};
+use crate::event::{self, InnerSizeWriter, StartCause};
 use crate::event_loop::{self, ActiveEventLoop as RootAEL, ControlFlow, DeviceEvents};
 use crate::platform::pump_events::PumpStatus;
 use crate::platform_impl::Fullscreen;
@@ -385,8 +385,6 @@ impl<T: 'static> EventLoop<T> {
         let mut input_status = InputStatus::Handled;
         match event {
             InputEvent::MotionEvent(motion_event) => {
-                let window_id = window::WindowId(WindowId);
-                let device_id = event::DeviceId(DeviceId(motion_event.device_id()));
 
                 // benilla: a controller's sticks go to the relay, a mouse's motion to `mouse.rs`;
                 // upstream reports both as touches.
@@ -402,50 +400,11 @@ impl<T: 'static> EventLoop<T> {
                     return input_status;
                 }
 
-                let phase = match motion_event.action() {
-                    MotionAction::Down | MotionAction::PointerDown => {
-                        Some(event::TouchPhase::Started)
-                    },
-                    MotionAction::Up | MotionAction::PointerUp => Some(event::TouchPhase::Ended),
-                    MotionAction::Move => Some(event::TouchPhase::Moved),
-                    MotionAction::Cancel => Some(event::TouchPhase::Cancelled),
-                    _ => {
-                        None // TODO mouse events
-                    },
-                };
-                if let Some(phase) = phase {
-                    let pointers: Box<dyn Iterator<Item = android_activity::input::Pointer<'_>>> =
-                        match phase {
-                            event::TouchPhase::Started | event::TouchPhase::Ended => {
-                                Box::new(std::iter::once(
-                                    motion_event.pointer_at_index(motion_event.pointer_index()),
-                                ))
-                            },
-                            event::TouchPhase::Moved | event::TouchPhase::Cancelled => {
-                                Box::new(motion_event.pointers())
-                            },
-                        };
-
-                    for pointer in pointers {
-                        let location =
-                            PhysicalPosition { x: pointer.x() as _, y: pointer.y() as _ };
-                        trace!(
-                            "Input event {device_id:?}, {phase:?}, loc={location:?}, \
-                             pointer={pointer:?}"
-                        );
-                        let event = event::Event::WindowEvent {
-                            window_id,
-                            event: event::WindowEvent::Touch(event::Touch {
-                                device_id,
-                                phase,
-                                location,
-                                id: pointer.pointer_id() as u64,
-                                force: Some(Force::Normalized(pointer.pressure() as f64)),
-                            }),
-                        };
-                        callback(event, self.window_target());
-                    }
-                }
+                // benilla: a finger is the mouse's left button (`Mouse::finger`): the app's buttons
+                // click on a release over them, which a touch, gone once lifted, never gave.
+                self.mouse.finger(motion_event, &mut |event| {
+                    callback(event, &self.window_target)
+                });
             },
             // benilla: a controller's buttons go to the relay, not out as keyboard keys.
             InputEvent::KeyEvent(key) if mouse::is_controller(key.source().into()) => {

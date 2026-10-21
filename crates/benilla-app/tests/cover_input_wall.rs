@@ -138,10 +138,6 @@ const VERDICTS: &[(&str, Verdict)] = &[
     ("RawGamepadAxisChangedEvent", Plumbing),
     ("RawGamepadButtonChangedEvent", Plumbing),
     ("RawGamepadEvent", Plumbing),
-    // Android reads a finger's tap only to open the phone's keyboard again over a text box
-    // (`android.rs`); a tap drives nothing in the game.
-    ("TouchInput", Open("re-opens Android's keyboard only; no game input reads a touch")),
-    ("TouchPhase", Plumbing),
     ("Window", Plumbing),
     ("WindowLevel", Plumbing),
     ("WindowMode", Plumbing),
