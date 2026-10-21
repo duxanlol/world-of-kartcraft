@@ -11269,10 +11269,27 @@ index 5529860..f4af29d 100644
          BattleGroundEventIdx eventId = sBattleGroundMgr.GetGameObjectEventIndex(u->GetGUIDLow());
          if (!((BattleGroundMap*)map)->GetBG()->IsActiveEvent(eventId.event1, eventId.event2))
 diff --git a/src/game/Maps/Map.cpp b/src/game/Maps/Map.cpp
-index b7f9cd7..19bf934 100644
+index b7f9cd7..a5f8f0a 100644
 --- a/src/game/Maps/Map.cpp
 +++ b/src/game/Maps/Map.cpp
-@@ -2451,6 +2451,13 @@ BattleGroundMap::~BattleGroundMap()
+@@ -2129,14 +2129,8 @@ bool DungeonMap::CanEnter(Player* player)
+         return false;
+     }
+ 
+-    // cannot enter if the instance is full (player cap), GMs don't count
+-    uint32 maxPlayers = GetMaxPlayers();
+-    if (!player->IsGameMaster() && GetPlayersCountExceptGMs() >= maxPlayers)
+-    {
+-        sLog.Out(LOG_BASIC, LOG_LVL_DETAIL, "MAP: Instance '%u' of map '%s' cannot have more than '%u' players. Player '%s' rejected", GetInstanceId(), GetMapName(), maxPlayers, player->GetName());
+-        player->SendTransferAborted(TRANSFER_ABORT_MAX_PLAYERS);
+-        return false;
+-    }
++    // Kartcraft: no player cap on a dungeon or a raid, a race's copy taking every racer (the
++    // Emerald Dream's map_template limit is 0, which counted it full for all but a GM).
+ 
+     if (m_resetAfterUnload)
+     {
+@@ -2451,6 +2445,13 @@ BattleGroundMap::~BattleGroundMap()
  
  void BattleGroundMap::Update(uint32 diff)
  {
@@ -11286,7 +11303,7 @@ index b7f9cd7..19bf934 100644
      if (!GetBG())
          return;
  
-@@ -2481,7 +2488,8 @@ bool BattleGroundMap::CanEnter(Player* player)
+@@ -2481,7 +2482,8 @@ bool BattleGroundMap::CanEnter(Player* player)
          return false;
      }
  
@@ -11296,7 +11313,7 @@ index b7f9cd7..19bf934 100644
          return false;
  
      // player number limit is checked in bgmgr, no need to do it here
-@@ -2513,7 +2521,8 @@ void BattleGroundMap::SetUnload()
+@@ -2513,7 +2515,8 @@ void BattleGroundMap::SetUnload()
  
  void BattleGroundMap::UnloadAll(bool pForce)
  {
