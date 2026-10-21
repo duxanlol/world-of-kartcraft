@@ -2048,7 +2048,7 @@ fn the_controller_test_lights_the_held_buttons_and_says_when_it_is_open() {
         "DualSense Wireless Controller"
     );
     let sticks: String = s
-        .eval("return BenillaKartPadFrame.sticks:GetText()")
+        .eval("local s = BenillaKartPadFrame.sticks return s[1]:GetText() .. ' ' .. s[3]:GetText()")
         .unwrap();
     assert!(
         sticks.starts_with("Left stick -1.00, +0.50") && sticks.ends_with("R2 1.00"),

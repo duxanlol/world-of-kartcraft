@@ -1132,7 +1132,21 @@
                 end
             else
                 BenillaKartTracksFrameTitle:SetText("")
-                BenillaKartTracksFrameText:SetText("Pick a track to read about it and see it on the map.")
+                -- An empty list says why: none of ours yet, none published, or the search.
+                local mode = BenillaKartTrackBrowser.mode
+                if table.getn(BenillaKartTrackBrowser_Shown()) > 0 then
+                    BenillaKartTracksFrameText:SetText("Pick a track to read about it and see it on the map.")
+                elseif (BenillaKartTrackBrowser.search or "") ~= "" then
+                    BenillaKartTracksFrameText:SetText("No track matches the search.")
+                elseif mode == "mine" then
+                    BenillaKartTracksFrameText:SetText("You have no tracks yet. The track editor, in the Kartcraft menu,"
+                        .. " builds one; it lists here once saved.")
+                elseif mode == "pub" then
+                    BenillaKartTracksFrameText:SetText("No player has published a track yet. Your own, from My tracks,"
+                        .. " can be the first.")
+                else
+                    BenillaKartTracksFrameText:SetText("No tracks to show.")
+                end
                 BenillaKartTracksFrameShow:Disable()
                 BenillaKartTracksFrameTrial:Disable()
                 BenillaKartTracksFrameRate:Disable()
@@ -1739,9 +1753,15 @@
                 what:SetText(r[3] ~= "" and r[3] or "(not used)")
                 frame.rows[r[1]] = { name = name, what = what }
             end
-            frame.sticks = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-            frame.sticks:SetPoint("TOPLEFT", frame, "TOPLEFT", 30, -60 - n * 17 - 8)
-            frame.sticks:SetJustifyH("LEFT")
+            -- The sticks and triggers, a line each 14 apart: one string's lines stand 11 apart,
+            -- a descender on the line under it.
+            frame.sticks = {}
+            for i = 1, 3 do
+                local line = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+                line:SetPoint("TOPLEFT", frame, "TOPLEFT", 30, -60 - n * 17 - 8 - (i - 1) * 14)
+                line:SetJustifyH("LEFT")
+                frame.sticks[i] = line
+            end
             BenillaKartPad_Set(nil)
         end
 
@@ -1766,8 +1786,9 @@
                     row.what:SetTextColor(0.6, 0.6, 0.6)
                 end
             end
-            f.sticks:SetText(format("Left stick %+.2f, %+.2f   (steer; down reverses)\nRight stick %+.2f, %+.2f\nL2 %.2f   R2 %.2f",
-                lx or 0, ly or 0, rx or 0, ry or 0, l2 or 0, r2 or 0))
+            f.sticks[1]:SetText(format("Left stick %+.2f, %+.2f   (steer; down reverses)", lx or 0, ly or 0))
+            f.sticks[2]:SetText(format("Right stick %+.2f, %+.2f", rx or 0, ry or 0))
+            f.sticks[3]:SetText(format("L2 %.2f   R2 %.2f", l2 or 0, r2 or 0))
             if GetCVar("KartRumble") == "0" then
                 BenillaKartPadFrameRumbleNote:SetText("Rumble is off in the Kartcraft settings.")
             else
@@ -3552,7 +3573,7 @@
         BENILLA_KART_CAMERA_BOXES = {
             { "ChaseCamera", "KartChaseCamera", "CTR chase camera (off: your WoW camera)" },
             { "FarCamera", "KartFarCamera", "Far camera (off: near)" },
-            { "Travel", "KartCamTravel", "Follow the direction of travel (off: the kart, as CTR)" },
+            { "Travel", "KartCamTravel", "Follow your travel (off: the kart, as CTR)" },
             { "WallPull", "KartCamWallPull", "Pull in short of walls" },
         }
 
@@ -4625,8 +4646,9 @@
                     <Size><AbsDimension x="252" y="32"/></Size>
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-292"/></Offset></Anchor></Anchors>
                 </FontString>
-                <FontString name="$parentLobbies" inherits="GameFontNormalSmall" justifyH="LEFT">
-                    <Size><AbsDimension x="272" y="14"/></Size>
+                <!-- Two lines for "none" and its hint, which no row stands under. -->
+                <FontString name="$parentLobbies" inherits="GameFontNormalSmall" justifyH="LEFT" justifyV="TOP">
+                    <Size><AbsDimension x="272" y="28"/></Size>
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-332"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
@@ -4958,8 +4980,8 @@
     <!-- The settings: the guide arrow, the camera, the music, the minimap button, the ghost and
          the ground types, each a CVar set as it is clicked, as the stock option boxes are. -->
     <Frame name="BenillaKartSettingsFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="320" y="782"/></Size>
-        <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
+        <Size><AbsDimension x="700" y="480"/></Size>
+        <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
             <TileSize><AbsValue val="32"/></TileSize>
@@ -4996,7 +5018,11 @@
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-334"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentPadTitle" inherits="GameFontNormal" text="Controller">
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-628"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="364" y="-248"/></Offset></Anchor></Anchors>
+                </FontString>
+                <!-- Two columns, so the window fits a 768-high screen: the race's own boxes right. -->
+                <FontString name="$parentRaceTitle" inherits="GameFontNormal" text="Racing">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="364" y="-34"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
@@ -5032,7 +5058,7 @@
             </Button>
             <Button name="$parentResetArrow" inherits="UIPanelButtonTemplate" text="Reset arrow">
                 <Size><AbsDimension x="128" y="22"/></Size>
-                <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-216"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="188" y="-216"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartSettings_ResetArrow()</OnClick></Scripts>
             </Button>
             <CheckButton name="$parentChaseCamera" inherits="BenillaKartSettingsCheckTemplate">
@@ -5043,7 +5069,7 @@
             </CheckButton>
             <Button name="$parentCamera" inherits="UIPanelButtonTemplate" text="Camera...">
                 <Size><AbsDimension x="100" y="22"/></Size>
-                <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-246"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="216" y="-246"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartCamera_Toggle()</OnClick></Scripts>
             </Button>
             <CheckButton name="$parentMusic" inherits="BenillaKartSettingsCheckTemplate">
@@ -5057,36 +5083,36 @@
                 </Scripts>
             </Slider>
             <CheckButton name="$parentMinimapButton" inherits="BenillaKartSettingsCheckTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-428"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="364" y="-48"/></Offset></Anchor></Anchors>
             </CheckButton>
             <CheckButton name="$parentGhost" inherits="BenillaKartSettingsCheckTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-456"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="364" y="-76"/></Offset></Anchor></Anchors>
             </CheckButton>
             <CheckButton name="$parentTerrain" inherits="BenillaKartSettingsCheckTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-484"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="364" y="-104"/></Offset></Anchor></Anchors>
             </CheckButton>
             <CheckButton name="$parentRumble" inherits="BenillaKartSettingsCheckTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-512"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="364" y="-132"/></Offset></Anchor></Anchors>
             </CheckButton>
             <CheckButton name="$parentWowVoices" inherits="BenillaKartSettingsCheckTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-540"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="364" y="-160"/></Offset></Anchor></Anchors>
             </CheckButton>
             <Slider name="$parentGateHeight" inherits="OptionsSliderTemplate">
                 <Size><AbsDimension x="240" y="17"/></Size>
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="38" y="-594"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="378" y="-214"/></Offset></Anchor></Anchors>
                 <Scripts>
                     <OnValueChanged>BenillaKartSettings_Slide(this, "KartGateHeight")</OnValueChanged>
                 </Scripts>
             </Slider>
             <!-- With several controllers connected, the one that drives (KartPad). -->
             <Frame name="$parentPad" inherits="UIDropDownMenuTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="8" y="-644"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="348" y="-264"/></Offset></Anchor></Anchors>
             </Frame>
             <CheckButton name="$parentShortcuts" inherits="BenillaKartSettingsCheckTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-680"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="364" y="-300"/></Offset></Anchor></Anchors>
             </CheckButton>
             <CheckButton name="$parentPadTriggers" inherits="BenillaKartSettingsCheckTemplate">
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-706"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="364" y="-326"/></Offset></Anchor></Anchors>
             </CheckButton>
             <!-- Every kind of guidance on or off, in a window of its own. -->
             <Button name="$parentNavigation" inherits="UIPanelButtonTemplate" text="Navigation...">
@@ -5114,7 +5140,7 @@
                     { "Rumble", "KartRumble", "Shake the controller on crashes" },
                     { "WowVoices", "KartWowVoices", "WoW character voices (off: CTR's racers)" },
                     { "Shortcuts", "KartShortcuts", "Show the Time trial and Race Finder bar" },
-                    { "PadTriggers", "KartPadTriggers", "Controller triggers as buttons (off: R2 Shift, L2 Ctrl)" },
+                    { "PadTriggers", "KartPadTriggers", "Triggers as buttons (off: R2 Shift, L2 Ctrl)" },
                 }
                 for i = 1, table.getn(boxes) do
                     local box = getglobal(this:GetName() .. boxes[i][1])
@@ -6198,25 +6224,26 @@
     <!-- The kart's shortcuts while out of a race (BenillaKartShortcuts_Update): a time trial and
          the Race Finder. Dragged to where it suits. -->
     <!-- A Courier Jobs row (BenillaKartJobs_Refresh): cargo, route, distance, par, state. -->
+    <!-- Wide enough for the longest cargo ("Steamwheedle Contraband") and route. -->
     <Button name="BenillaKartJobRowTemplate" virtual="true">
-        <Size><AbsDimension x="440" y="18"/></Size>
+        <Size><AbsDimension x="560" y="18"/></Size>
         <Layers>
             <Layer level="ARTWORK">
                 <FontString name="$parentCargo" inherits="GameFontNormalSmall" justifyH="LEFT">
-                    <Size><AbsDimension x="128" y="18"/></Size>
+                    <Size><AbsDimension x="170" y="18"/></Size>
                     <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="6" y="0"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentRoute" inherits="GameFontHighlightSmall" justifyH="LEFT">
-                    <Size><AbsDimension x="168" y="18"/></Size>
-                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="136" y="0"/></Offset></Anchor></Anchors>
+                    <Size><AbsDimension x="246" y="18"/></Size>
+                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="180" y="0"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentDistance" inherits="GameFontHighlightSmall" justifyH="RIGHT">
                     <Size><AbsDimension x="50" y="18"/></Size>
-                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="304" y="0"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="426" y="0"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentPar" inherits="GameFontHighlightSmall" justifyH="RIGHT">
                     <Size><AbsDimension x="34" y="18"/></Size>
-                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="356" y="0"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="484" y="0"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentState" inherits="GameFontHighlightSmall" justifyH="RIGHT">
                     <Size><AbsDimension x="50" y="18"/></Size>
@@ -6233,7 +6260,7 @@
 
     <!-- Courier Jobs: today's deliveries as a job market; over the world map with a route up. -->
     <Frame name="BenillaKartJobsFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="FULLSCREEN_DIALOG">
-        <Size><AbsDimension x="480" y="452"/></Size>
+        <Size><AbsDimension x="600" y="452"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -6262,23 +6289,23 @@
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="26" y="-38"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString inherits="GameFontDisableSmall" text="Route">
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="156" y="-38"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="200" y="-38"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString inherits="GameFontDisableSmall" text="Distance">
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="328" y="-38"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="450" y="-38"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString inherits="GameFontDisableSmall" text="Par">
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="394" y="-38"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="522" y="-38"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString inherits="GameFontDisableSmall" text="Status">
                     <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-38"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentTitle" inherits="GameFontNormalLarge" justifyH="LEFT">
-                    <Size><AbsDimension x="430" y="20"/></Size>
+                    <Size><AbsDimension x="550" y="20"/></Size>
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-246"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentText" inherits="GameFontHighlightSmall" justifyH="LEFT" justifyV="TOP">
-                    <Size><AbsDimension x="430" y="90"/></Size>
+                    <Size><AbsDimension x="550" y="90"/></Size>
                     <Anchors><Anchor point="TOPLEFT" relativeTo="$parentTitle" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-6"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
