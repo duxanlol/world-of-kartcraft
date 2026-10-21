@@ -28,6 +28,7 @@ use crate::{AppExit, BuildId};
 /// Runs the client in the activity `app`.
 pub fn main(build: BuildId, app: AndroidApp) -> AppExit {
     logcat::redirect();
+    preset::load(&app);
     if let Some(dir) = app.external_data_path() {
         environment(&app, &dir);
         // The run's log where the player's files are, which they reach from a PC, when the app
@@ -56,9 +57,39 @@ pub fn main(build: BuildId, app: AndroidApp) -> AppExit {
 /// (`Internal storage/WorldOfKartcraft`), reached through "All files access".
 pub const SHARED: &str = "WorldOfKartcraft";
 
-/// The server the APK was built for (`scripts/android-apk.sh`, from the publish config's
-/// `SERVER`), the way the launcher builds its preset in.
-const BUILT_SERVER: Option<&str> = option_env!("KARTCRAFT_SERVER");
+/// What the APK was packaged with (`scripts/android-apk.sh`): its channel's server, update folder
+/// and wake, its version code and its disc converter, as `KEY=value` lines in the asset
+/// `presets.txt`. Packaged, not compiled in, so one build of the library serves both channels
+/// and a new version number recompiles nothing.
+mod preset {
+    use std::collections::HashMap;
+    use std::io::Read;
+    use std::sync::OnceLock;
+
+    use super::AndroidApp;
+
+    static PRESETS: OnceLock<HashMap<String, String>> = OnceLock::new();
+
+    /// Reads the APK's `presets.txt`, once; an APK without one has no presets.
+    pub fn load(app: &AndroidApp) {
+        let mut text = String::new();
+        if let Some(mut asset) = app.asset_manager().open(c"presets.txt") {
+            let _ = asset.read_to_string(&mut text);
+        }
+        let presets = text
+            .lines()
+            .filter_map(|l| l.trim().split_once('='))
+            .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+            .filter(|(_, v)| !v.is_empty())
+            .collect();
+        let _ = PRESETS.set(presets);
+    }
+
+    /// The preset `key`, where the APK has one.
+    pub fn get(key: &str) -> Option<&'static str> {
+        PRESETS.get()?.get(key).map(String::as_str)
+    }
+}
 
 /// `env.txt`'s variables, then the launcher's paths where it names none: the data from the app's
 /// own folder when it holds an install (`adb push`, `scripts/android-apk.sh --data`), else from
@@ -125,7 +156,7 @@ fn environment(app: &AndroidApp, own: &Path) {
             std::env::set_var(key, path);
         }
     }
-    if let (None, Some(server)) = (std::env::var_os("WOW_HOST"), BUILT_SERVER) {
+    if let (None, Some(server)) = (std::env::var_os("WOW_HOST"), preset::get("SERVER")) {
         std::env::set_var("WOW_HOST", server);
     }
     // The kart data's relative lookups (`kart-data`, `../kart-data`) and any other relative path.
@@ -264,7 +295,9 @@ mod convert {
 
     /// This build's converter: the last commit to touch `ctr-assets` (`scripts/android-apk.sh`).
     /// A build without it converts only when there is no kart data.
-    const CONVERTER: Option<&str> = option_env!("KARTCRAFT_CONVERTER");
+    fn converter() -> Option<&'static str> {
+        super::preset::get("CONVERTER")
+    }
     /// The disc image's extensions, as the PC launcher looks for them (`find.rs`).
     const DISC: [&str; 3] = ["bin", "iso", "img"];
     /// Folders of [`super::SHARED`] that hold no disc.
@@ -325,7 +358,7 @@ mod convert {
             return true;
         }
         let stamp = std::fs::read_to_string(out.join(".converter")).unwrap_or_default();
-        CONVERTER.is_some_and(|c| stamp.trim() != c)
+        converter().is_some_and(|c| stamp.trim() != c)
     }
 
     /// Converts `disc` into `out` on a thread of its own, then starts the app again.
@@ -368,7 +401,7 @@ mod convert {
             println!("benilla: convert: {line}");
             set(Status::Running(line));
         })?;
-        if let Some(c) = CONVERTER {
+        if let Some(c) = converter() {
             std::fs::write(fresh.join(".converter"), c).map_err(|e| e.to_string())?;
         }
         if out.exists() {
@@ -433,11 +466,17 @@ mod update {
 
     /// The update host's Android folder and this build's version code, both from
     /// `scripts/android-apk.sh`; a build without them never updates.
-    const BASE: Option<&str> = option_env!("KARTCRAFT_UPDATE_URL");
-    const CODE: Option<&str> = option_env!("KARTCRAFT_VERSION_CODE");
+    fn base() -> Option<&'static str> {
+        super::preset::get("UPDATE_URL")
+    }
+    fn code() -> Option<&'static str> {
+        super::preset::get("VERSION_CODE")
+    }
     /// A staging build's wake: staging sleeps when nobody plays, and the players' site starts it
     /// (`kartcraft-launcher/src/wake.rs` does the same for the testers' PC launcher).
-    const WAKE: Option<&str> = option_env!("KARTCRAFT_WAKE_URL");
+    fn wake_url() -> Option<&'static str> {
+        super::preset::get("WAKE_URL")
+    }
     /// How long a woken server takes at most, and the login port that says it is up.
     const PATIENCE: std::time::Duration = std::time::Duration::from_secs(300);
     const LOGIN_PORT: u16 = 3724;
@@ -460,7 +499,7 @@ mod update {
     /// Wakes a sleeping staging server, then looks for an update, on a thread of its own.
     pub fn start(app: AndroidApp, own: PathBuf) {
         std::thread::spawn(move || {
-            if let Some(url) = WAKE.filter(|u| !u.is_empty()) {
+            if let Some(url) = wake_url() {
                 wake(url);
             }
             if let Err(e) = run(&app, &own) {
@@ -508,8 +547,8 @@ mod update {
     }
 
     fn run(app: &AndroidApp, own: &Path) -> Result<(), String> {
-        let base = BASE.filter(|b| !b.is_empty());
-        let (Some(base), Some(ours)) = (base, CODE.and_then(|c| c.parse::<u64>().ok())) else {
+        let base = base();
+        let (Some(base), Some(ours)) = (base, code().and_then(|c| c.parse::<u64>().ok())) else {
             return Ok(());
         };
         let agent = ureq::AgentBuilder::new()

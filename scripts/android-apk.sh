@@ -43,33 +43,40 @@ export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
 
 # The channel's presets, as publish.ps1 reads them: `.setup/publish.cfg`, and for
 # ANDROID_CHANNEL=staging `.setup/publish-staging.cfg` over it (the staging server and its
-# update folder). Built in: the server it plays on, and where it updates itself from, the update
-# folder's `android/` (`dist/android-upload.sh`).
+# update folder). Packaged as the asset `presets.txt` (android.rs, preset), not compiled in, so
+# one build of the library serves both channels: the server it plays on, where it updates itself
+# from (the update folder's `android/`, dist/android-upload.sh), and staging's wake.
 channel="${ANDROID_CHANNEL:-}"
 cfgs=(.setup/publish.cfg)
 [ "$channel" = staging ] && cfgs=(.setup/publish-staging.cfg .setup/publish.cfg)
 [ -z "$channel" ] || [ -f "${cfgs[0]}" ] || { echo "${cfgs[0]} is missing: it names the $channel server"; exit 1; }
 preset() { cat "${cfgs[@]}" 2>/dev/null | sed -n "s/^$1=//p" | head -1 | tr -d '\r'; }
-KARTCRAFT_SERVER="$(preset SERVER)"
+server="$(preset SERVER)"
 updates="$(preset UPDATE_URL)"
-KARTCRAFT_UPDATE_URL="${updates:+${updates%/}/android}"
+updates="${updates:+${updates%/}/android}"
 # Staging sleeps when nobody plays (benilla-config/staging/idle): its build wakes it first.
-KARTCRAFT_WAKE_URL=""
-[ "$channel" = staging ] && KARTCRAFT_WAKE_URL="https://worldofkartcraft.com/staging/wake"
+wake=""
+[ "$channel" = staging ] && wake="https://worldofkartcraft.com/staging/wake"
 # Its own version code, which an update must beat: the commit count, growing with every commit.
 code="$(git rev-list --count HEAD)"
-KARTCRAFT_VERSION_CODE="$code"
 # The disc converter it carries (`ctr-assets`), named by the last commit to touch it: kart data a
 # phone made with another is converted again from the disc (`android.rs`, convert).
-KARTCRAFT_CONVERTER="$(git log -1 --format=%H -- crates/ctr-assets)"
-export KARTCRAFT_SERVER KARTCRAFT_UPDATE_URL KARTCRAFT_WAKE_URL KARTCRAFT_VERSION_CODE KARTCRAFT_CONVERTER
-echo "channel ${channel:-production}: server ${KARTCRAFT_SERVER:-none}, updates ${KARTCRAFT_UPDATE_URL:-none}"
+converter="$(git log -1 --format=%H -- crates/ctr-assets)"
+echo "channel ${channel:-production}: server ${server:-none}, updates ${updates:-none}"
 cargo build -p benilla-android --target aarch64-linux-android --release --no-default-features
 
 out="$root/target/android"
 stage="$out/stage"
 rm -rf "$stage"
 mkdir -p "$stage/lib/arm64-v8a" "$out/res/mipmap"
+rm -rf "$out/assets" && mkdir -p "$out/assets"
+{
+    echo "SERVER=$server"
+    echo "UPDATE_URL=$updates"
+    echo "WAKE_URL=$wake"
+    echo "VERSION_CODE=$code"
+    echo "CONVERTER=$converter"
+} >"$out/assets/presets.txt"
 cp target/aarch64-linux-android/release/libbenilla.so "$stage/lib/arm64-v8a/"
 "$llvm/llvm-strip$( [ "$host" = windows-x86_64 ] && echo .exe)" --strip-debug "$stage/lib/arm64-v8a/libbenilla.so"
 
@@ -124,7 +131,7 @@ javac --release 11 -Xlint:all -Werror -cp "$PLATFORM" -d "$out/classes" \
 
 (cd "$out" && "$BUILD_TOOLS/aapt2" compile -o compiled.zip --dir res)
 "$BUILD_TOOLS/aapt2" link -o "$out/unsigned.apk" -I "$PLATFORM" \
-    --manifest "$out/AndroidManifest.xml" "$out/compiled.zip"
+    --manifest "$out/AndroidManifest.xml" -A "$out/assets" "$out/compiled.zip"
 (cd "$stage" && "$BUILD_TOOLS/aapt" add -0 so "$out/unsigned.apk" classes.dex lib/arm64-v8a/libbenilla.so >/dev/null)
 "$BUILD_TOOLS/zipalign" -f -p 4 "$out/unsigned.apk" "$out/aligned.apk"
 
