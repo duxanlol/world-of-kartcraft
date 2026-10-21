@@ -82,6 +82,7 @@ impl Plugin for ProbeRigPlugin {
             spec,
             phase: RigPhase::AwaitRoster,
             roster: Vec::new(),
+            listed: false,
             evicted: false,
             steps: Vec::new(),
             sent: 0,
@@ -227,8 +228,9 @@ enum RigPhase {
 struct Rig {
     spec: RigSpec,
     phase: RigPhase,
-    /// The freshest roster.
+    /// The freshest roster, and whether one has come: an empty account's is empty.
     roster: Vec<benilla_protocol::Character>,
+    listed: bool,
     /// A server-limit eviction has been spent; only one is allowed.
     evicted: bool,
     steps: Vec<String>,
@@ -250,12 +252,13 @@ fn drive_rig(
 ) {
     if let Some(list) = lists.read().last() {
         rig.roster = list.characters.clone();
+        rig.listed = true;
     }
     let entered_world = entered.read().next().is_some();
 
     match rig.phase {
         RigPhase::AwaitRoster => {
-            if rig.roster.is_empty() && rig.spec.body.is_none() {
+            if !rig.listed && rig.spec.body.is_none() {
                 return; // no roster yet, and nothing to create
             }
             let Some(want) = rig_char_name(&rig.spec) else {
@@ -274,7 +277,7 @@ fn drive_rig(
                     send_pick(&mut roster, &pick, guid);
                     rig.phase = RigPhase::Entering;
                 }
-                None if rig.roster.is_empty() => {} // the enum hasn't landed yet
+                None if !rig.listed => {} // the enum hasn't landed yet
                 None => {
                     let (race, class, gender) = rig.spec.body.expect("name implies a body");
                     info!("rig: {want} does not exist — creating it");
