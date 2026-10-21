@@ -253,7 +253,7 @@ fn parse_spec(chars: &[char], after_percent: usize) -> Option<Spec> {
 /// (`0x882748`) for a missing key, and callers test both (`GetPVPRankInfo`, `0x51aa1c`/`0x51aa20`).
 pub fn global(lua: &mlua::Lua, key: &str) -> Option<String> {
     // Bound before the filter so `globals().get::<String>` stays one unbroken substring, which is
-    // what `benilla-app/tests/reference_strings.rs` matches as a key lookup.
+    // what `benilla-app/tests/app/reference_strings.rs` matches as a key lookup.
     let value = lua.globals().get::<String>(key).ok();
     value.filter(|s| !s.is_empty())
 }

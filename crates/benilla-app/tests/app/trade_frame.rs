@@ -2,7 +2,7 @@
 //! the window with `TRADE_SHOW`, and asserts the Lua paints both columns, the money and the accept
 //! glows that follow `TRADE_ACCEPT_UPDATE(my, his)`.
 
-mod common;
+use crate::common;
 
 use benilla_ui::script::{ScriptValue, TradeSideState, TradeSlotItem, TradeState, UiScript};
 

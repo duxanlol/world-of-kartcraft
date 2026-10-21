@@ -164,7 +164,7 @@ fn every_input_channel_the_client_reads_has_a_verdict_under_the_cover() {
     let mut found: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for file in workspace_sources(&root) {
         // The wall names every channel itself.
-        if file.ends_with("tests/cover_input_wall.rs") {
+        if file.ends_with("tests/app/cover_input_wall.rs") {
             continue;
         }
         let Ok(text) = std::fs::read_to_string(&file) else {

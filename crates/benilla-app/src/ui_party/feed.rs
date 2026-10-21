@@ -136,7 +136,7 @@ pub(super) fn feed_party(
     names: pets::Names,
     areas: Option<Res<crate::area::AreaTableRes>>,
     // The area under us, through the accessor `crate::area` uses: `terrain_stream::CurrentArea`
-    // would cross the world-API wall (`tests/world_api_wall.rs`).
+    // would cross the world-API wall (`tests/app/world_api_wall.rs`).
     here: benilla_world::world_point::WorldPoint,
     map_catalog: Option<Res<benilla_assets::MapCatalogRes>>,
     mut fed: Local<crate::ui_script::VmMemo<FedParty>>,

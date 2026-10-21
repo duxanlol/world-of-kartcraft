@@ -2,7 +2,7 @@
 //! loads them: the addon idiom `CreateFrame("Button", "MyTab", UIParent, "TabButtonTemplate")`
 //! then `getglobal("MyTab".."Text")`.
 
-mod common;
+use crate::common;
 
 use benilla_ui::script::UiScript;
 

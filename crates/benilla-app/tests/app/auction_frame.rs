@@ -6,7 +6,7 @@ use benilla_ui::script::{
     AuctionSubCategory, UiScript, UnitState, BIDDER, LIST, OWNER,
 };
 
-mod common;
+use crate::common;
 
 /// The auction window's load prefix, in the production order: UIParent for
 /// `ShowUIPanel`, UIPanelTemplates for the tab kit and widget templates, StaticPopup for the

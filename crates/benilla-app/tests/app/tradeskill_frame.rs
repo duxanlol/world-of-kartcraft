@@ -7,7 +7,7 @@ use benilla_ui::script::{
     TradeSkillRecipe, TradeSkillState, UiScript,
 };
 
-mod common;
+use crate::common;
 
 /// The load prefix of both windows, in the app's order.
 const FILES: &[&str] = &[

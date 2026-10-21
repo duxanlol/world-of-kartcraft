@@ -4,8 +4,7 @@
 
 use benilla_ui::script::{ItemTextState, UiScript};
 
-#[path = "common/mod.rs"]
-mod common;
+use crate::common;
 
 const UI_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/ui");
 

@@ -2,7 +2,7 @@
 //! shaped like the warrior's Improved Rend and Deep Wounds column, asserting the Lua state
 //! (`TALENT_BRANCH_ARRAY`), the frame state (`IsShown`) and the quads the renderer draws.
 
-mod common;
+use crate::common;
 
 use benilla_ui::script::{
     QuadContent, SpellTooltipView, TalentPrereqView, TalentTabView, TalentUiState, TalentView,

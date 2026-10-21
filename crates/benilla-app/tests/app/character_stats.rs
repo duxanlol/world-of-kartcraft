@@ -3,7 +3,7 @@
 //! tooltip's base, which the stock Lua computes by subtracting both buff halves from `UnitStat`'s
 //! raw first return.
 
-mod common;
+use crate::common;
 
 use benilla_ui::script::{UiScript, UnitCombatStats, UnitState};
 

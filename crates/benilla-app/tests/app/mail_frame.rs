@@ -1,7 +1,7 @@
 //! Drives the stock `MailFrame.xml` off the player's chain with a synthetic inbox and the app's
 //! own `MAIL_SHOW`/`MAIL_INBOX_UPDATE` events, and asserts what it paints and queues.
 
-mod common;
+use crate::common;
 
 use benilla_ui::script::{
     EditAction, EditBoxAdvanceRequest, EditUnit, MailInboxRow, MailInvoice, MailState,
