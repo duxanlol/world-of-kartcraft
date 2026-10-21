@@ -243,13 +243,19 @@ fn on_worldport(
     }
 }
 
-fn on_transfer(In(ev): In<SessionEvent>, mut e: Edges) {
+fn on_transfer(
+    In(ev): In<SessionEvent>,
+    mut e: Edges,
+    mut errors: ResMut<crate::ui_action::UiErrorKeys>,
+) {
     match ev {
         SessionEvent::TransferPending {
             map_id,
             transport_entry,
         } => transfer_pending(map_id, transport_entry, &mut e.transfer),
-        SessionEvent::TransferAborted { reason } => transfer_aborted(reason, &mut e.transfer),
+        SessionEvent::TransferAborted { reason } => {
+            transfer_aborted(reason, &mut e.transfer, &mut errors)
+        }
         _ => {}
     }
 }
@@ -543,10 +549,30 @@ fn transfer_pending(map_id: u32, transport_entry: Option<u32>, pending: &mut Pen
     });
 }
 
-/// `SMSG_TRANSFER_ABORTED`: clears the latch.
-fn transfer_aborted(reason: u8, pending: &mut PendingTransfer) {
+/// `SMSG_TRANSFER_ABORTED`: clears the latch, and says why in red as 1.12 does.
+fn transfer_aborted(
+    reason: u8,
+    pending: &mut PendingTransfer,
+    errors: &mut crate::ui_action::UiErrorKeys,
+) {
     warn!("net: transfer aborted (reason {reason})");
     pending.0 = None;
+    if let Some(key) = transfer_abort_text(reason) {
+        errors.0.push(crate::ui_action::UiError::key(key));
+    }
+}
+
+/// The `GlobalStrings` line for an abort reason (vmangos `TransferAbortReason`, `Player.h`):
+/// instance full, not found, too many instances, an encounter in progress; 4 and the rest are
+/// silent.
+fn transfer_abort_text(reason: u8) -> Option<&'static str> {
+    Some(match reason {
+        1 => "TRANSFER_ABORT_MAX_PLAYERS",
+        2 => "TRANSFER_ABORT_NOT_FOUND",
+        3 => "TRANSFER_ABORT_TOO_MANY_INSTANCES",
+        5 => "TRANSFER_ABORT_ZONE_IN_COMBAT",
+        _ => return None,
+    })
 }
 
 /// `SMSG_NEW_WORLD`/`SMSG_LOGIN_VERIFY_WORLD`: drops every tracked object, then hands the app
