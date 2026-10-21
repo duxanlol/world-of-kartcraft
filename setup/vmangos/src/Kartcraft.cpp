@@ -18,6 +18,8 @@
 #include "QuestDef.h"
 #include "Utilities/Random.h"
 #include "Maps/MapPersistentStateMgr.h"
+#include "BattleGround.h"
+#include "BattleGroundMgr.h"
 #include "Config/Config.h"
 #include <zlib.h>
 #include <fstream>
@@ -519,13 +521,29 @@ namespace Kartcraft
     // The courses: courses/courses.json, made into this table by setup/vmangos/pack.py.
 #include "KartcraftCourses.h"
 
-    // Whether `c` is a party course: in a dungeon, not the open world, which in 1.12 is its two
-    // continents (MapEntry::IsContinent; the client draws the same line). Each party, in its own
-    // copy of the dungeon, races it alone: hosted inside, joined by the host's party in the host's
-    // copy, and never offered by the Race Finder, which would take players into copies of their own.
+    // Whether `c` is a party course: in a dungeon or a raid, not the open world, which in 1.12 is
+    // its two continents (MapEntry::IsContinent) and here the battlegrounds' open copies too, one a
+    // map with no match in it (kartcraft.patch, MapManager::CreateInstance); the client draws the
+    // same line (race.rs, Course::dungeon). Each party, in its own copy of the dungeon, races it
+    // alone: hosted inside, joined by the host's party in the host's copy, and never offered by the
+    // Race Finder, which would take players into copies of their own.
+    static bool PartyCourse(uint32 map)
+    {
+        MapEntry const* entry = sMapStorage.LookupEntry<MapEntry>(map);
+        return map > 1 && !(entry && entry->IsBattleGround());
+    }
+
     static bool PartyCourse(Course const& c)
     {
-        return c.map != 0 && c.map != 1;
+        return PartyCourse(c.map);
+    }
+
+    // Whether `player` stands in the open world: a continent, or a battleground's open copy, out of
+    // a match.
+    static bool InOpenWorld(Player* player)
+    {
+        Map const* map = player->GetMap();
+        return !player->InBattleGround() && (!map->Instanceable() || map->IsBattleGround());
     }
 
     // A showcase run (/kartshow; the client's kart/showcase.rs): its key, what it is and where it
@@ -1197,7 +1215,7 @@ namespace Kartcraft
             return std::string();
         std::string key = result->Fetch()[0].GetCppString();
         Course const* c = FindCourse(key);
-        return c && c->map <= 1 ? key : std::string();
+        return c && !PartyCourse(*c) ? key : std::string();
     }
 
     static std::string ChallengeCourse(std::string const& period)
@@ -1212,12 +1230,12 @@ namespace Kartcraft
         if (chosen)
         {
             Course const* c = FindCourse(chosen->Fetch()[0].GetCppString());
-            if (c && c->map <= 1 && !CourseOff(*c))
+            if (c && !PartyCourse(*c) && !CourseOff(*c))
                 return c->key;
         }
         std::vector<Course const*> open;
         for (Course const& c : COURSES)
-            if (c.map <= 1 && !CourseOff(c))
+            if (!PartyCourse(c) && !CourseOff(c))
                 open.push_back(&c);
         return open.empty() ? std::string() : open[Fnv1a(period) % open.size()]->key;
     }
@@ -4621,11 +4639,10 @@ namespace Kartcraft
     }
 
     // Whether the Race Finder may take a player off to a race now: settled, and not inside a
-    // dungeon, a raid or a battleground (a teleport out of those would lose their place there).
+    // dungeon, a raid or a battleground's match (a teleport out of those would lose their place).
     static bool CanBeRacedOff(Player* player)
     {
-        return Settled(player) && !player->InBattleGround() && !player->GetMap()->Instanceable() &&
-            !CarryingDelivery(player);
+        return Settled(player) && InOpenWorld(player) && !CarryingDelivery(player);
     }
 
     // Whether a racer may be put on `c`'s grid now: off to it from the open world, or, on a party
@@ -4721,13 +4738,13 @@ namespace Kartcraft
     }
     // ── Race copies ────────────────────────────────────────────────────────────────────────────
     //
-    // A dungeon course (PartyCourse) is raced in a copy of its dungeon of the race's own, made for
-    // it (RaceCopy) and entered by anyone the race takes, party or not: each racer is bound to it,
+    // A dungeon or raid course (PartyCourse) is raced in a copy of the race's own, made for it
+    // (RaceCopy) and entered by anyone the race takes, party or not: each racer is bound to it,
     // not for keeps, just before the grid's teleport (IntoCopy), so the core's own choice of copy
     // (Player::GetBoundInstanceSaveForSelfOrGroup, a player's own bind first) puts every racer in
     // the one copy. A player's time trials on a dungeon reuse their copy while it lives
-    // (TrialCopy), so a run after a run counts no new copy against Instance.PerHourLimit. A raid's
-    // copy wants a raid group, so a raid is never raced here.
+    // (TrialCopy), so a run after a run counts no new copy against Instance.PerHourLimit. A raid
+    // is entered alone, as a dungeon is (kartcraft.patch, MapManager::CanPlayerEnter).
 
     static std::unordered_map<uint64, uint32> s_trialCopies; // guid low << 32 | map -> instance
 
@@ -4738,12 +4755,12 @@ namespace Kartcraft
             ? static_cast<DungeonPersistentState*>(state) : nullptr;
     }
 
-    // A new copy of `c`'s dungeon for a race on it, its instance id; 0 for an open-world course or
-    // a raid.
+    // A new copy of `c`'s dungeon or raid for a race on it, its instance id; 0 for an open-world
+    // course.
     static uint32 RaceCopy(Course const& c)
     {
         MapEntry const* entry = sMapStorage.LookupEntry<MapEntry>(c.map);
-        if (!PartyCourse(c) || !entry || !entry->IsDungeon() || entry->IsRaid())
+        if (!PartyCourse(c) || !entry || !entry->IsDungeon())
             return 0;
         uint32 const instance = sMapMgr.GenerateInstanceId();
         return sMapPersistentStateMgr.AddPersistentState(entry, instance, 0, true) ? instance : 0;
@@ -6167,11 +6184,13 @@ namespace Kartcraft
 
     // ── Dungeon teleporter ───────────────────────────────────────────────────────────────────────
     //
-    // Any player, of any level, to any dungeon (not a raid, whose copy wants a raid group), from
-    // the Kartcraft menu: to build a track there, or race one. "R\tDL" asks for the list, answered
-    // "R\tDLs\t<map>:<name>:<level>;..." (the dungeon's entrance level, its trigger's, as the
-    // client shows it); "R\tDT\t<map>" goes, to where its entrance puts a player inside (its
-    // area trigger's spot, ObjectMgr::GetMapEntranceTrigger), in their own copy or their party's
+    // Any player, of any level, to any dungeon, raid or battleground, from the Kartcraft menu: to
+    // build a track there, or race one. "R\tDL" asks for the list, answered
+    // "R\tDLs\t<map>:<name>:<level>;..." (the entrance's level, its trigger's, as the client shows
+    // it; a battleground's its template's); "R\tDT\t<map>" goes, to where its entrance puts a
+    // player inside (its area trigger's spot, ObjectMgr::GetMapEntranceTrigger; a battleground's
+    // start for the player's side, in its open copy; NO_ENTRANCE's for a map none leads into), in
+    // their own copy or their party's
     // as an entrance would, race mode on (nobody can attack them, nor they anyone: a low level in
     // Stratholme stays alive); answered "R\tDTok\t<name>", or "R\tDTx\t<why>". "R\tDB" takes them
     // back to where the first trip took them from ("R\tDBok", or "R\tDTx\t<why>" with none to go
@@ -6181,7 +6200,81 @@ namespace Kartcraft
     static std::unordered_map<uint32, Origin> s_dungeonOrigins; // guid low -> where from
     static std::unordered_map<uint32, uint32> s_dungeonTrips;   // guid low -> last trip (ms)
 
-    // The dungeons the teleporter offers, by entrance level then name, once.
+    // The maps the teleporter goes to that no entrance leads into: where a trip lands (WoW x, y,
+    // facing; on the ground there) and the level it is listed at. The Emerald Dream, 1.12's
+    // unfinished raid: grass at its spot, in the 256 tiles of EmeraldDream.wdt.
+    struct Unentered
+    {
+        uint32 map;
+        float x, y, o;
+        uint32 level;
+    };
+    static Unentered const NO_ENTRANCE[] = { { 169, 2732.93f, -3319.63f, 0.f, 60 } };
+
+    // A battleground's template, its levels and its sides' starts; nullptr for another map.
+    static BattleGround* BattlegroundOf(uint32 map)
+    {
+        BattleGroundTypeId const type = GetBattleGroundTypeIdByMapId(map);
+        return type == BATTLEGROUND_TYPE_NONE ? nullptr : sBattleGroundMgr.GetBattleGroundTemplate(type);
+    }
+
+    // The level the teleporter lists `map` at; false for a map it does not go to.
+    static bool TeleporterLevel(uint32 map, uint32& level)
+    {
+        MapEntry const* entry = sMapStorage.LookupEntry<MapEntry>(map);
+        if (entry && entry->IsBattleGround())
+        {
+            BattleGround const* bg = BattlegroundOf(map);
+            if (bg)
+                level = bg->GetMinLevel();
+            return bg != nullptr;
+        }
+        if (!entry || !entry->IsDungeon())
+            return false;
+        if (AreaTriggerTeleport const* at = sObjectMgr.GetMapEntranceTrigger(map))
+        {
+            level = at->requiredLevel;
+            return true;
+        }
+        for (Unentered const& u : NO_ENTRANCE)
+            if (u.map == map)
+            {
+                level = u.level;
+                return true;
+            }
+        return false;
+    }
+
+    // Where `player`'s teleporter trip to `map` lands: its entrance trigger's spot, a
+    // battleground's start for their side, else NO_ENTRANCE's on the ground; false with no ground
+    // there.
+    static bool TeleporterSpot(Player* player, uint32 map, WorldLocation& to)
+    {
+        if (BattleGround const* bg = BattlegroundOf(map))
+        {
+            to.mapId = map;
+            bg->GetTeamStartLoc(player->GetTeam(), to.x, to.y, to.z, to.o);
+            return true;
+        }
+        if (AreaTriggerTeleport const* at = sObjectMgr.GetMapEntranceTrigger(map))
+        {
+            to = at->destination;
+            return true;
+        }
+        for (Unentered const& u : NO_ENTRANCE)
+            if (u.map == map)
+            {
+                float const ground = sTerrainMgr.LoadTerrain(map)->GetHeightStatic(u.x, u.y, 500.f);
+                if (ground <= INVALID_HEIGHT)
+                    return false;
+                to = WorldLocation(map, u.x, u.y, ground + 0.5f, u.o);
+                return true;
+            }
+        return false;
+    }
+
+    // The dungeons, raids and battlegrounds the teleporter offers, by entrance level then name,
+    // once.
     static std::string const& DungeonList()
     {
         static std::string const list = []
@@ -6190,10 +6283,9 @@ namespace Kartcraft
             for (uint32 id = 2; id < 1000; ++id)
             {
                 MapEntry const* entry = sMapStorage.LookupEntry<MapEntry>(id);
-                if (!entry || !entry->IsNonRaidDungeon() || !entry->name || !*entry->name)
-                    continue;
-                if (AreaTriggerTeleport const* at = sObjectMgr.GetMapEntranceTrigger(id))
-                    found.emplace_back(at->requiredLevel, entry->name, id);
+                uint32 level = 0;
+                if (entry && entry->name && *entry->name && TeleporterLevel(id, level))
+                    found.emplace_back(level, entry->name, id);
             }
             std::sort(found.begin(), found.end());
             std::string out;
@@ -6214,9 +6306,12 @@ namespace Kartcraft
     {
         auto no = [player](char const* why) { SendLine(player, std::string("KARTCRAFT\tR\tDTx\t") + why); };
         MapEntry const* entry = sMapStorage.LookupEntry<MapEntry>(map);
-        AreaTriggerTeleport const* at = entry && entry->IsNonRaidDungeon() ? sObjectMgr.GetMapEntranceTrigger(map) : nullptr;
-        if (!at)
-            return no("That is no dungeon the teleporter goes to.");
+        uint32 level = 0;
+        WorldLocation to;
+        if (!TeleporterLevel(map, level))
+            return no("That is no place the teleporter goes to.");
+        if (!TeleporterSpot(player, map, to))
+            return no("There is no ground to land on there.");
         if (InAnyRace(player->GetObjectGuid()))
             return no("Leave the race first.");
         if (!Settled(player) || player->InBattleGround() || CarryingDelivery(player))
@@ -6231,7 +6326,6 @@ namespace Kartcraft
             s_dungeonOrigins[guid] = { player->GetMapId(), player->GetPositionX(), player->GetPositionY(),
                 player->GetPositionZ(), player->GetOrientation(), now };
         RaceMode(player, true);
-        WorldLocation const to = at->destination;
         ObjectGuid const g = player->GetObjectGuid();
         sWorld.GetMessager().AddMessage([g, to](World*)
         {
@@ -6283,8 +6377,8 @@ namespace Kartcraft
         else if (verb == "Q+" && f.size() > 2)
         {
             std::vector<bool> mask = CourseMask(f[2]);
-            // Not from a dungeon, a raid or a battleground: a pop would teleport them out of it.
-            if (player->InBattleGround() || player->GetMap()->Instanceable() || !AnyCourse(mask))
+            // Not from a dungeon, a raid or a battleground's match: a pop would teleport them out.
+            if (!InOpenWorld(player) || !AnyCourse(mask))
                 return true;
             // A race still waiting to start is left for the queue; one under way is not: a pop
             // would teleport them off the course, so they are told why instead.
@@ -6320,8 +6414,8 @@ namespace Kartcraft
                 for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
                 {
                     Player* mate = itr->getSource();
-                    if (!mate || mate == player || !mate->IsInWorld() || mate->InBattleGround() ||
-                        mate->GetMap()->Instanceable() || !LeaveWaitingRaces(mate))
+                    if (!mate || mate == player || !mate->IsInWorld() || !InOpenWorld(mate) ||
+                        !LeaveWaitingRaces(mate))
                         continue;
                     enqueue(mate);
                     SendLine(mate, "KARTCRAFT\tR\tQp\t" + f[2] + "\t" + player->GetName());
@@ -6914,11 +7008,11 @@ namespace Kartcraft
         size_t gates = 0, grids = 0;
         if (t.name.empty())
             return no("The track needs a name.");
-        // The open world or a dungeon, whose races run in copies of their own (Race copies); never a
-        // raid, whose copy wants a raid group, nor a battleground.
+        // The open world, a battleground's open copy, or a dungeon or a raid, whose races run in
+        // copies of their own (Race copies).
         MapEntry const* entry = sMapStorage.LookupEntry<MapEntry>(t.map);
-        if (t.map > 1 && (!entry || !entry->IsDungeon() || entry->IsRaid()))
-            return no("Tracks can be published in the open world and in dungeons, not in raids or battlegrounds.");
+        if (t.map > 1 && (!entry || !(entry->IsDungeon() || entry->IsBattleGround())))
+            return no("Tracks can be published in the open world, dungeons, raids and battlegrounds.");
         // The track's floor height, an optional ninth field: under a roof, in a dungeon or the
         // open world's (the Caverns of Time's way down), the grid's trip lands on it.
         if (f.size() > 8 && !f[8].empty() && (!ParseFloat(f[8], t.z) || std::fabs(t.z) > 20000.f))

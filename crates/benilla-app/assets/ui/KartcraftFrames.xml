@@ -943,6 +943,16 @@
             end
         end
 
+        -- Whether a track's map is a dungeon's or a raid's, raced in a copy of its own: not the
+        -- open world, the continents (0, 1) and the battlegrounds' open copies (race.rs,
+        -- BATTLEGROUND_MAPS).
+        BENILLA_KART_BATTLEGROUNDS = { [30] = true, [489] = true, [529] = true }
+
+        function BenillaKart_DungeonMap(map)
+            map = tonumber(map) or 0
+            return map > 1 and not BENILLA_KART_BATTLEGROUNDS[map]
+        end
+
         function BenillaKartTrack(key)
             for i = 1, table.getn(BenillaKartTracks) do
                 if BenillaKartTracks[i].key == key then return BenillaKartTracks[i] end
@@ -1113,7 +1123,7 @@
                 BenillaKartTracksFrameText:SetText(track.text)
                 BenillaKartTracksFrameShow:Enable()
                 BenillaKartTracksFrameRate:Enable()
-                if track.map > 1 then
+                if BenillaKart_DungeonMap(track.map) then
                     BenillaKartTracksFrameTrial:Disable()
                     BenillaKartTracksFrameMarshal:Disable()
                 else
@@ -1163,7 +1173,7 @@
             -- Our own track's Publish, and a player track of ours taken down, share its place.
             if track and track.mine then return BenillaKartPub_Ask(track) end
             if track and track.pub then return BenillaKart_Send("PubD\t" .. track.id) end
-            if not track or track.map > 1 then return end
+            if not track or BenillaKart_DungeonMap(track.map) then return end
             BenillaKart_Send("MT\t" .. track.key)
             BenillaKartTracksFrame:Hide()
         end

@@ -197,23 +197,32 @@ pads, `pack.py`, and redeploy the server.
 
 ## Dungeon courses
 
-A course on a dungeon's map (not 0 or 1) is a dungeon course, raced in a copy of the dungeon
-(`Kartcraft.cpp` "Race copies"). The Race Finder offers it in its zone like any course: a race
-that pops on one gets a fresh copy of its own, and every racer, party or not, is bound to it
-(not for keeps) and lands on its grid from wherever they were. A time trial (the track browser,
-Try again, the Race Finder's) runs in the player's own copy, kept while it lives, so a run
-after a run makes no new copy. A raid's copy wants a raid group, so a raid is never raced. The
-Race Marshal stands inside too (Stratholme's in King's Square, past the main gate): the party's
+A course on a dungeon's or a raid's map (not 0 or 1, nor a battleground's) is a dungeon course,
+raced in a copy of the dungeon (`Kartcraft.cpp` "Race copies"). The Race Finder offers it in its
+zone like any course: a race that pops on one gets a fresh copy of its own, and every racer,
+party or not, is bound to it (not for keeps) and lands on its grid from wherever they were. A
+time trial (the track browser, Try again, the Race Finder's) runs in the player's own copy, kept
+while it lives, so a run after a run makes no new copy. Anyone enters a raid alone, as a
+dungeon: no raid group is asked (`kartcraft.patch`, `MapManager::CanPlayerEnter`). The Race
+Marshal stands inside too (Stratholme's in King's Square, past the main gate): the party's
 leader (or a player with no party) hosts there, and only the host's party in the host's copy
 can join; the grid, the unstuck hop and every checkpoint stay in that copy, as a teleport within
 one map does. A player track published on a dungeon's map is a dungeon course too.
 
+A battleground out of a match (Alterac Valley, Warsong Gulch, Arathi Basin) is one open copy a
+map, made when first entered and kept, with nothing of a match spawned in it: no creature, no
+object, no gate (`kartcraft.patch`, `MapManager::CreateInstance`, `ObjectGridLoader`). It is
+raced as the open world is, its races layered over one another; a player in a match is in that
+match's own map, as ever. A player logged out in an open copy logs in there again.
+
 To build one there, any player of any level gets in with the Kartcraft menu's Dungeon teleporter
-(and the minimap button's menu): it lists every dungeon but the raids, by its entrance's level
-(`R\tDL`, `R\tDLs`), and takes the player to where its entrance puts one inside, in their own
-copy or their party's, race mode on so nothing there attacks them (`R\tDT\t<map>`,
-`Kartcraft.cpp` "Dungeon teleporter"). Leave dungeon (`R\tDB`) takes them back to where the
-first trip took them from. The core checks a level only at an entrance, never a teleport.
+(and the minimap button's menu): it lists every dungeon, raid and battleground, by its entrance's
+level (`R\tDL`, `R\tDLs`), and takes the player to where its entrance puts one inside, in their
+own copy or their party's, race mode on so nothing there attacks them (`R\tDT\t<map>`,
+`Kartcraft.cpp` "Dungeon teleporter"). The Emerald Dream, which no entrance leads into, lands on
+its grass; a battleground at its start for the player's side, in its open copy. Leave dungeon
+(`R\tDB`) takes them back to where the first trip took them from. The core checks a level only
+at an entrance, never a teleport.
 
 In the kart, a driver springs none of Stratholme's position events: the rat-trap gates (and their
 rat swarm) and The Unforgiven's ambush on Market Row (`instance_stratholme.cpp`, a hunk of

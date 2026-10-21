@@ -105,12 +105,18 @@ struct CourseCheckpoint {
     ring: Option<[f32; 2]>,
 }
 
+/// 1.12's battlegrounds, `Map.dbc`'s `InstanceType` 3: Alterac Valley, Warsong Gulch and Arathi
+/// Basin. Out of a match each is one open copy, raced as the open world is (`kartcraft.patch`,
+/// `MapManager::CreateInstance`).
+pub(crate) const BATTLEGROUND_MAPS: [u32; 3] = [30, 489, 529];
+
 impl Course {
-    /// Whether it is a dungeon course: in a dungeon, not the open world (1.12's two continents, 0
-    /// and 1). The Race Finder and a time trial race it in a copy of the dungeon of the race's
-    /// own; a party inside hosts it at the marshal there (`Kartcraft.cpp` "Race copies").
+    /// Whether it is a dungeon course: in a dungeon or a raid, not the open world (1.12's two
+    /// continents, 0 and 1, and the battlegrounds' open copies). The Race Finder and a time trial
+    /// race it in a copy of the dungeon of the race's own; a party inside hosts it at the marshal
+    /// there (`Kartcraft.cpp` "Race copies").
     pub(crate) fn dungeon(&self) -> bool {
-        self.map > 1
+        self.map > 1 && !BATTLEGROUND_MAPS.contains(&self.map)
     }
 
     /// What the Race Finder offers it under: its series, else its zone (`pack.py` gives the
@@ -2945,6 +2951,17 @@ mod tests {
         assert!(ZONES.contains(&strat.zone));
         assert!(strat.description().contains("A dungeon race"));
         assert!(COURSES.iter().filter(|c| c.map <= 1).all(|c| !c.dungeon()));
+    }
+
+    #[test]
+    fn the_battlegrounds_are_map_dbcs() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let maps = benilla_formats::load_map_catalog(&mut chain).expect("Map.dbc");
+        let battlegrounds: Vec<u32> = (0..1000)
+            .filter(|&m| maps.instance_type(m) == Some(3))
+            .collect();
+        assert_eq!(battlegrounds, BATTLEGROUND_MAPS);
     }
 
     #[test]
