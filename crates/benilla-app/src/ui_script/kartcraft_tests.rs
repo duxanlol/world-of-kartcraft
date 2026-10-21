@@ -933,6 +933,9 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
             "Show Race Marshals",
             "Leave race",
             "Unstuck",
+            "Track editor",
+            "My tracks...",
+            "Player tracks...",
             "Courier jobs...",
             "Guide...",
             "Kart garage...",
@@ -956,6 +959,12 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
     menu(&mut s);
     pick(&mut s, "Leave race");
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tX"]);
+
+    // The track editor and its lists, as the controller's menu has them.
+    menu(&mut s);
+    pick(&mut s, "My tracks...");
+    assert!(shown(&s, "BenillaKartTracksFrame"));
+    s.run("BenillaKartTracksFrame:Hide()").unwrap();
 
     menu(&mut s);
     pick(&mut s, "Kart garage...");

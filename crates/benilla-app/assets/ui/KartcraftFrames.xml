@@ -2099,6 +2099,7 @@
             { id = "garage", label = "Kart garage", run = function() BenillaKartGarage_Toggle() end },
             { id = "shop", label = "Skin shop", run = function() BenillaKartShop_Toggle() end },
             { id = "settings", label = "Kartcraft settings", run = function() BenillaKartSettings_Toggle() end },
+            { id = "camera", label = "Kart camera", run = function() BenillaKartCamera_Toggle() end },
             { id = "guide", label = "Guide", run = function() BenillaKartGuide_Toggle() end },
             { id = "pad", label = "Controller test", run = function() BenillaKartPad_Toggle() end },
         }
@@ -3349,9 +3350,20 @@
                 { text = "Leave race", func = BenillaKart_LeaveRace },
                 { text = "Unstuck", func = BenillaKart_Unstuck },
             }
+            -- What the controller's menu offers by mode (BENILLA_KART_MENU), offered here too.
+            if BenillaKart_TrialRace() then
+                table.insert(entries, { text = "Restart time trial", func = BenillaKart_RestartTrial })
+            end
+            if IsInInstance and IsInInstance() then
+                table.insert(entries, { text = "Leave dungeon", func = BenillaKartDungeons_Leave })
+            end
             if BenillaKartFinder.queued then
                 table.insert(entries, { text = "Leave queue", func = BenillaKartFinder_QueueClick })
             end
+            table.insert(entries, { text = BenillaKartEditor.state == "" and "Track editor" or "Close the track editor",
+                func = BenillaKartEditor_Toggle })
+            table.insert(entries, { text = "My tracks...", func = BenillaKartTrackBrowser_OpenMine })
+            table.insert(entries, { text = "Player tracks...", func = BenillaKartTrackBrowser_OpenPublished })
             table.insert(entries, { text = "Courier jobs...", func = BenillaKartJobs_Toggle })
             table.insert(entries, { text = "Guide...", func = BenillaKartGuide_Toggle })
             table.insert(entries, { text = "Kart garage...", func = BenillaKartGarage_Toggle })

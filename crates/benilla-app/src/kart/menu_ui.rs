@@ -99,6 +99,7 @@ pub(crate) const PAGES: [Page; 6] = [
         icon: "Interface\\Icons\\INV_Misc_Gear_01",
         entries: &[
             ("settings", "Interface\\Icons\\INV_Misc_Gear_01"),
+            ("camera", "Interface\\Icons\\Ability_Hunter_EagleEye"),
             ("pad", "Interface\\Icons\\INV_Gizmo_01"),
         ],
     },
