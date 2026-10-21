@@ -6951,7 +6951,7 @@ namespace Kartcraft
     }
 
     // "key,x,y,z,yaw,pitch,roll[,l,w,h];..." checked and written back at the wire's decimals: a key of
-    // a-z, 0-9 and '-' (the client knows its models by it; one it does not know it skips), a place
+    // a-z, 0-9, '-' and '_' (CTR's props: ctr-crate_fruit) (the client knows its models by it; one it does not know it skips), a place
     // within the world and a turn in radians; false if any object is not so. `count` its objects.
     static bool CleanTrackObjects(std::string const& text, std::string& out, size_t& count)
     {
@@ -6978,7 +6978,7 @@ namespace Kartcraft
             if ((v.size() != 7 && v.size() != 10) || v[0].empty() || v[0].size() > 32)
                 return false;
             for (char ch : v[0])
-                if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-'))
+                if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_'))
                     return false;
             float n[9];
             for (size_t k = 0; k + 1 < v.size(); ++k)
@@ -7037,8 +7037,10 @@ namespace Kartcraft
             return no("The track's grid is not right.");
         // Its placed objects, an optional tenth field.
         size_t objects = 0;
-        if (f.size() > 9 && (!CleanTrackObjects(f[9], t.objects, objects) || objects > USER_TRACK_OBJECTS))
-            return no("The track's objects are not right: at most 250 of them.");
+        if (f.size() > 9 && !CleanTrackObjects(f[9], t.objects, objects))
+            return no("The track's objects are not right.");
+        if (objects > USER_TRACK_OBJECTS)
+            return no("A track has at most 250 objects.");
         // Its scale, an optional eleventh field: the karts' and racers' size on it.
         if (f.size() > 10 && !f[10].empty() &&
             (!ParseFloat(f[10], t.scale) || t.scale < MIN_RACE_SCALE || t.scale > MAX_RACE_SCALE))

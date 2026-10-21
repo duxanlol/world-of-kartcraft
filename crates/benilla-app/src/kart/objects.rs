@@ -1346,6 +1346,18 @@ mod tests {
                 k.key
             );
         }
+        // The server takes each key (`Kartcraft.cpp` `CleanTrackObjects`): CTR's have '_'.
+        for k in &ctr {
+            assert!(
+                k.key.len() <= 32
+                    && k.key.bytes().all(|b| b.is_ascii_lowercase()
+                        || b.is_ascii_digit()
+                        || b == b'-'
+                        || b == b'_'),
+                "{}",
+                k.key
+            );
+        }
         // The ? crate is among them, a pickup, textured.
         let crate_q = kind("ctr-crate_question").expect("the ? crate");
         assert_eq!(crate_q.1.group, "CTR Pickups");
