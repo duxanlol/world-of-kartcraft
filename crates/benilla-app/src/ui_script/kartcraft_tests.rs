@@ -4410,3 +4410,45 @@ fn an_engine_menu_takes_the_controller_from_the_layer() {
         .unwrap();
     assert_eq!(focus, "", "the layer's window got no press");
 }
+
+/// A publish too long for one addon message (2047 bytes, the client's cut) goes in pieces, each
+/// within it, that put back together are the line one message would carry; a short one is one.
+#[test]
+fn a_long_publish_goes_in_pieces_the_server_puts_together() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let publish = |s: &mut UiScript, objects: usize| -> Vec<String> {
+        sent(s);
+        s.run(&format!(
+            "local o = {{}} for i = 1, {objects} do \
+             table.insert(o, 'excavation-plank-2c,-8953.2,-123.4,56.7,1.571,0.000,0.000') end \
+             BenillaKartPub_Publish({{ name = 'Long Way', map = 0, laps = 3, zone = 'Elwynn Forest', \
+             grid = '0.0,1.0,0.500', gates = '1.0,2.0;3.0,4.0;5.0,6.0', z = '', \
+             objects = table.concat(o, ';'), scale = '' }})"
+        ))
+        .unwrap();
+        sent(s)
+    };
+    let short = publish(&mut s, 2);
+    assert_eq!(short.len(), 1);
+    assert!(short[0].starts_with("KARTCRAFT\tR\tPub\tLong Way\t"));
+    let pieces = publish(&mut s, 100);
+    assert!(pieces.len() >= 3, "{} pieces", pieces.len());
+    let mut line = String::new();
+    for (i, p) in pieces.iter().enumerate() {
+        assert!(p.len() <= 2047, "piece {i} is {} bytes", p.len());
+        let head = format!("KARTCRAFT\tR\tPubP\t{}\t{}\t", i + 1, pieces.len());
+        line.push_str(p.strip_prefix(&head).unwrap_or_else(|| panic!("{p:.40}")));
+    }
+    assert!(line.starts_with("Pub\tLong Way\t0\t3\tElwynn Forest\t"));
+    assert_eq!(line.matches("excavation-plank-2c,").count(), 100);
+    assert!(
+        line.ends_with("0.000,0.000\t"),
+        "{:.40}",
+        &line[line.len() - 40..]
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

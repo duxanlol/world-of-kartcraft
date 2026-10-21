@@ -6666,11 +6666,14 @@ namespace Kartcraft
     // \t<map>\t<laps>\t<zone>\t<grid>\t<points>\t<good>\t<bad>\t<z>\t<objects>\t<scale>" each (its
     // votes, its height, objects and scale or empty), then "R\tPTE"; a race on one sends its line
     // so, the votes empty. "R\tPubD\t<id>" takes one of ours down (a GM's, anyone's): "R\tPubGone\t<id>";
-    // "R\tPubDN\t<name>" ours of that name, if any.
+    // "R\tPubDN\t<name>" ours of that name, if any. A publish longer than one addon message (the
+    // client cuts one at 2047 bytes) comes in pieces, "R\tPubP\t<i>\t<n>\t<text>", its line after
+    // "R\t" cut anywhere, 1 to n in order; the last puts it together (PublishPiece).
     constexpr size_t USER_TRACKS_MAX = 2000;    // on the server
     constexpr size_t USER_TRACKS_EACH = 20;     // by one character
     constexpr size_t USER_TRACK_GATES = 60;     // checkpoints on one
-    constexpr size_t USER_TRACK_OBJECTS = 40;   // placed objects on one
+    constexpr size_t USER_TRACK_OBJECTS = 100;  // placed objects on one
+    constexpr size_t PUBLISH_PIECES = 8;        // pieces of one publish, at most
     // A build piece's size each way (yards): the client's bounds (kart/pieces.rs MIN_SIZE, MAX_SIZE).
     constexpr float PIECE_MIN = 0.5f;
     constexpr float PIECE_MAX = 200.f;
@@ -6680,6 +6683,44 @@ namespace Kartcraft
     static uint32 s_userTrackNext = 1;
     static std::unordered_map<uint32, uint32> s_published;      // guid low -> last publish (ms)
     static std::unordered_map<uint32, uint32> s_userTracksAsked; // guid low -> last list (ms)
+
+    // A publish coming in pieces: how many, how many so far, and their text.
+    struct PublishParts
+    {
+        size_t n = 0;
+        size_t got = 0;
+        std::string text;
+    };
+    static std::unordered_map<uint32, PublishParts> s_publishParts; // guid low -> so far
+
+    // One piece of a publish ("<i>\t<n>\t<text>"): true with `whole` its line once the last is
+    // in. A piece out of order, or past PUBLISH_PIECES, drops what came so far.
+    static bool PublishPiece(Player* player, std::string const& rest, std::string& whole)
+    {
+        uint32 const guid = player->GetGUIDLow();
+        size_t const a = rest.find('\t');
+        size_t const b = a == std::string::npos ? std::string::npos : rest.find('\t', a + 1);
+        if (b == std::string::npos)
+            return false;
+        size_t const i = std::strtoul(rest.substr(0, a).c_str(), nullptr, 10);
+        size_t const n = std::strtoul(rest.substr(a + 1, b - a - 1).c_str(), nullptr, 10);
+        PublishParts& p = s_publishParts[guid];
+        if (i == 1)
+            p = PublishParts();
+        if (n < 2 || n > PUBLISH_PIECES || i != p.got + 1 || (i > 1 && n != p.n))
+        {
+            s_publishParts.erase(guid);
+            return false;
+        }
+        p.n = n;
+        p.got = i;
+        p.text += rest.substr(b + 1);
+        if (i < n)
+            return false;
+        whole = "R\t" + p.text;
+        s_publishParts.erase(guid);
+        return whole.compare(0, 6, "R\tPub\t") == 0;
+    }
 
     static void LoadUserTracks()
     {
@@ -6892,7 +6933,7 @@ namespace Kartcraft
         // Its placed objects, an optional tenth field.
         size_t objects = 0;
         if (f.size() > 9 && (!CleanTrackObjects(f[9], t.objects, objects) || objects > USER_TRACK_OBJECTS))
-            return no("The track's objects are not right: at most 40 of them.");
+            return no("The track's objects are not right: at most 100 of them.");
         // Its scale, an optional eleventh field: the karts' and racers' size on it.
         if (f.size() > 10 && !f[10].empty() &&
             (!ParseFloat(f[10], t.scale) || t.scale < MIN_RACE_SCALE || t.scale > MAX_RACE_SCALE))
@@ -7000,13 +7041,18 @@ namespace Kartcraft
             it = WorldTimer::getMSTimeDiff(it->second.created, now) > RACE_LIFETIME ? s_races.erase(it) : std::next(it);
         UpdateFinder(now);
 
+        // A publish's pieces: nothing until the last, then its whole line.
+        std::string whole;
+        if (body.compare(0, 7, "R\tPubP\t") == 0 && !PublishPiece(player, body.substr(7), whole))
+            return;
+        std::string const& line = whole.empty() ? body : whole;
         std::vector<std::string> f;
-        for (size_t at = 0, tab; at <= body.size(); at = tab + 1)
+        for (size_t at = 0, tab; at <= line.size(); at = tab + 1)
         {
-            tab = body.find('\t', at);
+            tab = line.find('\t', at);
             if (tab == std::string::npos)
-                tab = body.size();
-            f.push_back(body.substr(at, tab - at));
+                tab = line.size();
+            f.push_back(line.substr(at, tab - at));
         }
         // Unstuck and race mode work in the kart or out of it.
         if (f.size() >= 2 && f[1] == "U")

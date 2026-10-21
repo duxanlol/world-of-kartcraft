@@ -927,11 +927,20 @@
         end
 
         -- A saved track to the server, its name and ours (the server knows who sends it), with
-        -- its floor, which a dungeon's trips land on.
+        -- its floor, which a dungeon's trips land on. An addon message holds 2047 bytes (the
+        -- client cuts one there): a longer publish goes in pieces, "PubP<TAB>i<TAB>n<TAB>text",
+        -- the line cut every BENILLA_KART_PUB_PIECE bytes, which the server puts together.
+        BENILLA_KART_PUB_PIECE = 1900
         function BenillaKartPub_Publish(track)
-            BenillaKart_Send("Pub\t" .. track.name .. "\t" .. track.map .. "\t" .. track.laps .. "\t"
+            local line = "Pub\t" .. track.name .. "\t" .. track.map .. "\t" .. track.laps .. "\t"
                 .. (track.zone or "") .. "\t" .. (track.grid or "") .. "\t" .. (track.gates or "")
-                .. "\t" .. (track.z or "") .. "\t" .. (track.objects or "") .. "\t" .. (track.scale or ""))
+                .. "\t" .. (track.z or "") .. "\t" .. (track.objects or "") .. "\t" .. (track.scale or "")
+            local size = BENILLA_KART_PUB_PIECE
+            local n = math.ceil(string.len(line) / size)
+            if n <= 1 then return BenillaKart_Send(line) end
+            for i = 1, n do
+                BenillaKart_Send("PubP\t" .. i .. "\t" .. n .. "\t" .. string.sub(line, (i - 1) * size + 1, i * size))
+            end
         end
 
         function BenillaKartTrack(key)
