@@ -55,11 +55,13 @@ fn placed_pads(objects: &[super::objects::Placed]) -> impl Iterator<Item = Pad> 
 }
 
 /// The pads of the track we are on: the draft's while editing, else the race's (a course's own
-/// and its placed ones), else none.
+/// and its placed ones), else none; each the size of the karts on that track (its scale), as the
+/// editor shows the draft at its own.
 fn track_pads(edit: &super::track_edit::TrackEdit, race: Option<&super::race::Active>) -> Vec<Pad> {
-    if edit.view().state == "edit" {
+    let view = edit.view();
+    if view.state == "edit" {
         let draft: Vec<_> = edit.laid_objects().into_iter().map(|(_, o)| o).collect();
-        return placed_pads(&draft).collect();
+        return placed_pads(&draft).map(|p| p.sized(view.scale)).collect();
     }
     let Some(race) = race else {
         return Vec::new();
@@ -68,7 +70,10 @@ fn track_pads(edit: &super::track_edit::TrackEdit, race: Option<&super::race::Ac
         .iter()
         .filter(|(key, _)| key == race.course_key())
         .map(|(_, p)| *p);
-    course.chain(placed_pads(race.objects())).collect()
+    course
+        .chain(placed_pads(race.objects()))
+        .map(|p| p.sized(race.scale()))
+        .collect()
 }
 
 /// The props' pads ([`super::props`]: the stunt park's, Skyhop's), out with the props, at their

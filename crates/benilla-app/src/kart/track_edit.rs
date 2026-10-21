@@ -375,6 +375,8 @@ impl TrackEdit {
                 .with_heights(self.heights.clone())
                 .with_rings(self.rings.clone())
                 .with_gates(self.widths.clone())
+                // So its default-wide gates are drawn as the race on it sizes them.
+                .with_scale(self.scale)
         })
     }
 

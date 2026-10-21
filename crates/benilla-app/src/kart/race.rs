@@ -958,9 +958,14 @@ impl Active {
         }
     }
 
-    /// Checkpoint `i`'s gate half-width (yards).
+    /// Checkpoint `i`'s gate half-width (yards). The default ([`GATE_HALF_WIDTH`], the width a
+    /// course leaves unset and the editor publishes as unset) is the karts' size on the track, so
+    /// it takes the race's scale; a width set for the spot is kept as set.
     fn gate_half_width(&self, i: usize) -> f32 {
-        self.gates.get(i).copied().unwrap_or(GATE_HALF_WIDTH)
+        match self.gates.get(i).copied() {
+            Some(w) if w != GATE_HALF_WIDTH => w,
+            _ => GATE_HALF_WIDTH * self.scale(),
+        }
     }
 
     /// The two ends of checkpoint `i`'s gate (WoW x, y): its half-width either side of its
@@ -3568,6 +3573,24 @@ mod tests {
             points: vec![[0.0, 0.0], [100.0, 0.0], [200.0, 0.0], [200.0, 100.0]],
             ..Default::default()
         }
+    }
+
+    /// A default-wide gate is the karts' size on the track, so it narrows with the race's scale;
+    /// one set for its spot keeps its width.
+    #[test]
+    fn a_default_gate_takes_the_race_s_scale_and_a_set_one_keeps_its_width() {
+        let race = Active::draft(1, vec![[0.0, 0.0], [50.0, 0.0], [100.0, 0.0]], "Me")
+            .with_gates(vec![GATE_HALF_WIDTH, 12.0])
+            .with_scale(0.5);
+        assert_eq!(race.gate_half_width(0), GATE_HALF_WIDTH * 0.5);
+        assert_eq!(race.gate_half_width(1), 12.0);
+        assert_eq!(
+            race.gate_half_width(2),
+            GATE_HALF_WIDTH * 0.5,
+            "past the list: the default"
+        );
+        let full = Active::draft(1, vec![[0.0, 0.0], [50.0, 0.0]], "Me");
+        assert_eq!(full.gate_half_width(0), GATE_HALF_WIDTH);
     }
 
     #[test]

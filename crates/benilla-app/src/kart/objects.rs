@@ -913,24 +913,39 @@ pub(crate) struct PlacedObject(pub(crate) usize);
 #[derive(Component)]
 pub(crate) struct Ghost;
 
-/// What is in the world: the objects as laid and their roots, and the ghost and its kind.
+/// What is in the world: the objects as laid and their roots, the track's scale they were laid
+/// at, and the ghost and its kind.
 #[derive(Resource, Default)]
 pub(crate) struct Laid {
     objects: Vec<(usize, Placed)>,
     roots: Vec<Entity>,
+    scale: f32,
     ghost: Option<(String, Option<[f32; 3]>, Entity)>,
 }
 
-/// Spawns `placed` as `loaded`'s parts under one root; solid, unless a ghost.
+/// Where and how big `placed` stands on a track of scale `scale`: a CTR prop is the kart's size,
+/// so it takes the track's scale as the karts do; a build piece and a WoW model are the world's,
+/// sized in yards for their spot (a ramp fills its gap at any scale).
+fn shown(placed: &Placed, scale: f32) -> Transform {
+    let mut t = placed.transform();
+    if kind(&placed.model).is_some_and(|(_, k)| k.path.starts_with(CTR_PATH)) {
+        t.scale *= scale;
+    }
+    t
+}
+
+/// Spawns `placed` as `loaded`'s parts under one root, on a track of scale `scale`; solid, unless
+/// a ghost.
 fn spawn(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     placed: &Placed,
     loaded: &Loaded,
     ghost: bool,
+    scale: f32,
 ) -> Entity {
     let mut root = commands.spawn((
-        placed.transform(),
+        shown(placed, scale),
         Visibility::default(),
         Name::new(format!("kart object {}", placed.model)),
     ));
@@ -997,6 +1012,12 @@ pub(crate) fn lay(
         .into_iter()
         .filter(|(_, p)| !is_pad(&p.model))
         .collect();
+    // The track's scale, the karts' size on it: the draft's while editing, else the race's.
+    let scale = match (edit.view().state, &races.race) {
+        ("edit", _) => edit.view().scale,
+        (_, Some(race)) => race.scale(),
+        _ => 1.0,
+    };
     let ghost = edit.ghost();
     let mut chain = None;
     let mut load = |key: &'static str, models: &mut Models, meshes: &mut Assets<Mesh>| {
@@ -1010,7 +1031,7 @@ pub(crate) fn lay(
             load(k.key, &mut models, &mut meshes);
         }
     }
-    if laid.objects != want {
+    if laid.objects != want || laid.scale != scale {
         for root in laid.roots.drain(..) {
             commands.entity(root).despawn();
         }
@@ -1022,16 +1043,17 @@ pub(crate) fn lay(
                 continue;
             }
             let loaded = models.0[kind.key].as_ref().unwrap();
-            let root = spawn(&mut commands, &mut meshes, placed, loaded, false);
+            let root = spawn(&mut commands, &mut meshes, placed, loaded, false, scale);
             commands.entity(root).insert(PlacedObject(*i));
             laid.roots.push(root);
         }
         laid.objects = want;
+        laid.scale = scale;
     }
     match (ghost, &laid.ghost) {
         (Some(g), Some((model, size, e))) if *model == g.model && *size == g.size => {
             if let Ok(mut t) = ghosts.get_mut(*e) {
-                t.set_if_neq(g.transform());
+                t.set_if_neq(shown(&g, scale));
             }
         }
         (g, _) => {
@@ -1042,7 +1064,7 @@ pub(crate) fn lay(
             if let (Some(g), Some((_, kind))) = (g, kind) {
                 if load(kind.key, &mut models, &mut meshes) {
                     let loaded = models.0[kind.key].as_ref().unwrap();
-                    let e = spawn(&mut commands, &mut meshes, &g, loaded, true);
+                    let e = spawn(&mut commands, &mut meshes, &g, loaded, true, scale);
                     commands.entity(e).insert(Ghost);
                     laid.ghost = Some((g.model, g.size, e));
                 }
@@ -1065,6 +1087,32 @@ pub(crate) fn lay(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// On a half-scale track a CTR prop is half its size, as the karts are; a WoW model and a
+    /// build piece keep the world's (a ramp still fills its gap). The CTR case runs where the
+    /// player's own kart data is there to list its props.
+    #[test]
+    fn a_ctr_prop_takes_the_track_s_scale_and_the_world_s_objects_keep_theirs() {
+        let wow = placed(0.0, 0.0, 0.0);
+        assert_eq!(shown(&wow, 0.5).scale, wow.transform().scale);
+        let piece = Placed {
+            model: kinds()
+                .iter()
+                .find(|k| k.group == "Build")
+                .unwrap()
+                .key
+                .into(),
+            ..placed(0.0, 0.0, 0.0)
+        };
+        assert_eq!(shown(&piece, 0.5).scale, piece.transform().scale);
+        if let Some(ctr) = kinds().iter().find(|k| k.path.starts_with(CTR_PATH)) {
+            let prop = Placed {
+                model: ctr.key.into(),
+                ..placed(0.0, 0.0, 0.0)
+            };
+            assert_eq!(shown(&prop, 0.5).scale, prop.transform().scale * 0.5);
+        }
+    }
 
     fn placed(yaw: f32, pitch: f32, roll: f32) -> Placed {
         Placed {

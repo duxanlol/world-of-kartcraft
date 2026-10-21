@@ -36,6 +36,9 @@ pub struct Pad {
     /// Laid flat at its own height, not dropped onto the world's ground: a pad on a prop the
     /// world's collision has not (Skyhop's platforms).
     pub fixed: bool,
+    /// Its size against CTR's ([`PAD_LENGTH`]): the race's scale, so a pad is the kart's size
+    /// as the kart is the race's (1 out of a scaled race).
+    pub size: f32,
 }
 
 impl Pad {
@@ -46,7 +49,13 @@ impl Pad {
             centre: wow_to_bevy([x, y, z]),
             forward: wow_to_bevy([o.cos(), o.sin(), 0.0]).normalize_or(Vec3::NEG_Z),
             fixed: false,
+            size: 1.0,
         }
+    }
+
+    /// This pad at `size` times CTR's ([`Pad::size`]).
+    pub fn sized(self, size: f32) -> Self {
+        Self { size, ..self }
     }
 
     /// This pad laid flat at its own height ([`Pad::fixed`]).
@@ -64,8 +73,8 @@ impl Pad {
     /// Whether a kart whose origin is at `p` (Bevy world) is on the pad.
     pub fn contains(&self, p: Vec3) -> bool {
         let d = p - self.centre;
-        d.dot(self.forward).abs() <= PAD_LENGTH * 0.5
-            && d.dot(self.right()).abs() <= PAD_WIDTH * 0.5
+        d.dot(self.forward).abs() <= PAD_LENGTH * self.size * 0.5
+            && d.dot(self.right()).abs() <= PAD_WIDTH * self.size * 0.5
             && d.y.abs() <= PAD_REACH
     }
 
@@ -92,22 +101,23 @@ pub fn pad_mesh(pad: &Pad, mut height: impl FnMut(Vec3) -> Option<f32>) -> Optio
         indices.extend([base, base + 2, base + 1, base, base + 3, base + 2]);
         Some(())
     };
-    let (hw, hl) = (PAD_WIDTH * 0.5, PAD_LENGTH * 0.5);
+    let (length, width) = (PAD_LENGTH * pad.size, PAD_WIDTH * pad.size);
+    let (hw, hl) = (width * 0.5, length * 0.5);
     // The plate, in strips so it follows the ground's slope.
     const STRIPS: usize = 4;
     for i in 0..STRIPS {
-        let z0 = -hl + PAD_LENGTH * i as f32 / STRIPS as f32;
-        let z1 = -hl + PAD_LENGTH * (i + 1) as f32 / STRIPS as f32;
+        let z0 = -hl + length * i as f32 / STRIPS as f32;
+        let z1 = -hl + length * (i + 1) as f32 / STRIPS as f32;
         quad(
             [(-hw, z0), (hw, z0), (hw, z1), (-hw, z1)],
             [0.05, 0.55, 0.12, 0.45],
         )?;
     }
     // Three chevrons, each two arms meeting at a tip ahead.
-    let (arm, depth) = (PAD_LENGTH * 0.09, PAD_LENGTH * 0.18);
+    let (arm, depth) = (length * 0.09, length * 0.18);
     let reach = hw * 0.8;
     for k in 0..3 {
-        let tip = -hl + PAD_LENGTH * (0.36 + 0.29 * k as f32);
+        let tip = -hl + length * (0.36 + 0.29 * k as f32);
         let tail = tip - depth;
         let color = [0.35, 1.0, 0.3, 0.95];
         // Left arm: from the left tail to the tip, `arm` thick along the course.
@@ -284,6 +294,16 @@ pub fn lay(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pad on a scaled track is the karts' size there: half the plate at half the scale.
+    #[test]
+    fn a_pad_sized_down_holds_a_kart_only_on_its_smaller_plate() {
+        let pad = Pad::from_wow(0.0, 0.0, 0.0, std::f32::consts::PI).sized(0.5);
+        let on = |x: f32, z: f32| pad.contains(Vec3::new(x, 0.0, z));
+        assert!(on(0.0, PAD_LENGTH * 0.24) && on(0.0, -PAD_LENGTH * 0.24));
+        assert!(!on(0.0, PAD_LENGTH * 0.26), "past its end at half size");
+        assert!(!on(PAD_WIDTH * 0.26, 0.0), "past its side at half size");
+    }
 
     #[test]
     fn a_pad_points_along_its_orientation_and_holds_a_kart_on_it_only() {
