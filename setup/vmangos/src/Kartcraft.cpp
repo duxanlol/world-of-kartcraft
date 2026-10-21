@@ -4660,6 +4660,16 @@ namespace Kartcraft
         return instance && CopyState(c.map, instance) && CanBeRacedOff(player);
     }
 
+    // Whether `player` may go to a time trial on `c` now: off to it from the open world, as the
+    // Race Finder takes them, or, on a party course, from inside its dungeon, whose copy the
+    // trial reuses (TrialCopy).
+    static bool CanTrialOn(Player* player, Course const& c)
+    {
+        if (PartyCourse(c) && player->GetMapId() == c.map)
+            return Settled(player) && !CarryingDelivery(player);
+        return CanBeRacedOff(player);
+    }
+
     // Whether `player` may join `r`: anyone near its start, but a party race only the host's party
     // (one group) in the host's copy of the dungeon; a host with no party races alone.
     static bool MayJoin(Player* player, Race const& r)
@@ -6456,7 +6466,7 @@ namespace Kartcraft
             // teleport to the course's grid (a far one settles longer) and, after it, the way
             // back ("R\tRet"); a dungeon course's in the player's own copy of the dungeon.
             Course const* course = FindCourse(f[2]);
-            if (!course || !CanBeRacedOff(player) || RefuseOff(player, *course))
+            if (!course || !CanTrialOn(player, *course) || RefuseOff(player, *course))
                 return true;
             // A dungeon course in the player's own copy of it (Race copies).
             uint32 const instance = TrialCopy(player, *course);
@@ -6502,7 +6512,7 @@ namespace Kartcraft
             // its grid again from wherever they are, as "TB" goes, inside its dungeon for a party
             // course. A spot a track browser trial took them from stays theirs; none is taken now.
             Course const* course = FindCourse(f[2]);
-            if (!course || InAnyRace(guid) || !CanBeRacedOff(player) || RefuseOff(player, *course))
+            if (!course || InAnyRace(guid) || !CanTrialOn(player, *course) || RefuseOff(player, *course))
                 return true;
             // A dungeon course in the player's own copy of it (Race copies), from wherever they are.
             uint32 const instance = TrialCopy(player, *course);
@@ -6623,11 +6633,12 @@ namespace Kartcraft
             if (verb == "Stay" || WorldTimer::getMSTimeDiff(to.at, now) > RETURN_KEEP)
                 return true;
             // A teleport belongs to the world thread: posted to its messager, as a Race Marshal's
-            // choice is, and only for a player who could be raced off (alive, not fighting...).
+            // choice is, and only for a player settled (alive, not fighting...) out of a
+            // battleground's match: from a dungeon course's copy too, which they leave.
             sWorld.GetMessager().AddMessage([guid, to](World*)
             {
                 Player* p = ObjectAccessor::FindPlayer(guid);
-                if (p && p->IsInWorld() && CanBeRacedOff(p))
+                if (p && p->IsInWorld() && Settled(p) && !p->InBattleGround() && !CarryingDelivery(p))
                     p->TeleportTo(to.map, to.x, to.y, to.z, to.o);
             });
         }
