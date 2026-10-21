@@ -22,8 +22,10 @@ use crate::ui_script::{EnginePad, EnginePanel};
 
 /// Over the editor's panels and popups.
 const Z: i32 = 130;
-/// The tiles a row holds, a tile's size and its icon's.
+/// The tiles a row holds, the rows a page shows, a tile's size and its icon's.
 const COLS: usize = 4;
+const PAGE_ROWS: usize = 3;
+const PAGE_TILES: usize = COLS * PAGE_ROWS;
 const TILE: Vec2 = Vec2::new(120.0, 92.0);
 const TILE_ICON: f32 = 44.0;
 /// A dungeon's art, its loading screen's 4:3.
@@ -38,6 +40,9 @@ const STICK_LEAN: f32 = 0.5;
 const STICK_REPEAT: f32 = 0.22;
 const LEGEND: &str =
     "D-pad / stick: move    Cross / A: choose    Circle / B: back    L1 / R1: subcategory";
+/// The legend where L1 and R1 turn the grid's pages (the dungeons').
+const LEGEND_PAGES: &str =
+    "D-pad / stick: move    Cross / A: choose    Circle / B: back    L1 / R1: page";
 
 /// A subcategory: its name and icon, and its entries' ids (Lua's) with their icons.
 pub(crate) struct Page {
@@ -129,13 +134,16 @@ enum Art {
     Map(u32),
 }
 
-/// What a tree was built for: the grid's title, its tiles and what it says with none, at the
-/// screen's scale.
+/// What a tree was built for: the grid's title, the page of its tiles shown (the first one's
+/// place, the pages), what it says with none and its legend, at the screen's scale.
 #[derive(Clone, PartialEq)]
 struct Built {
     title: String,
     tiles: Vec<Tile>,
+    first: usize,
+    pages: (usize, usize),
     empty: &'static str,
+    legend: &'static str,
     s: f32,
 }
 
@@ -221,9 +229,10 @@ impl KartMenu {
             return (self.rows.iter())
                 .filter_map(|(id, label)| {
                     let map = id.strip_prefix(DUNGEON_ROW)?.parse().ok()?;
+                    // Its level (Lua's grey "(level N)") on a line of its own, under the name.
                     Some(Tile {
                         id: id.clone(),
-                        label: label.clone(),
+                        label: label.replacen(" |cff999999(", "\n|cff999999(", 1),
                         art: Art::Map(map),
                     })
                 })
@@ -251,6 +260,11 @@ impl KartMenu {
                 })
             })
             .collect()
+    }
+
+    /// The page holding the focus, a page of [`PAGE_TILES`]: (the page, the pages).
+    fn page_of(&self, n: usize) -> (usize, usize) {
+        (self.at / PAGE_TILES, n.div_ceil(PAGE_TILES).max(1))
     }
 
     fn nav(&mut self, nav: Nav) {
@@ -292,7 +306,15 @@ impl KartMenu {
                 (Some(p), false) => (self.page, self.at) = (None, p),
                 (None, false) => self.open = false,
             },
-            Nav::Turn(_) if self.dungeons => {}
+            // The dungeons' grid turns its pages, onto the same place in the next or last one.
+            Nav::Turn(d) if self.dungeons => {
+                let pages = n.div_ceil(PAGE_TILES).max(1);
+                let page = (self.at / PAGE_TILES) as i32 + d;
+                if (0..pages as i32).contains(&page) {
+                    let to = page as usize * PAGE_TILES + self.at % PAGE_TILES;
+                    self.at = to.min(n.saturating_sub(1));
+                }
+            }
             Nav::Turn(d) => match self.page {
                 Some(p) => {
                     let p = (p as i32 + d).rem_euclid(PAGES.len() as i32) as usize;
@@ -417,15 +439,23 @@ pub(crate) fn draw(
     mut frames: Query<(&MenuTile, &Interaction, &mut BorderColor)>,
 ) {
     let s = crate::glue::screen_scale(window.single().ok());
-    let want = menu.open.then(|| Built {
-        title: menu.title(),
-        tiles: menu.tiles(),
-        empty: if menu.dungeons {
-            "Asking the server for its dungeons..."
-        } else {
-            "Nothing here now."
-        },
-        s,
+    let want = menu.open.then(|| {
+        let all = menu.tiles();
+        let pages = menu.page_of(all.len());
+        let first = pages.0 * PAGE_TILES;
+        Built {
+            title: menu.title(),
+            tiles: all.into_iter().skip(first).take(PAGE_TILES).collect(),
+            first,
+            pages,
+            empty: if menu.dungeons {
+                "Asking the server for its dungeons..."
+            } else {
+                "Nothing here now."
+            },
+            legend: if menu.dungeons { LEGEND_PAGES } else { LEGEND },
+            s,
+        }
     });
     if menu.built != want {
         if let Some(root) = menu.root.take() {
@@ -507,7 +537,7 @@ fn spawn(
             };
             p.spawn(grid).with_children(|g| {
                 for (i, t) in built.tiles.iter().enumerate() {
-                    tile(g, image, font, s, i, t);
+                    tile(g, image, font, s, built.first + i, t);
                 }
             });
             if built.tiles.is_empty() {
@@ -515,7 +545,11 @@ fn spawn(
                 label(p, font, built.empty, FONT, white, Node::default(), s);
             }
             let grey = Color::srgb(0.6, 0.6, 0.6);
-            label(p, font, LEGEND, SMALL, grey, Node::default(), s);
+            if built.pages.1 > 1 {
+                let text = format!("Page {} of {}", built.pages.0 + 1, built.pages.1);
+                label(p, font, &text, SMALL, GOLD, Node::default(), s);
+            }
+            label(p, font, built.legend, SMALL, grey, Node::default(), s);
         });
     });
     root.id()
@@ -680,6 +714,41 @@ mod tests {
         m.take_run();
         m.nav(Nav::Back);
         assert_eq!((m.dungeons, m.page, m.at), (false, Some(2), 0));
+    }
+
+    /// The dungeons' grid shows a page of twelve: the D-pad walks off its bottom row onto the
+    /// next page, L1 and R1 turn them, and the focus never leaves the tiles there are.
+    #[test]
+    fn the_dungeon_grid_pages_by_twelve() {
+        let mut rows = String::from("dungeons\tDungeon teleporter");
+        for map in 0..31 {
+            rows += &format!("\ndt:{map}\tMap {map}");
+        }
+        let mut m = menu(&rows);
+        m.toggle(Some("dungeons"));
+        assert_eq!(m.page_of(m.tiles().len()), (0, 3));
+        m.nav(Nav::Move(IVec2::Y));
+        m.nav(Nav::Move(IVec2::Y));
+        m.nav(Nav::Move(IVec2::Y));
+        assert_eq!(
+            (m.at, m.page_of(31).0),
+            (12, 1),
+            "off the bottom row: the next page"
+        );
+        m.nav(Nav::Turn(1));
+        assert_eq!(m.at, 24);
+        m.nav(Nav::Move(IVec2::X));
+        m.nav(Nav::Turn(1));
+        assert_eq!(m.at, 25, "no page after the last");
+        m.nav(Nav::Move(IVec2::Y));
+        m.nav(Nav::Move(IVec2::Y));
+        assert_eq!(m.at, 29, "the last row: no row under it");
+        m.nav(Nav::Turn(-1));
+        assert_eq!(
+            (m.at, m.page_of(31).0),
+            (17, 1),
+            "the same place a page back"
+        );
     }
 
     #[test]
