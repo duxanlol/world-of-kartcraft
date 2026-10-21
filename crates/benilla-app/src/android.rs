@@ -31,6 +31,22 @@ pub fn main(build: BuildId, app: AndroidApp) -> AppExit {
     logcat::redirect();
     if let Some(dir) = app.external_data_path() {
         environment(&app, &dir);
+        // The run's log where the player's files are, which they reach from a PC, when the app
+        // may write there; else in its own folder.
+        let shared = dir.ancestors().nth(4).map(|s| s.join(SHARED));
+        let log = shared
+            .filter(|s| {
+                let probe = s.join("log.txt.probe");
+                let ok = std::fs::write(&probe, b"").is_ok();
+                let _ = std::fs::remove_file(&probe);
+                ok
+            })
+            .unwrap_or_else(|| dir.clone());
+        println!(
+            "benilla: this run's log is {}",
+            log.join("log.txt").display()
+        );
+        logcat::to_file(&log.join("log.txt"));
         update::start(app.clone(), dir);
     }
     let _ = bevy::android::ANDROID_APP.set(app);
@@ -941,6 +957,73 @@ mod logcat {
     /// `ANDROID_LOG_INFO`.
     const INFO: c_int = 4;
 
+    use std::fs::File;
+    use std::io::Write;
+    use std::path::Path;
+    use std::sync::Mutex;
+
+    /// The log file once [`to_file`] has opened it, and the lines from before.
+    static FILE: Mutex<Option<File>> = Mutex::new(None);
+    static EARLY: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+
+    /// `line` without the terminal's colour codes (`ESC [ … m`, the tracing layer's), which a
+    /// player's text editor shows as noise.
+    fn plain(line: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(line.len());
+        let mut bytes = line.iter().copied();
+        while let Some(b) = bytes.next() {
+            if b == 0x1b {
+                for c in bytes.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                out.push(b);
+            }
+        }
+        out
+    }
+
+    fn keep(line: &[u8]) {
+        let line = &plain(line);
+        if let Some(file) = FILE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            let _ = file.write_all(line).and_then(|()| file.write_all(b"\n"));
+            return;
+        }
+        let mut early = EARLY.lock().unwrap_or_else(|e| e.into_inner());
+        // Bounded, should the file never open.
+        if early.len() < 5000 {
+            early.push(line.to_vec());
+        }
+    }
+
+    /// Every line from here on into `path` too, which a player can send when the game fails on
+    /// their phone (`adb` needs a computer and developer mode); the run before keeps its own as
+    /// `log-previous.txt`. A panic goes into it directly, with its backtrace: the pipe's reader
+    /// may not get to it before the app aborts.
+    pub fn to_file(path: &Path) {
+        let _ = std::fs::rename(path, path.with_file_name("log-previous.txt"));
+        let Ok(mut file) = File::create(path) else {
+            return;
+        };
+        for line in EARLY.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
+            let _ = file.write_all(&line).and_then(|()| file.write_all(b"\n"));
+        }
+        *FILE.lock().unwrap_or_else(|e| e.into_inner()) = Some(file);
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let thread = std::thread::current();
+            let text = format!(
+                "PANIC in thread {}: {info}\n{}",
+                thread.name().unwrap_or("<unnamed>"),
+                std::backtrace::Backtrace::force_capture()
+            );
+            keep(text.as_bytes());
+            previous(info);
+        }));
+    }
+
     pub fn redirect() {
         let mut fds = [0; 2];
         // SAFETY: a fresh pipe; its write end replaces fds 1 and 2, its read end moves to the File.
@@ -958,6 +1041,7 @@ mod logcat {
             let mut line = Vec::new();
             while lines.read_until(b'\n', &mut line).is_ok_and(|n| n > 0) {
                 line.retain(|&b| b != 0 && b != b'\n');
+                keep(&line);
                 if let Ok(text) = CString::new(std::mem::take(&mut line)) {
                     // SAFETY: two NUL-terminated strings that outlive the call.
                     unsafe { __android_log_write(INFO, tag.as_ptr(), text.as_ptr()) };
