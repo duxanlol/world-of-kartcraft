@@ -71,11 +71,12 @@ mod icon {
     pub(super) const OBJECTS: &str = "Interface\\Icons\\INV_Box_01";
     pub(super) const RING: &str = "Interface\\Icons\\INV_Jewelry_Ring_03";
     pub(super) const SIZE: &str = "Interface\\Icons\\INV_Misc_Spyglass_02";
+    pub(super) const SNAP: &str = "Interface\\Icons\\INV_Gizmo_02";
 
     #[cfg(test)]
-    pub(super) const ALL: [&str; 18] = [
+    pub(super) const ALL: [&str; 19] = [
         EXIT, SAVE, TEST, MOVE, UNDO, REDO, PLACE, NUMBER, GRID, ERASE, SPRINT, LAPS, BACK,
-        RESTART, OK, OBJECTS, RING, SIZE,
+        RESTART, OK, OBJECTS, RING, SIZE, SNAP,
     ];
 }
 
@@ -820,6 +821,12 @@ fn spawn(
             root.spawn(bars).with_children(|bars| {
                 let tool = |t: &str| view.tool == t;
                 bar(bars, art, font, s, "Editor controls", |b| {
+                    let cap = super::objects::PUBLISH_OBJECTS;
+                    let count = match view.objects {
+                        n if n > cap => format!("|cffff8040{n} objects: {cap} publish|r"),
+                        n => format!("Objects: {n} / {cap}"),
+                    };
+                    label(b, font, &count, SMALL, Color::WHITE, Node::default(), s);
                     row(b, s, Node::default(), |r| {
                         let move_ = Act::Cmd(&["move"]);
                         icon_button(r, icons, font, s, icon::MOVE, "Move", move_, tool("move"));
@@ -830,6 +837,9 @@ fn spawn(
                         let open = built.objects.is_some();
                         let objects = Act::Objects;
                         icon_button(r, icons, font, s, icon::OBJECTS, "Objects", objects, open);
+                        let snap = Act::Cmd(&["snap"]);
+                        let name = "Snap to objects";
+                        icon_button(r, icons, font, s, icon::SNAP, name, snap, view.snap);
                     });
                 });
                 bar(bars, art, font, s, "Checkpoints", |b| {
@@ -1441,6 +1451,8 @@ mod tests {
             picked,
             object: None,
             turns_object: false,
+            snap: false,
+            objects: 0,
         }
     }
 
@@ -1451,6 +1463,8 @@ mod tests {
         fields: Vec<Field>,
         buttons: Vec<(Act, bool)>,
         tips: Vec<String>,
+        /// Every label's text, its colour codes read.
+        spans: Vec<String>,
     }
 
     fn tree(spawn_it: impl FnOnce(&mut Commands, &mut Icons) -> Entity) -> Tree {
@@ -1470,11 +1484,14 @@ mod tests {
             .iter()
             .map(|t| world.get::<Text>(*t).unwrap().0.clone())
             .collect();
+        let mut spans = world.query::<&TextSpan>();
+        let spans = spans.iter(world).map(|t| t.0.clone()).collect();
         Tree {
             panels: world.query::<&Panel>().iter(world).copied().collect(),
             fields: world.query::<&Field>().iter(world).copied().collect(),
             buttons,
             tips,
+            spans,
         }
     }
 
@@ -1538,6 +1555,7 @@ mod tests {
             "Undo",
             "Redo",
             "Objects",
+            "Snap to objects",
             "Place checkpoint",
             "Place ring checkpoint",
             "Edit checkpoint",
@@ -1557,6 +1575,26 @@ mod tests {
         want.sort();
         assert_eq!(tips, want);
         assert_eq!(t.buttons.len(), named.len() + 3);
+        assert!(
+            t.buttons.contains(&(Act::Cmd(&["snap"]), false)),
+            "snap starts off"
+        );
+    }
+
+    /// The bar counts the objects against what a publish takes, and says when there are more.
+    #[test]
+    fn the_bar_counts_the_objects_a_publish_takes() {
+        let mut v = view("edit", "move", 0);
+        v.objects = 37;
+        assert!(build(v.clone())
+            .spans
+            .contains(&"Objects: 37 / 100".to_string()));
+        v.objects = 120;
+        let spans = build(v).spans;
+        assert!(
+            spans.contains(&"120 objects: 100 publish".to_string()),
+            "{spans:?}"
+        );
     }
 
     #[test]

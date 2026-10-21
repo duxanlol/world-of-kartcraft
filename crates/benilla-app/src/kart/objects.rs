@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use avian3d::prelude::{Collider, RigidBody};
-use benilla_assets::coords::{wow_rotation_to_bevy, wow_to_bevy};
+use benilla_assets::coords::{bevy_to_wow, wow_rotation_to_bevy, wow_to_bevy};
 use benilla_assets::{LockRecover, WorldAssets};
 use benilla_formats::{Chain, ModelBlend, RenderSubmesh};
 use bevy::asset::RenderAssetUsages;
@@ -398,6 +398,8 @@ pub(crate) struct Loaded {
     )>,
     collider: Option<Collider>,
     pub(crate) icon: Handle<Image>,
+    /// Its box in its own frame (WoW yards about its origin), for snapping; none for the pad.
+    bounds: Option<[Vec3; 2]>,
 }
 
 /// The kinds loaded so far, `None` for one that did not load.
@@ -409,6 +411,86 @@ impl Models {
     pub(crate) fn icon(&self, key: &str) -> Option<Handle<Image>> {
         self.0.get(key)?.as_ref().map(|l| l.icon.clone())
     }
+
+    /// `placed`'s box in its own frame (WoW yards): a build piece's at its size, a model's as
+    /// loaded; none for the turbo pad or a kind not loaded.
+    pub(crate) fn bounds(&self, placed: &Placed) -> Option<[Vec3; 2]> {
+        if let Some((shape, m)) = piece_of(&placed.model) {
+            let size =
+                super::pieces::clamp_size(shape, placed.size.unwrap_or(shape.default_size()));
+            return bounds_of(&[piece_parts(shape, m, size, None)]);
+        }
+        self.0.get(placed.model.as_str())?.as_ref()?.bounds
+    }
+}
+
+/// Parts' box, back in WoW axes.
+fn bounds_of(parts: &[Part]) -> Option<[Vec3; 2]> {
+    let mut all = parts
+        .iter()
+        .flat_map(|p| &p.pos)
+        .map(|v| Vec3::from(bevy_to_wow(*v)));
+    let first = all.next()?;
+    Some(all.fold([first, first], |[lo, hi], v| [lo.min(v), hi.max(v)]))
+}
+
+/// The objects a published track may have (`Kartcraft.cpp` `USER_TRACK_OBJECTS`); the editor
+/// places more, which only its own saves keep.
+pub(crate) const PUBLISH_OBJECTS: usize = 100;
+
+/// How near (yards) a face must come to another's to snap onto it.
+pub(crate) const SNAP_REACH: f32 = 1.5;
+/// How near (degrees) a turn must be to another's, or to it a quarter turn about its vertical,
+/// to take it.
+pub(crate) const SNAP_ANGLE: f32 = 15.0;
+
+/// A box's six face centres and their outward normals, turned and placed as `p` is (WoW).
+fn faces(p: &Placed, [lo, hi]: [Vec3; 2]) -> [(Vec3, Vec3); 6] {
+    let (q, at) = (p.turn(), Vec3::new(p.x, p.y, p.z));
+    let mid = (lo + hi) / 2.0;
+    std::array::from_fn(|i| {
+        let (axis, out) = (i / 2, if i % 2 == 0 { -1.0 } else { 1.0 });
+        let mut c = mid;
+        c[axis] = if out < 0.0 { lo[axis] } else { hi[axis] };
+        let mut n = Vec3::ZERO;
+        n[axis] = out;
+        (at + q * c, q * n)
+    })
+}
+
+/// `ghost` snapped onto the nearest of `others`: turned as that one is when its turn is within
+/// [`SNAP_ANGLE`] of it (or of it a quarter turn round), then moved so the nearest pair of
+/// facing faces within [`SNAP_REACH`] meet. With where they meet (WoW), or none in reach.
+pub(crate) fn snap(
+    ghost: &Placed,
+    bounds: [Vec3; 2],
+    others: impl IntoIterator<Item = (Placed, [Vec3; 2])>,
+) -> Option<(Placed, Vec3)> {
+    let mut best: Option<(f32, Placed, Vec3)> = None;
+    for (other, other_bounds) in others {
+        let mut g = ghost.clone();
+        let (gq, oq) = (ghost.turn(), other.turn());
+        let quarter = |k: i32| oq * Quat::from_rotation_z(k as f32 * std::f32::consts::FRAC_PI_2);
+        let near = (0..4)
+            .map(quarter)
+            .find(|q| gq.angle_between(*q) <= SNAP_ANGLE.to_radians());
+        if let Some(q) = near {
+            g.set_turn(q);
+        }
+        for (gp, gn) in faces(&g, bounds) {
+            for (op, on) in faces(&other, other_bounds) {
+                let d = gp.distance(op);
+                let closer = best.as_ref().is_none_or(|(b, ..)| d < *b);
+                if gn.dot(on) < -0.9 && d <= SNAP_REACH && closer {
+                    let mut moved = g.clone();
+                    let shift = op - gp;
+                    (moved.x, moved.y, moved.z) = (g.x + shift.x, g.y + shift.y, g.z + shift.z);
+                    best = Some((d, moved, op));
+                }
+            }
+        }
+    }
+    best.map(|(_, p, at)| (p, at))
 }
 
 /// The side of an icon (px).
@@ -642,6 +724,7 @@ impl Models {
                     tris.extend(t.map(|t| [base + t[0], base + t[1], base + t[2]]));
                 }
                 let collider = (!tris.is_empty()).then(|| Collider::trimesh(verts, tris));
+                let bounds = bounds_of(&parts);
                 let icon = images.add(benilla_assets::sprite_image(
                     ICON,
                     ICON,
@@ -678,6 +761,7 @@ impl Models {
                     parts,
                     collider,
                     icon,
+                    bounds,
                 })
             })
             .as_ref()
@@ -711,6 +795,7 @@ fn pad_kind(
         )],
         collider: None,
         icon: images.add(benilla_assets::sprite_image(ICON, ICON, pad_icon(ICON))),
+        bounds: None,
     }
 }
 
@@ -1235,5 +1320,71 @@ mod tests {
                 k.key
             );
         }
+    }
+
+    /// A 2-yard cube about its origin at `at`, turned.
+    fn cube(at: [f32; 3], yaw: f32, pitch: f32) -> (Placed, [Vec3; 2]) {
+        let p = Placed {
+            model: "cube".into(),
+            x: at[0],
+            y: at[1],
+            z: at[2],
+            yaw,
+            pitch,
+            roll: 0.0,
+            size: None,
+        };
+        (p, [Vec3::splat(-1.0), Vec3::ONE])
+    }
+
+    fn near(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    /// Near another's side, an object takes its turn and meets it face to face; on top, it
+    /// stands on it; out of reach, it stays where it is.
+    #[test]
+    fn an_object_snaps_end_to_end_and_on_top_turned_as_its_neighbour() {
+        let other = cube([0.0, 0.0, 0.0], 0.0, 0.0);
+        let (ghost, b) = cube([2.8, 0.3, 0.0], 5f32.to_radians(), 0.0);
+        let (p, meets) = snap(&ghost, b, [other.clone()]).expect("in reach");
+        assert!(near(p.yaw, 0.0), "turned as it: {}", p.yaw);
+        assert!(near(p.x, 2.0) && near(p.y, 0.0) && near(p.z, 0.0), "{p:?}");
+        assert!(meets.distance(Vec3::X) < 1e-3, "{meets}");
+        let (ghost, b) = cube([0.2, -0.1, 2.9], 0.0, 0.0);
+        let (p, _) = snap(&ghost, b, [other.clone()]).expect("on top");
+        assert!(near(p.z, 2.0) && near(p.x, 0.0), "{p:?}");
+        let (ghost, b) = cube([6.0, 0.0, 0.0], 0.0, 0.0);
+        assert!(snap(&ghost, b, [other]).is_none(), "out of reach");
+    }
+
+    /// A turn a quarter round from the neighbour's matches it; one between keeps its own and,
+    /// its faces not facing, does not snap.
+    #[test]
+    fn a_quarter_turn_matches_and_a_turn_between_does_not() {
+        let other = cube([0.0, 0.0, 0.0], 0.0, 0.0);
+        let (ghost, b) = cube([2.6, 0.0, 0.0], 92f32.to_radians(), 0.0);
+        let (p, _) = snap(&ghost, b, [other.clone()]).expect("a quarter round");
+        assert!(
+            near(p.yaw, std::f32::consts::FRAC_PI_2),
+            "{}",
+            p.yaw.to_degrees()
+        );
+        let (ghost, b) = cube([2.6, 0.0, 0.0], 45f32.to_radians(), 0.0);
+        assert!(snap(&ghost, b, [other]).is_none());
+    }
+
+    /// A ramp pitched up chains on from its end, pitched as it: the climb goes on.
+    #[test]
+    fn a_pitched_ramp_chains_on_up_its_neighbour() {
+        let pitch = 20f32.to_radians();
+        let other = cube([0.0, 0.0, 0.0], 0.0, pitch);
+        let end = other.0.turn() * Vec3::X;
+        let at = end * 2.0 + Vec3::new(0.4, 0.0, 0.3);
+        let (ghost, b) = cube(at.into(), 0.0, 22f32.to_radians());
+        let (p, meets) = snap(&ghost, b, [other]).expect("in reach");
+        assert!(near(p.pitch, pitch), "{}", p.pitch.to_degrees());
+        assert!(Vec3::new(p.x, p.y, p.z).distance(end * 2.0) < 1e-3, "{p:?}");
+        assert!(meets.distance(end) < 1e-3);
     }
 }

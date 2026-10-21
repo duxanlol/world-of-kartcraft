@@ -34,6 +34,8 @@ const NOTE: &str = "Made with the in-game track editor.";
 /// The aim's colour, the grid's, and what the move cursor is over or holds.
 const AIM_COLOR: Color = Color::srgb(1.0, 0.85, 0.2);
 const GRID_COLOR: Color = Color::srgb(0.3, 1.0, 0.4);
+/// Where a snapped object meets another.
+const SNAP_COLOR: Color = Color::srgb(0.3, 0.8, 1.0);
 const HOVER_COLOR: Color = Color::srgb(0.4, 0.8, 1.0);
 const ERASE_COLOR: Color = Color::srgb(1.0, 0.3, 0.25);
 /// A pinned object's axes (yards each way) and the ring the mouse turns it about (yards), in the
@@ -233,6 +235,11 @@ pub(crate) struct TrackEdit {
     /// size keys set it ([`SIZE_KEYS`]); a held one's are its own.
     piece_sizes: [[f32; 3]; 2],
     ghost: Option<Placed>,
+    /// Snapping (the bar's Snap, off at first): an object placed or dragged near another takes
+    /// its turn when near it and meets it face to face ([`super::objects::snap`]); and the ghost
+    /// as snapped, with where it meets, which a click places.
+    snap: bool,
+    snapped: Option<(Placed, Vec3)>,
     /// Where the middle mouse or Ctrl held pins the object turned (WoW, its ground), so the mouse
     /// turns or raises it in place; and how high over its ground it is raised (yards).
     pin: Option<[f32; 3]>,
@@ -285,6 +292,8 @@ impl Default for TrackEdit {
             object_turn: [0.0; 3],
             piece_sizes: super::pieces::Shape::ALL.map(super::pieces::Shape::default_size),
             ghost: None,
+            snap: false,
+            snapped: None,
             pin: None,
             lift: 0.0,
             picked: None,
@@ -322,9 +331,31 @@ pub(crate) struct EditView {
     pub(crate) object: Option<&'static str>,
     /// An object turns on the keys ([`TURN_KEYS`]): one is held, or about to be placed.
     pub(crate) turns_object: bool,
+    /// Objects snap to each other.
+    pub(crate) snap: bool,
+    /// The objects placed.
+    pub(crate) objects: usize,
 }
 
 impl TrackEdit {
+    /// `p` snapped onto the draft's other objects (all but `skip`), with where it meets one,
+    /// while snapping is on.
+    fn snap_onto(
+        &self,
+        p: &Placed,
+        skip: Option<usize>,
+        models: &super::objects::Models,
+    ) -> Option<(Placed, Vec3)> {
+        if !self.snap {
+            return None;
+        }
+        let bounds = models.bounds(p)?;
+        let others = (self.objects.iter().enumerate())
+            .filter(|(i, _)| Some(*i) != skip)
+            .filter_map(|(_, o)| Some((o.clone(), models.bounds(o)?)));
+        super::objects::snap(p, bounds, others)
+    }
+
     fn say(&mut self, note: impl Into<String>) {
         self.note = note.into();
         self.notes += 1;
@@ -376,6 +407,8 @@ impl TrackEdit {
                 _ => None,
             },
             turns_object: self.on && !self.testing && self.turning().is_some(),
+            snap: self.snap,
+            objects: self.objects.len(),
         }
     }
 
@@ -618,8 +651,9 @@ impl TrackEdit {
                 format!(
                     "Left-click to place the {}. Q/E yaw, R/F pitch, Z/C roll; the middle mouse \
                      turns it as you see it (Shift: rolls it), Ctrl raises it. Yaw {yaw}°, pitch \
-                     {pitch}°, roll {roll}°, {lift:.1} yd up.",
+                     {pitch}°, roll {roll}°, {lift:.1} yd up.{}",
                     kinds().get(k).map_or("object", |k| k.name),
+                    if self.snap { " Snap: on." } else { "" },
                     lift = self.lift,
                 )
             }
@@ -1212,6 +1246,14 @@ pub(crate) fn on_cmd(
             }
         }
         ["renumber", to, ..] if editing => edit.renumber(to.parse().unwrap_or(0)),
+        ["snap", ..] if editing => {
+            edit.snap = !edit.snap;
+            let on = edit.snap;
+            edit.say(match on {
+                true => "Snapping on: an object near another meets it face to face, turned as it.",
+                false => "Snapping off.",
+            });
+        }
         ["undo", ..] if editing => edit.undo(),
         ["redo", ..] if editing => edit.redo(),
         ["clear", ..] if editing => edit.clear(),
@@ -1401,12 +1443,13 @@ pub(crate) fn update(
         Query<&Window, With<bevy::window::PrimaryWindow>>,
         Query<(&Camera, &GlobalTransform), With<benilla_world::view::WorldCamera>>,
     ),
-    (time, keys, typing, overlay, scroll): (
+    (time, keys, typing, overlay, scroll, models): (
         Res<Time>,
         Res<ButtonInput<KeyCode>>,
         Res<crate::ui_script::UiKeyboardCapture>,
         Res<crate::bindings::BindingOverlay>,
         Res<bevy::input::mouse::AccumulatedMouseScroll>,
+        Res<super::objects::Models>,
     ),
 ) {
     edit.load();
@@ -1644,6 +1687,19 @@ pub(crate) fn update(
     } else if let Some(held) = edit.held {
         if let (Some(at), Some(o), None) = (aim, facing, edit.pin) {
             edit.drag(at, o);
+            // A dragged object snaps onto the others as it goes.
+            if let Held::Object(i) = held {
+                let snapped =
+                    (edit.objects.get(i)).and_then(|p| edit.snap_onto(p, Some(i), &models));
+                if let Some((p, meets)) = snapped {
+                    edit.objects[i] = p;
+                    gizmos.sphere(
+                        Isometry3d::from_translation(wow_to_bevy(meets.into())),
+                        0.4,
+                        SNAP_COLOR,
+                    );
+                }
+            }
         }
         if let Some(at) = aim.filter(|_| held == Held::Grid) {
             gizmos.circle(flat(at + Vec3::Y * 0.3), GRID_PICK, HOVER_COLOR);
@@ -1747,6 +1803,17 @@ pub(crate) fn update(
         }),
         _ => None,
     };
+    // The one a click would place, snapped onto the others: the click places it as it shows.
+    let placing = edit.held.is_none().then(|| edit.ghost.clone()).flatten();
+    edit.snapped = placing.and_then(|g| edit.snap_onto(&g, None, &models));
+    if let Some((g, meets)) = &edit.snapped {
+        gizmos.sphere(
+            Isometry3d::from_translation(wow_to_bevy((*meets).into())),
+            0.4,
+            SNAP_COLOR,
+        );
+        edit.ghost = Some(g.clone());
+    }
     // Pinned, its axes show, each with its ring, the ones the mouse turns bright: across yaws,
     // up and down pitches (with Shift, rolls).
     // What turns, where its axes show: the ghost of an object, else a ring held or to be hung.
@@ -1919,7 +1986,8 @@ fn place(edit: &mut TrackEdit, what: Place, at: Vec3, o: f32) {
             let Some(kind) = kinds().get(k) else { return };
             let [yaw, pitch, roll] = edit.object_turn;
             let size = edit.piece_size(kind.key);
-            edit.objects.push(Placed {
+            let snapped = edit.snapped.take().map(|(p, _)| p);
+            let placed = snapped.filter(|p| p.model == kind.key).unwrap_or(Placed {
                 model: kind.key.into(),
                 x: w[0],
                 y: w[1],
@@ -1929,6 +1997,7 @@ fn place(edit: &mut TrackEdit, what: Place, at: Vec3, o: f32) {
                 roll,
                 size,
             });
+            edit.objects.push(placed);
             edit.placed.push(true);
             edit.undone.clear();
             // The tool stays: the next click places another.
@@ -2458,5 +2527,37 @@ mod tests {
         assert_eq!(edit.view().state, "run");
         edit.testing = false;
         assert_eq!(edit.view().state, "");
+    }
+
+    /// Snapping starts off; on, a block placed beside another meets it, side to side, and
+    /// the bar says so.
+    #[test]
+    fn snapping_is_off_until_the_bar_turns_it_on_then_a_block_meets_its_neighbour() {
+        let mut edit = draft(0, &[]);
+        assert!(!edit.view().snap);
+        let models = super::super::objects::Models::default();
+        let block = |x: f32| Placed {
+            model: "block-grate".into(),
+            x,
+            y: 0.0,
+            z: 0.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            roll: 0.0,
+            size: None,
+        };
+        edit.objects.push(block(0.0));
+        let [lo, hi] = models.bounds(&block(0.0)).expect("a piece's box");
+        let side = hi.x - lo.x;
+        let ghost = block(side + 1.0);
+        assert!(edit.snap_onto(&ghost, None, &models).is_none(), "off");
+        edit.snap = true;
+        assert!(edit.view().snap);
+        let (p, _) = edit.snap_onto(&ghost, None, &models).expect("on, in reach");
+        assert!((p.x - side).abs() < 1e-3, "{} vs {side}", p.x);
+        assert!(
+            edit.snap_onto(&block(0.5), Some(0), &models).is_none(),
+            "not onto itself"
+        );
     }
 }
