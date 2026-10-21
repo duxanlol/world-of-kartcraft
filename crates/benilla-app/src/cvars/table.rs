@@ -774,9 +774,10 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "0",
         "Kartcraft's own — the controller test window; 1.12 has no kart",
     ),
+    // Text, "strong" or "weak": a numeric default would make the row refuse both.
     ours(
         "KartPadRumble",
-        "0",
+        "",
         "Kartcraft's own — the controller test's rumble; 1.12 has no kart",
     ),
     // The racers' voices: their WoW characters' (`kart::sound::wow_voices`), else CTR's cast's.
@@ -931,10 +932,11 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "0.42",
         "Kartcraft's own — the race map; 1.12 has no kart",
     ),
-    // The Kartcraft menu's toggle (`kart::menu_ui`), counting presses; for the session only.
+    // The Kartcraft menu's toggle (`kart::menu_ui`), counting presses, then `\t<entry>` to open at
+    // an entry's own grid: text, as a numeric default would refuse the tab; for the session only.
     ours(
         "KartMenu",
-        "0",
+        "",
         "Kartcraft's own — the Kartcraft menu; 1.12 has no kart",
     ),
     // How tall a race checkpoint's sheet of light stands, yards (`kart::race`); looks only.

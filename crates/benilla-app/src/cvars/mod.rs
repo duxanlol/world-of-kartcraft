@@ -1979,7 +1979,8 @@ mod tests {
     /// (the reference's registered `""`, `0x882748`), `gxApi` and the kart's `KartReplay` and
     /// `KartReplays` (the replay playing and those on disk, `kart::replay`) and `KartPads` (the
     /// controllers connected), `KartFlag` (the flag flown, `kartcraft::goods`) and
-    /// `KartGoodPreview` (the shop's picked good, `kart::goods_preview`) are empty until
+    /// `KartGoodPreview` (the shop's picked good, `kart::goods_preview`), `KartMenu` (the menu's
+    /// presses and the entry it opens at) and `KartPadRumble` (a motor's name) are empty until
     /// the session writes them, and `KartPad` (the
     /// controller chosen) is empty for any; `gxResolution`, `realmList` and the kart garage's `KartClass` and `KartRacer` pass
     /// their observers' parsers ([`crate::video::parse_resolution`],
@@ -1999,8 +2000,10 @@ mod tests {
                 "KartFlag",
                 "KartFreeCam",
                 "KartGoodPreview",
+                "KartMenu",
                 "KartNavGpsColor",
                 "KartPad",
+                "KartPadRumble",
                 "KartPads",
                 "KartRacer",
                 "KartReplay",
@@ -2028,6 +2031,8 @@ mod tests {
         assert_eq!(default_of("KartPads"), "");
         assert_eq!(default_of("KartReplay"), "");
         assert_eq!(default_of("KartReplays"), "");
+        assert_eq!(default_of("KartMenu"), "");
+        assert_eq!(default_of("KartPadRumble"), "");
         assert_eq!(
             crate::video::parse_resolution(default_of("gxResolution")),
             Some(crate::video::DEFAULT_WINDOWED)
@@ -2429,5 +2434,42 @@ mod tests {
                 "gxWindow",
             ]
         );
+    }
+
+    /// A row whose default is a number refuses text (`Cvars::write`), so every Kartcraft row its
+    /// interface writes text into has a text default: each literal write's, and the two whose
+    /// text is built (the menu's `<presses>\t<entry>`, the rumble's motor name).
+    #[test]
+    fn the_kartcraft_interface_writes_no_text_into_a_numeric_row() {
+        let numeric = |name: &str| {
+            let row = REGISTERED.iter().find(|r| r.name == name);
+            row.unwrap_or_else(|| panic!("{name} is not registered"))
+                .default
+                .trim()
+                .parse::<f32>()
+                .is_ok()
+        };
+        let lua = include_str!("../../assets/ui/KartcraftFrames.xml");
+        for call in lua.split("SetCVar(\"").skip(1) {
+            let Some((name, rest)) = call.split_once('"') else {
+                continue;
+            };
+            let Some(value) = rest.trim_start().strip_prefix(',').map(str::trim_start) else {
+                continue;
+            };
+            let Some(literal) = value.strip_prefix('"').and_then(|v| v.split_once('"')) else {
+                continue;
+            };
+            if literal.0.trim().parse::<f32>().is_err() {
+                assert!(
+                    !numeric(name),
+                    "SetCVar(\"{name}\", \"{}\") into a numeric row",
+                    literal.0
+                );
+            }
+        }
+        for name in ["KartMenu", "KartPadRumble"] {
+            assert!(!numeric(name), "{name} takes text");
+        }
     }
 }
