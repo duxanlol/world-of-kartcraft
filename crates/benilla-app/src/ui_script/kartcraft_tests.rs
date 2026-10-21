@@ -4424,7 +4424,7 @@ fn a_long_publish_goes_in_pieces_the_server_puts_together() {
         sent(s);
         s.run(&format!(
             "local o = {{}} for i = 1, {objects} do \
-             table.insert(o, 'excavation-plank-2c,-8953.2,-123.4,56.7,1.571,0.000,0.000') end \
+             table.insert(o, 'excavation-plank-2c,-8953.2,-123.4,56.7,1.571,-0.120,0.000,100.5,10.0,1.5') end \
              BenillaKartPub_Publish({{ name = 'Long Way', map = 0, laps = 3, zone = 'Elwynn Forest', \
              grid = '0.0,1.0,0.500', gates = '1.0,2.0;3.0,4.0;5.0,6.0', z = '', \
              objects = table.concat(o, ';'), scale = '' }})"
@@ -4435,8 +4435,9 @@ fn a_long_publish_goes_in_pieces_the_server_puts_together() {
     let short = publish(&mut s, 2);
     assert_eq!(short.len(), 1);
     assert!(short[0].starts_with("KARTCRAFT\tR\tPub\tLong Way\t"));
-    let pieces = publish(&mut s, 100);
-    assert!(pieces.len() >= 3, "{} pieces", pieces.len());
+    // The most objects, each as long as a build piece's: within the server's 16 pieces.
+    let pieces = publish(&mut s, 250);
+    assert!((3..=16).contains(&pieces.len()), "{} pieces", pieces.len());
     let mut line = String::new();
     for (i, p) in pieces.iter().enumerate() {
         assert!(p.len() <= 2047, "piece {i} is {} bytes", p.len());
@@ -4444,9 +4445,9 @@ fn a_long_publish_goes_in_pieces_the_server_puts_together() {
         line.push_str(p.strip_prefix(&head).unwrap_or_else(|| panic!("{p:.40}")));
     }
     assert!(line.starts_with("Pub\tLong Way\t0\t3\tElwynn Forest\t"));
-    assert_eq!(line.matches("excavation-plank-2c,").count(), 100);
+    assert_eq!(line.matches("excavation-plank-2c,").count(), 250);
     assert!(
-        line.ends_with("0.000,0.000\t"),
+        line.ends_with("100.5,10.0,1.5\t"),
         "{:.40}",
         &line[line.len() - 40..]
     );

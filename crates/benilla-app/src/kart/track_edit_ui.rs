@@ -1588,11 +1588,11 @@ mod tests {
         v.objects = 37;
         assert!(build(v.clone())
             .spans
-            .contains(&"Objects: 37 / 100".to_string()));
-        v.objects = 120;
+            .contains(&"Objects: 37 / 250".to_string()));
+        v.objects = 300;
         let spans = build(v).spans;
         assert!(
-            spans.contains(&"120 objects: 100 publish".to_string()),
+            spans.contains(&"300 objects: 250 publish".to_string()),
             "{spans:?}"
         );
     }

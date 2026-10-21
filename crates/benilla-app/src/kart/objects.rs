@@ -436,7 +436,7 @@ fn bounds_of(parts: &[Part]) -> Option<[Vec3; 2]> {
 
 /// The objects a published track may have (`Kartcraft.cpp` `USER_TRACK_OBJECTS`); the editor
 /// places more, which only its own saves keep.
-pub(crate) const PUBLISH_OBJECTS: usize = 100;
+pub(crate) const PUBLISH_OBJECTS: usize = 250;
 
 /// How near (yards) a face must come to another's to snap onto it.
 pub(crate) const SNAP_REACH: f32 = 1.5;

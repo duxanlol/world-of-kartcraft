@@ -6672,8 +6672,8 @@ namespace Kartcraft
     constexpr size_t USER_TRACKS_MAX = 2000;    // on the server
     constexpr size_t USER_TRACKS_EACH = 20;     // by one character
     constexpr size_t USER_TRACK_GATES = 60;     // checkpoints on one
-    constexpr size_t USER_TRACK_OBJECTS = 100;  // placed objects on one
-    constexpr size_t PUBLISH_PIECES = 8;        // pieces of one publish, at most
+    constexpr size_t USER_TRACK_OBJECTS = 250;  // placed objects on one
+    constexpr size_t PUBLISH_PIECES = 16;       // pieces of one publish, at most
     // A build piece's size each way (yards): the client's bounds (kart/pieces.rs MIN_SIZE, MAX_SIZE).
     constexpr float PIECE_MIN = 0.5f;
     constexpr float PIECE_MAX = 200.f;
@@ -6933,7 +6933,7 @@ namespace Kartcraft
         // Its placed objects, an optional tenth field.
         size_t objects = 0;
         if (f.size() > 9 && (!CleanTrackObjects(f[9], t.objects, objects) || objects > USER_TRACK_OBJECTS))
-            return no("The track's objects are not right: at most 100 of them.");
+            return no("The track's objects are not right: at most 250 of them.");
         // Its scale, an optional eleventh field: the karts' and racers' size on it.
         if (f.size() > 10 && !f[10].empty() &&
             (!ParseFloat(f[10], t.scale) || t.scale < MIN_RACE_SCALE || t.scale > MAX_RACE_SCALE))
