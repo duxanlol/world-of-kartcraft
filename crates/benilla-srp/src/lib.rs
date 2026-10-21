@@ -191,18 +191,29 @@ fn xor_hash(generator: u8, large_safe_prime: &[u8; 32]) -> [u8; 20] {
     out
 }
 
+/// `SHA1( UPPER(user) ":" UPPER(pass) )`, the one value the SRP6 exchange takes from the password
+/// ([`SrpClientChallenge::from_credentials_hash`]). Changing the password changes it, so a kept
+/// hash stops logging in.
+pub fn credentials_hash(username: &NormalizedString, password: &NormalizedString) -> [u8; 20] {
+    sha1(&[
+        username.as_ref().as_bytes(),
+        b":",
+        password.as_ref().as_bytes(),
+    ])
+}
+
 /// `x = SHA1( salt | SHA1( UPPER(user) ":" UPPER(pass) ) )`.
 fn calculate_x(
     username: &NormalizedString,
     password: &NormalizedString,
     salt: &[u8; 32],
 ) -> [u8; 20] {
-    let inner = sha1(&[
-        username.as_ref().as_bytes(),
-        b":",
-        password.as_ref().as_bytes(),
-    ]);
-    sha1(&[salt, &inner])
+    x_from_credentials(&credentials_hash(username, password), salt)
+}
+
+/// [`calculate_x`] from the [`credentials_hash`].
+fn x_from_credentials(credentials: &[u8; 20], salt: &[u8; 32]) -> [u8; 20] {
+    sha1(&[salt, credentials])
 }
 
 /// `u = SHA1( A | B )` (both little endian).
@@ -278,10 +289,10 @@ impl SrpClientChallenge {
         server_public_key: PublicKey,
         salt: [u8; 32],
     ) -> SrpClientChallenge {
-        Self::new_with_rng(
-            &mut thread_rng(),
+        let credentials = credentials_hash(&username, &password);
+        Self::from_credentials_hash(
             username,
-            password,
+            credentials,
             generator,
             large_safe_prime,
             server_public_key,
@@ -289,11 +300,34 @@ impl SrpClientChallenge {
         )
     }
 
-    /// [`Self::new`] with the draw source injected, so a test can script a draw that trips a guard.
+    /// [`Self::new`] from the account's [`credentials_hash`] instead of its password: the whole
+    /// exchange depends on the password only through that hash, so a client that kept it logs in
+    /// without the password ever being stored.
+    pub fn from_credentials_hash(
+        username: NormalizedString,
+        credentials: [u8; 20],
+        generator: u8,
+        large_safe_prime: [u8; 32],
+        server_public_key: PublicKey,
+        salt: [u8; 32],
+    ) -> SrpClientChallenge {
+        Self::new_with_rng(
+            &mut thread_rng(),
+            username,
+            credentials,
+            generator,
+            large_safe_prime,
+            server_public_key,
+            salt,
+        )
+    }
+
+    /// [`Self::from_credentials_hash`] with the draw source injected, so a test can script a draw
+    /// that trips a guard.
     fn new_with_rng<R: RngCore>(
         rng: &mut R,
         username: NormalizedString,
-        password: NormalizedString,
+        credentials: [u8; 20],
         generator: u8,
         large_safe_prime: [u8; 32],
         server_public_key: PublicKey,
@@ -303,7 +337,7 @@ impl SrpClientChallenge {
         let g = BigInt::from(generator);
         let k = BigInt::from(K_VALUE);
 
-        let x = from_le(&calculate_x(&username, &password, &salt));
+        let x = from_le(&x_from_credentials(&credentials, &salt));
         let s_base = server_public_key.as_bigint() - &k * g.modpow(&x, &n);
         let xor = xor_hash(generator, &large_safe_prime);
         let username_hash = sha1(&[username.as_ref().as_bytes()]);
@@ -565,7 +599,7 @@ mod tests {
             let c = SrpClientChallenge::new_with_rng(
                 &mut rng,
                 user.clone(),
-                pass.clone(),
+                credentials_hash(&user, &pass),
                 GENERATOR,
                 LARGE_SAFE_PRIME_LITTLE_ENDIAN,
                 PublicKey::from_le_bytes(b).unwrap(),
@@ -672,7 +706,7 @@ mod tests {
             let c = SrpClientChallenge::new_with_rng(
                 &mut rng,
                 user.clone(),
-                pass.clone(),
+                credentials_hash(&user, &pass),
                 GENERATOR,
                 LARGE_SAFE_PRIME_LITTLE_ENDIAN,
                 server,
@@ -696,8 +730,8 @@ mod tests {
         let mut rng = Scripted([CLEAN, TRIPS_A].into_iter().collect());
         let c = SrpClientChallenge::new_with_rng(
             &mut rng,
-            user,
-            pass,
+            user.clone(),
+            credentials_hash(&user, &pass),
             GENERATOR,
             LARGE_SAFE_PRIME_LITTLE_ENDIAN,
             server,

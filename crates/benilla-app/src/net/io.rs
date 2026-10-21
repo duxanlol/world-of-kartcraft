@@ -60,7 +60,8 @@ pub(crate) fn inbound_census() -> (u64, Option<u64>) {
 #[derive(Clone)]
 pub(crate) struct LoginRequest {
     pub(crate) user: String,
-    pub(crate) pass: String,
+    /// The password typed, or the hash a "Stay logged in" kept (`login::saved`).
+    pub(crate) pass: benilla_protocol::Secret,
     /// The realmlist to dial, `host[:port]`, per attempt so an edit mid-dial cannot retarget the
     /// connection in flight.
     pub(crate) host: String,
@@ -351,7 +352,7 @@ fn run(
     // Logon: the dial and the SRP6 exchange against realmd.
     let mut logon = {
         stage(LoginStage::Connecting);
-        match benilla_protocol::logon(&req.host, &req.user, &req.pass) {
+        match benilla_protocol::logon_with(&req.host, &req.user, &req.pass) {
             Ok(l) => l,
             Err(e) => {
                 if canceled() {

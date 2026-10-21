@@ -162,14 +162,60 @@ impl Logon {
     }
 }
 
+/// What proves the account at logon: the password typed, or the [`credentials_hash`] a client
+/// kept from an earlier logon (the SRP6 exchange takes the password only through that hash).
+#[derive(Clone)]
+pub enum Secret {
+    Password(String),
+    Saved([u8; 20]),
+}
+
+/// A typed password.
+impl From<&str> for Secret {
+    fn from(password: &str) -> Self {
+        Secret::Password(password.to_string())
+    }
+}
+
+impl From<String> for Secret {
+    fn from(password: String) -> Self {
+        Secret::Password(password)
+    }
+}
+
+/// Never the password or the hash, in a log or a panic.
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Secret::Password(_) => "Secret::Password(..)",
+            Secret::Saved(_) => "Secret::Saved(..)",
+        })
+    }
+}
+
+/// `SHA1( UPPER(user) ":" UPPER(pass) )` as [`logon`] normalizes both, for a client that keeps it
+/// to log in again as a [`Secret::Saved`].
+pub fn credentials_hash(username: &str, password: &str) -> Result<[u8; 20]> {
+    let username = NormalizedString::new(username).map_err(|e| anyhow!("invalid username: {e}"))?;
+    let password = NormalizedString::new(password).map_err(|e| anyhow!("invalid password: {e}"))?;
+    Ok(benilla_srp::credentials_hash(&username, &password))
+}
+
 /// The full SRP6 logon against a vanilla `realmd`, then the realm list.
 pub fn logon(host: &str, username: &str, password: &str) -> Result<Logon> {
+    logon_with(host, username, &Secret::Password(password.to_string()))
+}
+
+/// [`logon`] with the account proved by either [`Secret`].
+pub fn logon_with(host: &str, username: &str, secret: &Secret) -> Result<Logon> {
     let (host, port) = host_port(host, AUTH_PORT);
 
     let username_n =
         NormalizedString::new(username).map_err(|e| anyhow!("invalid username: {e}"))?;
-    let password_n =
-        NormalizedString::new(password).map_err(|e| anyhow!("invalid password: {e}"))?;
+    let credentials = match secret {
+        Secret::Password(password) => credentials_hash(username, password)?,
+        Secret::Saved(hash) => *hash,
+    };
 
     // The account name goes uppercased, as SRP6 hashes it. About one `B` in 137 serializes
     // differently in the client and mangos (a right password gets 0x04), so redial for a fresh
@@ -194,9 +240,9 @@ pub fn logon(host: &str, username: &str, password: &str) -> Result<Logon> {
         dialed.expect("MAX_CHALLENGE_DIALS is non-zero")
     };
 
-    let challenge = SrpClientChallenge::new(
+    let challenge = SrpClientChallenge::from_credentials_hash(
         username_n,
-        password_n,
+        credentials,
         reply.generator,
         reply.large_safe_prime,
         server_public_key,

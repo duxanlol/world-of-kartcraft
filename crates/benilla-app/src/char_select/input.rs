@@ -117,6 +117,8 @@ pub(super) fn select_input(
         sounds.write(GlueSound("gsCharacterSelectionExit"));
         roster.pending_pick = None;
         intent.clear();
+        // Back is the logout of Stay logged in: the next start asks again.
+        crate::login::saved::forget();
         let _ = pick.0.send(crate::net::CharRequest::Abandon);
         next.set(ClientState::Login);
     }

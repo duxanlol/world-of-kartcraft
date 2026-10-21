@@ -41,7 +41,7 @@ pub(super) fn debug_login_smoke(
             let (user, pass, _) = smoke_spec(&spec);
             info!("login-smoke: submitting as {user}");
             let (user, pass) = (user.to_string(), pass.to_string());
-            attempt.send(&user, &pass, true);
+            attempt.send(&user, pass.into(), true);
             *phase = 1;
         }
         1 => {

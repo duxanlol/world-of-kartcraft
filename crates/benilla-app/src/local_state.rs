@@ -149,6 +149,12 @@ pub(crate) fn saved_account_path() -> Option<PathBuf> {
     home().map(|h| h.join("account"))
 }
 
+/// `benilla-config/login`: "Stay logged in"'s account name and credentials hash
+/// (`login::saved`), which logs in without the password. 1.12 has no such file.
+pub(crate) fn saved_login_path() -> Option<PathBuf> {
+    home().map(|h| h.join("login"))
+}
+
 /// `benilla-config/chat/<realm>-<character>.txt`: the chat windows' tint, alpha, font size and
 /// lock, the four the reference keeps in its per-character `chat-cache.txt`.
 pub(crate) fn chat_character_path(realm: &str, character: &str) -> Option<PathBuf> {

@@ -13,6 +13,7 @@
 //! displaced it.
 
 pub(crate) mod queue;
+pub(crate) mod saved;
 mod screen;
 mod smoke;
 
@@ -25,7 +26,7 @@ use crate::textinput::{self, HostClipboard};
 use bevy::input::ButtonState;
 use bevy::prelude::*;
 
-use benilla_protocol::{DialFailure, LoginRefusal, LoginStage};
+use benilla_protocol::{DialFailure, LoginRefusal, LoginStage, Secret};
 
 use crate::char_select::ClientState;
 use crate::glue::dialog::{DialogKind, GlueDialog};
@@ -112,7 +113,10 @@ enum IoPark {
 pub(crate) struct LoginIntent {
     /// Kept in-world so the logout relist and an unattended reconnect re-authenticate silently;
     /// cleared by select's Back, a refusal, a Cancel and a lost session.
-    creds: Option<(String, String)>,
+    creds: Option<(String, Secret)>,
+    /// The typed submit had "Stay logged in" checked: its login is kept ([`saved`]) once it
+    /// succeeds.
+    stay: bool,
     /// Between our send and its LoginFailed or CharacterList answer.
     in_flight: bool,
     /// The in-flight submit came from the screen, which shows its connecting dialog and failure.
@@ -128,7 +132,17 @@ impl LoginIntent {
     /// Forget the session's credentials and any scheduled retry.
     pub(crate) fn clear(&mut self) {
         self.creds = None;
+        self.stay = false;
         self.retry_at = None;
+    }
+
+    /// A refusal of a kept login: it no longer logs in (the password changed, the account went),
+    /// so it is forgotten and the screen asks again.
+    fn forget_if_kept(&self) {
+        if matches!(self.creds, Some((_, Secret::Saved(_)))) {
+            warn!("login: the kept login was refused — forgetting it");
+            saved::forget();
+        }
     }
 
     /// The account this session authenticated as, from the env fast path or the screen; it
@@ -152,14 +166,14 @@ pub(super) struct Attempt<'w> {
 impl Attempt<'_> {
     /// Send one login attempt to the parked IO thread, stamped with the abandon generation. The
     /// realmlist is read at submit time, so an attempt keeps the server it started with.
-    fn send(&mut self, user: &str, pass: &str, announced: bool) {
-        self.intent.creds = Some((user.to_string(), pass.to_string()));
+    fn send(&mut self, user: &str, secret: Secret, announced: bool) {
+        self.intent.creds = Some((user.to_string(), secret.clone()));
         self.intent.in_flight = true;
         self.intent.announced = announced;
         self.intent.retry_at = None;
         let _ = self.submit.0.send(LoginRequest {
             user: user.to_string(),
-            pass: pass.to_string(),
+            pass: secret,
             host: self.realmlist.address().to_string(),
             generation: self.abandon.0.load(Ordering::SeqCst),
         });
@@ -394,12 +408,12 @@ fn drive_policy(
             match crate::run_mode::account_guard(&user) {
                 Ok(()) => {
                     info!("login: env fast path — auto-submitting as {user}");
-                    attempt.intent.creds = Some((user, pass));
+                    attempt.intent.creds = Some((user, pass.into()));
                     attempt.intent.retry_at = Some(now);
                 }
                 Err(why) if std::env::var_os("WOW_ALLOW_ACCOUNT").is_some() => {
                     warn!("login: {why} — WOW_ALLOW_ACCOUNT is set, going ahead anyway");
-                    attempt.intent.creds = Some((user, pass));
+                    attempt.intent.creds = Some((user, pass.into()));
                     attempt.intent.retry_at = Some(now);
                 }
                 Err(why) => {
@@ -412,6 +426,21 @@ fn drive_policy(
                         exit.write(AppExit::error());
                     }
                 }
+            }
+        }
+        // Stay logged in ([`saved`]): the kept login, once, the way the env path submits. Never
+        // on an instrumented or capture run, whose login would take the account from the player
+        // who kept it.
+        if attempt.intent.creds.is_none()
+            && !smoke
+            && !crate::run_mode::unattended()
+            && !crate::run_mode::scenario_active()
+        {
+            if let Some((user, hash)) = saved::load() {
+                info!("login: logging in as {user} (Stay logged in)");
+                attempt.intent.creds = Some((user, Secret::Saved(hash)));
+                attempt.intent.retry_at = Some(now);
+                dialog.open_status(strings.text("LOGIN_STATE_CONNECTING", "Connecting"));
             }
         }
     }
@@ -461,6 +490,7 @@ fn drive_policy(
         if msg.terminal {
             // No resubmit can change it: show the server's words and drop the credentials.
             warn!("login: {}", msg.reason);
+            attempt.intent.forget_if_kept();
             attempt.intent.clear();
             dialog.open_error(&msg.reason);
             if may_end_the_run
@@ -478,6 +508,7 @@ fn drive_policy(
                 // A refusal from either server: shown even on the silent path, never retried.
                 let byte = refusal.byte();
                 warn!("login: refused ({refusal:?}, {byte:#04x}) — {}", msg.reason);
+                attempt.intent.forget_if_kept();
                 attempt.intent.clear();
                 dialog.open_error(&fail_text(strings, Some(refusal), None));
                 if may_end_the_run
@@ -530,8 +561,8 @@ fn drive_policy(
         && !attempt.intent.in_flight
         && attempt.intent.retry_at.is_some_and(|t| now >= t)
     {
-        if let Some((user, pass)) = attempt.intent.creds.clone() {
-            attempt.send(&user, &pass, false);
+        if let Some((user, secret)) = attempt.intent.creds.clone() {
+            attempt.send(&user, secret, false);
         } else {
             attempt.intent.retry_at = None;
         }
@@ -553,6 +584,18 @@ fn to_select_on_roster(
     intent.in_flight = false;
     intent.park = IoPark::Active;
     intent.retry_at = None;
+    // Stay logged in: the login just accepted is kept ([`saved`]), as its hash.
+    if std::mem::take(&mut intent.stay) {
+        if let Some((user, Secret::Password(pass))) = &intent.creds {
+            match benilla_protocol::credentials_hash(user, pass) {
+                Ok(hash) => {
+                    info!("login: keeping the login for {user} (Stay logged in)");
+                    saved::save(user, &hash);
+                }
+                Err(e) => warn!("login: could not keep the login: {e}"),
+            }
+        }
+    }
     // Only the dialogs the roster answers: a refused character login's relist brings a roster,
     // and its `Error` is dismissed by its Okay, never by a packet.
     if matches!(dialog.kind, Some(DialogKind::Status | DialogKind::Queued)) {
@@ -581,6 +624,8 @@ pub(crate) struct LoginForm {
     pub(super) password: EditBoxState,
     pub(super) focus: Field,
     pub(super) save: bool,
+    /// "Stay logged in" ([`saved`]).
+    pub(super) stay: bool,
 }
 
 impl Default for LoginForm {
@@ -591,6 +636,7 @@ impl Default for LoginForm {
             password: textinput::field(MAX_LETTERS, true),
             focus: Field::default(),
             save: false,
+            stay: false,
         }
     }
 }
@@ -626,6 +672,7 @@ struct QuitArm(Option<f32>);
 fn enter_login(mut form: ResMut<LoginForm>, mut preview: ResMut<GluePreview>) {
     let saved = load_saved_account();
     form.save = !saved.is_empty();
+    form.stay = saved::load().is_some();
     form.focus = if saved.is_empty() {
         Field::Account
     } else {
@@ -729,6 +776,17 @@ fn login_input(
                     save_account("");
                 }
             }
+            LoginAction::ToggleStay => {
+                form.stay = !form.stay;
+                sounds.write(GlueSound(if form.stay {
+                    "igMainMenuOptionCheckBoxOff"
+                } else {
+                    "igMainMenuOptionCheckBoxOn"
+                }));
+                if !form.stay {
+                    saved::forget();
+                }
+            }
         }
     }
 
@@ -813,7 +871,13 @@ fn login_input(
                 let (user, pass) = (form.account.text.clone(), form.password.text.clone());
                 form.password.set_text("");
                 dialog.open_status(strings.text("LOGIN_STATE_CONNECTING", "Connecting"));
-                attempt.send(&user, &pass, true);
+                // A typed login replaces any kept one: kept again on success when the box is
+                // checked, forgotten now when it is not.
+                if !form.stay {
+                    saved::forget();
+                }
+                attempt.send(&user, Secret::Password(pass), true);
+                attempt.intent.stay = form.stay;
             }
         }
     }
@@ -1320,6 +1384,107 @@ mod tests {
         exited(&mut app, &mut cursor)
     }
 
+    /// A state folder of its own and no login env, so the kept-login branch is the one that runs.
+    fn stay_env(
+        tag: &str,
+    ) -> (
+        std::path::PathBuf,
+        Vec<crate::local_state::test_env::EnvGuard>,
+    ) {
+        use crate::local_state::test_env::EnvGuard;
+        let home = std::env::temp_dir().join(format!("benilla-stay-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let guards = vec![
+            EnvGuard::set("BENILLA_HOME", home.to_str().unwrap()),
+            EnvGuard::unset("WOW_USER"),
+            EnvGuard::unset("WOW_PASS"),
+            EnvGuard::unset("WOW_UNATTENDED"),
+            EnvGuard::unset("WOW_CAPTURE"),
+            EnvGuard::unset("WOW_LOGIN_SMOKE"),
+        ];
+        (home, guards)
+    }
+
+    /// Stay logged in: a kept login submits once at start, as its hash and never a password, under
+    /// the connecting dialog; a refusal of it forgets it.
+    #[test]
+    fn a_kept_login_submits_its_hash_at_start_and_a_refusal_forgets_it() {
+        let _lock = crate::local_state::test_env::ENV_LOCK.lock();
+        let (home, _env) = stay_env("submit");
+        let hash: [u8; 20] = std::array::from_fn(|i| i as u8 + 1);
+        saved::save("Player", &hash);
+
+        let (mut app, requests) = policy_app();
+        app.world_mut().resource_mut::<LoginIntent>().env_read = false;
+        app.update();
+
+        let req = requests.try_recv().expect("the kept login is submitted");
+        assert_eq!(req.user, "Player");
+        assert!(matches!(req.pass, Secret::Saved(h) if h == hash));
+        assert_eq!(
+            app.world().resource::<GlueDialog>().kind,
+            Some(DialogKind::Status),
+            "under the connecting dialog",
+        );
+
+        app.world_mut().write_message(LoginFailedMessage {
+            refusal: Some(LoginRefusal::Logon(0x04)),
+            reason: "server rejected logon: result 0x04".into(),
+            terminal: false,
+            dial: None,
+        });
+        app.update();
+        assert!(saved::load().is_none(), "a refused kept login is forgotten");
+        assert!(app.world().resource::<LoginIntent>().creds.is_none());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// An unattended run never uses a kept login: its login would take the account from the
+    /// player who kept it.
+    #[test]
+    fn an_unattended_run_never_logs_in_with_a_kept_login() {
+        let _lock = crate::local_state::test_env::ENV_LOCK.lock();
+        let (home, _env) = stay_env("unattended");
+        let _unattended = crate::local_state::test_env::EnvGuard::set("WOW_UNATTENDED", "1");
+        saved::save("Player", &[7; 20]);
+
+        let (mut app, requests) = policy_app();
+        app.world_mut().resource_mut::<LoginIntent>().env_read = false;
+        app.update();
+        app.update();
+        assert!(requests.try_recv().is_err(), "nothing is submitted");
+        assert!(saved::load().is_some(), "and the kept login stays");
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// A typed login with the box checked is kept when the roster comes back, as the hash the
+    /// protocol makes from that name and password.
+    #[test]
+    fn a_typed_login_with_stay_is_kept_on_success() {
+        let _lock = crate::local_state::test_env::ENV_LOCK.lock();
+        let (home, _env) = stay_env("keep");
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .insert_state(ClientState::Login)
+            .init_resource::<LoginIntent>()
+            .init_resource::<GlueDialog>()
+            .add_message::<CharListMessage>()
+            .add_systems(Update, to_select_on_roster);
+        {
+            let mut intent = app.world_mut().resource_mut::<LoginIntent>();
+            intent.creds = Some(("Player".into(), "Secret1".into()));
+            intent.stay = true;
+        }
+        app.world_mut().write_message(CharListMessage {
+            characters: Vec::new(),
+            realm: None,
+        });
+        app.update();
+        let want = benilla_protocol::credentials_hash("Player", "Secret1").unwrap();
+        assert_eq!(saved::load(), Some(("Player".to_string(), want)));
+        assert!(!app.world().resource::<LoginIntent>().stay);
+        let _ = std::fs::remove_dir_all(home);
+    }
     /// Neither a typed refusal nor env credentials alone end the run: only an untyped attempt in
     /// a run that declares `WOW_UNATTENDED` does.
     #[test]

@@ -35,6 +35,8 @@ pub(crate) enum LoginAction {
     Login,
     Quit,
     ToggleSave,
+    /// "Stay logged in" (`super::saved`).
+    ToggleStay,
     /// Open the realmlist editor, from the button or the address readout under it.
     Realmlist,
 }
@@ -52,9 +54,17 @@ pub(super) struct AccountText;
 /// The password box's row items, displayed as the `*` mask.
 #[derive(Component, Clone)]
 pub(super) struct PasswordText;
-/// The checkbox's checked overlay, shown while the form's save flag is set.
+/// Which checkbox a check overlay belongs to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Check {
+    /// Remember Account Name, the form's save flag.
+    Save,
+    /// Stay logged in, the form's stay flag.
+    Stay,
+}
+/// A checkbox's checked overlay, shown while its flag is set.
 #[derive(Component)]
-pub(super) struct CheckMark;
+pub(super) struct CheckMark(pub(super) Check);
 /// The checkbox's hover highlight, driven by [`refresh_checkbox`].
 #[derive(Component)]
 pub(super) struct CheckHilight;
@@ -440,96 +450,134 @@ fn spawn_screen(
 
         // The Remember Account Name checkbox (20×20 at (17, top 653), resolved from its anchor
         // under the absent Community button) and its label at LEFT+24.
-        ui.spawn((Node {
-            position_type: PositionType::Absolute,
-            left: px(17.0),
-            top: px(653.0),
-            height: px(20.0),
-            align_items: AlignItems::Center,
-            flex_direction: FlexDirection::Row,
-            ..default()
-        },))
-            .with_children(|row| {
-                let mut b = row.spawn((
-                    LoginAction::ToggleSave,
-                    Button,
-                    Node {
-                        width: px(20.0),
-                        height: px(20.0),
-                        ..default()
-                    },
-                ));
-                match &art.checkbox {
-                    Some(check) => {
-                        b.insert((
-                            ImageNode::new(check.up.clone()),
-                            ArtSwap {
-                                up: check.up.clone(),
-                                down: check.down.clone(),
-                            },
+        checkbox_row(
+            ui,
+            art,
+            &font,
+            s,
+            653.0,
+            LoginAction::ToggleSave,
+            Check::Save,
+            form.save,
+            strings.text("SAVE_ACCOUNT_NAME", "Remember Account Name"),
+        );
+        // Deviation: "Stay logged in", one row under it, which 1.12 lacks: the client keeps the
+        // login (`super::saved`) and logs in by itself the next time.
+        checkbox_row(
+            ui,
+            art,
+            &font,
+            s,
+            677.0,
+            LoginAction::ToggleStay,
+            Check::Stay,
+            form.stay,
+            "Stay logged in",
+        );
+    });
+}
+
+/// One checkbox and its label, `top` px down the canvas: the UI-CheckBox art when it loaded (an
+/// `x` on a pale square when not), the check overlay shown while `checked`.
+#[allow(clippy::too_many_arguments)]
+fn checkbox_row(
+    ui: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    art: &GlueArt,
+    font: &Handle<Font>,
+    s: f32,
+    top: f32,
+    action: LoginAction,
+    which: Check,
+    checked: bool,
+    label: &str,
+) {
+    let px = |v: f32| Val::Px(v * s);
+    let shown = if checked {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    ui.spawn((Node {
+        position_type: PositionType::Absolute,
+        left: px(17.0),
+        top: px(top),
+        height: px(20.0),
+        align_items: AlignItems::Center,
+        flex_direction: FlexDirection::Row,
+        ..default()
+    },))
+        .with_children(|row| {
+            let mut b = row.spawn((
+                action,
+                Button,
+                Node {
+                    width: px(20.0),
+                    height: px(20.0),
+                    ..default()
+                },
+            ));
+            match &art.checkbox {
+                Some(check) => {
+                    b.insert((
+                        ImageNode::new(check.up.clone()),
+                        ArtSwap {
+                            up: check.up.clone(),
+                            down: check.down.clone(),
+                        },
+                    ));
+                    b.with_children(|inner| {
+                        inner.spawn((
+                            CheckMark(which),
+                            shown,
+                            ImageNode::new(check.checked.clone()),
+                            overlay(),
                         ));
-                        b.with_children(|inner| {
+                        if let Some(hi) = &check.hi {
                             inner.spawn((
-                                CheckMark,
-                                if form.save {
-                                    Visibility::Inherited
-                                } else {
-                                    Visibility::Hidden
-                                },
-                                ImageNode::new(check.checked.clone()),
+                                CheckHilight,
+                                Hilight,
+                                Visibility::Hidden,
+                                bevy::ui_render::ui_material::MaterialNode(hi.clone()),
                                 overlay(),
                             ));
-                            if let Some(hi) = &check.hi {
-                                inner.spawn((
-                                    CheckHilight,
-                                    Hilight,
-                                    Visibility::Hidden,
-                                    bevy::ui_render::ui_material::MaterialNode(hi.clone()),
-                                    overlay(),
-                                ));
-                            }
-                        });
-                    }
-                    None => {
-                        b.insert(BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.15)));
-                        b.with_children(|inner| {
-                            inner.spawn((
-                                CheckMark,
-                                if form.save {
-                                    Visibility::Inherited
-                                } else {
-                                    Visibility::Hidden
-                                },
-                                Text::new("x"),
-                                TextFont {
-                                    font: font.clone(),
-                                    font_size: 14.0 * s,
-                                    ..default()
-                                },
-                                TextColor(GOLD),
-                            ));
-                        });
-                    }
+                        }
+                    });
                 }
-                row.spawn((
-                    Text::new(strings.text("SAVE_ACCOUNT_NAME", "Remember Account Name")),
-                    TextFont {
-                        font: font.clone(),
-                        font_size: 10.0 * s, // the authored FontHeight 10
-                        ..default()
-                    },
-                    TextColor(GOLD),
-                    TextShadow {
-                        offset: Vec2::new(s, s),
-                        color: Color::BLACK,
-                    },
-                    Node {
-                        margin: UiRect::left(px(4.0)), // LEFT+24 from the checkbox's left edge
-                        ..default()
-                    },
-                ));
-            });
-    });
+                None => {
+                    b.insert(BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.15)));
+                    b.with_children(|inner| {
+                        inner.spawn((
+                            CheckMark(which),
+                            shown,
+                            Text::new("x"),
+                            TextFont {
+                                font: font.clone(),
+                                font_size: 14.0 * s,
+                                ..default()
+                            },
+                            TextColor(GOLD),
+                        ));
+                    });
+                }
+            }
+            row.spawn((
+                Text::new(label),
+                TextFont {
+                    font: font.clone(),
+                    font_size: 10.0 * s, // the authored FontHeight 10
+                    ..default()
+                },
+                TextColor(GOLD),
+                TextShadow {
+                    offset: Vec2::new(s, s),
+                    color: Color::BLACK,
+                },
+                Node {
+                    margin: UiRect::left(px(4.0)), // LEFT+24 from the checkbox's left edge
+                    ..default()
+                },
+            ));
+        });
 }
 
 /// Paint both boxes from their [`EditBoxState`]s through the shared [`paint_glue_field`].
@@ -574,11 +622,15 @@ pub(super) fn refresh_realmlist(
 pub(super) fn refresh_checkbox(
     form: Res<LoginForm>,
     boxes: Query<(&Interaction, &Children), With<ArtSwap>>,
-    mut marks: Query<&mut Visibility, (With<CheckMark>, Without<CheckHilight>)>,
+    mut marks: Query<(&CheckMark, &mut Visibility), Without<CheckHilight>>,
     mut hilights: Query<&mut Visibility, With<CheckHilight>>,
 ) {
-    for mut vis in &mut marks {
-        let want = if form.save {
+    for (mark, mut vis) in &mut marks {
+        let checked = match mark.0 {
+            Check::Save => form.save,
+            Check::Stay => form.stay,
+        };
+        let want = if checked {
             Visibility::Inherited
         } else {
             Visibility::Hidden
