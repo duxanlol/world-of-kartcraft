@@ -6843,7 +6843,7 @@
         </Scripts>
     </Frame>
     <Frame name="BenillaKartReplaysFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="400" y="416"/></Size>
+        <Size><AbsDimension x="560" y="416"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="40"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -6860,7 +6860,7 @@
                     <Anchors><Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentEmpty" inherits="GameFontHighlight" text="No replays yet. Every race you run is kept here, the newest ten." hidden="true">
-                    <Size><AbsDimension x="320" y="60"/></Size>
+                    <Size><AbsDimension x="480" y="60"/></Size>
                     <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-86"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString inherits="GameFontDisableSmall" text="Plays while you sit in your kart. Steer to watch another racer.">
@@ -6891,8 +6891,11 @@
                 <DisabledTexture file="Interface\Buttons\UI-SpellbookIcon-NextPage-Disabled"/>
                 <HighlightTexture file="Interface\Buttons\UI-Common-MouseHilight" alphaMode="ADD"/>
             </Button>
+            <!-- A row as wide as a records line in the small font: course, record, time and holder. -->
             <Button name="$parentEntry1" inherits="UIPanelButtonTemplate" id="1">
-                <Size><AbsDimension x="320" y="22"/></Size>
+                <Size><AbsDimension x="480" y="22"/></Size>
+                <NormalFont inherits="GameFontNormalSmall"/>
+                <HighlightFont inherits="GameFontHighlightSmall"/>
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-60"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
@@ -6906,7 +6909,9 @@
                 </Scripts>
             </CheckButton>
             <Button name="$parentEntry2" inherits="UIPanelButtonTemplate" id="2">
-                <Size><AbsDimension x="320" y="22"/></Size>
+                <Size><AbsDimension x="480" y="22"/></Size>
+                <NormalFont inherits="GameFontNormalSmall"/>
+                <HighlightFont inherits="GameFontHighlightSmall"/>
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-86"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
@@ -6920,7 +6925,9 @@
                 </Scripts>
             </CheckButton>
             <Button name="$parentEntry3" inherits="UIPanelButtonTemplate" id="3">
-                <Size><AbsDimension x="320" y="22"/></Size>
+                <Size><AbsDimension x="480" y="22"/></Size>
+                <NormalFont inherits="GameFontNormalSmall"/>
+                <HighlightFont inherits="GameFontHighlightSmall"/>
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-112"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
@@ -6934,7 +6941,9 @@
                 </Scripts>
             </CheckButton>
             <Button name="$parentEntry4" inherits="UIPanelButtonTemplate" id="4">
-                <Size><AbsDimension x="320" y="22"/></Size>
+                <Size><AbsDimension x="480" y="22"/></Size>
+                <NormalFont inherits="GameFontNormalSmall"/>
+                <HighlightFont inherits="GameFontHighlightSmall"/>
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-138"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
@@ -6948,7 +6957,9 @@
                 </Scripts>
             </CheckButton>
             <Button name="$parentEntry5" inherits="UIPanelButtonTemplate" id="5">
-                <Size><AbsDimension x="320" y="22"/></Size>
+                <Size><AbsDimension x="480" y="22"/></Size>
+                <NormalFont inherits="GameFontNormalSmall"/>
+                <HighlightFont inherits="GameFontHighlightSmall"/>
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-164"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
@@ -6962,7 +6973,9 @@
                 </Scripts>
             </CheckButton>
             <Button name="$parentEntry6" inherits="UIPanelButtonTemplate" id="6">
-                <Size><AbsDimension x="320" y="22"/></Size>
+                <Size><AbsDimension x="480" y="22"/></Size>
+                <NormalFont inherits="GameFontNormalSmall"/>
+                <HighlightFont inherits="GameFontHighlightSmall"/>
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-190"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
@@ -6976,7 +6989,9 @@
                 </Scripts>
             </CheckButton>
             <Button name="$parentEntry7" inherits="UIPanelButtonTemplate" id="7">
-                <Size><AbsDimension x="320" y="22"/></Size>
+                <Size><AbsDimension x="480" y="22"/></Size>
+                <NormalFont inherits="GameFontNormalSmall"/>
+                <HighlightFont inherits="GameFontHighlightSmall"/>
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-216"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
@@ -6990,7 +7005,9 @@
                 </Scripts>
             </CheckButton>
             <Button name="$parentEntry8" inherits="UIPanelButtonTemplate" id="8">
-                <Size><AbsDimension x="320" y="22"/></Size>
+                <Size><AbsDimension x="480" y="22"/></Size>
+                <NormalFont inherits="GameFontNormalSmall"/>
+                <HighlightFont inherits="GameFontHighlightSmall"/>
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-242"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
@@ -7004,7 +7021,9 @@
                 </Scripts>
             </CheckButton>
             <Button name="$parentEntry9" inherits="UIPanelButtonTemplate" id="9">
-                <Size><AbsDimension x="320" y="22"/></Size>
+                <Size><AbsDimension x="480" y="22"/></Size>
+                <NormalFont inherits="GameFontNormalSmall"/>
+                <HighlightFont inherits="GameFontHighlightSmall"/>
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-268"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
@@ -7018,7 +7037,9 @@
                 </Scripts>
             </CheckButton>
             <Button name="$parentEntry10" inherits="UIPanelButtonTemplate" id="10">
-                <Size><AbsDimension x="320" y="22"/></Size>
+                <Size><AbsDimension x="480" y="22"/></Size>
+                <NormalFont inherits="GameFontNormalSmall"/>
+                <HighlightFont inherits="GameFontHighlightSmall"/>
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-294"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Choose(this:GetID())</OnClick></Scripts>
             </Button>
@@ -7038,17 +7059,17 @@
             </Button>
             <!-- The tabs: this computer's replays, our races on the server, the courses' records. -->
             <Button name="$parentTabLocal" inherits="UIPanelButtonTemplate" text="This computer">
-                <Size><AbsDimension x="112" y="22"/></Size>
+                <Size><AbsDimension x="166" y="22"/></Size>
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-30"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Tab("local")</OnClick></Scripts>
             </Button>
             <Button name="$parentTabServer" inherits="UIPanelButtonTemplate" text="Your races">
-                <Size><AbsDimension x="112" y="22"/></Size>
+                <Size><AbsDimension x="166" y="22"/></Size>
                 <Anchors><Anchor point="LEFT" relativeTo="$parentTabLocal" relativePoint="RIGHT"><Offset><AbsDimension x="4" y="0"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Tab("server")</OnClick></Scripts>
             </Button>
             <Button name="$parentTabRecords" inherits="UIPanelButtonTemplate" text="Records">
-                <Size><AbsDimension x="112" y="22"/></Size>
+                <Size><AbsDimension x="166" y="22"/></Size>
                 <Anchors><Anchor point="LEFT" relativeTo="$parentTabServer" relativePoint="RIGHT"><Offset><AbsDimension x="4" y="0"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartReplays_Tab("records")</OnClick></Scripts>
             </Button>
