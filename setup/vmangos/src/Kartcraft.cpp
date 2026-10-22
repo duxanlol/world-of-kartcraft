@@ -2978,8 +2978,19 @@ namespace Kartcraft
                 {
                     Field* x = result->Fetch();
                     std::string const reason = x[0].GetCppString();
+                    std::string const name = x[2].GetCppString();
+                    uint32 ms = x[3].GetUInt32();
+                    // A take saved before ReplayFinish holds 0 ms for its record holder: the board's time.
+                    if (!ms)
+                    {
+                        std::lock_guard<std::mutex> lock(s_mutex);
+                        Board const& board = reason == "rT" ? s_trialBoard : s_raceBoard;
+                        auto record = board.records.find(course);
+                        if (record != board.records.end() && record->second.name == name)
+                            ms = record->second.ms;
+                    }
                     SendLine(player, "KARTCRAFT\tR\tRR\t" + course + "\t" + (reason == "rT" ? "T" : "R") + "\t" +
-                        x[1].GetCppString() + "\t" + x[2].GetCppString() + "\t" + std::to_string(x[3].GetUInt32()));
+                        x[1].GetCppString() + "\t" + name + "\t" + std::to_string(ms));
                 } while (result->NextRow());
             }
             SendLine(player, "KARTCRAFT\tR\tRR-\t" + course);
