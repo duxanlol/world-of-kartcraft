@@ -7440,20 +7440,35 @@ namespace Kartcraft
             // A race already waiting on this course takes them in: who arrives after the offer
             // (sent once, to those near) still races with the host rather than alone. A party
             // race only if it is theirs to join.
+            uint32 joinId = 0;
             for (auto& entry : s_races)
             {
-                uint32 openId = entry.first;
                 Race& open = entry.second;
                 bool in = std::any_of(open.racers.begin(), open.racers.end(),
                     [player](Racer const& x) { return x.guid == player->GetObjectGuid(); });
                 if (open.course == course && !open.start && !open.timeTrial && open.instance == instance &&
                     MayJoin(player, open) && (in || open.racers.size() < MAX_RACERS))
                 {
-                    if (!in)
-                        open.racers.push_back({ player->GetObjectGuid(), player->GetName() });
-                    SendRace(open, "KARTCRAFT\tR\tL\t" + std::to_string(openId) + "\t" + Roster(open));
-                    return;
+                    if (in)
+                    {
+                        SendRace(open, "KARTCRAFT\tR\tL\t" + std::to_string(entry.first) + "\t" + Roster(open));
+                        return;
+                    }
+                    joinId = entry.first;
+                    break;
                 }
+            }
+            // Hosting or joining here leaves the queue and every other race still waiting; one
+            // under way stays, and refuses it.
+            if (!LeaveWaitingRaces(player))
+                return;
+            LeaveQueue(player->GetObjectGuid());
+            auto join = s_races.find(joinId);
+            if (joinId && join != s_races.end())
+            {
+                join->second.racers.push_back({ player->GetObjectGuid(), player->GetName() });
+                SendRace(join->second, "KARTCRAFT\tR\tL\t" + std::to_string(joinId) + "\t" + Roster(join->second));
+                return;
             }
             uint32 raceId = s_nextRace++;
             Race& r = s_races[raceId];
@@ -7493,6 +7508,10 @@ namespace Kartcraft
             for (Racer const& x : r.racers)
                 if (x.guid == player->GetObjectGuid())
                     return;
+            // As hosting: out of the queue and every other race still waiting.
+            if (!LeaveWaitingRaces(player))
+                return;
+            LeaveQueue(player->GetObjectGuid());
             r.racers.push_back({ player->GetObjectGuid(), player->GetName() });
             SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(id) + "\t" + Roster(r));
         }
