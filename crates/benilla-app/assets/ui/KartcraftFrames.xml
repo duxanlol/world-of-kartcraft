@@ -1467,6 +1467,7 @@
         function BenillaKartMap_SetTrack(name)
             BenillaKartShortcuts.racing = name ~= nil and name ~= ""
             BenillaKartShortcuts_Update()
+            BenillaKart_StepAside(BENILLA_KART_RACE_HIDDEN_FRAMES, BenillaKartShortcuts.racing)
         end
 
         -- The server's replies.
@@ -2762,6 +2763,9 @@
             "MultiBarRight", "PlayerFrame", "TargetFrame", "PetFrame", "PartyMemberFrame1",
             "PartyMemberFrame2", "PartyMemberFrame3", "PartyMemberFrame4",
         }
+        -- In a race the zone's name steps aside too: crossing into a zone or a subzone it would
+        -- show over the race's banner (TOP -256) and the top of its results board.
+        BENILLA_KART_RACE_HIDDEN_FRAMES = { "ZoneTextFrame", "SubZoneTextFrame" }
 
         -- In the kart and out of a race, two shortcuts: a time trial (the track browser, where the
         -- course is picked) and the Race Finder. A race under way (a course on the race map) or
@@ -3173,23 +3177,28 @@
             BenillaKartShortcuts.seated = seated
             BenillaKartShortcuts_Update()
             if seated then BenillaKartGuide_FirstDrive() end
+            BenillaKart_StepAside(BENILLA_KART_HIDDEN_FRAMES, seated)
+        end
+
+        -- `names` under the hidden holder (`aside`), or back where they were.
+        function BenillaKart_StepAside(names, aside)
             if not BenillaKartHiddenHolder then
                 BenillaKartHiddenHolder = CreateFrame("Frame", nil, UIParent)
                 BenillaKartHiddenHolder:Hide()
                 BenillaKartHiddenHolder.parents = {}
             end
             local holder = BenillaKartHiddenHolder
-            for _, name in ipairs(BENILLA_KART_HIDDEN_FRAMES) do
+            for _, name in ipairs(names) do
                 local frame = getglobal(name)
                 if frame then
-                    if seated and not holder.parents[name] then
+                    if aside and not holder.parents[name] then
                         holder.parents[name] = frame:GetParent() or UIParent
                         -- Stepping aside is no lost target: TargetFrame's OnHide would play it.
                         local onhide = frame:GetScript("OnHide")
                         frame:SetScript("OnHide", nil)
                         frame:SetParent(holder)
                         frame:SetScript("OnHide", onhide)
-                    elseif not seated and holder.parents[name] then
+                    elseif not aside and holder.parents[name] then
                         frame:SetParent(holder.parents[name])
                         holder.parents[name] = nil
                         -- 1.12's SetParent does not show a frame it moves under a visible parent
