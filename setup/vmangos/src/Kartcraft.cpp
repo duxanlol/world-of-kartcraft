@@ -6538,6 +6538,8 @@ namespace Kartcraft
             uint32 const instance = race->second.instance;
             if (!CanRaceOn(player, course, instance) || RefuseOff(player, course))
                 return true;
+            // Its take too: a restart is no run, and each would stand in Replays unfinished.
+            s_takes.erase(race->first);
             s_races.erase(race);
             uint32 raceId = OpenTimeTrial(player, course, instance, now);
             TeleportToGrid(player, course, 0, instance);
