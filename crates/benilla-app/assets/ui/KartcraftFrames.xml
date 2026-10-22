@@ -1480,8 +1480,16 @@
                 f.waiting, f.waited = tonumber(line[3]), tonumber(line[4])
             elseif verb == "Qx" then
                 f.queued, f.waiting, f.waited = nil, nil, nil
-                if line[3] == "racing" then f.noticeUntil = GetTime() + 6 end
+                if line[3] == "racing" then
+                    f.noticeUntil = GetTime() + 6
+                    -- The finder's status line says it; with the finder shut (the Kartcraft
+                    -- menu's Find a race) the chat does.
+                    if not BenillaKartFinderFrame:IsVisible() then BenillaKart_Say(BENILLA_KART_RACING) end
+                end
                 if line[3] == "party" then BenillaKart_Say("Your party left the Race Finder queue.") end
+                if line[3] == "world" then
+                    BenillaKart_Say("The Race Finder takes you from out in the world: not from a dungeon, a raid or a battleground.")
+                end
             elseif verb == "Qp" then
                 -- A party mate queued the party: we are queued too, and keep our place ourselves.
                 f.queued, f.waiting, f.waited, f.noticeUntil = line[3], nil, nil, 0

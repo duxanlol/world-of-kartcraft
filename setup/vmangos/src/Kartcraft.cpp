@@ -6453,8 +6453,17 @@ namespace Kartcraft
         {
             std::vector<bool> mask = CourseMask(f[2]);
             // Not from a dungeon, a raid or a battleground's match: a pop would teleport them out.
-            if (!InOpenWorld(player) || !AnyCourse(mask))
+            // Told, or their client shows them queued until the heartbeat's answer.
+            if (!InOpenWorld(player))
+            {
+                SendLine(player, "KARTCRAFT\tR\tQx\tworld");
                 return true;
+            }
+            if (!AnyCourse(mask))
+            {
+                SendLine(player, "KARTCRAFT\tR\tQx\tcourse");
+                return true;
+            }
             // A race still waiting to start is left for the queue; one under way is not: a pop
             // would teleport them off the course, so they are told why instead.
             if (!LeaveWaitingRaces(player))
