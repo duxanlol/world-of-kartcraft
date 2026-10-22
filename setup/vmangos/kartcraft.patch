@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..64de1a7
+index 0000000..e75ef82
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,8034 @@
+@@ -0,0 +1,8051 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -2775,6 +2775,22 @@ index 0000000..64de1a7
 +            return 0;
 +        int32 v = int32(std::strtol(f[i].c_str(), nullptr, 10));
 +        return std::max(lo, std::min(hi, v));
++    }
++
++    // A racer's finish into the race's take at once: the last finisher's race is gone before the
++    // next sample could see it. Under s_mutex.
++    static void ReplayFinish(uint32 race, ObjectGuid guid, uint8 place, uint32 ms, uint32 now)
++    {
++        auto take = s_takes.find(race);
++        if (take == s_takes.end())
++            return;
++        for (ReplayTrack& t : take->second.tracks)
++            if (t.guid == guid && !t.finishedAt)
++            {
++                t.finishedAt = now ? now : 1;
++                t.place = place;
++                t.ms = ms;
++            }
 +    }
 +
 +    // Every race under way: each racer's place now, every REPLAY_STEP. Under s_mutex.
@@ -7585,6 +7601,7 @@ index 0000000..64de1a7
 +                    r.firstFinish = now ? now : 1;
 +                uint32 ms = WorldTimer::getMSTimeDiff(r.start, now);
 +                me->ms = ms;
++                ReplayFinish(id, me->guid, me->place, ms, now);
 +                RecordResult(r, *me, place, ms);
 +                if (r.timeTrial)
 +                {

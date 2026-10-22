@@ -2664,6 +2664,22 @@ namespace Kartcraft
         return std::max(lo, std::min(hi, v));
     }
 
+    // A racer's finish into the race's take at once: the last finisher's race is gone before the
+    // next sample could see it. Under s_mutex.
+    static void ReplayFinish(uint32 race, ObjectGuid guid, uint8 place, uint32 ms, uint32 now)
+    {
+        auto take = s_takes.find(race);
+        if (take == s_takes.end())
+            return;
+        for (ReplayTrack& t : take->second.tracks)
+            if (t.guid == guid && !t.finishedAt)
+            {
+                t.finishedAt = now ? now : 1;
+                t.place = place;
+                t.ms = ms;
+            }
+    }
+
     // Every race under way: each racer's place now, every REPLAY_STEP. Under s_mutex.
     static void SampleReplays(uint32 now)
     {
@@ -7472,6 +7488,7 @@ namespace Kartcraft
                     r.firstFinish = now ? now : 1;
                 uint32 ms = WorldTimer::getMSTimeDiff(r.start, now);
                 me->ms = ms;
+                ReplayFinish(id, me->guid, me->place, ms, now);
                 RecordResult(r, *me, place, ms);
                 if (r.timeTrial)
                 {
