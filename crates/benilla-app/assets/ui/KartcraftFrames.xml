@@ -97,7 +97,7 @@
         BenillaKartFinder = { any = 1, picked = {}, beat = 0, noticeUntil = 0, search = "" }
         -- While the finder is open: how many wait for each zone (by key) and the races hosted at a
         -- start ({ id, course, host, racers }), from the server's "Lobby" answer every 2 s.
-        BenillaKartLobby = { counts = {}, races = {}, beat = 0 }
+        BenillaKartLobby = { counts = {}, races = {}, beat = 0, page = 1 }
         BENILLA_KART_LOBBY_ROWS = 3
 
         function BenillaKart_Send(body)
@@ -396,21 +396,37 @@
             end
         end
 
-        -- The hosted races under the list, each with its Join; past the rows, a count.
-        -- ponytail: the first BENILLA_KART_LOBBY_ROWS only; scroll them if hosts get many.
+        -- The hosted races under the list, each with its Join, BENILLA_KART_LOBBY_ROWS a page,
+        -- turned by the arrows at the line's end.
+        function BenillaKartLobby_Turn(by)
+            local l = BenillaKartLobby
+            l.page = (l.page or 1) + by
+            BenillaKartLobby_Update()
+        end
+
         function BenillaKartLobby_Update()
-            local races = BenillaKartLobby.races
+            local l = BenillaKartLobby
+            local races = l.races
             local count = table.getn(races)
+            local pages = math.max(1, math.ceil(count / BENILLA_KART_LOBBY_ROWS))
+            l.page = math.max(1, math.min(pages, l.page or 1))
             if count == 0 then
                 BenillaKartFinderFrameLobbies:SetText("Hosted races: none. A Race Marshal hosts one at a course's start.")
-            elseif count > BENILLA_KART_LOBBY_ROWS then
-                BenillaKartFinderFrameLobbies:SetText("Hosted races (" .. count .. ", the first " .. BENILLA_KART_LOBBY_ROWS .. ")")
+            elseif pages > 1 then
+                BenillaKartFinderFrameLobbies:SetText(format("Hosted races (%d, page %d of %d)", count, l.page, pages))
             else
                 BenillaKartFinderFrameLobbies:SetText("Hosted races")
             end
+            for _, b in ipairs({ BenillaKartFinderFrameLobbyPrev, BenillaKartFinderFrameLobbyNext }) do
+                if pages > 1 then b:Show() else b:Hide() end
+            end
+            -- The line's full width where no arrows stand at its end.
+            BenillaKartFinderFrameLobbies:SetWidth(pages > 1 and 222 or 272)
+            if l.page > 1 then BenillaKartFinderFrameLobbyPrev:Enable() else BenillaKartFinderFrameLobbyPrev:Disable() end
+            if l.page < pages then BenillaKartFinderFrameLobbyNext:Enable() else BenillaKartFinderFrameLobbyNext:Disable() end
             for i = 1, BENILLA_KART_LOBBY_ROWS do
                 local row = getglobal("BenillaKartFinderFrameLobby" .. i)
-                local race = races[i]
+                local race = races[(l.page - 1) * BENILLA_KART_LOBBY_ROWS + i]
                 if race then
                     row.id = race.id
                     local racers = race.racers .. " racers"
@@ -4668,7 +4684,7 @@
                 </FontString>
                 <!-- Two lines for "none" and its hint, which no row stands under. -->
                 <FontString name="$parentLobbies" inherits="GameFontNormalSmall" justifyH="LEFT" justifyV="TOP">
-                    <Size><AbsDimension x="272" y="28"/></Size>
+                    <Size><AbsDimension x="222" y="28"/></Size>
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-332"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
@@ -4793,6 +4809,25 @@
                 <Scripts><OnClick>BenillaKartFinder_SetTab(2)</OnClick></Scripts>
             </Button>
             <!-- The hosted races, each with its Join (BenillaKartLobby_Update). -->
+            <!-- The hosted races' pages, as the spellbook's arrows, at the end of their line. -->
+            <Button name="$parentLobbyPrev" hidden="true">
+                <Size><AbsDimension x="24" y="24"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="248" y="-326"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartLobby_Turn(-1)</OnClick></Scripts>
+                <NormalTexture file="Interface\Buttons\UI-SpellbookIcon-PrevPage-Up"/>
+                <PushedTexture file="Interface\Buttons\UI-SpellbookIcon-PrevPage-Down"/>
+                <DisabledTexture file="Interface\Buttons\UI-SpellbookIcon-PrevPage-Disabled"/>
+                <HighlightTexture file="Interface\Buttons\UI-Common-MouseHilight" alphaMode="ADD"/>
+            </Button>
+            <Button name="$parentLobbyNext" hidden="true">
+                <Size><AbsDimension x="24" y="24"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="272" y="-326"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartLobby_Turn(1)</OnClick></Scripts>
+                <NormalTexture file="Interface\Buttons\UI-SpellbookIcon-NextPage-Up"/>
+                <PushedTexture file="Interface\Buttons\UI-SpellbookIcon-NextPage-Down"/>
+                <DisabledTexture file="Interface\Buttons\UI-SpellbookIcon-NextPage-Disabled"/>
+                <HighlightTexture file="Interface\Buttons\UI-Common-MouseHilight" alphaMode="ADD"/>
+            </Button>
             <Frame name="$parentLobby1" inherits="BenillaKartLobbyRowTemplate">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-350"/></Offset></Anchor></Anchors>
             </Frame>

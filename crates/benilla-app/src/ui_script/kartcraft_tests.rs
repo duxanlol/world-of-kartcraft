@@ -2743,6 +2743,26 @@ fn the_finder_shows_the_queue_and_the_hosted_races_and_joins_one() {
     s.run("BenillaKartFinderFrameLobby1Join:Click()").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tLJ\t7"]);
 
+    // Five hosted: three a page, the arrows turning them, Join the race its page shows.
+    from_server(
+        &mut s,
+        "R\tLobby\t\t1:elwynn:A:1;2:elwynn:B:1;3:elwynn:C:1;4:sprint:D:2;5:sprint:E:1",
+    );
+    assert_eq!(
+        text(&s, "BenillaKartFinderFrameLobbies"),
+        "Hosted races (5, page 1 of 2)"
+    );
+    assert!(shown(&s, "BenillaKartFinderFrameLobbyNext"));
+    s.run("BenillaKartFinderFrameLobbyNext:Click()").unwrap();
+    assert!(text(&s, "BenillaKartFinderFrameLobby1Text").contains("D, 2 racers"));
+    assert!(
+        !shown(&s, "BenillaKartFinderFrameLobby3"),
+        "two on the last page"
+    );
+    sent(&mut s);
+    s.run("BenillaKartFinderFrameLobby1Join:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tLJ\t4"]);
+
     // Nobody waiting, nothing hosted.
     from_server(&mut s, "R\tLobby\t\t");
     assert_eq!(text(&s, "BenillaKartFinderFrameRow2Text"), "Elwynn Loop");
