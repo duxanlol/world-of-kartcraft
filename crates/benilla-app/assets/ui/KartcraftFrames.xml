@@ -6091,7 +6091,19 @@
             <OnLoad>
                 if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
                 BenillaKart_Movable(this)
+                -- Tokens that come while the shop is open (a delivery's bonus, a cache): asked
+                -- again a moment after the bags settle, the answer carrying the new count.
+                this:RegisterEvent("BAG_UPDATE")
             </OnLoad>
+            <OnEvent>
+                if event == "BAG_UPDATE" then BenillaKartShop.askAt = GetTime() + 0.5 end
+            </OnEvent>
+            <OnUpdate>
+                if BenillaKartShop.askAt and GetTime() >= BenillaKartShop.askAt then
+                    BenillaKartShop.askAt = nil
+                    BenillaKart_Send("Goods")
+                end
+            </OnUpdate>
             <OnShow>
                 PlaySound("igMainMenuOpen")
                 BenillaKart_Send("Skins")
