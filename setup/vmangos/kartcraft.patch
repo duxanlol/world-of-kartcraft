@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..412263f
+index 0000000..3d60e18
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,8094 @@
+@@ -0,0 +1,8095 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -1994,9 +1994,10 @@ index 0000000..412263f
 +        return entry.second;
 +    }
 +
++    // In the bank too: a package banked for the trip and taken out at the far end is still carried.
 +    bool CarryingDelivery(Player const* player)
 +    {
-+        return player->HasItemCount(DELIVERY_PACKAGE, 1);
++        return player->HasItemCount(DELIVERY_PACKAGE, 1, true);
 +    }
 +
 +    static std::string DeliveryClock(uint32 seconds)

@@ -1881,9 +1881,10 @@ namespace Kartcraft
         return entry.second;
     }
 
+    // In the bank too: a package banked for the trip and taken out at the far end is still carried.
     bool CarryingDelivery(Player const* player)
     {
-        return player->HasItemCount(DELIVERY_PACKAGE, 1);
+        return player->HasItemCount(DELIVERY_PACKAGE, 1, true);
     }
 
     static std::string DeliveryClock(uint32 seconds)
