@@ -782,7 +782,13 @@ impl UiScript {
 
     /// Load and evaluate a Lua chunk, returning its result: for tests and one-shot queries.
     pub fn eval<T: mlua::FromLuaMulti>(&self, chunk: &str) -> mlua::Result<T> {
-        self.lua.load(chunk).set_mode(mlua::ChunkMode::Text).eval()
+        // Named as `run_chunk`'s are: unnamed, mlua names it by the Rust caller's file, whose
+        // separators differ by host and leak into every traceback the chunk is on.
+        self.lua
+            .load(chunk)
+            .set_name("(eval)")
+            .set_mode(mlua::ChunkMode::Text)
+            .eval()
     }
 
     /// How many values the Lua expression `expr` returns (`"GetItemInfo(1)"`, not a chunk), zero
