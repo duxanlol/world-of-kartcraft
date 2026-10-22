@@ -114,8 +114,11 @@ const KEYS: [(&str, Option<&str>, &str); 4] = [
 pub(crate) fn keys_text(bindings: &[(String, Vec<String>)]) -> String {
     let key = |command: &str| {
         let keys = bindings.iter().find(|(c, _)| c == command);
+        // A modifier bound alone reads `SHIFT-`; the card names it `SHIFT`.
         keys.and_then(|(_, k)| k.first())
-            .map_or("unbound".to_string(), Clone::clone)
+            .map_or("unbound".to_string(), |k| {
+                k.trim_end_matches('-').to_string()
+            })
     };
     let mut lines: Vec<String> = KEYS
         .iter()
@@ -952,7 +955,7 @@ fn spawn(
             if let Some(objects) = &built.objects {
                 objects_panel(root, art, font, s, objects, view.object);
             }
-            panel(root, art, Panel::Keys, card(0, (260.0, 216.0), 182.0), s).with_children(|k| {
+            panel(root, art, Panel::Keys, card(0, (260.0, 236.0), 182.0), s).with_children(|k| {
                 label(
                     k,
                     font,
@@ -1782,7 +1785,7 @@ mod tests {
         let text = keys_text(&[
             bound("KARTCRAFT_ACCELERATE", "W"),
             bound("KARTCRAFT_BRAKE", "S"),
-            bound("KARTCRAFT_BOOST", "SHIFT"),
+            bound("KARTCRAFT_BOOST", "SHIFT-"),
         ]);
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines[0], "|cffffd100W / S|r  fly forward, back");
