@@ -1929,6 +1929,19 @@ namespace Kartcraft
                 ChatHandler(player->GetSession()).SendSysMessage("Deliver the package you're carrying first.");
             return false;
         }
+        // One delivery at a time, its package lost or not: a second would run beside the first's
+        // clock, and Courier Jobs' Cancel abandons the first in the log.
+        for (Delivery const& other : DELIVERIES)
+        {
+            QuestStatus const status = player->GetQuestStatus(other.quest);
+            if (other.quest != d->quest && (status == QUEST_STATUS_INCOMPLETE || status == QUEST_STATUS_COMPLETE))
+            {
+                if (msg)
+                    ChatHandler(player->GetSession()).SendSysMessage(
+                        "Finish or abandon the delivery in your quest log first.");
+                return false;
+            }
+        }
         return true;
     }
 

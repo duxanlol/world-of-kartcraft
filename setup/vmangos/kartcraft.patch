@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..3d60e18
+index 0000000..08b44cf
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,8095 @@
+@@ -0,0 +1,8108 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -2041,6 +2041,19 @@ index 0000000..3d60e18
 +            if (msg)
 +                ChatHandler(player->GetSession()).SendSysMessage("Deliver the package you're carrying first.");
 +            return false;
++        }
++        // One delivery at a time, its package lost or not: a second would run beside the first's
++        // clock, and Courier Jobs' Cancel abandons the first in the log.
++        for (Delivery const& other : DELIVERIES)
++        {
++            QuestStatus const status = player->GetQuestStatus(other.quest);
++            if (other.quest != d->quest && (status == QUEST_STATUS_INCOMPLETE || status == QUEST_STATUS_COMPLETE))
++            {
++                if (msg)
++                    ChatHandler(player->GetSession()).SendSysMessage(
++                        "Finish or abandon the delivery in your quest log first.");
++                return false;
++            }
 +        }
 +        return true;
 +    }
