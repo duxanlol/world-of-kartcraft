@@ -179,9 +179,11 @@
             return keys
         end
 
-        function BenillaKartFinder_Queue()
+        -- The courses ticked, or on the Player tracks tab the track picked; `courses` the courses
+        -- whatever the tab (the Kartcraft menu's Find a race, where no tab is in sight).
+        function BenillaKartFinder_Queue(courses)
             local f = BenillaKartFinder
-            if f.mode == "player" then
+            if f.mode == "player" and not courses then
                 if not f.track then return end
                 f.queued = "pt-" .. f.track
             else
@@ -562,6 +564,7 @@
             PADLSHOULDER = -BENILLA_KART_ROWS, PADRSHOULDER = BENILLA_KART_ROWS }
         function BenillaKartFinder_Pad(key)
             local f = BenillaKartFinder
+            if f.mode == "player" then return BenillaKartFinder_PadTracks(key) end
             local list = BenillaKartFinder_Shown()
             local n = table.getn(list)
             local lobbies = math.min(table.getn(BenillaKartLobby.races), BENILLA_KART_LOBBY_ROWS)
@@ -603,6 +606,46 @@
                 end
             elseif at > n then
                 item = getglobal("BenillaKartFinderFrameLobby" .. (at - n) .. "Join")
+            end
+            BenillaPad_Show(item)
+        end
+
+        -- The Player tracks tab: the D-pad moves down the tracks (L1 and R1 a page), Cross picks
+        -- the one under it, Triangle runs its time trial, Start queues for it; Circle closes.
+        function BenillaKartFinder_PadTracks(key)
+            local f = BenillaKartFinder
+            local list = BenillaKartFinderPlayer_Shown()
+            local n = table.getn(list)
+            local at = math.max(1, math.min(f.padTrack or 1, math.max(n, 1)))
+            local steps = { PADDUP = -1, PADDDOWN = 1,
+                PADLSHOULDER = -BENILLA_KART_PLAYER_ROWS, PADRSHOULDER = BENILLA_KART_PLAYER_ROWS }
+            if steps[key] then
+                at = math.max(1, math.min(math.max(n, 1), at + steps[key]))
+            elseif key == "PAD1" then
+                if list[at] then BenillaKartFinder_PickTrack(list[at].id) end
+            elseif key == "PAD4" then
+                BenillaKartFinder_PlayerTrial()
+                return
+            elseif key == "PADFORWARD" then
+                BenillaKartFinder_QueueClick()
+            elseif key == "PAD2" then
+                BenillaKartFinderFrameClose:Click()
+                return
+            end
+            f.padTrack = at
+            -- The track under the cursor into view, at the list's top or bottom edge.
+            local bar = getglobal("BenillaKartFinderFramePlayerScrollScrollBar")
+            local offset = FauxScrollFrame_GetOffset and FauxScrollFrame_GetOffset(BenillaKartFinderFramePlayerScroll) or 0
+            if bar and at <= offset then
+                bar:SetValue((at - 1) * BENILLA_KART_ROW_HEIGHT)
+            elseif bar and at > offset + BENILLA_KART_PLAYER_ROWS then
+                bar:SetValue((at - BENILLA_KART_PLAYER_ROWS) * BENILLA_KART_ROW_HEIGHT)
+            end
+            BenillaKartFinder_Refresh()
+            local item = BenillaKartFinderFramePlayerSort
+            for i = 1, BENILLA_KART_PLAYER_ROWS do
+                local row = getglobal("BenillaKartFinderFramePlayerRow" .. i)
+                if list[at] and row.id == list[at].id and row:IsVisible() then item = row end
             end
             BenillaPad_Show(item)
         end
@@ -1865,7 +1908,7 @@
               legend = "D-pad: pick a job    Cross / A: take it    Triangle / Y: route\nSquare / X: cancel the job under way    Circle / B: close" },
             -- `below`: how far under the window its legend hangs, past its tabs.
             { name = "BenillaKartFinderFrame", buttons = "BenillaKartFinder_Pad", below = 26,
-              legend = "D-pad: move    L1 / R1: page    Cross / A: tick or join\nStart: find race (again: leave the queue)    Circle / B: close" },
+              legend = "D-pad: move    L1 / R1: page    Cross / A: tick, pick or join    Triangle / Y: a player track's trial\nStart: find race (again: leave the queue)    Circle / B: close" },
             { name = "BenillaKartGarageFrame" },
             { name = "BenillaKartShopFrame" },
             { name = "BenillaKartSettingsFrame" },
@@ -2137,7 +2180,10 @@
         -- one there only in its mode, when it is shown.
         BENILLA_KART_MENU = {
             { id = "find", label = function() return BenillaKartFinder.queued and "Leave the queue" or "Find a race" end,
-              run = function() BenillaKartFinder_QueueClick() end },
+              run = function()
+                  if BenillaKartFinder.queued then BenillaKartFinder_Leave() else BenillaKartFinder_Queue(true) end
+                  BenillaKartFinder_Refresh()
+              end },
             { id = "daily", label = function() return BenillaKartMenu_Challenge("daily") end,
               run = function() BenillaKartMenu_OpenChallenge("daily") end },
             { id = "weekly", label = function() return BenillaKartMenu_Challenge("weekly") end,

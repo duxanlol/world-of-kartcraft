@@ -4520,6 +4520,23 @@ fn the_race_finder_s_player_tracks_tab_races_and_time_trials_a_player_track() {
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tTB\tpt-7"]);
     assert!(!shown(&s, "BenillaKartFinderFrame"));
 
+    // The controller walks the tracks here, not the hidden courses: down to the second, Cross
+    // picks it, Triangle runs its trial.
+    s.run("BenillaKartFinder_Toggle() BenillaKartFinder.padTrack = nil")
+        .unwrap();
+    s.run("BenillaKartFinder_Pad('PADDDOWN') BenillaKartFinder_Pad('PAD1')")
+        .unwrap();
+    let picked: String = s.eval("return tostring(BenillaKartFinder.track)").unwrap();
+    assert_eq!(picked, "5", "barrens Run, the second down");
+    sent(&mut s);
+    s.run("BenillaKartFinder_Pad('PAD4')").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tTB\tpt-5"]);
+    // The Kartcraft menu's Find a race queues for the courses, whatever tab was left open.
+    s.run("BenillaKartMenu_Run('find')").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tQ+\tany"]);
+    s.run("BenillaKartMenu_Run('find')").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tQ-"]);
+
     // Back on the courses' tab, the ticks again.
     s.run("BenillaKartFinder_Toggle() BenillaKartFinderFrameTab1:Click()")
         .unwrap();
