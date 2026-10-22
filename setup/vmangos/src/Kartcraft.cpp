@@ -7180,11 +7180,38 @@ namespace Kartcraft
             UnpublishTrack(player, t->id);
     }
 
+    // A race's close: everyone not in is out of time, recorded and told to all.
+    static void CloseRace(uint32 id, Race& r)
+    {
+        if (!r.start)
+            return;
+        for (Racer& x : r.racers)
+            if (!x.finished)
+            {
+                x.finished = true;
+                x.place = 0;
+                RecordResult(r, x, 0, 0);
+                SendRace(r, "KARTCRAFT\tR\tDNF\t" + std::to_string(id) + "\t" + x.name);
+            }
+    }
+
     static void HandleRace(Player* player, std::string const& body, bool marshal)
     {
         uint32 now = WorldTimer::getMSTime();
+        // RACE_LIFETIME from the start once it has gone, as a lobby may wait long; closed as a
+        // late race is, so its racers are told and recorded.
         for (auto it = s_races.begin(); it != s_races.end();)
-            it = WorldTimer::getMSTimeDiff(it->second.created, now) > RACE_LIFETIME ? s_races.erase(it) : std::next(it);
+        {
+            Race& r = it->second;
+            uint32 const since = r.start && int32(now - r.start) >= 0 ? r.start : r.created;
+            if (WorldTimer::getMSTimeDiff(since, now) <= RACE_LIFETIME)
+            {
+                it = std::next(it);
+                continue;
+            }
+            CloseRace(it->first, r);
+            it = s_races.erase(it);
+        }
         UpdateFinder(now);
 
         // A publish's pieces: nothing until the last, then its whole line.
@@ -7528,7 +7555,9 @@ namespace Kartcraft
                 if (!best.empty())
                     SendRecords(id, r);
                 Reward(player, place, uint32(r.racers.size()));
-                if (r.finishers >= r.racers.size())
+                // Over when everyone still in has finished: a finisher who left counts in
+                // `finishers` but no longer in `racers`, so the counts would close it a racer early.
+                if (std::all_of(r.racers.begin(), r.racers.end(), [](Racer const& x) { return x.finished; }))
                     s_races.erase(race);
             }
         }
@@ -7580,14 +7609,7 @@ namespace Kartcraft
                 it = std::next(it);
                 continue;
             }
-            for (Racer& x : r.racers)
-                if (!x.finished)
-                {
-                    x.finished = true;
-                    x.place = 0;
-                    RecordResult(r, x, 0, 0);
-                    SendRace(r, "KARTCRAFT\tR\tDNF\t" + std::to_string(it->first) + "\t" + x.name);
-                }
+            CloseRace(it->first, r);
             it = s_races.erase(it);
         }
     }
