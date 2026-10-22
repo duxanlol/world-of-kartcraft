@@ -64,6 +64,7 @@ pub(super) fn publish_view_focus(
     cinematic: Option<Res<crate::cinematic::Cinematic>>,
     kart: Option<Res<crate::kart::KartDrive>>,
     free: Option<Res<crate::kart::freecam::FreeCam>>,
+    current_map: Option<Res<benilla_world::world_map::CurrentMap>>,
     mut was_flying: Local<bool>,
 ) {
     let entry = roster
@@ -112,6 +113,13 @@ pub(super) fn publish_view_focus(
                 ViewFocus::body(wow, paced)
             }
         }
+        // No avatar yet, but a worldport has placed us and its ack is owed: the server moved the
+        // login on at once (its map refused us), and keeps us out of world, with no body, until
+        // the ack, which waits for that map's ground. Stream where it put us, not the roster's.
+        Some(p) if p.owes_worldport_ack && current_map.is_some() => ViewFocus::entry(
+            current_map.as_deref().map_or(0, |m| m.0),
+            benilla_assets::coords::bevy_to_wow(p.pos),
+        ),
         // No avatar: the picked character's row for the entry window, else
         // whatever the camera can see.
         _ => match entry {
