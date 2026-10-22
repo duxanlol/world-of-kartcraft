@@ -408,13 +408,9 @@ fn drive(
                             send(ClientCommand::Chat {
                                 kind: ChatKind::Say,
                                 target: None,
-                                // Our own height, a little up: the server drops us there.
-                                text: format!(
-                                    ".go xyz {:.1} {:.1} {:.1}",
-                                    p[0],
-                                    p[1],
-                                    bevy_to_wow(player.pos)[2] + 3.0
-                                ),
+                                // `.go xy`: the ground's height there (vmangos `HandleGoHelper`).
+                                // Our own, a checkpoint uphill of us, put us inside the hill.
+                                text: format!(".go xy {:.1} {:.1}", p[0], p[1]),
                                 language: None,
                             });
                             test.target = Some((p, now));
