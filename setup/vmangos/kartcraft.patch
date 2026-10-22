@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..e651b47
+index 0000000..5cb67fa
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,8159 @@
+@@ -0,0 +1,8166 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -707,6 +707,9 @@ index 0000000..e651b47
 +        // The passes the server has seen with its own eyes (Witness), counted as Passes counts:
 +        // a report that reaches us after the position proving it still counts.
 +        uint32 seen = 0;
++        // Joined from the Race Finder's list (LJ), from anywhere: the host's start takes them to
++        // the grid as a pop does, the way back with it (Origin).
++        bool fromList = false;
 +        // Weapons: the item held (ITEM_NONE for none) and its shots left, when the crate that gave
 +        // it was taken (ms), the Wumpa count, and until when a fired mask protects (ms, 0 none).
 +        uint8 held = 15;
@@ -6651,6 +6654,7 @@ index 0000000..e651b47
 +            SummonKart(player);
 +            Race& r = race->second;
 +            r.racers.push_back({ guid, player->GetName() });
++            r.racers.back().fromList = true;
 +            SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(race->first) + "\t" + Roster(r));
 +        }
 +        else if (verb == "TB" && f.size() > 2)
@@ -7669,7 +7673,10 @@ index 0000000..e651b47
 +                        p->CombatStopWithPets(true);
 +                        p->GetHostileRefManager().deleteReferences();
 +                    }
-+                    TeleportToGrid(p, *r.course, slot++, r.instance);
++                    Origin from = { p->GetMapId(), p->GetPositionX(), p->GetPositionY(), p->GetPositionZ(),
++                        p->GetOrientation(), now };
++                    if (TeleportToGrid(p, *r.course, slot++, r.instance) && x.fromList)
++                        s_origins[p->GetGUIDLow()] = from;
 +                }
 +            StartRace(id, r, now, far ? GRID_COUNTDOWN + FAR_SETTLE : GRID_COUNTDOWN);
 +        }

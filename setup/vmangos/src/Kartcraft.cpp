@@ -594,6 +594,9 @@ namespace Kartcraft
         // The passes the server has seen with its own eyes (Witness), counted as Passes counts:
         // a report that reaches us after the position proving it still counts.
         uint32 seen = 0;
+        // Joined from the Race Finder's list (LJ), from anywhere: the host's start takes them to
+        // the grid as a pop does, the way back with it (Origin).
+        bool fromList = false;
         // Weapons: the item held (ITEM_NONE for none) and its shots left, when the crate that gave
         // it was taken (ms), the Wumpa count, and until when a fired mask protects (ms, 0 none).
         uint8 held = 15;
@@ -6538,6 +6541,7 @@ namespace Kartcraft
             SummonKart(player);
             Race& r = race->second;
             r.racers.push_back({ guid, player->GetName() });
+            r.racers.back().fromList = true;
             SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(race->first) + "\t" + Roster(r));
         }
         else if (verb == "TB" && f.size() > 2)
@@ -7556,7 +7560,10 @@ namespace Kartcraft
                         p->CombatStopWithPets(true);
                         p->GetHostileRefManager().deleteReferences();
                     }
-                    TeleportToGrid(p, *r.course, slot++, r.instance);
+                    Origin from = { p->GetMapId(), p->GetPositionX(), p->GetPositionY(), p->GetPositionZ(),
+                        p->GetOrientation(), now };
+                    if (TeleportToGrid(p, *r.course, slot++, r.instance) && x.fromList)
+                        s_origins[p->GetGUIDLow()] = from;
                 }
             StartRace(id, r, now, far ? GRID_COUNTDOWN + FAR_SETTLE : GRID_COUNTDOWN);
         }
