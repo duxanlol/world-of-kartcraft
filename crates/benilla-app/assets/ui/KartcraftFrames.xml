@@ -6329,20 +6329,21 @@
                     <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="6" y="0"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentRoute" inherits="GameFontHighlightSmall" justifyH="LEFT">
-                    <Size><AbsDimension x="246" y="18"/></Size>
+                    <Size><AbsDimension x="216" y="18"/></Size>
                     <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="180" y="0"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentDistance" inherits="GameFontHighlightSmall" justifyH="RIGHT">
-                    <Size><AbsDimension x="50" y="18"/></Size>
-                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="426" y="0"/></Offset></Anchor></Anchors>
+                    <Size><AbsDimension x="54" y="18"/></Size>
+                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="400" y="0"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentPar" inherits="GameFontHighlightSmall" justifyH="RIGHT">
-                    <Size><AbsDimension x="34" y="18"/></Size>
-                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="484" y="0"/></Offset></Anchor></Anchors>
+                    <Size><AbsDimension x="38" y="18"/></Size>
+                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="460" y="0"/></Offset></Anchor></Anchors>
                 </FontString>
-                <FontString name="$parentState" inherits="GameFontHighlightSmall" justifyH="RIGHT">
-                    <Size><AbsDimension x="50" y="18"/></Size>
-                    <Anchors><Anchor point="RIGHT"><Offset><AbsDimension x="-4" y="0"/></Offset></Anchor></Anchors>
+                <!-- Clear of the par column: "Under way" beside a par of "22:30". -->
+                <FontString name="$parentState" inherits="GameFontHighlightSmall" justifyH="LEFT">
+                    <Size><AbsDimension x="64" y="18"/></Size>
+                    <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="506" y="0"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
@@ -6387,13 +6388,13 @@
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="200" y="-38"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString inherits="GameFontDisableSmall" text="Distance">
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="450" y="-38"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-126" y="-38"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString inherits="GameFontDisableSmall" text="Par">
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="522" y="-38"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-82" y="-38"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString inherits="GameFontDisableSmall" text="Status">
-                    <Anchors><Anchor point="TOPRIGHT"><Offset><AbsDimension x="-24" y="-38"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="526" y="-38"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentTitle" inherits="GameFontNormalLarge" justifyH="LEFT">
                     <Size><AbsDimension x="550" y="20"/></Size>
