@@ -4625,6 +4625,9 @@ namespace Kartcraft
         uint32 created = 0;
         std::vector<Queued> members;
         std::vector<ObjectGuid> accepted;
+        // Said yes while they could not be raced off (dead, fighting, flying, in a dungeon...):
+        // accepted as soon as they can be, within the pop's time.
+        std::vector<ObjectGuid> waiting;
     };
 
     static std::vector<Queued> s_queue;
@@ -5061,13 +5064,34 @@ namespace Kartcraft
             it = WorldTimer::getMSTimeDiff(it->second.at, now) > RETURN_KEEP ? s_origins.erase(it) : std::next(it);
 
         for (auto it = s_pops.begin(); it != s_pops.end();)
-            if (WorldTimer::getMSTimeDiff(it->second.created, now) > POP_ANSWER)
+        {
+            Pop& p = it->second;
+            // A yes that waited (the "Y" handler) counts once they can be raced off.
+            for (auto w = p.waiting.begin(); w != p.waiting.end();)
             {
-                EndPop(it->first, it->second, now);
+                Player* racer = ObjectAccessor::FindPlayer(*w);
+                if (!racer || !CanBeRacedOff(racer))
+                {
+                    w = std::next(w);
+                    continue;
+                }
+                if (std::find(p.accepted.begin(), p.accepted.end(), *w) == p.accepted.end())
+                    p.accepted.push_back(*w);
+                w = p.waiting.erase(w);
+            }
+            if (p.accepted.size() == p.members.size())
+            {
+                LaunchPop(p, now);
+                it = s_pops.erase(it);
+            }
+            else if (WorldTimer::getMSTimeDiff(p.created, now) > POP_ANSWER)
+            {
+                EndPop(it->first, p, now);
                 it = s_pops.erase(it);
             }
             else
                 it = std::next(it);
+        }
 
         // The course with the most takers that is ready, oldest first.
         std::stable_sort(s_queue.begin(), s_queue.end(), [now](Queued const& a, Queued const& b) {
@@ -6683,9 +6707,16 @@ namespace Kartcraft
                 return true;
             }
             // A racer who can't be raced off yet (dead, fighting, flying, in a dungeon...): their yes
-            // waits until they can.
+            // waits until they can (UpdateFinder), and they are told so.
             if (!CanBeRacedOff(player))
+            {
+                if (std::find(p.waiting.begin(), p.waiting.end(), guid) == p.waiting.end())
+                    p.waiting.push_back(guid);
+                ChatHandler(player->GetSession()).SendSysMessage(
+                    "Accepted: the race takes you as soon as you can go (alive, out of the fight, off the "
+                    "flight path, out of the dungeon).");
                 return true;
+            }
             if (std::find(p.accepted.begin(), p.accepted.end(), guid) == p.accepted.end())
                 p.accepted.push_back(guid);
             if (p.accepted.size() == p.members.size())
