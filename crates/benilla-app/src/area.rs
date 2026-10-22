@@ -149,8 +149,12 @@ fn feed_zone_events(
     if let Some((k, group, default)) = world.area_interior_rows() {
         // The client keys `[groupRec+0x7c]`, nonzero-gated; see the module doc's deviation.
         wmo_group = k.group_area_id;
+        // The same group and the same zone: nothing to resolve. A zone that changed under the
+        // same group (the leaf catching up after a teleport, its first frames still the last
+        // map's) resolves again, or GetRealZoneText keeps the map left behind.
         if cache.indoor
             && k.group_area_id != 0
+            && cache.zone_id == Some(zone)
             && (cache.wmo_id, cache.wmo_group) == (k.wmo_id, wmo_group)
         {
             return;
