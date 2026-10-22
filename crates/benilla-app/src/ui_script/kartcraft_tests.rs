@@ -2423,6 +2423,48 @@ fn a_track_is_rated_after_a_race_and_a_closed_one_leaves_the_browser() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
+/// The results board and the delivery clock are as wide as their longest line, never narrower
+/// than their own width: a record by a 12-letter name, a marathon leg to Light's Hope Chapel.
+#[test]
+fn the_results_board_and_the_delivery_clock_fit_their_lines() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
+    let fits = |s: &mut UiScript, frame: &str, text: &str| -> (f64, f64) {
+        s.eval(&format!(
+            "return {frame}:GetWidth(), {text}:GetStringWidth()"
+        ))
+        .unwrap()
+    };
+    s.run("BenillaKartRace_Show('', '1. A  0:50.12')").unwrap();
+    assert_eq!(
+        fits(&mut s, "BenillaKartResultsFrame", "BenillaKartRaceResults").0,
+        240.0
+    );
+    s.run(
+        "BenillaKartRace_Show('', '1. Abcdefghijkl  10:50.38  (record)\\n\
+         Time trial record: 10:50.38 by Abcdefghijkl')",
+    )
+    .unwrap();
+    let (board, line) = fits(&mut s, "BenillaKartResultsFrame", "BenillaKartRaceResults");
+    assert!(line > 240.0 - 28.0, "the record line measures {line}");
+    assert_eq!(board, line + 28.0, "14 in each side");
+
+    s.run("BenillaKartDelivery_Start(\"Light's Hope Chapel\", 330, 400, 2, 4)")
+        .unwrap();
+    let (clock, line) = fits(
+        &mut s,
+        "BenillaKartDeliveryFrame",
+        "BenillaKartDeliveryFrameText",
+    );
+    assert!(line > 300.0 - 28.0, "the marathon leg measures {line}");
+    assert_eq!(clock, line + 28.0);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 /// The Replays window's server tabs: our races there, each with a pin, and the courses'
 /// records, each played as a server replay token.
 #[test]
