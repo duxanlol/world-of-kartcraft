@@ -2775,6 +2775,8 @@
             if d.stops then label = format("Marathon: to %s (%d/%d)", d.to, d.stop or 1, d.stops) end
             BenillaKartDeliveryFrameText:SetText(format("%s   %s%d:%02d|r / par %d:%02d%s",
                 label, color, floor(gone / 60), mod(gone, 60), floor(d.par / 60), mod(d.par, 60), road))
+            -- The box as wide as its line: a marathon leg to Light's Hope Chapel measures 362 px.
+            BenillaKartDeliveryFrame:SetWidth(math.max(300, BenillaKartDeliveryFrameText:GetStringWidth() + 28))
         end
 
         -- ── The navigation window (/kartnav): each kind of guidance on or off, and the GPS's
@@ -6496,10 +6498,11 @@
         </Scripts>
     </Frame>
 
-    <!-- The courier delivery's clock (BenillaKartDelivery_Update), under the minimap's row. -->
+    <!-- The courier delivery's clock (BenillaKartDelivery_Update), over the trick score's popup
+         (BenillaKartScoreFrame, from TOP -80), which it would otherwise cover. -->
     <Frame name="BenillaKartDeliveryFrame" parent="UIParent" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" frameStrata="MEDIUM">
         <Size><AbsDimension x="300" y="30"/></Size>
-        <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-110"/></Offset></Anchor></Anchors>
+        <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-44"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
             <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>
             <TileSize><AbsValue val="16"/></TileSize>
@@ -6526,7 +6529,7 @@
     <!-- The Marathon Delivery's popup: its route, the time to the start and the queue, and the
          button to join or leave it; at the start, its countdown. -->
     <Frame name="BenillaKartMarathonFrame" parent="UIParent" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" frameStrata="HIGH">
-        <Size><AbsDimension x="360" y="110"/></Size>
+        <Size><AbsDimension x="360" y="124"/></Size>
         <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-150"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
             <BackgroundInsets><AbsInset left="4" right="4" top="4" bottom="4"/></BackgroundInsets>
@@ -6538,13 +6541,14 @@
                 <FontString name="$parentTitle" inherits="GameFontNormal" text="Marathon Delivery">
                     <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-10"/></Offset></Anchor></Anchors>
                 </FontString>
-                <FontString name="$parentRoute" inherits="GameFontHighlightSmall">
-                    <Size><AbsDimension x="340" y="14"/></Size>
+                <!-- Two lines: five stops run past one ("... > Everlook > Steamwheedle Port"). -->
+                <FontString name="$parentRoute" inherits="GameFontHighlightSmall" justifyV="TOP">
+                    <Size><AbsDimension x="340" y="28"/></Size>
                     <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-28"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentStatus" inherits="GameFontHighlight">
                     <Size><AbsDimension x="340" y="30"/></Size>
-                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-44"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-58"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
