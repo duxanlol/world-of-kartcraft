@@ -2356,6 +2356,17 @@ fn a_track_is_rated_after_a_race_and_a_closed_one_leaves_the_browser() {
     s.run("BenillaKartRateFrameGood:Click()").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tRate\tt1\t1\t"]);
     assert!(!shown(&mut s, "BenillaKartRateFrame"));
+    // Asked while a race's results stand, it hangs under them, however many racers they list.
+    s.run("BenillaKartRace_Show('', '1. A\\n2. B\\n3. C\\n4. D\\n5. E\\n6. F\\n7. G\\n8. H')")
+        .unwrap();
+    from_server(&mut s, "R\tRateAsk\tt1");
+    let anchor: String = s
+        .eval("local p, to, rp = BenillaKartRateFrame:GetPoint(1) return p .. ' ' .. to:GetName() .. ' ' .. rp")
+        .unwrap();
+    assert_eq!(anchor, "TOP BenillaKartResultsFrame BOTTOM");
+    s.run("BenillaKartRateFrame:Hide() BenillaKartRace_Show('', '')")
+        .unwrap();
+    sent(&mut s);
     // A bad one asks why, then sends it.
     from_server(&mut s, "R\tRateAsk\tt2");
     s.run("BenillaKartRateFrameBad:Click()").unwrap();

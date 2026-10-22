@@ -1885,6 +1885,21 @@
 
         -- The controller's guide under the window it drives, while a controller is connected
         -- (KartPads): what each button does there. Hidden with no such window.
+        -- The widest of a legend's lines as drawn, measured on a string of its own font.
+        function BenillaPadLegend_LongestLine(text)
+            local measure = BenillaPadLegendMeasure
+            if not measure then
+                measure = UIParent:CreateFontString("BenillaPadLegendMeasure", "ARTWORK", "GameFontHighlightSmall")
+                measure:Hide()
+            end
+            local widest = 0
+            for line in string.gfind(text .. "\n", "(.-)\n") do
+                measure:SetText(line)
+                widest = math.max(widest, measure:GetStringWidth() or 0)
+            end
+            return widest
+        end
+
         function BenillaPadLegend_Update(frame, w)
             local legend = BenillaPadLegendFrame
             if not legend then return end
@@ -1897,7 +1912,8 @@
             if legend.window ~= frame or BenillaPadLegendFrameText:GetText() ~= text then
                 legend.window = frame
                 BenillaPadLegendFrameText:SetText(text)
-                legend:SetWidth(math.max(frame:GetWidth(), 240))
+                -- As wide as its window, or as its longest line, which would otherwise be cut.
+                legend:SetWidth(math.max(frame:GetWidth(), 240, BenillaPadLegend_LongestLine(text) + 24))
                 legend:SetHeight(BenillaPadLegendFrameText:GetHeight() + 16)
                 legend:ClearAllPoints()
                 legend:SetPoint("TOP", frame, "BOTTOM", 0, 2 - (w.below or 0))
@@ -2463,7 +2479,20 @@
             BenillaKartRate.key = key
             BenillaKartRateFrameTitle:SetText("How was " .. BenillaKart_CourseName(key) .. "?")
             BenillaKartRate_Stage(1)
+            BenillaKartRate_Place()
             BenillaKartRateFrame:Show()
+        end
+
+        -- Under the race's results while they stand, which grow down a line a racer; else low in
+        -- the middle of the screen.
+        function BenillaKartRate_Place()
+            local frame = BenillaKartRateFrame
+            frame:ClearAllPoints()
+            if BenillaKartResultsFrame:IsVisible() then
+                frame:SetPoint("TOP", BenillaKartResultsFrame, "BOTTOM", 0, -4)
+            else
+                frame:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 170)
+            end
         end
 
         -- Stage 1: Good, Bad, Skip; stage 2: why it was bad.
@@ -2650,6 +2679,7 @@
             local lines = table.getn(BenillaKart_Split(string.gsub(results, "\n", "\t")))
             BenillaKartResultsFrame:SetHeight(44 + lines * 16)
             BenillaKartResultsFrame:Show()
+            if BenillaKartRateFrame:IsVisible() then BenillaKartRate_Place() end
         end
 
         -- The chain: its latest trick, its points, then the experience and skill it earned.
@@ -6732,7 +6762,7 @@
          does what it describes. -->
     <!-- After a race (the server's RateAsk) or from the track browser: how was the track. -->
     <Frame name="BenillaKartRateFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="300" y="260"/></Size>
+        <Size><AbsDimension x="340" y="272"/></Size>
         <Anchors><Anchor point="BOTTOM"><Offset><AbsDimension x="0" y="170"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -6741,60 +6771,61 @@
         </Backdrop>
         <Layers>
             <Layer level="ARTWORK">
-                <FontString name="$parentTitle" inherits="GameFontNormal">
-                    <Size><AbsDimension x="260" y="16"/></Size>
+                <!-- Two lines: a track's name runs long ("Brackwell Pumpkin Patch to Elwynn Forest"). -->
+                <FontString name="$parentTitle" inherits="GameFontNormal" justifyV="TOP">
+                    <Size><AbsDimension x="300" y="28"/></Size>
                     <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-20"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentAsk" inherits="GameFontHighlightSmall">
-                    <Size><AbsDimension x="260" y="14"/></Size>
-                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-40"/></Offset></Anchor></Anchors>
+                    <Size><AbsDimension x="300" y="14"/></Size>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-52"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
         <Frames>
             <Button name="$parentGood" inherits="UIPanelButtonTemplate" text="Good track">
                 <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-64"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-76"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartRate_Vote(1)</OnClick></Scripts>
             </Button>
             <Button name="$parentBad" inherits="UIPanelButtonTemplate" text="Bad track">
                 <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-90"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-102"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartRate_Vote(-1)</OnClick></Scripts>
             </Button>
             <Button name="$parentSkip" inherits="UIPanelButtonTemplate" text="Not now">
                 <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-124"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-136"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartRateFrame:Hide()</OnClick></Scripts>
             </Button>
             <Button name="$parentReason1" inherits="UIPanelButtonTemplate" text="" hidden="true">
                 <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-64"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-76"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartRate_Reason(1)</OnClick></Scripts>
             </Button>
             <Button name="$parentReason2" inherits="UIPanelButtonTemplate" text="" hidden="true">
                 <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-90"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-102"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartRate_Reason(2)</OnClick></Scripts>
             </Button>
             <Button name="$parentReason3" inherits="UIPanelButtonTemplate" text="" hidden="true">
                 <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-116"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-128"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartRate_Reason(3)</OnClick></Scripts>
             </Button>
             <Button name="$parentReason4" inherits="UIPanelButtonTemplate" text="" hidden="true">
                 <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-142"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-154"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartRate_Reason(4)</OnClick></Scripts>
             </Button>
             <Button name="$parentReason5" inherits="UIPanelButtonTemplate" text="" hidden="true">
                 <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-168"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-180"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartRate_Reason(5)</OnClick></Scripts>
             </Button>
             <Button name="$parentReason6" inherits="UIPanelButtonTemplate" text="No reason, just bad" hidden="true">
                 <Size><AbsDimension x="220" y="22"/></Size>
-                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-194"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-206"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartRate_Reason(6)</OnClick></Scripts>
             </Button>
         </Frames>
