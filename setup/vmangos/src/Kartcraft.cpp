@@ -2016,6 +2016,18 @@ namespace Kartcraft
     {
         std::string const day = ChallengePeriods().first;
         std::vector<Delivery const*> jobs = Today(day, TeamOf(player));
+        // A delivery under way that today's list no longer posts (taken before the day turned)
+        // leads it, so the board still shows it under way and offers its Cancel.
+        for (Delivery const& d : DELIVERIES)
+        {
+            QuestStatus const status = player->GetQuestStatus(d.quest);
+            if ((status == QUEST_STATUS_INCOMPLETE || status == QUEST_STATUS_COMPLETE) &&
+                std::find(jobs.begin(), jobs.end(), &d) == jobs.end())
+            {
+                jobs.insert(jobs.begin(), &d);
+                break;
+            }
+        }
         SendLine(player, "KARTCRAFT\tR\tJobs\t" + std::to_string(jobs.size()));
         for (size_t i = 0; i < jobs.size(); ++i)
         {

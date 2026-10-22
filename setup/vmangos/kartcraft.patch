@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..08b44cf
+index 0000000..c38128f
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,8108 @@
+@@ -0,0 +1,8120 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -2129,6 +2129,18 @@ index 0000000..08b44cf
 +    {
 +        std::string const day = ChallengePeriods().first;
 +        std::vector<Delivery const*> jobs = Today(day, TeamOf(player));
++        // A delivery under way that today's list no longer posts (taken before the day turned)
++        // leads it, so the board still shows it under way and offers its Cancel.
++        for (Delivery const& d : DELIVERIES)
++        {
++            QuestStatus const status = player->GetQuestStatus(d.quest);
++            if ((status == QUEST_STATUS_INCOMPLETE || status == QUEST_STATUS_COMPLETE) &&
++                std::find(jobs.begin(), jobs.end(), &d) == jobs.end())
++            {
++                jobs.insert(jobs.begin(), &d);
++                break;
++            }
++        }
 +        SendLine(player, "KARTCRAFT\tR\tJobs\t" + std::to_string(jobs.size()));
 +        for (size_t i = 0; i < jobs.size(); ++i)
 +        {
