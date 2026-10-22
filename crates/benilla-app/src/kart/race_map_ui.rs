@@ -321,7 +321,8 @@ fn spawn(
         left: Val::Px(top_left.x.max(0.0)),
         top: Val::Px(top_left.y.max(0.0)),
         width: px(CARD_W),
-        height: px(CARD_H),
+        // A line taller when the course's name wraps.
+        min_height: px(CARD_H),
         padding: UiRect::all(px(PAD)),
         flex_direction: FlexDirection::Column,
         border: UiRect::all(px(1.0)),
@@ -358,10 +359,11 @@ fn spawn(
             face(11.0),
             TextColor(GOLD),
             TextShadow::default(),
-            TextLayout::new_with_no_wrap(),
+            // As wide as the map, a long name onto a second line ("Brackwell Pumpkin Patch to
+            // Elwynn Forest  sprint" runs past the card on one).
             Node {
-                height: px(TITLE_H),
-                overflow: Overflow::clip(),
+                width: px(SIDE),
+                min_height: px(TITLE_H),
                 ..default()
             },
         ))
