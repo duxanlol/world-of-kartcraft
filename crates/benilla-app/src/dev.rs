@@ -101,6 +101,10 @@ impl Plugin for DevProbesPlugin {
             if std::env::var("WOW_PROBE_LUA").is_ok() {
                 app.add_plugins(crate::capture::ProbeLuaPlugin);
             }
+            // `WOW_PROBE_TALK="Innkeeper Janene@30"`: a right-click's hello to a named NPC.
+            if std::env::var("WOW_PROBE_TALK").is_ok() {
+                app.add_plugins(crate::capture::ProbeTalkPlugin);
+            }
             // `WOW_PROBE_DRAG="A>B"`: drags frame A onto B through the real pointer path.
             if std::env::var("WOW_PROBE_DRAG").is_ok() {
                 app.add_plugins(crate::capture::ProbeDragPlugin);

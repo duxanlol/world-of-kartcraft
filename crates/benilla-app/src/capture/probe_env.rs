@@ -67,6 +67,12 @@ pub(crate) const PROBE_VARS: &[ProbeVar] = &[
         wall_clock: true,
     },
     ProbeVar {
+        name: "WOW_PROBE_TALK",
+        purpose: "\"<name>@<secs>[;…]\" — send a right-click's service hello to the nearest unit of that name in reach (open an NPC's gossip or quest offer)",
+        // Each talk fires at its `@<secs>` on `ProbeClock`.
+        wall_clock: true,
+    },
+    ProbeVar {
         name: "WOW_PROBE_LUA",
         purpose: "\"<chunk>\" — run a Lua chunk in the live UI VM once per world entry (the press-the-button-headlessly instrument)",
         // First fire at `_AT` seconds, re-armed `_AGAIN` seconds into every later world entry.

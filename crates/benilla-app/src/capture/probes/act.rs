@@ -682,6 +682,94 @@ fn fire_probe_drag(
     probe.phase += 1;
 }
 
+/// `WOW_PROBE_TALK="<name>@<secs>[;…]"`: at each time once in-world, does what a right-click on
+/// the nearest unit of that name in service reach sends, the shipped
+/// [`crate::target::click::service_arm`] on its wire flags (a gossip hello, a quest giver's), so a
+/// run can open an NPC's menu or quest offer, which no 1.12 Lua call does. A unit out of reach
+/// is logged and skipped.
+pub(crate) struct ProbeTalkPlugin;
+
+impl Plugin for ProbeTalkPlugin {
+    fn build(&self, app: &mut App) {
+        let talks = std::env::var("WOW_PROBE_TALK")
+            .unwrap_or_default()
+            .split(';')
+            .filter_map(|t| {
+                let (name, at) = t.trim().rsplit_once('@')?;
+                Some((name.trim().to_string(), at.trim().parse().ok()?))
+            })
+            .collect();
+        app.insert_resource(ProbeTalk { talks, sent: 0 })
+            .add_systems(Update, fire_probe_talk);
+    }
+}
+
+/// [`ProbeTalkPlugin`] state: the `(name, seconds)` talks in order, and how many have gone.
+#[derive(Resource)]
+struct ProbeTalk {
+    talks: Vec<(String, f32)>,
+    sent: usize,
+}
+
+#[allow(clippy::type_complexity)]
+fn fire_probe_talk(
+    mut probe: ResMut<ProbeTalk>,
+    time: ProbeClock,
+    player: Res<crate::player::Player>,
+    names: Option<Res<crate::names::NameCache>>,
+    net: Option<Res<crate::net::NetCommands>>,
+    giver: Res<crate::ui_quest::QuestGiver>,
+    self_player: Query<(), With<crate::net::SelfPlayer>>,
+    units: Query<
+        (
+            &crate::net::Guid,
+            &crate::net::NetEntity,
+            &crate::net::ObjectStore,
+            &Transform,
+        ),
+        Without<crate::net::SelfPlayer>,
+    >,
+) {
+    use crate::target::click::{service_action, service_arm, ServiceAction};
+    let Some((name, at)) = probe.talks.get(probe.sent).cloned() else {
+        return;
+    };
+    if self_player.is_empty() || time.elapsed_secs() < at {
+        return;
+    }
+    let (Some(names), Some(net)) = (names, net) else {
+        return;
+    };
+    probe.sent += 1;
+    let reach = crate::target::cursor_mode::SERVICE_RANGE_SQ;
+    let nearest = units
+        .iter()
+        .filter(|(_, e, ..)| e.kind == benilla_protocol::EntityKind::Unit)
+        .filter(|(g, _, s, _)| names.resolve_unit(g.0, Some(s), &net) == Some(name.as_str()))
+        .map(|(g, _, s, t)| (g.0, s, t.translation.distance_squared(player.pos)))
+        .min_by(|a, b| a.2.total_cmp(&b.2));
+    let Some((guid, store, d2)) = nearest.filter(|n| n.2 <= reach) else {
+        warn!(
+            "probe-talk: no {name:?} in service reach ({nearest:?})",
+            nearest = nearest.map(|n| n.2.sqrt())
+        );
+        return;
+    };
+    let flags = store.0.unit_npc_flags();
+    match service_arm(flags, giver.status(guid)).map(|arm| service_action(arm, guid, false, None)) {
+        Some(ServiceAction::Send(cmd)) => {
+            info!(
+                "probe-talk: {name:?} ({guid:#x}, {:.1} yd, flags {flags:#x}): {cmd:?}",
+                d2.sqrt()
+            );
+            let _ = net.0.send(cmd);
+        }
+        _ => warn!(
+            "probe-talk: {name:?} ({guid:#x}, flags {flags:#x}) takes no service a talk sends"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{probe_lua_due, ProbeLua};
