@@ -37,6 +37,11 @@ struct Car {
     nozzles: &'static [[f32; 3]],
 }
 
+/// Whether `racer` is one of the cars built from the install at startup, after the CVars load.
+pub(super) fn built_from_install(racer: &str) -> bool {
+    CARS.iter().any(|c| c.key.eq_ignore_ascii_case(racer))
+}
+
 const CARS: [Car; 2] = [
     Car {
         key: "gnomecar",

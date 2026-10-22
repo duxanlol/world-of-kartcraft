@@ -303,7 +303,11 @@ pub(crate) fn on_cvar(
             }
         }
         "kartflag" => kartcraft::goods::set_our_flag(ev.new.trim()),
-        "kartracer" if !kartcraft::model::set_our_kart(ev.new.trim()) => {
+        // A car built from the install is not there yet at the CVars' load; it is taken when built.
+        "kartracer"
+            if !kartcraft::model::set_our_kart(ev.new.trim())
+                && !super::wow_karts::built_from_install(ev.new.trim()) =>
+        {
             warn!("kart: no kart for racer {:?} in the kart data", ev.new);
         }
         _ => {}
