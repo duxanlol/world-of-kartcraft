@@ -2195,6 +2195,8 @@ namespace Kartcraft
             else
             {
                 player->DestroyItemCount(DELIVERY_TOKEN, skin->price, true);
+                // Saved at once: the good is written now, so a crash before the next save would keep both.
+                player->SaveInventoryAndGoldToDB();
                 CharacterDatabase.DirectPExecute("INSERT INTO `kartcraft_skins` (`guid`, `skin`, `worn`, `at`) "
                     "VALUES (%u, '%s', 0, %u)", guid, skin->key, uint32(std::time(nullptr)));
                 chat.PSendSysMessage("Skin bought for %u Kartcraft Tokens.", skin->price);
@@ -2306,6 +2308,8 @@ namespace Kartcraft
             else
             {
                 player->DestroyItemCount(DELIVERY_TOKEN, good->price, true);
+                // Saved at once: the good is written now, so a crash before the next save would keep both.
+                player->SaveInventoryAndGoldToDB();
                 CharacterDatabase.DirectPExecute("INSERT INTO `kartcraft_goods` (`guid`, `good`, `worn`, `at`) "
                     "VALUES (%u, '%s', 0, %u)", guid, good->key, uint32(std::time(nullptr)));
                 chat.PSendSysMessage("Bought for %u Kartcraft Tokens.", good->price);
@@ -3296,6 +3300,8 @@ namespace Kartcraft
             {
                 Good const* prize = left[tier][urand(0, uint32(left[tier].size()) - 1)];
                 player->DestroyItemCount(DELIVERY_TOKEN, CRATE_PRICE, true);
+                // Saved at once: the good is written now, so a crash before the next save would keep both.
+                player->SaveInventoryAndGoldToDB();
                 CharacterDatabase.DirectPExecute("INSERT INTO `kartcraft_goods` (`guid`, `good`, `worn`, `at`) "
                     "VALUES (%u, '%s', 0, %u)", guid, prize->key, uint32(std::time(nullptr)));
                 s.sinceEpic = tier >= 2 ? 0 : s.sinceEpic + 1;
