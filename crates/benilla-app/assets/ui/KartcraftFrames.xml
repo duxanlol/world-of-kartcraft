@@ -2678,6 +2678,8 @@
             end
             local lines = table.getn(BenillaKart_Split(string.gsub(results, "\n", "\t")))
             BenillaKartResultsFrame:SetHeight(44 + lines * 16)
+            -- As wide as its widest line, 14 in each side: a record by a 12-letter name runs 272.
+            BenillaKartResultsFrame:SetWidth(math.max(240, BenillaKartRaceResults:GetStringWidth() + 28))
             BenillaKartResultsFrame:Show()
             if BenillaKartRateFrame:IsVisible() then BenillaKartRate_Place() end
         end
