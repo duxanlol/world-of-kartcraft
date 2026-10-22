@@ -985,7 +985,12 @@ fn real_prospecting_effect_is_absent_from_5875() {
     let set = parse(&raw, spell_schema(), "Spell.dbc").expect("parse Spell.dbc");
 
     let mut slots = 0usize;
-    for r in set.records() {
+    // The stock rows: Kartcraft's own spells ride the chain's read of the table.
+    let stock = set
+        .records()
+        .iter()
+        .filter(|r| !crate::kartcraft::kartcraft_spell(u32_at(r, 0).unwrap_or(0)));
+    for r in stock {
         for i in 0..3 {
             slots += 1;
             assert_ne!(
@@ -1423,7 +1428,11 @@ fn real_spell_family_columns_carry_the_modifier_gate() {
     let mut families: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
     let mut popcounts: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
     let mut max_bit = 0u32;
-    for (_, d) in cat.iter() {
+    // The stock rows: Kartcraft's own spells ride the chain's read of the table.
+    for (_, d) in cat
+        .iter()
+        .filter(|(id, _)| !crate::kartcraft::kartcraft_spell(*id))
+    {
         *families.entry(d.spell_family).or_default() += 1;
         *popcounts
             .entry(d.spell_family_flags.count_ones())

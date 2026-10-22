@@ -154,6 +154,12 @@ fn skill_race_class_rows() -> Vec<Row> {
     }]
 }
 
+/// Whether `id` is one of our own spells, appended to the stock `Spell.dbc` as the chain reads it:
+/// a test of the stock table leaves these out.
+pub fn kartcraft_spell(id: u32) -> bool {
+    SPELLS.iter().any(|s| s.id == id)
+}
+
 fn spell_rows() -> Vec<Row> {
     SPELLS
         .iter()
