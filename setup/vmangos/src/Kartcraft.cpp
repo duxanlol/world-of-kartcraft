@@ -2944,8 +2944,16 @@ namespace Kartcraft
         uint32 const guid = player->GetGUIDLow();
         if (f[1] == "RList")
         {
+            // A take saved before ReplayFinish holds 0 ms and place 0 for its last finisher: the
+            // race's result (kartcraft_results, the same start and race id) gives them.
             std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
-                "SELECT r.`key`, r.`course`, r.`trial`, r.`at`, r.`field`, m.`place`, m.`ms`, "
+                "SELECT r.`key`, r.`course`, r.`trial`, r.`at`, r.`field`, "
+                "IF(m.`ms` = 0, COALESCE((SELECT s.`place` FROM `kartcraft_results` s WHERE s.`race_at` = r.`at` "
+                "AND s.`race` = SUBSTRING_INDEX(r.`key`, '-', -1) AND s.`guid` = m.`guid` ORDER BY s.`ms` DESC LIMIT 1), "
+                "m.`place`), m.`place`), "
+                "IF(m.`ms` = 0, COALESCE((SELECT s.`ms` FROM `kartcraft_results` s WHERE s.`race_at` = r.`at` "
+                "AND s.`race` = SUBSTRING_INDEX(r.`key`, '-', -1) AND s.`guid` = m.`guid` ORDER BY s.`ms` DESC LIMIT 1), "
+                "0), m.`ms`), "
                 "EXISTS (SELECT 1 FROM `kartcraft_replay_pins` p WHERE p.`key` = r.`key` AND p.`guid` = %u), "
                 "EXISTS (SELECT 1 FROM `kartcraft_replay_keeps` k WHERE k.`key` = r.`key`) "
                 "FROM `kartcraft_replay_racers` m JOIN `kartcraft_replays` r ON r.`key` = m.`key` "

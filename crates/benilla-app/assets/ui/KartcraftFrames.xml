@@ -2308,7 +2308,7 @@
         function BenillaKartReplays_ServerLabel(r)
             local how
             if r.trial then
-                how = r.ms > 0 and ("time trial, " .. BenillaKartReplays_Clock(r.ms)) or "time trial"
+                how = "time trial, " .. (r.ms > 0 and BenillaKartReplays_Clock(r.ms) or "did not finish")
             elseif r.place == 0 then
                 how = "did not finish"
             else
