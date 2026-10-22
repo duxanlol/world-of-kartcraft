@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..c62baa7
+index 0000000..64de1a7
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,8030 @@
+@@ -0,0 +1,8034 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -216,6 +216,10 @@ index 0000000..c62baa7
 +        { "fel", 'K', 400, 0 },
 +        { "alliance", 'K', 250, 0 },
 +        { "wok", 'K', 500, 0 },
++        // The Mirage Raceway's racers, drawn from each player's own install (the client's
++        // kart/wow_karts.rs).
++        { "gnomecar", 'K', 500, 0 },
++        { "goblincar", 'K', 500, 0 },
 +    };
 +
 +    static Good const* FindGood(std::string const& key)

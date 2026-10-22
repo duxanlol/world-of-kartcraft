@@ -3852,7 +3852,7 @@
         -- the order the skill opens them, and the racers { key, name } we have a kart for.
         BenillaKartGarage = { skill = 0, classes = {}, racers = {} }
         BENILLA_KART_GARAGE_CLASSES = 4
-        BENILLA_KART_GARAGE_RACERS = 16
+        BENILLA_KART_GARAGE_RACERS = 18
         BENILLA_KART_LOCKED_COLOR = { r = 0.5, g = 0.5, b = 0.5 }
 
         -- `list`'s lines, each cut at its TABs.
@@ -3942,6 +3942,8 @@
             { key = "fel", kind = "kart", tier = 0, name = "Fel Kart", short = "Fel Kart", price = 400, icon = "Spell_Shadow_SummonFelHunter", about = "Dark armour, a horned skull and fel crystals." },
             { key = "alliance", kind = "kart", tier = 0, name = "Alliance Kart", short = "Alliance", price = 250, icon = "INV_BannerPVP_02", about = "The lion and Ashbringer, in blue and gold." },
             { key = "wok", kind = "kart", tier = 0, name = "WoK Kart", short = "WoK Kart", price = 500, icon = "INV_Gizmo_01", about = "A blue and silver race car in the WoK livery." },
+            { key = "gnomecar", kind = "kart", tier = 0, name = "Gnome Rocket Car", short = "Gnome Car", price = 500, icon = "INV_Gizmo_02", about = "The Mirage Raceway's gnomish racer, its rockets your turbos." },
+            { key = "goblincar", kind = "kart", tier = 0, name = "Goblin Rocket Car", short = "Goblin Car", price = 500, icon = "INV_Gizmo_RocketBoot_01", about = "The Mirage Raceway's goblin racer, two rockets and a prayer." },
         }
         -- The goods by key.
         function BenillaKartGoods_Find(key)
@@ -5547,7 +5549,7 @@
     <!-- The kart garage: the engine class, as the Karting skill opens them, and whose kart we
          drive, each a CVar set as it is clicked. -->
     <Frame name="BenillaKartGarageFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="340" y="630"/></Size>
+        <Size><AbsDimension x="340" y="654"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -5589,41 +5591,41 @@
                 </FontString>
                 <!-- The Look: a paint and a boost trail, earned by racing (the server's catalogues). -->
                 <FontString name="$parentLookTitle" inherits="GameFontNormal" text="Look">
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-438"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-462"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentPaintLabel" inherits="GameFontHighlight" text="Paint">
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-462"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-486"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentPaintName" inherits="GameFontNormal" justifyH="CENTER">
                     <Size><AbsDimension x="160" y="14"/></Size>
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="118" y="-462"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="118" y="-486"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentPaintNeed" inherits="GameFontHighlightSmall" justifyH="CENTER">
                     <Size><AbsDimension x="260" y="12"/></Size>
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="40" y="-480"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="40" y="-504"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentTrailLabel" inherits="GameFontHighlight" text="Trail">
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-504"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-528"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentTrailName" inherits="GameFontNormal" justifyH="CENTER">
                     <Size><AbsDimension x="160" y="14"/></Size>
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="118" y="-504"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="118" y="-528"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentTrailNeed" inherits="GameFontHighlightSmall" justifyH="CENTER">
                     <Size><AbsDimension x="260" y="12"/></Size>
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="40" y="-522"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="40" y="-546"/></Offset></Anchor></Anchors>
                 </FontString>
                 <!-- The Flag: one of ours flown at the back of the kart (the shop's goods). -->
                 <FontString name="$parentFlagLabel" inherits="GameFontHighlight" text="Flag">
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-546"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-570"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentFlagName" inherits="GameFontNormal" justifyH="CENTER">
                     <Size><AbsDimension x="160" y="14"/></Size>
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="118" y="-546"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="118" y="-570"/></Offset></Anchor></Anchors>
                 </FontString>
                 <FontString name="$parentFlagNeed" inherits="GameFontHighlightSmall" justifyH="CENTER">
                     <Size><AbsDimension x="260" y="12"/></Size>
-                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="40" y="-564"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="40" y="-588"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
@@ -5689,34 +5691,40 @@
             <CheckButton name="$parentRacer16" inherits="BenillaKartGarageRacerTemplate" id="16">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="176" y="-406"/></Offset></Anchor></Anchors>
             </CheckButton>
+            <CheckButton name="$parentRacer17" inherits="BenillaKartGarageRacerTemplate" id="17">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-430"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentRacer18" inherits="BenillaKartGarageRacerTemplate" id="18">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="176" y="-430"/></Offset></Anchor></Anchors>
+            </CheckButton>
             <Button name="$parentPaintPrev" inherits="UIPanelButtonTemplate" text="&lt;">
                 <Size><AbsDimension x="26" y="20"/></Size>
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="88" y="-458"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="88" y="-482"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartLook_Step("P", -1)</OnClick></Scripts>
             </Button>
             <Button name="$parentPaintNext" inherits="UIPanelButtonTemplate" text="&gt;">
                 <Size><AbsDimension x="26" y="20"/></Size>
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="282" y="-458"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="282" y="-482"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartLook_Step("P", 1)</OnClick></Scripts>
             </Button>
             <Button name="$parentTrailPrev" inherits="UIPanelButtonTemplate" text="&lt;">
                 <Size><AbsDimension x="26" y="20"/></Size>
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="88" y="-500"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="88" y="-524"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartLook_Step("T", -1)</OnClick></Scripts>
             </Button>
             <Button name="$parentTrailNext" inherits="UIPanelButtonTemplate" text="&gt;">
                 <Size><AbsDimension x="26" y="20"/></Size>
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="282" y="-500"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="282" y="-524"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartLook_Step("T", 1)</OnClick></Scripts>
             </Button>
             <Button name="$parentFlagPrev" inherits="UIPanelButtonTemplate" text="&lt;">
                 <Size><AbsDimension x="26" y="20"/></Size>
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="88" y="-542"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="88" y="-566"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartFlag_Step(-1)</OnClick></Scripts>
             </Button>
             <Button name="$parentFlagNext" inherits="UIPanelButtonTemplate" text="&gt;">
                 <Size><AbsDimension x="26" y="20"/></Size>
-                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="282" y="-542"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="282" y="-566"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartFlag_Step(1)</OnClick></Scripts>
             </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">

@@ -50,6 +50,7 @@ pub(crate) use seat::SEAT_ANIMS;
 pub(crate) use ui::{KartOverlay, PadView, ScoreLines};
 mod weapons;
 pub(crate) mod wheel;
+mod wow_karts;
 
 use benilla_world::collision::WorldCollision;
 use benilla_world::schedule::WorldStage;
@@ -809,6 +810,10 @@ pub(crate) fn plugin(app: &mut App) {
                 gps::preload();
                 kartcraft::weapons::look::preload();
             }),
+        )
+        .add_systems(
+            Startup,
+            wow_karts::build_cars.after(benilla_assets::AssetSet::Open),
         )
         // A D-pad wired as the stick (a USB SNES pad) presses the D-pad's buttons, once the
         // frame's pad events are in and before anything reads the pads.

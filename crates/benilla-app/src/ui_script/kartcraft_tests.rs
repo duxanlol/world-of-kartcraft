@@ -3767,7 +3767,7 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     assert_eq!(preview(&mut s), "3597");
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin1Name"), "Magni");
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin10Name"), "VanCleef");
-    // Sixteen skins fill the first page, then the four goods and the crate the second, the rest
+    // Sixteen skins fill the first page, then the six goods and the crate the second, the rest
     // of its grid empty.
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin16Name"), "Zombie");
     assert_eq!(text(&mut s, "BenillaKartShopFramePageText"), "Page 1 of 2");
@@ -3781,7 +3781,7 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     );
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin2Name"), "Fel Kart");
     assert!(!s
-        .eval::<bool>("return BenillaKartShopFrameSkin6:IsVisible() == 1")
+        .eval::<bool>("return BenillaKartShopFrameSkin8:IsVisible() == 1")
         .unwrap());
     // The picked skin stays picked on another page.
     assert_eq!(preview(&mut s), "3597");
@@ -3868,9 +3868,9 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin2Price"), "Driven");
 
     // The Mystery Crate: closed with no prizes in it, then open, its odds said, one opened.
-    s.run("BenillaKartShopFrameSkin5:Click()").unwrap();
+    s.run("BenillaKartShopFrameSkin7:Click()").unwrap();
     assert_eq!(
-        text(&mut s, "BenillaKartShopFrameSkin5Name"),
+        text(&mut s, "BenillaKartShopFrameSkin7Name"),
         "Mystery Crate"
     );
     from_server(&mut s, "R\tCrateOdds\t100\t5\t0\t0\t-\t60,28,10,2\t20\t50");

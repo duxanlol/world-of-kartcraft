@@ -22,38 +22,52 @@ pub enum Kind {
 }
 
 /// One cosmetic: its key (the server's, and a kart's racer key), what it is, its name, and its
-/// gzipped JSON.
+/// gzipped JSON; `None` for a kart built from the player's own install at startup (the app's
+/// `kart::wow_karts`, handed over by [`crate::model::provide`]), whose art we may not ship.
 pub struct Good {
     pub key: &'static str,
     pub kind: Kind,
     pub name: &'static str,
-    gz: &'static [u8],
+    gz: Option<&'static [u8]>,
 }
 
-pub const GOODS: [Good; 4] = [
+pub const GOODS: [Good; 6] = [
     Good {
         key: "student",
         kind: Kind::Flag,
         name: "Student Flag",
-        gz: include_bytes!("../../../cosmetics/flag-student.json.gz"),
+        gz: Some(include_bytes!("../../../cosmetics/flag-student.json.gz")),
     },
     Good {
         key: "fel",
         kind: Kind::Kart,
         name: "Fel Kart",
-        gz: include_bytes!("../../../cosmetics/kart-fel.json.gz"),
+        gz: Some(include_bytes!("../../../cosmetics/kart-fel.json.gz")),
     },
     Good {
         key: "alliance",
         kind: Kind::Kart,
         name: "Alliance Kart",
-        gz: include_bytes!("../../../cosmetics/kart-alliance.json.gz"),
+        gz: Some(include_bytes!("../../../cosmetics/kart-alliance.json.gz")),
     },
     Good {
         key: "wok",
         kind: Kind::Kart,
         name: "WoK Kart",
-        gz: include_bytes!("../../../cosmetics/kart-wok.json.gz"),
+        gz: Some(include_bytes!("../../../cosmetics/kart-wok.json.gz")),
+    },
+    // The Mirage Raceway's racers (Creature\GnomeRocketCar, Creature\GoblinRocketCar).
+    Good {
+        key: "gnomecar",
+        kind: Kind::Kart,
+        name: "Gnome Rocket Car",
+        gz: None,
+    },
+    Good {
+        key: "goblincar",
+        kind: Kind::Kart,
+        name: "Goblin Rocket Car",
+        gz: None,
     },
 ];
 
@@ -81,7 +95,7 @@ pub fn flag_index(key: &str) -> u8 {
 /// A good's JSON, unpacked.
 pub(crate) fn json(good: &Good) -> Option<Vec<u8>> {
     let mut out = Vec::new();
-    flate2::read::GzDecoder::new(good.gz)
+    flate2::read::GzDecoder::new(good.gz?)
         .read_to_end(&mut out)
         .map_err(|e| warn!("kart goods: {}: {e}", good.key))
         .ok()?;
@@ -221,7 +235,7 @@ mod tests {
 
     #[test]
     fn every_good_unpacks_and_reads() {
-        for g in &GOODS {
+        for g in GOODS.iter().filter(|g| g.gz.is_some()) {
             let bytes = json(g).unwrap_or_else(|| panic!("{} unpacks", g.key));
             match g.kind {
                 Kind::Kart => {

@@ -103,6 +103,10 @@ namespace Kartcraft
         { "fel", 'K', 400, 0 },
         { "alliance", 'K', 250, 0 },
         { "wok", 'K', 500, 0 },
+        // The Mirage Raceway's racers, drawn from each player's own install (the client's
+        // kart/wow_karts.rs).
+        { "gnomecar", 'K', 500, 0 },
+        { "goblincar", 'K', 500, 0 },
     };
 
     static Good const* FindGood(std::string const& key)
