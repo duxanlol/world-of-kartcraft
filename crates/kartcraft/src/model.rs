@@ -83,6 +83,11 @@ pub struct Anchors {
     /// The exhaust pipes' tips, where the smoke comes out.
     #[serde(default)]
     pub exhaust: Vec<[f32; 3]>,
+    /// Where its turbo flames burn, each pointing back (−Z); empty for CTR's own pair
+    /// (`effects.json`), which every CTR kart shares. A kart whose nozzles stand elsewhere (a
+    /// rocket car's) names its own.
+    #[serde(default)]
+    pub turbo: Vec<[f32; 3]>,
 }
 
 #[derive(serde::Deserialize)]
@@ -95,6 +100,10 @@ pub struct Model {
     pub wheel_sprites: Option<WheelSprites>,
     pub surfaces: Vec<Surface>,
     pub textures: Vec<Texture>,
+    /// Its textures filtered, not point-sampled: WoW's art, made for bilinear, where the PSX's is
+    /// sampled as the PSX did.
+    #[serde(default)]
+    pub smooth: bool,
 }
 
 /// `WOW_KART_DATA`, else a `kart-data` beside or above the working directory.
@@ -111,6 +120,9 @@ pub fn data_root() -> Option<PathBuf> {
 
 /// The racer picked with [`set_our_kart`], over [`our_kart`]'s default.
 static CHOSEN: std::sync::RwLock<Option<&'static str>> = std::sync::RwLock::new(None);
+/// A racer picked before its kart exists (one built from the install, [`provide`]d at startup,
+/// after the settings are read): taken once it is.
+static WANTED: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
 
 /// The karts that float on deep water and plane across it (`ctr_kart::Kart::water`), in races
 /// and time trials only: none yet; every other kart drives the water's bed as CTR's do.
@@ -144,6 +156,9 @@ pub fn our_kart() -> &'static str {
 /// kart on screen follows at its next frame ([`update`]), and so does the racer we relay.
 pub fn set_our_kart(racer: &str) -> bool {
     let Some(model) = model_named(racer).filter(|_| !racer.is_empty()) else {
+        *WANTED
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(racer.to_ascii_lowercase());
         return false;
     };
     *CHOSEN
@@ -160,17 +175,44 @@ pub fn racers() -> Vec<&'static str> {
     KARTS
         .into_iter()
         .filter(|k| root.join(format!("kart-{k}.json")).is_file())
-        .chain(crate::goods::karts().map(|g| g.key))
+        .chain(
+            crate::goods::karts()
+                .map(|g| g.key)
+                .filter(|k| model_named(k).is_some()),
+        )
         .collect()
+}
+
+/// Every model read so far by key, `None` for one there is none for.
+type Models = std::sync::Mutex<std::collections::HashMap<String, Option<&'static Model>>>;
+
+fn models() -> &'static Models {
+    static MODELS: OnceLock<Models> = OnceLock::new();
+    MODELS.get_or_init(Default::default)
+}
+
+/// A kart built from the player's own install (a good with no shipped model,
+/// [`crate::goods::Good`]), handed over to be found by its key like any other.
+pub fn provide(model: Model) {
+    let key = model.kart.to_ascii_lowercase();
+    info!("kart: {}'s kart, from the install", model.kart);
+    models()
+        .lock()
+        .unwrap()
+        .insert(key.clone(), Some(&*Box::leak(Box::new(model))));
+    let wanted = WANTED
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    if wanted.as_deref() == Some(key.as_str()) {
+        set_our_kart(&key);
+    }
 }
 
 /// A racer's kart (`kart-<name>.json`; `""` for `kart.json`), read once and kept.
 pub fn model_named(name: &str) -> Option<&'static Model> {
-    static MODELS: OnceLock<
-        std::sync::Mutex<std::collections::HashMap<String, Option<&'static Model>>>,
-    > = OnceLock::new();
     let name = name.to_ascii_lowercase();
-    let models = MODELS.get_or_init(Default::default);
+    let models = models();
     if let Some(m) = models.lock().unwrap().get(&name) {
         return *m;
     }
@@ -253,7 +295,7 @@ fn linear(c: [f32; 4]) -> [f32; 4] {
     [c[0].powf(2.2), c[1].powf(2.2), c[2].powf(2.2), c[3]]
 }
 
-fn image(t: &Texture, paint: Option<Paint>) -> Image {
+fn image(t: &Texture, paint: Option<Paint>, smooth: bool) -> Image {
     let mut rgba = t.rgba.clone();
     if let Some(paint) = paint {
         for px in rgba.as_chunks_mut::<4>().0 {
@@ -274,7 +316,11 @@ fn image(t: &Texture, paint: Option<Paint>) -> Image {
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
     );
-    image.sampler = ImageSampler::nearest();
+    image.sampler = if smooth {
+        ImageSampler::linear()
+    } else {
+        ImageSampler::nearest()
+    };
     image
 }
 
@@ -384,6 +430,11 @@ fn tread_mesh() -> Mesh {
 #[derive(Component)]
 pub struct KartRoot;
 
+/// Whose kart a root is (its model's racer key), for what hangs off its own shape: the turbo
+/// flames and the exhaust smoke ([`crate::effects`]).
+#[derive(Component, Clone, Copy)]
+pub struct KartRacer(pub &'static str);
+
 /// Ours, placed from [`KartView`].
 #[derive(Component)]
 pub struct LocalKart;
@@ -471,7 +522,7 @@ pub(crate) fn build_parts(
 ) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>)> {
     let textures: Vec<Handle<Image>> = textures
         .iter()
-        .map(|t| images.add(image(t, paint)))
+        .map(|t| images.add(image(t, paint, false)))
         .collect();
     parts_of(&textures, surfaces, paint, meshes, materials)
 }
@@ -517,7 +568,7 @@ fn build_assets(
     let textures: Vec<Handle<Image>> = model
         .textures
         .iter()
-        .map(|t| images.add(image(t, paint)))
+        .map(|t| images.add(image(t, paint, model.smooth)))
         .collect();
     let parts = parts_of(&textures, &model.surfaces, paint, meshes, materials);
     let sprites = model.wheel_sprites.as_ref().map(|w| w.textures.as_slice());
@@ -623,6 +674,7 @@ impl KartSpawner<'_, '_> {
         let root = commands
             .spawn((
                 KartRoot,
+                KartRacer(model.kart.as_str()),
                 KartWheels::default(),
                 KartStatus::default(),
                 crate::goods::KartFlag::default(),

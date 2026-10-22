@@ -371,7 +371,10 @@ pub fn attach(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
-    karts: Query<Entity, (With<KartRoot>, Without<KartFx>, Without<GhostKart>)>,
+    karts: Query<
+        (Entity, Option<&crate::model::KartRacer>),
+        (With<KartRoot>, Without<KartFx>, Without<GhostKart>),
+    >,
 ) {
     if karts.is_empty() {
         return;
@@ -382,9 +385,25 @@ pub fn attach(
     let Some(built) = built.as_ref() else {
         return;
     };
-    for kart in &karts {
-        let flames = built
-            .instances
+    for (kart, racer) in &karts {
+        // Its own nozzles where its model names them, the right-hand one mirrored as CTR's is;
+        // else CTR's pair.
+        let own: Vec<(Vec3, bool)> = racer
+            .and_then(|r| crate::model::model_named(r.0))
+            .map(|m| {
+                m.anchors
+                    .turbo
+                    .iter()
+                    .map(|&p| (Vec3::from_array(p), p[0] < 0.0))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let origins = if own.is_empty() {
+            built.instances.clone()
+        } else {
+            own
+        };
+        let flames = origins
             .iter()
             .map(|&(origin, mirror)| {
                 let scale = if mirror {
@@ -433,6 +452,7 @@ pub fn attach(
 }
 
 /// Runs each kart's effects at CTR's 30 Hz: flames lit and animated, puffs emitted, marks laid.
+#[allow(clippy::type_complexity)]
 pub fn tick(
     time: Res<Time>,
     mut state: ResMut<KartEffects>,
@@ -443,6 +463,7 @@ pub fn tick(
             &InheritedVisibility,
             &KartStatus,
             &mut KartFx,
+            Option<&crate::model::KartRacer>,
         ),
         With<KartRoot>,
     >,
@@ -450,15 +471,21 @@ pub fn tick(
 ) {
     let dt = time.delta_secs().min(0.1);
     let state = &mut *state;
-    let pipes: Vec<Vec3> = crate::model::model()
-        .map(|m| m.anchors.exhaust.clone())
-        .filter(|e| !e.is_empty())
-        .unwrap_or_else(|| DEFAULT_EXHAUST.to_vec())
-        .into_iter()
-        .map(Vec3::from_array)
-        .collect();
+    // Each kart smokes from its own pipes (its racer's model), else ours, else CTR's median.
+    let pipes_of = |racer: Option<&crate::model::KartRacer>| -> Vec<Vec3> {
+        racer
+            .and_then(|r| crate::model::model_named(r.0))
+            .or_else(crate::model::model)
+            .map(|m| m.anchors.exhaust.clone())
+            .filter(|e| !e.is_empty())
+            .unwrap_or_else(|| DEFAULT_EXHAUST.to_vec())
+            .into_iter()
+            .map(Vec3::from_array)
+            .collect()
+    };
     let mut live = Vec::new();
-    for (kart, t, shown, status, mut fx) in &mut karts {
+    for (kart, t, shown, status, mut fx, racer) in &mut karts {
+        let pipes = pipes_of(racer);
         if !shown.get() {
             continue;
         }
