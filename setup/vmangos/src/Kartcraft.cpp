@@ -7016,6 +7016,11 @@ namespace Kartcraft
                 !ParseFloat(v[5], pitch) || std::fabs(pitch) > 100.f || !ParseFloat(v[6], roll) ||
                 std::fabs(roll) > 100.f))
                 return false;
+            // A facing within one turn: the editor's turning is not wrapped, and a huge one would
+            // run the spot's text past the buffer it is written back into.
+            o = std::fmod(o, 6.2831853f);
+            if (o < 0.f)
+                o += 6.2831853f;
             char buf[80];
             int n = std::snprintf(buf, sizeof(buf), "%.1f,%.1f", x, y);
             if (has_o)
