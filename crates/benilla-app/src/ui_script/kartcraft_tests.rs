@@ -2200,6 +2200,11 @@ fn the_menu_names_the_challenges_and_starts_their_time_trial() {
         )],
     );
     sent(&mut s);
+    // Chosen before the server has named the courses: asked, and the trial goes on the answer.
+    s.run("BenillaKartMenu_Run('daily')").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tCH"]);
+    from_server(&mut s, "R\tCH\tstormwind\tsprint\t0\tGoblin\t62400\t0\t\t0");
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tTB\tstormwind"]);
     s.run("BenillaKartMenu_OnShow()").unwrap();
     // Opening the menu asks the server; its answer names the two courses.
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tCH"]);

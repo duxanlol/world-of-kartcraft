@@ -1584,6 +1584,9 @@
                     dailyMine = tonumber(line[5]) or 0, dailyLeader = line[6] or "", dailyLeaderMs = tonumber(line[7]) or 0,
                     weeklyMine = tonumber(line[8]) or 0, weeklyLeader = line[9] or "", weeklyLeaderMs = tonumber(line[10]) or 0,
                 }
+                if BenillaKartMenu_PendingChallenge then
+                    BenillaKartMenu_OpenChallenge(BenillaKartMenu_PendingChallenge)
+                end
             elseif verb == "Mx" then
                 BenillaKart_Say("Race mode: not while you're in combat.")
             elseif verb == "X" then
@@ -2082,10 +2085,18 @@
             return (which == "daily" and "Daily: " or "Weekly: ") .. name
         end
 
+        -- The challenge's time trial; chosen before the server has said which course it is
+        -- ("CH", asked as the menu opens), it goes once the answer comes.
         function BenillaKartMenu_OpenChallenge(which)
             local c = BenillaKartChallenge
             if c and c[which] and c[which] ~= "" then
+                BenillaKartMenu_PendingChallenge = nil
                 BenillaKart_Send("TB\t" .. c[which])
+            elseif not c then
+                BenillaKartMenu_PendingChallenge = which
+                BenillaKart_Send("CH")
+            else
+                BenillaKart_Say("There is no " .. which .. " challenge course right now.")
             end
         end
 

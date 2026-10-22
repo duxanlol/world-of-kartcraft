@@ -159,6 +159,10 @@ fn probe_key_by_name(name: &str) -> Option<KeyCode> {
         "Delete" => KeyCode::Delete,
         "Left" => KeyCode::ArrowLeft,
         "Right" => KeyCode::ArrowRight,
+        // The Kartcraft menu's grid walks on the arrows and backs out on Escape (`kart::menu_ui`).
+        "Up" => KeyCode::ArrowUp,
+        "Down" => KeyCode::ArrowDown,
+        "Escape" => KeyCode::Escape,
         "Home" => KeyCode::Home,
         "End" => KeyCode::End,
         // Enter at character select enters the world (`char_select::input`): `/logout` then
