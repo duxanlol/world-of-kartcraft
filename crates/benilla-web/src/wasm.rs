@@ -152,9 +152,47 @@ impl WebWorld {
             set(&o, "magma", &JsValue::from_bool(w.magma));
             water.push(&o);
         }
+        let placed = |list: &[crate::Placement]| {
+            let a = Array::new();
+            for p in list {
+                let o = Object::new();
+                set(&o, "model", &JsValue::from_str(&p.model));
+                set(&o, "id", &JsValue::from(p.unique_id));
+                set(&o, "matrix", &Float32Array::from(p.matrix.as_slice()));
+                a.push(&o);
+            }
+            a
+        };
         let out = Object::new();
         set(&out, "chunks", &chunks);
         set(&out, "water", &water);
+        set(&out, "doodads", &placed(&tile.doodads));
+        set(&out, "wmos", &placed(&tile.wmos));
+        Ok(out.into())
+    }
+
+    /// A model's submeshes: `[{ positions, normals, uvs, indices, texture, blend, twoSided }]`,
+    /// an M2 or (`wmo`) a WMO with its groups.
+    pub fn model(&mut self, path: &str, wmo: bool) -> Result<JsValue, JsError> {
+        let subs = self.0.model(path, wmo).map_err(err)?;
+        let out = Array::new();
+        for s in &subs {
+            let o = Object::new();
+            set(&o, "positions", &Float32Array::from(s.positions.as_slice()));
+            set(&o, "normals", &Float32Array::from(s.normals.as_slice()));
+            set(&o, "uvs", &Float32Array::from(s.uvs.as_slice()));
+            set(&o, "indices", &Uint32Array::from(s.indices.as_slice()));
+            set(
+                &o,
+                "texture",
+                &s.texture
+                    .as_deref()
+                    .map_or(JsValue::NULL, JsValue::from_str),
+            );
+            set(&o, "blend", &JsValue::from(s.blend));
+            set(&o, "twoSided", &JsValue::from_bool(s.two_sided));
+            out.push(&o);
+        }
         Ok(out.into())
     }
 

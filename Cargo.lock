@@ -764,6 +764,7 @@ dependencies = [
  "benilla-blp",
  "benilla-formats",
  "benilla-mpq",
+ "glam 0.31.1",
  "js-sys",
  "wasm-bindgen",
  "web-sys",
