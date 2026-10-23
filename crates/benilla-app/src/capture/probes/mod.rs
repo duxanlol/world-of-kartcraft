@@ -10,7 +10,7 @@ pub(crate) use fx_draw_census::plugin as fx_draw_census_plugin;
 mod act;
 pub(crate) use act::{
     ProbeChatPlugin, ProbeDragPlugin, ProbeHoverPlugin, ProbeKeyPlugin, ProbeLuaPlugin,
-    ProbeTalkPlugin,
+    ProbePadPlugin, ProbeTalkPlugin,
 };
 
 /// The probe run's shell: its bounded lifetime and its window's level, parking and size.

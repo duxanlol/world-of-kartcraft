@@ -105,6 +105,10 @@ impl Plugin for DevProbesPlugin {
             if std::env::var("WOW_PROBE_TALK").is_ok() {
                 app.add_plugins(crate::capture::ProbeTalkPlugin);
             }
+            // `WOW_PROBE_PAD="Start@20"`: a virtual controller's presses.
+            if std::env::var("WOW_PROBE_PAD").is_ok() {
+                app.add_plugins(crate::capture::ProbePadPlugin);
+            }
             // `WOW_PROBE_DRAG="A>B"`: drags frame A onto B through the real pointer path.
             if std::env::var("WOW_PROBE_DRAG").is_ok() {
                 app.add_plugins(crate::capture::ProbeDragPlugin);

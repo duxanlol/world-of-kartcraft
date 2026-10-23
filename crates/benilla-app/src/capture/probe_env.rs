@@ -67,6 +67,12 @@ pub(crate) const PROBE_VARS: &[ProbeVar] = &[
         wall_clock: true,
     },
     ProbeVar {
+        name: "WOW_PROBE_PAD",
+        purpose: "\"<button>@<secs>[:<hold>][;…]\" — press a virtual controller's buttons once in-world (Start, South, DPadUp, …; Bevy's names)",
+        // Each press fires at its `@<secs>` and releases `<hold>` later, on `ProbeClock`.
+        wall_clock: true,
+    },
+    ProbeVar {
         name: "WOW_PROBE_TALK",
         purpose: "\"<name>@<secs>[;…]\" — send a right-click's service hello to the nearest unit of that name in reach (open an NPC's gossip or quest offer)",
         // Each talk fires at its `@<secs>` on `ProbeClock`.

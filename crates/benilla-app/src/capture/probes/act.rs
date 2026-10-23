@@ -770,6 +770,143 @@ fn fire_probe_talk(
     }
 }
 
+/// `WOW_PROBE_PAD="<button>@<secs>[:<hold>][;…]"`: a virtual controller, connected once in-world
+/// and pressed through Bevy's raw gamepad events, as a real pad's driver (or Android's,
+/// `android.rs`) feeds them, so the press takes every path a controller's does: the bindings'
+/// PAD planes, the Kartcraft menu, the windows' pad handlers. Buttons by Bevy's names (`South`,
+/// `East`, `West`, `North`, `Start`, `Select`, `DPadUp`…, `LeftTrigger`, `RightTrigger2`…).
+pub(crate) struct ProbePadPlugin;
+
+impl Plugin for ProbePadPlugin {
+    fn build(&self, app: &mut App) {
+        let presses = std::env::var("WOW_PROBE_PAD")
+            .unwrap_or_default()
+            .split(';')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| {
+                let parsed = (|| {
+                    let (button, rest) = s.split_once('@')?;
+                    let (at, hold) = match rest.split_once(':') {
+                        Some((at, hold)) => (at, hold.trim().parse().ok()?),
+                        None => (rest, PROBE_KEY_TAP_SECS),
+                    };
+                    Some(ProbePadPress {
+                        button: probe_pad_button(button.trim())?,
+                        at: at.trim().parse().ok()?,
+                        hold,
+                        pressed: false,
+                        released: false,
+                    })
+                })();
+                if parsed.is_none() {
+                    warn!("probe-pad: unparseable press {s:?} (want e.g. Start@14 or South@20:1) — skipped");
+                }
+                parsed
+            })
+            .collect();
+        app.insert_resource(ProbePad { presses, pad: None })
+            .add_systems(
+                bevy::app::PreUpdate,
+                fire_probe_pad.before(bevy::input::InputSystems),
+            );
+    }
+}
+
+/// [`ProbePadPlugin`] state: the presses in order, and the virtual pad once connected.
+#[derive(Resource)]
+struct ProbePad {
+    presses: Vec<ProbePadPress>,
+    pad: Option<Entity>,
+}
+
+struct ProbePadPress {
+    button: bevy::input::gamepad::GamepadButton,
+    at: f32,
+    hold: f32,
+    pressed: bool,
+    released: bool,
+}
+
+fn probe_pad_button(name: &str) -> Option<bevy::input::gamepad::GamepadButton> {
+    use bevy::input::gamepad::GamepadButton as B;
+    Some(match name {
+        "South" => B::South,
+        "East" => B::East,
+        "West" => B::West,
+        "North" => B::North,
+        "Start" => B::Start,
+        "Select" => B::Select,
+        "Mode" => B::Mode,
+        "DPadUp" => B::DPadUp,
+        "DPadDown" => B::DPadDown,
+        "DPadLeft" => B::DPadLeft,
+        "DPadRight" => B::DPadRight,
+        "LeftTrigger" => B::LeftTrigger,
+        "RightTrigger" => B::RightTrigger,
+        "LeftTrigger2" => B::LeftTrigger2,
+        "RightTrigger2" => B::RightTrigger2,
+        "LeftThumb" => B::LeftThumb,
+        "RightThumb" => B::RightThumb,
+        _ => return None,
+    })
+}
+
+fn fire_probe_pad(
+    mut commands: Commands,
+    mut probe: ResMut<ProbePad>,
+    time: ProbeClock,
+    self_player: Query<(), With<crate::net::SelfPlayer>>,
+    mut events: MessageWriter<bevy::input::gamepad::RawGamepadEvent>,
+    mut connections: MessageWriter<bevy::input::gamepad::GamepadConnectionEvent>,
+    mut buttons: MessageWriter<bevy::input::gamepad::RawGamepadButtonChangedEvent>,
+) {
+    use bevy::input::gamepad::{
+        GamepadConnection, GamepadConnectionEvent, RawGamepadButtonChangedEvent,
+    };
+    if probe.presses.is_empty() || self_player.is_empty() {
+        return;
+    }
+    let pad = match probe.pad {
+        Some(pad) => pad,
+        None => {
+            let pad = commands.spawn_empty().id();
+            let connected = GamepadConnectionEvent::new(
+                pad,
+                GamepadConnection::Connected {
+                    name: "Probe controller".into(),
+                    vendor_id: None,
+                    product_id: None,
+                },
+            );
+            events.write(connected.clone().into());
+            connections.write(connected);
+            info!("probe-pad: a virtual controller connected");
+            probe.pad = Some(pad);
+            // Its buttons from the next frame, once Bevy has given it a Gamepad.
+            return;
+        }
+    };
+    let now = time.elapsed_secs();
+    for press in &mut probe.presses {
+        let value = if !press.pressed && now >= press.at {
+            press.pressed = true;
+            info!(
+                "probe-pad: {:?} down ({now:.1}s, hold {:.2}s)",
+                press.button, press.hold
+            );
+            1.0
+        } else if press.pressed && !press.released && now >= press.at + press.hold {
+            press.released = true;
+            0.0
+        } else {
+            continue;
+        };
+        events.write(RawGamepadButtonChangedEvent::new(pad, press.button, value).into());
+        buttons.write(RawGamepadButtonChangedEvent::new(pad, press.button, value));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{probe_lua_due, ProbeLua};
