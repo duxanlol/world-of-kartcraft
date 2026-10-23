@@ -7063,6 +7063,17 @@ namespace Kartcraft
         // Its scale (Course::scale), added to a table made before it.
         CharacterDatabase.DirectExecute("ALTER TABLE `kartcraft_user_tracks` ADD COLUMN IF NOT EXISTS "
             "`scale` FLOAT NOT NULL DEFAULT 1 COMMENT 'the karts'' and racers'' size, 1 their own'");
+        // A track's id is never given again, a deleted one's too: its votes, results, records
+        // and replays stay under "pt-<id>" (UnpublishTrack takes only its row), and a new track
+        // with its id would inherit them. The next id is past every one those tables know.
+        if (std::unique_ptr<QueryResult> used = CharacterDatabase.Query(
+                "SELECT MAX(CAST(SUBSTRING(`course`, 4) AS UNSIGNED)) FROM ("
+                "SELECT `course` FROM `kartcraft_rating` WHERE `course` LIKE 'pt-%' UNION ALL "
+                "SELECT `course` FROM `kartcraft_results` WHERE `course` LIKE 'pt-%' UNION ALL "
+                "SELECT `course` FROM `kartcraft_replays` WHERE `course` LIKE 'pt-%' UNION ALL "
+                "SELECT `course` FROM `kartcraft_records` WHERE `course` LIKE 'pt-%' UNION ALL "
+                "SELECT `course` FROM `kartcraft_tt_records` WHERE `course` LIKE 'pt-%') `pt`"))
+            s_userTrackNext = std::max(s_userTrackNext, used->Fetch()[0].GetUInt32() + 1);
         std::unique_ptr<QueryResult> result = CharacterDatabase.Query(
             "SELECT `id`, `guid`, `author`, `name`, `map`, `laps`, `zone`, `grid`, `points`, `z`, `objects`, `scale` "
             "FROM `kartcraft_user_tracks` ORDER BY `at`, `id`");
