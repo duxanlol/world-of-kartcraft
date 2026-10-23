@@ -266,7 +266,7 @@
             if table.getn(keys) > 3 then names = table.getn(keys) .. " zones" end
             if not f.waited then return "In queue: " .. names end
             return format("In queue: %s\n%d:%02d, %d waiting", names, floor(f.waited / 60),
-                mod(f.waited, 60), f.waiting)
+                mod(f.waited, 60), f.waiting or 0)
         end
 
         -- The finder's view while open: on the frame after a reply, else four times a second (its
