@@ -226,6 +226,8 @@ pub(crate) struct EditorUi {
     errors: u32,
     notes: u32,
     note_at: f32,
+    /// A test lap under way when last seen: its start lets an editing error go.
+    testing: bool,
     root: Option<Entity>,
     built: Option<Built>,
     popup_root: Option<Entity>,
@@ -290,6 +292,7 @@ impl Default for EditorUi {
             errors: 0,
             notes: 0,
             note_at: f32::MIN,
+            testing: false,
             root: None,
             built: None,
             popup_root: None,
@@ -321,6 +324,13 @@ impl EditorUi {
             self.focus = None;
             self.popup = self.popup.take().filter(|p| matches!(p, Popup::Error(_)));
         }
+        // A test lap's start: an error from the editing before it is no longer the case (one
+        // left up dims the lap and takes its clicks); a refusal to open the editor stays.
+        let testing = matches!(view.state, "test" | "run");
+        if testing && !self.testing && errors == self.errors {
+            self.popup = None;
+        }
+        self.testing = testing;
         if view.picked != self.picked {
             self.picked = view.picked;
             self.focus = match view.picked {
@@ -1777,6 +1787,30 @@ mod tests {
         ui.open_save(false);
         ui.follow(&view("", "move", 0), ("", 0));
         assert_eq!((ui.popup.clone(), ui.focus), (None, None));
+    }
+
+    #[test]
+    fn a_test_lap_lets_an_editing_error_go_but_a_new_one_shows() {
+        let mut ui = EditorUi::default();
+        ui.follow(
+            &view("edit", "checkpoint", 0),
+            ("Aim at the ground to place it.", 1),
+        );
+        assert!(matches!(ui.popup, Some(Popup::Error(_))));
+        ui.follow(
+            &view("test", "checkpoint", 0),
+            ("Aim at the ground to place it.", 1),
+        );
+        assert_eq!(ui.popup, None, "the test lap's start lets it go");
+        ui.follow(&view("test", "checkpoint", 0), ("Leave the race first.", 2));
+        assert!(
+            matches!(ui.popup, Some(Popup::Error(_))),
+            "an error in the lap shows"
+        );
+        // Out of the editor, a refusal to open it stays up.
+        let mut ui = EditorUi::default();
+        ui.follow(&view("", "move", 0), ("Summon your kart first (J).", 1));
+        assert!(matches!(ui.popup, Some(Popup::Error(_))));
     }
 
     #[test]
