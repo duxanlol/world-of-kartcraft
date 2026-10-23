@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..9ddccae
+index 0000000..305c38e
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,8481 @@
+@@ -0,0 +1,8500 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -4860,6 +4860,24 @@ index 0000000..9ddccae
 +        return std::find(mask.begin(), mask.end(), true) != mask.end();
 +    }
 +
++    // A queue line's tokens that CourseMask takes, in its order, as it was asked: what a party
++    // mate is told was queued, so no other text of the line reaches their client.
++    static std::string KnownCourseTokens(std::string const& asked)
++    {
++        std::string out;
++        for (size_t at = 0, comma; at <= asked.size(); at = comma + 1)
++        {
++            comma = asked.find(',', at);
++            if (comma == std::string::npos)
++                comma = asked.size();
++            std::string const token = asked.substr(at, comma - at);
++            if (token.empty() || !AnyCourse(CourseMask(token)))
++                continue;
++            out += (out.empty() ? "" : ",") + token;
++        }
++        return out;
++    }
++
 +    // Whether queue entry `q` takes the course at `i` (CourseAt); a mask made before a player
 +    // track was published is shorter than the courses are now.
 +    template <typename Q>
@@ -6768,6 +6786,7 @@ index 0000000..9ddccae
 +                return true;
 +            }
 +            uint32 const party = group ? group->GetId() : 0;
++            std::string const queued = KnownCourseTokens(f[2]);
 +            auto enqueue = [&](Player* who)
 +            {
 +                ObjectGuid const g = who->GetObjectGuid();
@@ -6789,7 +6808,7 @@ index 0000000..9ddccae
 +                        !LeaveWaitingRaces(mate))
 +                        continue;
 +                    enqueue(mate);
-+                    SendLine(mate, "KARTCRAFT\tR\tQp\t" + f[2] + "\t" + player->GetName());
++                    SendLine(mate, "KARTCRAFT\tR\tQp\t" + queued + "\t" + player->GetName());
 +                }
 +        }
 +        else if (verb == "Lobby")

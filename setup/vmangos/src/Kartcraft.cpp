@@ -4747,6 +4747,24 @@ namespace Kartcraft
         return std::find(mask.begin(), mask.end(), true) != mask.end();
     }
 
+    // A queue line's tokens that CourseMask takes, in its order, as it was asked: what a party
+    // mate is told was queued, so no other text of the line reaches their client.
+    static std::string KnownCourseTokens(std::string const& asked)
+    {
+        std::string out;
+        for (size_t at = 0, comma; at <= asked.size(); at = comma + 1)
+        {
+            comma = asked.find(',', at);
+            if (comma == std::string::npos)
+                comma = asked.size();
+            std::string const token = asked.substr(at, comma - at);
+            if (token.empty() || !AnyCourse(CourseMask(token)))
+                continue;
+            out += (out.empty() ? "" : ",") + token;
+        }
+        return out;
+    }
+
     // Whether queue entry `q` takes the course at `i` (CourseAt); a mask made before a player
     // track was published is shorter than the courses are now.
     template <typename Q>
@@ -6655,6 +6673,7 @@ namespace Kartcraft
                 return true;
             }
             uint32 const party = group ? group->GetId() : 0;
+            std::string const queued = KnownCourseTokens(f[2]);
             auto enqueue = [&](Player* who)
             {
                 ObjectGuid const g = who->GetObjectGuid();
@@ -6676,7 +6695,7 @@ namespace Kartcraft
                         !LeaveWaitingRaces(mate))
                         continue;
                     enqueue(mate);
-                    SendLine(mate, "KARTCRAFT\tR\tQp\t" + f[2] + "\t" + player->GetName());
+                    SendLine(mate, "KARTCRAFT\tR\tQp\t" + queued + "\t" + player->GetName());
                 }
         }
         else if (verb == "Lobby")
