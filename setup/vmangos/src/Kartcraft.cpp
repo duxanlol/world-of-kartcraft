@@ -4634,6 +4634,16 @@ namespace Kartcraft
     static std::unordered_map<uint32, Pop> s_pops;
     static uint32 s_nextPop = 1;
 
+    // In a ready check: the pop has them, out of the queue, until it launches or ends.
+    static bool InPop(ObjectGuid guid)
+    {
+        for (auto const& entry : s_pops)
+            for (Queued const& q : entry.second.members)
+                if (q.guid == guid)
+                    return true;
+        return false;
+    }
+
     // The Race Finder's zones, in the order courses.json first names them: the client asks for a
     // zone by its place in this list ("z3"), which keeps a queue line short however many it ticks.
     // A party course's zone is not in it.
@@ -6497,6 +6507,10 @@ namespace Kartcraft
                 SendLine(player, "KARTCRAFT\tR\tQx\tcourse");
                 return true;
             }
+            // A tick while their ready check is up: the pop has them, and queueing again could
+            // put them in a second one.
+            if (InPop(guid))
+                return true;
             // A race still waiting to start is left for the queue; one under way is not: a pop
             // would teleport them off the course, so they are told why instead.
             if (!LeaveWaitingRaces(player))
@@ -6546,6 +6560,11 @@ namespace Kartcraft
             // the roster where they are, as a pop's racer; the host's start puts everyone on the
             // grid. Out of the queue and any other race still waiting.
             uint32 id = uint32(std::strtoul(f[2].c_str(), nullptr, 10));
+            if (InPop(guid))
+            {
+                ChatHandler(player->GetSession()).SendSysMessage("Answer the Race Finder's ready check first.");
+                return true;
+            }
             auto race = s_races.find(id);
             if (race == s_races.end() || race->second.start || race->second.timeTrial ||
                 race->second.instance || race->second.racers.size() >= MAX_RACERS || !CanBeRacedOff(player) ||
@@ -7514,7 +7533,12 @@ namespace Kartcraft
                 }
             }
             // Hosting or joining here leaves the queue and every other race still waiting; one
-            // under way stays, and refuses it.
+            // under way stays, and refuses it, as a ready check up does.
+            if (InPop(player->GetObjectGuid()))
+            {
+                ChatHandler(player->GetSession()).SendSysMessage("Answer the Race Finder's ready check first.");
+                return;
+            }
             if (!LeaveWaitingRaces(player))
                 return;
             LeaveQueue(player->GetObjectGuid());
@@ -7564,6 +7588,11 @@ namespace Kartcraft
                 if (x.guid == player->GetObjectGuid())
                     return;
             // As hosting: out of the queue and every other race still waiting.
+            if (InPop(player->GetObjectGuid()))
+            {
+                ChatHandler(player->GetSession()).SendSysMessage("Answer the Race Finder's ready check first.");
+                return;
+            }
             if (!LeaveWaitingRaces(player))
                 return;
             LeaveQueue(player->GetObjectGuid());
