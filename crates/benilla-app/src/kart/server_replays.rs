@@ -228,7 +228,9 @@ pub(crate) fn decode(file: &[u8], us: &str) -> Option<Replay> {
         return None;
     }
     head.0 = &head.0[4..];
-    if head.u8()? != 1 {
+    // Version 2 adds each sample's turbo fire after its flags.
+    let version = head.u8()?;
+    if !(1..=2).contains(&version) {
         return None;
     }
     let size = head.u32()? as usize;
@@ -274,6 +276,9 @@ pub(crate) fn decode(file: &[u8], us: &str) -> Option<Replay> {
             let steer = r.u8()? as i8;
             drift = drift.wrapping_add(r.signed()?);
             let _flags = r.u8()?;
+            if version >= 2 {
+                let _fire = r.u8()?;
+            }
             let yaw = f32::from(o) / 65536.0 * std::f32::consts::TAU + drift as f32 / 1000.0;
             let fwd = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
             let rot = Quat::from_mat3(&Mat3::from_cols(Vec3::Y.cross(fwd), Vec3::Y, fwd));
@@ -314,6 +319,11 @@ mod tests {
 
     /// A file as `Kartcraft.cpp`'s `EncodeTake` writes it, built here.
     fn take(samples: &[(i32, i32, i32, u16, i8, i32)]) -> Vec<u8> {
+        take_version(1, samples)
+    }
+
+    /// [`take`] at a format version: 2 carries each sample's fire after its flags.
+    fn take_version(version: u8, samples: &[(i32, i32, i32, u16, i8, i32)]) -> Vec<u8> {
         fn var(out: &mut Vec<u8>, mut v: u32) {
             while v >= 0x80 {
                 out.push((v & 0x7F) as u8 | 0x80);
@@ -348,11 +358,15 @@ mod tests {
             body.push(steer as u8);
             signed(&mut body, drift - last.4);
             body.push(1);
+            if version >= 2 {
+                body.push(6);
+            }
             last = (x, y, z, o, drift);
         }
         let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
         std::io::Write::write_all(&mut z, &body).unwrap();
-        let mut out = b"KRPS\x01".to_vec();
+        let mut out = b"KRPS".to_vec();
+        out.push(version);
         out.extend_from_slice(&(body.len() as u32).to_le_bytes());
         out.extend_from_slice(&z.finish().unwrap());
         out
@@ -388,6 +402,14 @@ mod tests {
         // Someone else's: not ours.
         assert!(!decode(&file, "Other").unwrap().tracks[0].us);
         assert!(decode(b"KRPL\x01", "Racer").is_none());
+        // Version 2's fire byte read past, the same poses; a newer version refused.
+        let samples = [
+            (-565_100, -402_900, -5_180, 0, 0, 0),
+            (-565_000, -402_900, -5_180, 16_384, 50, 120),
+        ];
+        let v2 = decode(&take_version(2, &samples), "Racer").expect("a version 2 take");
+        assert_eq!(v2.tracks[0].poses[1].pos, t.poses[1].pos);
+        assert!(decode(&take_version(3, &samples), "Racer").is_none());
     }
 
     #[test]

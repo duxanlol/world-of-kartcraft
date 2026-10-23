@@ -2575,7 +2575,8 @@ namespace Kartcraft
     constexpr uint32 REPLAY_MAX_SAMPLES = 20 * 60 * 15;
     constexpr uint32 REPLAY_KEEP = 2 * DAY;
     constexpr uint32 REPLAY_SWEEP = HOUR * IN_MILLISECONDS;
-    constexpr uint8 REPLAY_VERSION = 1;
+    // 2: each sample carries its turbo fire (the state line's third field) after its flags.
+    constexpr uint8 REPLAY_VERSION = 2;
 
     // One sample: the place in hundredths of a yard, the facing over 65536 of a turn, and the
     // state line's steer (-100..100), drift yaw (milliradians) and flags.
@@ -2586,6 +2587,7 @@ namespace Kartcraft
         int8 steer;
         int16 drift;
         uint8 flags;
+        uint8 fire;   // the turbo's flame, 0 none, 4..8 its size (the state line's)
     };
 
     struct ReplayTrack
@@ -2779,6 +2781,7 @@ namespace Kartcraft
         s.steer = int8(StateInt(f, 0, -100, 100));
         s.drift = int16(StateInt(f, 1, -3200, 3200));
         s.flags = uint8(StateInt(f, 5, 0, 255));
+        s.fire = uint8(StateInt(f, 2, 0, 8));
         if (f.size() > 6 && !f[6].empty() && f[6].size() <= 12)
             t.kart = f[6];
         t.paint = uint8(StateInt(f, 8, 0, 255));
@@ -2900,8 +2903,8 @@ namespace Kartcraft
     // step (ms, u16), the start (u32), a time trial (u8), the course, the track count (u8), and
     // per track its name, kart, paint, trail, flag, place (u8), time (ms, u32), first sample
     // (u32), sample count (u32) and samples, each field the change from the one before as a
-    // zigzag varint (the first from zero), the steer and flags as bytes. Little endian; a string
-    // is a length byte and its bytes.
+    // zigzag varint (the first from zero), the steer, flags and (version 2) fire as bytes. Little
+    // endian; a string is a length byte and its bytes.
     static std::string EncodeTake(ReplayTake const& take)
     {
         std::string body;
@@ -2934,6 +2937,7 @@ namespace Kartcraft
                 body.push_back(char(s.steer));
                 PutSigned(body, s.drift - last.drift);
                 body.push_back(char(s.flags));
+                body.push_back(char(s.fire));
                 last = s;
             }
         }
