@@ -4653,3 +4653,32 @@ fn a_long_publish_goes_in_pieces_the_server_puts_together() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// A Skyhop finish is told with the record; a record is ours only when we hold it, so a tie with
+/// another's time is not one.
+#[test]
+fn a_skyhop_record_is_ours_only_when_we_hold_it() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    s.run(
+        "BenillaTestSaid = {} \
+         DEFAULT_CHAT_FRAME.AddMessage = function(self, m) table.insert(BenillaTestSaid, m) end",
+    )
+    .unwrap();
+    let said = |s: &UiScript| -> String {
+        s.eval("local t = table.concat(BenillaTestSaid, '|') BenillaTestSaid = {} return t")
+            .unwrap()
+    };
+    let me: String = s.eval("return UnitName('player')").unwrap();
+    from_server(&mut s, "R\tHopBest\thop1\t9500\t9500\t9500\tGoblin");
+    assert_eq!(
+        said(&s),
+        "Skyhop: 9.50 s. Your best: 9.50 s. Record: 9.50 s by Goblin."
+    );
+    from_server(&mut s, &format!("R\tHopBest\thop1\t9400\t9400\t9400\t{me}"));
+    assert!(said(&s).starts_with("Skyhop record! "));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

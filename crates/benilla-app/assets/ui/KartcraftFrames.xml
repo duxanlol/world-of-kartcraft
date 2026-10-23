@@ -1591,7 +1591,8 @@
                 local function clock(ms) return format("%.2f s", (tonumber(ms) or 0) / 1000) end
                 local text = "Skyhop: " .. clock(line[4]) .. ". Your best: " .. clock(line[5]) ..
                     ". Record: " .. clock(line[6]) .. " by " .. (line[7] or "?") .. "."
-                if line[4] == line[6] then text = "Skyhop record! " .. text end
+                -- Ours only when we hold it: a tie leaves the record with whoever set it first.
+                if line[4] == line[6] and line[7] == UnitName("player") then text = "Skyhop record! " .. text end
                 UIErrorsFrame:AddMessage(text, 1, 0.82, 0, 1, 6)
                 BenillaKart_Say(text)
             elseif verb == "RL" or verb == "RL-" or verb == "RR" or verb == "RR-" or verb == "RP" then
