@@ -3248,6 +3248,18 @@ fn courier_jobs_list_today_s_jobs_and_take_one_to_its_courier() {
     assert!(enabled(&s, "BenillaKartJobsFrameCancel"));
     s.run("BenillaKartJobs_Select(2)").unwrap();
     assert!(!enabled(&s, "BenillaKartJobsFrameTake"), "one at a time");
+    // A new list with the jobs in another order keeps the pick on its job, not its row.
+    from_server(&mut s, "R\tJobs\t2");
+    from_server(
+        &mut s,
+        "R\tJob\t1\t190907\t0\tStormwind\tGoldshire\tInnkeeper Allison\tInnkeeper Farley\t740\t120\tElwynn Lumber\t0\t-8868\t674\t-9463\t16",
+    );
+    from_server(
+        &mut s,
+        "R\tJob\t2\t190201\t1\tRatchet\tGadgetzan\tWharfmaster Dizzywig\tMarin Noggenfogger\t6208\t300\tArcane Crystals\t1\t-985\t-3796\t-7193\t-3793",
+    );
+    assert_eq!(s.eval::<i64>("return BenillaKartJobs.selected").unwrap(), 1);
+    assert_eq!(text(&s, "BenillaKartJobsFrameTitle"), "Elwynn Lumber");
     // The cooldown is said.
     s.run(
         "BenillaKartSaid = {} local said = BenillaKart_Say \

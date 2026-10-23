@@ -717,6 +717,11 @@
         end
 
         function BenillaKartJobs_Begin(count)
+            -- The pick is its job, not its row: a new day's list (or a job under way leading it)
+            -- puts other jobs where the old ones stood.
+            local picked = BenillaKartJobs.selected and BenillaKartJobs.list[BenillaKartJobs.selected]
+            BenillaKartJobs.keep = picked and picked.quest
+            BenillaKartJobs.selected = nil
             BenillaKartJobs.list = {}
             BenillaKartJobs.count = count or 0
             BenillaKartJobs_Refresh()
@@ -735,7 +740,11 @@
             BenillaKartJobs.tracks["job:" .. job.quest] = { key = "job:" .. job.quest, map = job.map, zone = "",
                 laps = 0, points = { { tonumber(line[14]) or 0, tonumber(line[15]) or 0 },
                     { tonumber(line[16]) or 0, tonumber(line[17]) or 0 } } }
-            if not BenillaKartJobs.selected then BenillaKartJobs.selected = 1 end
+            if job.quest == BenillaKartJobs.keep then
+                BenillaKartJobs.selected = i
+            elseif not BenillaKartJobs.selected then
+                BenillaKartJobs.selected = 1
+            end
             BenillaKartJobs_Refresh()
         end
 
