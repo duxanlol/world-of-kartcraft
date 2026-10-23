@@ -96,6 +96,30 @@ impl Chain {
         Ok(Self { archives })
     }
 
+    /// The chain over archives the caller reads itself, each by its `Data` file name, mounted in
+    /// [`mount_order`] as [`Self::open`] mounts a directory's: a browser holding a player's own
+    /// MPQs. Names outside the order are not mounted, as on disk.
+    pub fn from_sources(
+        sources: Vec<(String, std::sync::Arc<dyn benilla_mpq::Source>)>,
+    ) -> Result<Self> {
+        let mut names: Vec<String> = sources.iter().map(|(n, _)| n.clone()).collect();
+        names.sort();
+        let mut archives = Vec::new();
+        for name in mount_order(&names) {
+            let Some((_, source)) = sources.iter().find(|(n, _)| *n == name) else {
+                continue;
+            };
+            archives.push(
+                Archive::from_source(&name, std::sync::Arc::clone(source))
+                    .with_context(|| format!("opening {name}"))?,
+            );
+        }
+        if archives.is_empty() {
+            bail!("no known vanilla MPQs among the files given");
+        }
+        Ok(Self { archives })
+    }
+
     /// The highest-priority archive with an entry for `name`, a delete marker included, as a
     /// tombstone shadows every lower copy: check [`Archive::is_delete_marker`] for a readable file.
     fn resolve(&self, name: &str) -> Option<&Archive> {

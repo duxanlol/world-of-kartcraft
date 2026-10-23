@@ -1,0 +1,23 @@
+[package]
+name = "benilla-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The game world for the website's replay viewer: a player's own 1.12.1 MPQs read in a browser worker"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+benilla-blp = { path = "../benilla-blp" }
+benilla-formats = { path = "../benilla-formats" }
+benilla-mpq = { path = "../benilla-mpq" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3.99"
+wasm-bindgen = "0.2.122"
+web-sys = { version = "0.3.99", features = ["Blob", "File", "FileReaderSync"] }

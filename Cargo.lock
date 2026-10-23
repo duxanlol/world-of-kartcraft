@@ -757,6 +757,19 @@ name = "benilla-wdt"
 version = "0.2.0"
 
 [[package]]
+name = "benilla-web"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "benilla-blp",
+ "benilla-formats",
+ "benilla-mpq",
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "benilla-wmo"
 version = "0.2.0"
 dependencies = [
