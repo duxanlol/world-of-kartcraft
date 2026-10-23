@@ -1144,11 +1144,13 @@ pub(crate) fn parse_spots(text: &str) -> Option<Gates> {
     Some(g)
 }
 
-/// A name as courses.json takes one: ASCII, no quotes, backslashes or control characters.
+/// A name as courses.json takes one: ASCII, no quotes, backslashes or control characters, and no
+/// `|` (the UI's escapes), as the server's `CleanTrackText` keeps it: a published track's name is
+/// the name saved here, and the overwrite question compares them.
 fn clean(name: &str) -> String {
     let kept: String = name
         .chars()
-        .filter(|c| c.is_ascii() && !c.is_ascii_control() && *c != '"' && *c != '\\')
+        .filter(|c| c.is_ascii() && !c.is_ascii_control() && *c != '"' && *c != '\\' && *c != '|')
         .take(40)
         .collect();
     kept.trim().to_string()
@@ -2069,6 +2071,11 @@ mod tests {
         assert_eq!(key_of("  --  "), "");
         assert_eq!(key_of(&"a".repeat(40)).len(), 32);
         assert_eq!(clean(" Bob's \"Loop\"\\ "), "Bob's Loop");
+        assert_eq!(
+            clean("A|B"),
+            "AB",
+            "the server's name, the overwrite question's"
+        );
     }
 
     #[test]
