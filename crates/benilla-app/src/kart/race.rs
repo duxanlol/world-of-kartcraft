@@ -1074,6 +1074,9 @@ pub(crate) struct Races {
     pub(crate) offer: Option<Offer>,
     /// A Race Finder ready check is out (`Pop` until `Pop-` or the race's roster).
     check_pending: bool,
+    /// The race we left once its results had shown: a roster of it the server sent before our
+    /// leave reached it puts us in no race.
+    left: Option<u32>,
     pub(crate) race: Option<Active>,
     /// Our character's name, to find ourselves in rosters.
     pub(crate) me: String,
@@ -1241,7 +1244,7 @@ impl Races {
             }
             Some("L") if f.len() >= 3 => {
                 let roster: Vec<String> = f[2].split(',').map(str::to_string).collect();
-                if roster.contains(&me) {
+                if roster.contains(&me) && self.left != Some(id) {
                     self.check_pending = false;
                     // Another race's roster with us in it: the server has moved us (a time trial
                     // takes us out of every other race), so the old one goes.
@@ -1749,6 +1752,7 @@ pub(crate) fn update(
         if race.closes_at.is_some_and(|t| now >= t) {
             info!("kart race: {} over, leaving", race.id);
             profession.send(format!("KARTCRAFT\tR\tQ\t{}", race.id));
+            races.left = Some(race.id);
             races.race = None;
             *text = RaceText::default();
             clear_hud(&mut extras, &mut audio);
@@ -3305,6 +3309,20 @@ mod tests {
         );
         assert_eq!(hear(&mut races, "X", 4.0), Heard::LeftAll);
         assert!(races.race.is_none());
+    }
+
+    #[test]
+    fn a_roster_of_the_race_we_left_puts_us_in_no_race() {
+        let mut races = racer();
+        hear(&mut races, "L\t3\tRacer,Goblin", 1.0);
+        // Its results shown, we left it; the server's roster sent before our leave reached it.
+        races.left = Some(3);
+        races.race = None;
+        hear(&mut races, "L\t3\tRacer", 2.0);
+        assert!(races.race.is_none());
+        // Another race's roster with us in it is ours.
+        hear(&mut races, "L\t4\tRacer", 3.0);
+        assert_eq!(races.race.as_ref().map(|r| r.id), Some(4));
     }
 
     #[test]
