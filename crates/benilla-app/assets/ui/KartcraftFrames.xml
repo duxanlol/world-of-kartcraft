@@ -2503,6 +2503,12 @@
                 rp.ours = rp.incoming or {}
                 rp.incoming = nil
             elseif verb == "RR" then
+                -- A course's board once: a second click on the tab asks again while the first's
+                -- replies are still coming.
+                for i = table.getn(rp.records), 1, -1 do
+                    local r = rp.records[i]
+                    if r.course == line[3] and r.board == line[4] then table.remove(rp.records, i) end
+                end
                 table.insert(rp.records, { course = line[3], board = line[4], key = line[5], name = line[6] or "?", ms = tonumber(line[7]) or 0 })
             elseif verb == "RP" then
                 for _, r in ipairs(rp.ours) do

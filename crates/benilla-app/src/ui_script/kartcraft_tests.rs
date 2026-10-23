@@ -2538,8 +2538,18 @@ fn the_replays_window_lists_our_server_races_pins_one_and_plays_a_record() {
     // The records of the courses raced, each played from the server.
     s.run("BenillaKartReplaysFrameTabRecords:Click()").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tRRec\tgp-azora"]);
-    from_server(&mut s, "R\tRR\tgp-azora\tT\t1792300000-7\tSpeedy\t55120");
-    from_server(&mut s, "R\tRR-\tgp-azora");
+    // Clicked again before the answer: both answers come, the record listed once.
+    s.run("BenillaKartReplaysFrameTabRecords:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tRRec\tgp-azora"]);
+    for _ in 0..2 {
+        from_server(&mut s, "R\tRR\tgp-azora\tT\t1792300000-7\tSpeedy\t55120");
+        from_server(&mut s, "R\tRR-\tgp-azora");
+    }
+    assert_eq!(
+        s.eval::<i64>("return table.getn(BenillaKartReplays.records)")
+            .unwrap(),
+        1
+    );
     assert_eq!(
         text(&mut s, "BenillaKartReplaysFrameEntry1"),
         "Azora Hill Climb: time trial record, 0:55.12 by Speedy"
