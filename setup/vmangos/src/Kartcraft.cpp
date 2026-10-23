@@ -5816,6 +5816,14 @@ namespace Kartcraft
                 SendLine(p, "KARTCRAFT\tR\tMarEnd");
                 continue;
             }
+            // A Race Finder ready check up: its teleport would take them off the route.
+            if (InPop(guid))
+            {
+                ChatHandler(p->GetSession()).SendSysMessage(
+                    "The Marathon Delivery left without you: you were in a Race Finder ready check.");
+                SendLine(p, "KARTCRAFT\tR\tMarEnd");
+                continue;
+            }
             ItemPosCountVec dest;
             if (p->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, DELIVERY_PACKAGE, 1) != EQUIP_ERR_OK)
             {

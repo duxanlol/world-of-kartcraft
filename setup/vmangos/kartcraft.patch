@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..9dc1c0b
+index 0000000..e409e66
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,8263 @@
+@@ -0,0 +1,8271 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -5926,6 +5926,14 @@ index 0000000..9dc1c0b
 +                ChatHandler(p->GetSession()).SendSysMessage(
 +                    "The Marathon Delivery left without you: you were in a race, a fight, an instance or "
 +                    "carrying a delivery.");
++                SendLine(p, "KARTCRAFT\tR\tMarEnd");
++                continue;
++            }
++            // A Race Finder ready check up: its teleport would take them off the route.
++            if (InPop(guid))
++            {
++                ChatHandler(p->GetSession()).SendSysMessage(
++                    "The Marathon Delivery left without you: you were in a Race Finder ready check.");
 +                SendLine(p, "KARTCRAFT\tR\tMarEnd");
 +                continue;
 +            }
