@@ -5967,9 +5967,20 @@ namespace Kartcraft
                 SendLine(p, "KARTCRAFT\tR\tMarEnd");
                 continue;
             }
+            // Released to a graveyard: a teleport the by-kart rule never saw, a shortcut where one
+            // stands nearer the next town. Out, as the package's loss is.
+            if (p->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+            {
+                r.out = true;
+                ChatHandler(p->GetSession()).SendSysMessage(
+                    "Marathon Delivery: released to a graveyard, you are out of it.");
+                SendLine(p, "KARTCRAFT\tR\tDel-");
+                SendLine(p, "KARTCRAFT\tR\tMarEnd");
+                continue;
+            }
             going = true;
             MarathonTown const& next = *m.stops[r.stop];
-            if (p->GetMapId() == next.map &&
+            if (p->IsAlive() && p->GetMapId() == next.map &&
                 std::hypot(p->GetPositionX() - next.x, p->GetPositionY() - next.y) <= MARATHON_ARRIVE)
                 MarathonArrive(m, r, p, now);
         }
