@@ -1127,6 +1127,16 @@
                 offset = FauxScrollFrame_GetOffset(scroll)
             end
             local selected = BenillaKartTrackBrowser.selected
+            -- A pick the list no longer shows (another page of tracks, a search) is no pick: its
+            -- details and buttons would act on a track not in view.
+            local listed = false
+            for i = 1, table.getn(list) do
+                if list[i].key == selected then listed = true end
+            end
+            if not listed then
+                selected = nil
+                BenillaKartTrackBrowser.selected = nil
+            end
             for i = 1, BENILLA_KART_TRACK_ROWS do
                 local row = getglobal("BenillaKartTracksFrameRow" .. i)
                 local track = list[offset + i]

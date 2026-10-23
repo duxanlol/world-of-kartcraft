@@ -3003,6 +3003,13 @@ fn the_track_browser_starts_a_time_trial_on_the_track_shown() {
     assert!(!enabled(&s));
     s.run("BenillaKartTrackBrowser_Select('t2')").unwrap();
     assert!(enabled(&s));
+    // A pick a search hides is no pick: nothing to race from a track not in view.
+    s.run("BenillaKartTrackBrowser_Search('no track is called this')")
+        .unwrap();
+    assert!(!enabled(&s));
+    s.run("BenillaKartTrackBrowser_Search('') BenillaKartTrackBrowser_Select('t2')")
+        .unwrap();
+    assert!(enabled(&s));
     sent(&mut s);
     s.run("BenillaKartTracksFrameTrial:Click()").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tTB\tt2"]);
@@ -3024,6 +3031,7 @@ fn the_track_browser_starts_a_time_trial_on_the_track_shown() {
     sent(&mut s);
     s.run("BenillaKartTrackBrowser_Pad('PAD1')").unwrap();
     assert!(sent(&mut s).is_empty(), "no trial from the pad either");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
 #[test]
