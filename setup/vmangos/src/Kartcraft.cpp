@@ -2598,6 +2598,7 @@ namespace Kartcraft
         uint32 ms = 0;
         uint32 finishedAt = 0; // ms, 0 not yet
         uint32 from = 0;       // the sample its first is
+        uint32 held = 0;       // samples at the end that repeat the place before them
         std::vector<ReplaySample> samples;
     };
 
@@ -2608,7 +2609,10 @@ namespace Kartcraft
         uint32 startedAt = 0;
         bool trial = false;
         uint32 start = 0;
-        uint32 lastSample = 0;
+        uint32 map = 0;
+        uint32 lastIndex = 0;  // the step last sampled, with `sampled`
+        bool sampled = false;
+        uint32 overAt = 0;     // ms the race went, its finishers' run-outs still sampled; 0 under way
         std::vector<ReplayTrack> tracks;
     };
 
@@ -2736,7 +2740,84 @@ namespace Kartcraft
             }
     }
 
-    // Every race under way: each racer's place now, every REPLAY_STEP. Under s_mutex.
+    // The server knows a racer's place only as their movement packets come, every 100 to 200 ms,
+    // so a step often finds the place of the one before. Up to REPLAY_FILL such steps, or steps a
+    // long world tick skipped, are drawn as the way between once the place moves on; a longer
+    // stop (parked, out of the world a while) holds the place.
+    constexpr uint32 REPLAY_FILL = 5;
+
+    // The way from `from` to `to`, a share `a` along: place, facing (the short way round), drift.
+    static ReplaySample Between(ReplaySample const& from, ReplaySample const& to, float a)
+    {
+        auto lerp = [a](int32 x, int32 y) { return x + int32(std::lround(float(y - x) * a)); };
+        ReplaySample m = from;
+        m.x = lerp(from.x, to.x);
+        m.y = lerp(from.y, to.y);
+        m.z = lerp(from.z, to.z);
+        m.o = uint16(from.o + int32(std::lround(float(int16(uint16(to.o - from.o))) * a)));
+        m.drift = int16(lerp(from.drift, to.drift));
+        return m;
+    }
+
+    // `p`'s place now into their track at step `index`, once a step; a sample's index is its time.
+    static void SampleTrack(ReplayTrack& t, Player* p, uint32 index)
+    {
+        if (index < t.from)
+            return;
+        ReplaySample s;
+        s.x = int32(std::lround(p->GetPositionX() * 100.f));
+        s.y = int32(std::lround(p->GetPositionY() * 100.f));
+        s.z = int32(std::lround(p->GetPositionZ() * 100.f));
+        s.o = uint16(std::lround(p->GetOrientation() / 6.2831853f * 65536.f) & 0xFFFF);
+        std::vector<std::string> f;
+        {
+            std::lock_guard<std::mutex> lock(s_stateMutex);
+            auto line = s_stateLines.find(p->GetGUIDLow());
+            if (line != s_stateLines.end())
+                f = StateFields(line->second);
+        }
+        s.steer = int8(StateInt(f, 0, -100, 100));
+        s.drift = int16(StateInt(f, 1, -3200, 3200));
+        s.flags = uint8(StateInt(f, 5, 0, 255));
+        if (f.size() > 6 && !f[6].empty() && f[6].size() <= 12)
+            t.kart = f[6];
+        t.paint = uint8(StateInt(f, 8, 0, 255));
+        t.trail = uint8(StateInt(f, 9, 0, 255));
+        t.flag = uint8(StateInt(f, 10, 0, 255));
+        if (t.samples.empty())
+            t.from = index;
+        uint32 const next = t.from + uint32(t.samples.size());
+        if (index < next)
+            return;
+        // Steps a long tick skipped: the last place repeated for now, the way between below.
+        while (!t.samples.empty() && t.from + t.samples.size() < index)
+        {
+            t.samples.push_back(t.samples.back());
+            ++t.held;
+        }
+        bool const still = !t.samples.empty() && t.samples.back().x == s.x && t.samples.back().y == s.y &&
+            t.samples.back().z == s.z;
+        if (still)
+        {
+            t.samples.push_back(s);
+            ++t.held;
+            return;
+        }
+        // Moved on: the repeats behind it, if few, become the way from the place before them.
+        if (t.held && t.held <= REPLAY_FILL && t.samples.size() > t.held)
+        {
+            size_t const base = t.samples.size() - t.held - 1;
+            ReplaySample const from = t.samples[base];
+            float const span = float(t.held + 1);
+            for (uint32 k = 1; k <= t.held; ++k)
+                t.samples[base + k] = Between(from, s, float(k) / span);
+        }
+        t.held = 0;
+        t.samples.push_back(s);
+    }
+
+    // Every race under way: each racer's place, every REPLAY_STEP (each world tick, a step sampled
+    // once). Under s_mutex.
     static void SampleReplays(uint32 now)
     {
         for (auto& entry : s_races)
@@ -2752,13 +2833,13 @@ namespace Kartcraft
                 take.startedAt = r.startedAt;
                 take.trial = r.timeTrial;
                 take.start = r.start;
+                take.map = r.course->map;
             }
-            if (take.lastSample && WorldTimer::getMSTimeDiff(take.lastSample, now) < REPLAY_STEP)
-                continue;
-            take.lastSample = now;
             uint32 const index = WorldTimer::getMSTimeDiff(r.start, now) / REPLAY_STEP;
-            if (index >= REPLAY_MAX_SAMPLES)
+            if ((take.sampled && index == take.lastIndex) || index >= REPLAY_MAX_SAMPLES)
                 continue;
+            take.sampled = true;
+            take.lastIndex = index;
             for (Racer const& x : r.racers)
             {
                 auto t = std::find_if(take.tracks.begin(), take.tracks.end(),
@@ -2782,36 +2863,7 @@ namespace Kartcraft
                 Player* p = ObjectAccessor::FindPlayer(x.guid);
                 if (!p || !p->IsInWorld() || p->GetMapId() != r.course->map)
                     continue;
-                ReplaySample s;
-                s.x = int32(std::lround(p->GetPositionX() * 100.f));
-                s.y = int32(std::lround(p->GetPositionY() * 100.f));
-                s.z = int32(std::lround(p->GetPositionZ() * 100.f));
-                s.o = uint16(std::lround(p->GetOrientation() / 6.2831853f * 65536.f) & 0xFFFF);
-                std::vector<std::string> f;
-                {
-                    std::lock_guard<std::mutex> lock(s_stateMutex);
-                    auto line = s_stateLines.find(x.guid.GetCounter());
-                    if (line != s_stateLines.end())
-                        f = StateFields(line->second);
-                }
-                s.steer = int8(StateInt(f, 0, -100, 100));
-                s.drift = int16(StateInt(f, 1, -3200, 3200));
-                s.flags = uint8(StateInt(f, 5, 0, 255));
-                if (f.size() > 6 && !f[6].empty() && f[6].size() <= 12)
-                    t->kart = f[6];
-                t->paint = uint8(StateInt(f, 8, 0, 255));
-                t->trail = uint8(StateInt(f, 9, 0, 255));
-                t->flag = uint8(StateInt(f, 10, 0, 255));
-                // A gap (out of the world a while) holds the last place, so a sample's index is
-                // its time.
-                if (index < t->from)
-                    continue;
-                if (t->samples.empty())
-                    t->from = index;
-                while (!t->samples.empty() && t->from + t->samples.size() < index)
-                    t->samples.push_back(t->samples.back());
-                if (t->from + t->samples.size() == index)
-                    t->samples.push_back(s);
+                SampleTrack(*t, p, index);
             }
         }
     }
@@ -2932,8 +2984,10 @@ namespace Kartcraft
         }
     }
 
-    // Takes whose race is over, written. Under s_mutex.
-    static void FinishTakes()
+    // Takes whose race is over: its finishers sampled on to REPLAY_AFTER past their finish (a race
+    // goes the moment its last racer is in, so the last finish would end the take on the line),
+    // then written. Under s_mutex.
+    static void FinishTakes(uint32 now)
     {
         for (auto it = s_takes.begin(); it != s_takes.end();)
         {
@@ -2942,7 +2996,29 @@ namespace Kartcraft
                 ++it;
                 continue;
             }
-            WriteTake(it->second);
+            ReplayTake& take = it->second;
+            if (!take.overAt)
+                take.overAt = now ? now : 1;
+            uint32 const index = WorldTimer::getMSTimeDiff(take.start, now) / REPLAY_STEP;
+            bool const step = !(take.sampled && index == take.lastIndex) && index < REPLAY_MAX_SAMPLES;
+            take.sampled = true;
+            take.lastIndex = index;
+            bool running = false;
+            for (ReplayTrack& t : take.tracks)
+            {
+                if (!t.finishedAt || WorldTimer::getMSTimeDiff(t.finishedAt, now) > REPLAY_AFTER)
+                    continue;
+                running = true;
+                Player* p = ObjectAccessor::FindPlayer(t.guid);
+                if (step && p && p->IsInWorld() && p->GetMapId() == take.map)
+                    SampleTrack(t, p, index);
+            }
+            if (running && WorldTimer::getMSTimeDiff(take.overAt, now) <= REPLAY_AFTER)
+            {
+                ++it;
+                continue;
+            }
+            WriteTake(take);
             it = s_takes.erase(it);
         }
     }
@@ -2957,6 +3033,14 @@ namespace Kartcraft
             "AND k.`course` < '%u' AND (SELECT COUNT(*) FROM `kartcraft_ladder` l WHERE l.`season` = k.`course` "
             "AND l.`rating` > (SELECT m.`rating` FROM `kartcraft_ladder` m WHERE m.`season` = k.`course` "
             "AND m.`guid` = k.`guid`)) >= 3", SeasonNow());
+        // A past day's or week's challenge bests, likewise: its top three's only. Kept for every
+        // racer's best of every period, they would never go.
+        std::pair<std::string, std::string> const periods = ChallengePeriods();
+        CharacterDatabase.DirectPExecute("DELETE k FROM `kartcraft_replay_keeps` k WHERE k.`reason` IN ('cd', 'cw') "
+            "AND k.`course` NOT IN ('%s', '%s') AND (SELECT COUNT(*) FROM `kartcraft_challenge` c "
+            "WHERE c.`period` = k.`course` AND c.`ms` < (SELECT m.`ms` FROM `kartcraft_challenge` m "
+            "WHERE m.`period` = k.`course` AND m.`guid` = k.`guid`)) >= 3",
+            periods.first.c_str(), periods.second.c_str());
         std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
             "SELECT r.`key` FROM `kartcraft_replays` r WHERE r.`at` < %u "
             "AND NOT EXISTS (SELECT 1 FROM `kartcraft_replay_keeps` k WHERE k.`key` = r.`key`) "
@@ -6146,7 +6230,7 @@ namespace Kartcraft
         {
             std::lock_guard<std::mutex> races(s_mutex);
             SampleReplays(now);
-            FinishTakes();
+            FinishTakes(now);
             // A racer gone off the course with no line of theirs to come (a hearthstone out of a
             // solo trial): out here, their shield and layer let go with it.
             if (!s_straysTicked || WorldTimer::getMSTimeDiff(s_straysTicked, now) >= STRAYS_TICK)
