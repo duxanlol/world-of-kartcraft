@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..f22b22c
+index 0000000..4bf10f6
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,8451 @@
+@@ -0,0 +1,8452 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -1829,8 +1829,8 @@ index 0000000..f22b22c
 +    // route's par. DELIVERIES_A_DAY of the routes are offered each UTC day, the daily
 +    // challenge's (ChallengePeriods) and each faction's own, each once a day a character; one
 +    // package at a time. A
-+    // package goes by kart: while it is carried no Kartcraft teleport, flight path, hearthstone
-+    // or teleport spell takes its carrier (CarryingDelivery).
++    // package goes by kart: while it is carried no Kartcraft teleport, flight path, hearthstone,
++    // teleport spell or summon takes its carrier (CarryingDelivery).
 +    struct Delivery
 +    {
 +        uint32 quest;
@@ -3239,8 +3239,9 @@ index 0000000..f22b22c
 +            return { f[0].GetUInt32(), f[1].GetCppString() };
 +        };
 +        char sql[384];
++        // The record is the fastest, a tie going to whoever set it first.
 +        std::snprintf(sql, sizeof(sql), "SELECT h.`ms`, c.`name` FROM `kartcraft_hops` h JOIN `characters` c ON "
-+            "c.`guid` = h.`guid` WHERE h.`course` = '%s' ORDER BY h.`ms` LIMIT 1", course->key);
++            "c.`guid` = h.`guid` WHERE h.`course` = '%s' ORDER BY h.`ms`, h.`at` LIMIT 1", course->key);
 +        std::pair<uint32, std::string> const record = best_of(sql);
 +        std::snprintf(sql, sizeof(sql), "SELECT `ms`, '' FROM `kartcraft_hops` WHERE `guid` = %u AND `course` = '%s'",
 +            guid, course->key);
@@ -11946,6 +11947,21 @@ index c45726e..f1a7ec9 100644
      // Nostalrius: ghost visibility by raid members.
      if (IsInSameRaidWith(pl))
          return true;
+@@ -19656,6 +19684,14 @@ void Player::SummonIfPossible(bool agree)
+     if (m_summon_expire < time(nullptr))
+         return;
+ 
++    // Kartcraft: a courier's package goes by kart, not by a summon.
++    if (Kartcraft::CarryingDelivery(this))
++    {
++        m_summon_expire = 0;
++        ChatHandler(GetSession()).SendSysMessage("You're carrying a delivery: it goes by kart, not by a summon.");
++        return;
++    }
++
+     // stop taxi flight at summon
+     if (IsTaxiFlying())
+     {
 diff --git a/src/game/Spells/Spell.cpp b/src/game/Spells/Spell.cpp
 index eaaaaf1..9219d68 100644
 --- a/src/game/Spells/Spell.cpp

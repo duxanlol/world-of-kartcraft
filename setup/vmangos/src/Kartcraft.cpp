@@ -1716,8 +1716,8 @@ namespace Kartcraft
     // route's par. DELIVERIES_A_DAY of the routes are offered each UTC day, the daily
     // challenge's (ChallengePeriods) and each faction's own, each once a day a character; one
     // package at a time. A
-    // package goes by kart: while it is carried no Kartcraft teleport, flight path, hearthstone
-    // or teleport spell takes its carrier (CarryingDelivery).
+    // package goes by kart: while it is carried no Kartcraft teleport, flight path, hearthstone,
+    // teleport spell or summon takes its carrier (CarryingDelivery).
     struct Delivery
     {
         uint32 quest;
@@ -3126,8 +3126,9 @@ namespace Kartcraft
             return { f[0].GetUInt32(), f[1].GetCppString() };
         };
         char sql[384];
+        // The record is the fastest, a tie going to whoever set it first.
         std::snprintf(sql, sizeof(sql), "SELECT h.`ms`, c.`name` FROM `kartcraft_hops` h JOIN `characters` c ON "
-            "c.`guid` = h.`guid` WHERE h.`course` = '%s' ORDER BY h.`ms` LIMIT 1", course->key);
+            "c.`guid` = h.`guid` WHERE h.`course` = '%s' ORDER BY h.`ms`, h.`at` LIMIT 1", course->key);
         std::pair<uint32, std::string> const record = best_of(sql);
         std::snprintf(sql, sizeof(sql), "SELECT `ms`, '' FROM `kartcraft_hops` WHERE `guid` = %u AND `course` = '%s'",
             guid, course->key);
