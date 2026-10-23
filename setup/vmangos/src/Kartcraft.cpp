@@ -4991,9 +4991,11 @@ namespace Kartcraft
 
     static void EndPop(uint32 id, Pop& pop, uint32 now)
     {
+        // A yes still waiting for its racer to be able to go is a yes.
         auto accepted = [&pop](ObjectGuid guid)
         {
-            return std::find(pop.accepted.begin(), pop.accepted.end(), guid) != pop.accepted.end();
+            return std::find(pop.accepted.begin(), pop.accepted.end(), guid) != pop.accepted.end() ||
+                std::find(pop.waiting.begin(), pop.waiting.end(), guid) != pop.waiting.end();
         };
         // A party goes back only whole: one who said no takes their party out with them.
         auto whole = [&pop, &accepted](uint32 party)
@@ -5659,8 +5661,10 @@ namespace Kartcraft
     // The package off a runner, if they have it.
     static void TakePackage(Player* player)
     {
-        if (player->HasItemCount(DELIVERY_PACKAGE, 1))
-            player->DestroyItemCount(DELIVERY_PACKAGE, 1, true);
+        // From the bank too, as CarryingDelivery counts it there: one left behind would hold its
+        // keeper to the by-kart rule for good.
+        if (player->HasItemCount(DELIVERY_PACKAGE, 1, true))
+            player->DestroyItemCount(DELIVERY_PACKAGE, 1, true, false, true);
     }
 
     // The marathon over: everyone still out told, the podium to the world, the start marked run.
@@ -5916,7 +5920,7 @@ namespace Kartcraft
                 going = true;
                 continue;
             }
-            if (!p->HasItemCount(DELIVERY_PACKAGE, 1))
+            if (!p->HasItemCount(DELIVERY_PACKAGE, 1, true))
             {
                 r.out = true;
                 ChatHandler(p->GetSession()).SendSysMessage("Marathon Delivery: the package is gone, and you with it.");
@@ -6291,7 +6295,7 @@ namespace Kartcraft
             SendMarathonOpen(player, m);
         if (running && m.phase == Marathon::RUNNING)
             SendMarathonLeg(player, m, *r, WorldTimer::getMSTime());
-        if (running || !player->HasItemCount(DELIVERY_PACKAGE, 1))
+        if (running || !player->HasItemCount(DELIVERY_PACKAGE, 1, true))
             return;
         // A courier delivery's own package: one of its quests in the log.
         for (Delivery const& d : DELIVERIES)
@@ -7305,8 +7309,10 @@ namespace Kartcraft
         for (auto it = s_races.begin(); it != s_races.end();)
         {
             Race& r = it->second;
-            uint32 const since = r.start && int32(now - r.start) >= 0 ? r.start : r.created;
-            if (WorldTimer::getMSTimeDiff(since, now) <= RACE_LIFETIME)
+            // Counting down: started, its lifetime not yet begun.
+            bool const counting = r.start && int32(now - r.start) < 0;
+            uint32 const since = r.start ? r.start : r.created;
+            if (counting || WorldTimer::getMSTimeDiff(since, now) <= RACE_LIFETIME)
             {
                 it = std::next(it);
                 continue;
