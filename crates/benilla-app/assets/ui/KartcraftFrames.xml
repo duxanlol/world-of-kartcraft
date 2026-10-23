@@ -1297,10 +1297,12 @@
                     bar:SetValue((to - BENILLA_KART_TRACK_ROWS) * BENILLA_KART_TRACK_ROW_HEIGHT)
                 end
                 BenillaKartTrackBrowser_Select(list[to].key)
+            -- Each button only as it stands: a disabled one (a dungeon course's time trial, another's
+            -- track's take-down) is not pressed from the pad either.
             elseif key == "PAD1" then
-                BenillaKartTrackBrowser_TimeTrial()
+                if BenillaKartTracksFrameTrial:IsEnabled() == 1 then BenillaKartTracksFrameTrial:Click() end
             elseif key == "PAD3" then
-                BenillaKartTrackBrowser_ToMarshal()
+                if BenillaKartTracksFrameMarshal:IsEnabled() == 1 then BenillaKartTracksFrameMarshal:Click() end
             elseif key == "PAD4" then
                 if BenillaKartTracksFrameShow:IsEnabled() == 1 then BenillaKartTracksFrameShow:Click() end
             elseif key == "PADBACK" then

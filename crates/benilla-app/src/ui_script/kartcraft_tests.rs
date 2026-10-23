@@ -3020,6 +3020,10 @@ fn the_track_browser_starts_a_time_trial_on_the_track_shown() {
     s.run("BenillaKartTrackBrowser_Open() BenillaKartTrackBrowser_Select('d1')")
         .unwrap();
     assert!(!enabled(&s));
+    // Nor from the pad: its Cross presses the button only as it stands.
+    sent(&mut s);
+    s.run("BenillaKartTrackBrowser_Pad('PAD1')").unwrap();
+    assert!(sent(&mut s).is_empty(), "no trial from the pad either");
 }
 
 #[test]
