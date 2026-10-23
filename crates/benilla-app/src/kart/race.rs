@@ -291,6 +291,10 @@ const CP_ARROW_HZ: f32 = 0.8;
 /// fallback for a close that never comes, a little longer.
 const RESULTS_SECS: f32 = 10.0;
 const FINISH_WAIT_SECS: f32 = 75.0;
+/// How long after we leave a race its roster is not ours (s): one the server sent before our
+/// leave reached it comes within a round trip, and a race of the same id again only after a
+/// server restart (its ids start over).
+const LEFT_STALE_SECS: f32 = 10.0;
 /// How long our progress may run ahead of the server's for us (s) before the checkpoints it lacks
 /// are reported again, and again as often while it still lacks them.
 const RESYNC_SECS: f32 = 1.5;
@@ -1074,9 +1078,9 @@ pub(crate) struct Races {
     pub(crate) offer: Option<Offer>,
     /// A Race Finder ready check is out (`Pop` until `Pop-` or the race's roster).
     check_pending: bool,
-    /// The race we left once its results had shown: a roster of it the server sent before our
-    /// leave reached it puts us in no race.
-    left: Option<u32>,
+    /// The race we left once its results had shown, and when: a roster of it the server sent
+    /// before our leave reached it puts us in no race (`LEFT_STALE_SECS`).
+    left: Option<(u32, f32)>,
     pub(crate) race: Option<Active>,
     /// Our character's name, to find ourselves in rosters.
     pub(crate) me: String,
@@ -1201,6 +1205,12 @@ impl Races {
 
 impl Races {
     /// One server line (`R\t` taken off, split at the tabs): the race state it changes.
+    /// We leave race `id`, its results shown: in no race, and its roster not ours for a while.
+    fn leave_over(&mut self, id: u32, now: f32) {
+        self.left = Some((id, now));
+        self.race = None;
+    }
+
     fn hear(&mut self, f: &[String], now: f32) -> Heard {
         let me = self.me.clone();
         let id = f.get(1).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
@@ -1244,7 +1254,10 @@ impl Races {
             }
             Some("L") if f.len() >= 3 => {
                 let roster: Vec<String> = f[2].split(',').map(str::to_string).collect();
-                if roster.contains(&me) && self.left != Some(id) {
+                let stale = self
+                    .left
+                    .is_some_and(|(left, at)| left == id && now - at < LEFT_STALE_SECS);
+                if roster.contains(&me) && !stale {
                     self.check_pending = false;
                     // Another race's roster with us in it: the server has moved us (a time trial
                     // takes us out of every other race), so the old one goes.
@@ -1752,8 +1765,8 @@ pub(crate) fn update(
         if race.closes_at.is_some_and(|t| now >= t) {
             info!("kart race: {} over, leaving", race.id);
             profession.send(format!("KARTCRAFT\tR\tQ\t{}", race.id));
-            races.left = Some(race.id);
-            races.race = None;
+            let id = race.id;
+            races.leave_over(id, now);
             *text = RaceText::default();
             clear_hud(&mut extras, &mut audio);
         }
@@ -3316,13 +3329,16 @@ mod tests {
         let mut races = racer();
         hear(&mut races, "L\t3\tRacer,Goblin", 1.0);
         // Its results shown, we left it; the server's roster sent before our leave reached it.
-        races.left = Some(3);
-        races.race = None;
-        hear(&mut races, "L\t3\tRacer", 2.0);
+        races.leave_over(3, 2.0);
+        hear(&mut races, "L\t3\tRacer", 2.2);
         assert!(races.race.is_none());
         // Another race's roster with us in it is ours.
         hear(&mut races, "L\t4\tRacer", 3.0);
         assert_eq!(races.race.as_ref().map(|r| r.id), Some(4));
+        // Long after, a race of that id again (the server restarted, its ids anew) is ours.
+        races.race = None;
+        hear(&mut races, "L\t3\tRacer", 2.0 + LEFT_STALE_SECS + 1.0);
+        assert_eq!(races.race.as_ref().map(|r| r.id), Some(3));
     }
 
     #[test]
