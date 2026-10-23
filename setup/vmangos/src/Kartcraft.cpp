@@ -4132,6 +4132,15 @@ namespace Kartcraft
             SendLine(player, "KARTCRAFT\tR\tMx");
             return;
         }
+        // Not in a battleground's match (an untargetable flag carrier), nor dead (a corpse run
+        // made safe): race mode is for the road.
+        if (on && (player->InBattleGround() || !player->IsAlive()))
+        {
+            ChatHandler(player->GetSession()).SendSysMessage(
+                "Race mode: not in a battleground's match, and not while you're dead.");
+            SendLine(player, "KARTCRAFT\tR\tM\t0");
+            return;
+        }
         if (on)
             s_raceMode.insert(player->GetObjectGuid());
         else
@@ -6552,6 +6561,15 @@ namespace Kartcraft
             return SendLine(player, "KARTCRAFT\tR\tDTx\tNo teleporter trip to go back from.");
         if (InAnyRace(player->GetObjectGuid()))
             return SendLine(player, "KARTCRAFT\tR\tDTx\tLeave the race first.");
+        // The way back from the trip's dungeon only, from inside one: walked out, it is no recall
+        // to the spot it left; and a delivery goes by kart, a match by its own leaving.
+        Map const* map = player->GetMap();
+        if (!map || !(map->IsDungeon() || map->IsBattleGround()))
+            return SendLine(player, "KARTCRAFT\tR\tDTx\tLeave dungeon takes you back from inside the dungeon.");
+        if (player->InBattleGround())
+            return SendLine(player, "KARTCRAFT\tR\tDTx\tLeave the battleground's match as it lets you.");
+        if (CarryingDelivery(player))
+            return SendLine(player, "KARTCRAFT\tR\tDTx\tYou're carrying a delivery: it goes by kart.");
         Origin const to = found->second;
         s_dungeonOrigins.erase(found);
         ObjectGuid const g = player->GetObjectGuid();
@@ -6962,7 +6980,9 @@ namespace Kartcraft
                 auto const& at = c.points[std::min<size_t>(x.checkpoint, n - 1)];
                 auto const& next = c.points[c.laps ? (x.checkpoint + 1) % n : std::min<size_t>(x.checkpoint + 1, n - 1)];
                 float o = std::atan2(next.second - at.second, next.first - at.first);
-                if (TeleportOnto(player, c.map, at.first, at.second, o, false))
+                // On the course's floor (Course::z: the Caverns of Time's way down, a player track
+                // under a roof), not on what stands over it.
+                if (TeleportOnto(player, c.map, at.first, at.second, o, false, c.z))
                 {
                     s_unstuck[player->GetGUIDLow()] = now;
                     CharacterDatabase.PExecute("INSERT INTO `kartcraft_unstuck` (`course`, `guid`, `race_at`, `at`) "
@@ -7727,6 +7747,16 @@ namespace Kartcraft
             Race& r = race->second;
             if (r.start || r.host != player->GetObjectGuid())
                 return;
+            // Who logged out in the lobby is not in the race: neither its field nor a loss of theirs.
+            for (auto x = r.racers.begin(); x != r.racers.end();)
+                if (ObjectAccessor::FindPlayer(x->guid))
+                    x = std::next(x);
+                else
+                {
+                    RemoveRacer(r, x);
+                    x = r.racers.begin();
+                }
+            SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(id) + "\t" + Roster(r));
             // Everyone to a grid slot behind the start, as a Race Finder race lines up, whether
             // they joined on foot or drove up in the kart; the countdown waits for the settle.
             size_t slot = 0;
@@ -7811,7 +7841,8 @@ namespace Kartcraft
                     std::to_string(place) + "\t" + std::to_string(ms) + "\t" + best);
                 if (!best.empty())
                     SendRecords(id, r);
-                Reward(player, place, uint32(r.racers.size()));
+                // Worth the field it started with: a racer who left since was beaten all the same.
+                Reward(player, place, uint32(r.field));
                 // Over when everyone still in has finished: a finisher who left counts in
                 // `finishers` but no longer in `racers`, so the counts would close it a racer early.
                 if (std::all_of(r.racers.begin(), r.racers.end(), [](Racer const& x) { return x.finished; }))
