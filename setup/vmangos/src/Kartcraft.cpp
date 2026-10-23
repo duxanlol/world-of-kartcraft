@@ -4757,9 +4757,12 @@ namespace Kartcraft
             comma = asked.find(',', at);
             if (comma == std::string::npos)
                 comma = asked.size();
-            std::string const token = asked.substr(at, comma - at);
+            std::string token = asked.substr(at, comma - at);
             if (token.empty() || !AnyCourse(CourseMask(token)))
                 continue;
+            // A zone as CourseMask reads it, its digits only: "z0<anything>" is zone 0.
+            if (token.size() > 1 && token[0] == 'z' && std::isdigit(uint8(token[1])))
+                token = "z" + std::to_string(std::strtoul(token.c_str() + 1, nullptr, 10));
             out += (out.empty() ? "" : ",") + token;
         }
         return out;
@@ -6038,6 +6041,8 @@ namespace Kartcraft
             if (p->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
             {
                 r.out = true;
+                // The package goes with them: kept, it would hold them to the by-kart rule.
+                TakePackage(p);
                 ChatHandler(p->GetSession()).SendSysMessage(
                     "Marathon Delivery: released to a graveyard, you are out of it.");
                 SendLine(p, "KARTCRAFT\tR\tDel-");
