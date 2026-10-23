@@ -929,6 +929,7 @@ namespace Kartcraft
     {
         uint32 ms = 0; // 0: none yet
         std::string name;
+        uint32 at = 0; // when it was set, unix time (challenge boards: the first to a tie leads)
     };
 
     // One table's times: every character's best on each course, and each course's record.
@@ -1285,7 +1286,7 @@ namespace Kartcraft
             "VALUES ('%s', '%s', %u, %u)", period.c_str(), escaped.c_str(), ChallengePick(period).empty() ? 1u : 0u,
             uint32(std::time(nullptr)));
         std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
-            "SELECT `guid`, `name`, `ms` FROM `kartcraft_challenge` WHERE `period` = '%s' AND `course` = '%s'",
+            "SELECT `guid`, `name`, `ms`, `at` FROM `kartcraft_challenge` WHERE `period` = '%s' AND `course` = '%s'",
             period.c_str(), escaped.c_str());
         if (!result)
             return;
@@ -1295,6 +1296,7 @@ namespace Kartcraft
             Record& r = board.bests[f[0].GetUInt32()];
             r.name = f[1].GetCppString();
             r.ms = f[2].GetUInt32();
+            r.at = f[3].GetUInt32();
         } while (result->NextRow());
     }
 
@@ -1342,9 +1344,10 @@ namespace Kartcraft
 
     static Record const* ChallengeLeader(ChallengeBoard const& board)
     {
+        // The fastest; on a tie, who set it first, as the record announcement had it.
         Record const* best = nullptr;
         for (auto const& e : board.bests)
-            if (!best || e.second.ms < best->ms)
+            if (!best || e.second.ms < best->ms || (e.second.ms == best->ms && e.second.at < best->at))
                 best = &e.second;
         return best;
     }
@@ -1383,11 +1386,12 @@ namespace Kartcraft
                 continue;
             best.ms = ms;
             best.name = name;
+            best.at = uint32(std::time(nullptr));
             std::string escaped = name;
             CharacterDatabase.escape_string(escaped);
             CharacterDatabase.PExecute("REPLACE INTO `kartcraft_challenge` (`period`, `course`, `guid`, `name`, "
                 "`ms`, `at`) VALUES ('%s', '%s', %u, '%s', %u, %u)", board->period.c_str(), course.c_str(), guid,
-                escaped.c_str(), ms, uint32(std::time(nullptr)));
+                escaped.c_str(), ms, best.at);
             if (race)
                 ReplayKeep(*race, board == &s_daily ? "cd" : "cw", guid, board->period, guid);
             if (record)
