@@ -6083,6 +6083,11 @@ namespace Kartcraft
         }
     }
 
+    static bool RetireStrays(uint32 now);
+    // How often the world's tick looks for racers gone off their course (RetireStrays).
+    constexpr uint32 STRAYS_TICK = IN_MILLISECONDS;
+    static uint32 s_straysTicked = 0; // under s_mutex
+
     void Update(uint32 /*diff*/)
     {
         uint32 const now = WorldTimer::getMSTime();
@@ -6090,6 +6095,17 @@ namespace Kartcraft
             std::lock_guard<std::mutex> races(s_mutex);
             SampleReplays(now);
             FinishTakes();
+            // A racer gone off the course with no line of theirs to come (a hearthstone out of a
+            // solo trial): out here, their shield and layer let go with it.
+            if (!s_straysTicked || WorldTimer::getMSTimeDiff(s_straysTicked, now) >= STRAYS_TICK)
+            {
+                s_straysTicked = now;
+                if (RetireStrays(now))
+                {
+                    TickShields(now);
+                    TickLayers();
+                }
+            }
             if (!s_scaleTicked || WorldTimer::getMSTimeDiff(s_scaleTicked, now) >= SCALE_TICK)
             {
                 s_scaleTicked = now;
@@ -7840,6 +7856,76 @@ namespace Kartcraft
     // DNF_WAIT after its first finish a race closes: everyone not in is out of time, told to all.
     // Run with every line from anyone, as the Race Finder's matching is: racers in the kart send
     // their state many times a second, so the close comes on time.
+    // A racer off the course's map (or its dungeon copy), settled there, is out of the race, as a
+    // /leaverace is: a hearthstone, a portal or a summon took them, and the race's shield and layer
+    // must not go with them. One being teleported (to the grid, a far start) waits until in.
+    // How far from the route a racer is off the course (yards): far past any shortcut or spin.
+    constexpr float STRAY_REACH = 600.f;
+
+    // A player's distance to a course's route: the nearest of its legs, checkpoint to checkpoint
+    // (and the last back to the start, with laps).
+    static float DistanceToRoute(Player const* player, Course const& c)
+    {
+        float const px = player->GetPositionX(), py = player->GetPositionY();
+        size_t const n = c.points.size();
+        float best = DistanceTo(player, c.points[0]);
+        for (size_t i = 0; i + 1 < n + (c.laps ? 1 : 0); ++i)
+        {
+            auto const& a = c.points[i];
+            auto const& b = c.points[(i + 1) % n];
+            float const dx = b.first - a.first, dy = b.second - a.second;
+            float const len = dx * dx + dy * dy;
+            float t = len > 0.f ? ((px - a.first) * dx + (py - a.second) * dy) / len : 0.f;
+            t = std::max(0.f, std::min(1.f, t));
+            float const ex = a.first + t * dx - px, ey = a.second + t * dy - py;
+            best = std::min(best, std::sqrt(ex * ex + ey * ey));
+        }
+        return best;
+    }
+
+    static bool RetireStrays(uint32 /*now*/)
+    {
+        bool any = false;
+        for (auto it = s_races.begin(); it != s_races.end();)
+        {
+            Race& r = it->second;
+            if (!r.start || !r.course)
+            {
+                it = std::next(it);
+                continue;
+            }
+            bool left = false;
+            for (auto x = r.racers.begin(); x != r.racers.end();)
+            {
+                Player* p = x->finished ? nullptr : ObjectAccessor::FindPlayer(x->guid);
+                bool away = p && p->IsInWorld() && !p->IsBeingTeleported() &&
+                    (p->GetMapId() != r.course->map || (r.instance && p->GetInstanceId() != r.instance));
+                // On its map but far from all of it: a capital's hearthstone off a course nearby.
+                if (p && !away && p->IsInWorld() && !p->IsBeingTeleported() && !r.course->points.empty())
+                    away = DistanceToRoute(p, *r.course) > STRAY_REACH;
+                if (!away)
+                {
+                    x = std::next(x);
+                    continue;
+                }
+                ChatHandler(p->GetSession()).SendSysMessage("You left the course: you are out of the race.");
+                SendLine(p, "KARTCRAFT\tR\tL\t" + std::to_string(it->first) + "\t");
+                RemoveRacer(r, x);
+                x = r.racers.begin();
+                left = any = true;
+            }
+            if (r.racers.empty())
+                it = s_races.erase(it);
+            else
+            {
+                if (left)
+                    SendRace(r, "KARTCRAFT\tR\tL\t" + std::to_string(it->first) + "\t" + Roster(r));
+                it = std::next(it);
+            }
+        }
+        return any;
+    }
+
     static void CloseLateRaces(uint32 now)
     {
         for (auto it = s_races.begin(); it != s_races.end();)
@@ -7906,6 +7992,7 @@ namespace Kartcraft
         if (housekeep)
         {
             s_housekept = now;
+            RetireStrays(now);
             CloseLateRaces(now);
             TickDoors();
             TickWeapons(now);
