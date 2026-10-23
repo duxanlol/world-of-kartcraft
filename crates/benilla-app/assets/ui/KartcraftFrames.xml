@@ -4467,6 +4467,34 @@
             end)
         end
 
+        -- The world map takes the keyboard while it is open, a controller's presses with it as
+        -- keys by their PAD names, and closes only on Escape or its binding: Kartcraft opens it
+        -- with a route (Show route, Show on map), and Circle, which closes Kartcraft's windows,
+        -- closes it too.
+        function BenillaKart_PadClosesWorldMap()
+            if not WorldMapFrame or BenillaKartWorldMapPadded then return end
+            BenillaKartWorldMapPadded = 1
+            local onkeydown = WorldMapFrame:GetScript("OnKeyDown")
+            WorldMapFrame:SetScript("OnKeyDown", function()
+                if arg1 == "PAD2" then
+                    ToggleWorldMap()
+                    return
+                end
+                if onkeydown then onkeydown() end
+            end)
+            -- The map covers the screen, and the kart's HUD (the engine's, drawn over the
+            -- interface) steps aside while it is up, as with /kartclean.
+            local onshow, onhide = WorldMapFrame:GetScript("OnShow"), WorldMapFrame:GetScript("OnHide")
+            WorldMapFrame:SetScript("OnShow", function()
+                if onshow then onshow() end
+                SetCVar("KartHideHud", "1")
+            end)
+            WorldMapFrame:SetScript("OnHide", function()
+                if onhide then onhide() end
+                if UIParent:IsShown() then SetCVar("KartHideHud", "0") end
+            end)
+        end
+
         -- /kartnext: the next racer's kart in the garage's list, round to the first, said in chat.
         function BenillaKartGarage_Next()
             local racers = BenillaKartGarage.racers or {}
@@ -6861,6 +6889,7 @@
                 this:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
                 this:RegisterEvent("BENILLA_KART_PAD")
                 BenillaKart_WatchUIParent()
+                BenillaKart_PadClosesWorldMap()
             </OnLoad>
             <OnEvent>BenillaKartEvents_OnEvent()</OnEvent>
             <OnUpdate>BenillaKartEvents_OnUpdate()</OnUpdate>
