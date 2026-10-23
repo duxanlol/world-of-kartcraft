@@ -342,7 +342,8 @@ pub(in crate::net) fn sample_splines(
                 }
             }
             if now.saturating_duration_since(spline.start) >= spline.duration {
-                commands.entity(entity).remove::<Spline>();
+                // `try_`: a unit destroyed later this frame has no spline left to drop.
+                commands.entity(entity).try_remove::<Spline>();
             }
             continue;
         }
@@ -379,7 +380,7 @@ pub(in crate::net) fn sample_splines(
                     &format!("{:#x} DONE — spline dropped", guid.map_or(0, |g| g.0)),
                 );
             }
-            commands.entity(entity).remove::<Spline>();
+            commands.entity(entity).try_remove::<Spline>();
         }
     }
 }
