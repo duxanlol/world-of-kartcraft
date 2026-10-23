@@ -2067,7 +2067,8 @@
         -- The highlight: the focused button lit, and an arrow at its left.
         function BenillaPad_Show(item)
             local old = BenillaPad.focus
-            if old and old ~= item and old.UnlockHighlight then old:UnlockHighlight() end
+            -- A window's own pick (`padKeep`, the shop's chosen cell) keeps its highlight.
+            if old and old ~= item and old.UnlockHighlight and not old.padKeep then old:UnlockHighlight() end
             BenillaPad.focus = item
             if not item then
                 BenillaPadCursor:Hide()
@@ -4334,6 +4335,7 @@
                     price:SetTextColor(1, 0.82, 0)
                 end
                 if i == shop.selected then getglobal(cell):LockHighlight() else getglobal(cell):UnlockHighlight() end
+                getglobal(cell).padKeep = i == shop.selected
             end
             local item = BenillaKartShop_Item(shop.selected)
             local buy, wear = BenillaKartShopFrameBuy, BenillaKartShopFrameWear

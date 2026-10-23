@@ -4014,6 +4014,20 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     );
     assert!(!enabled(&mut s, "BenillaKartShopFrameBuy"));
 
+    // The controller's cursor passing over the picked cell leaves it picked.
+    s.run(
+        "local c = BenillaKartShopFrameSkin1 local l, u = c.LockHighlight, c.UnlockHighlight \
+         c.LockHighlight = function(self) self.testLocked = 1 l(self) end \
+         c.UnlockHighlight = function(self) self.testLocked = nil u(self) end \
+         BenillaKartShopFrameSkin1:Click()",
+    )
+    .unwrap();
+    s.run("BenillaPad_Show(BenillaKartShopFrameSkin1) BenillaPad_Show(BenillaKartShopFrameSkin2)")
+        .unwrap();
+    assert!(s
+        .eval::<bool>("return BenillaKartShopFrameSkin1.testLocked == 1")
+        .unwrap());
+
     // Closed, the pane's unit goes.
     s.run("BenillaKartShopFrame:Hide()").unwrap();
     assert_eq!(preview(&mut s), "0");
