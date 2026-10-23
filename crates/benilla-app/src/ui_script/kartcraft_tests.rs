@@ -3448,6 +3448,14 @@ fn a_marathon_delivery_is_queued_shut_counted_down_and_driven_on_the_clock() {
     from_server(&mut s, "R@MarEnd".replace('@', "	").as_str());
     assert!(!shown(&s, "BenillaKartDeliveryFrame"));
     assert!(!shown(&s, "BenillaKartMarathonFrame"));
+    // A countdown with no first leg after it: the popup goes, not left at "Off in 0".
+    from_server(&mut s, "R@MarGo@1".replace('@', "	").as_str());
+    s.tick(0.1);
+    assert!(shown(&s, "BenillaKartMarathonFrame"));
+    for _ in 0..170 {
+        s.tick(0.1);
+    }
+    assert!(!shown(&s, "BenillaKartMarathonFrame"));
     // /marathon's words: leave for anyone, any other a GM's order for the server.
     s.run("SlashCmdList['BENILLA_MARATHON']('  leave ')")
         .unwrap();

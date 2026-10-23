@@ -2996,11 +2996,19 @@
             return n .. tail
         end
 
+        -- How long past its countdown the popup waits for the first leg ("MDel").
+        BENILLA_KART_MARATHON_LATE = 15
+
         -- The status line and the button, written when the shown second or the queue changes.
         function BenillaKartMarathon_Update(elapsed)
             local m = BenillaKartMarathon
             local text, button
-            if m.goAt then
+            if m.goAt and GetTime() - m.goAt > BENILLA_KART_MARATHON_LATE then
+                -- No first leg after the countdown (the server dropped us at the start): "Off in 0" goes.
+                m.goAt = nil
+                BenillaKartMarathonFrame:Hide()
+                return
+            elseif m.goAt then
                 text = format("Off in %d...", math.max(0, math.ceil(m.goAt - GetTime())))
             elseif m.open then
                 local left = math.max(0, floor(m.leaves - GetTime()))
