@@ -21,6 +21,7 @@
 #include "BattleGround.h"
 #include "BattleGroundMgr.h"
 #include "Config/Config.h"
+#include "Mail.h"
 #include <zlib.h>
 #include <fstream>
 #include <sys/stat.h>
@@ -5659,7 +5660,21 @@ namespace Kartcraft
                 player->SendNewItem(item, count, true, false);
         }
         else if (count)
-            ChatHandler(player->GetSession()).SendSysMessage("Your bags had no room for the Kartcraft Tokens.");
+        {
+            // Mailed, not lost: a marathon's prize and a cache's are recorded as paid.
+            MailDraft draft("Kartcraft Tokens", "Your bags had no room for these.");
+            ItemPrototype const* proto = sObjectMgr.GetItemPrototype(DELIVERY_TOKEN);
+            uint32 const stack = proto && proto->GetMaxStackSize() ? proto->GetMaxStackSize() : count;
+            for (uint32 left = count, n = 0; left && n < MAX_MAIL_ITEMS; left -= std::min(left, stack), ++n)
+                if (::Item* item = ::Item::CreateItem(DELIVERY_TOKEN, std::min(left, stack), player->GetObjectGuid()))
+                {
+                    item->SaveToDB();
+                    draft.AddItem(item);
+                }
+            draft.SendMailTo(MailReceiver(player), MailSender(player, MAIL_STATIONERY_GM), MAIL_CHECK_MASK_COPIED);
+            ChatHandler(player->GetSession()).SendSysMessage(
+                "Your bags had no room for the Kartcraft Tokens: they are in your mailbox.");
+        }
     }
 
     // The package off a runner, if they have it.
