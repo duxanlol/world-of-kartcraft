@@ -3384,6 +3384,8 @@ namespace Kartcraft
         }
         CharacterDatabase.PExecute("REPLACE INTO `kartcraft_rating` (`course`, `guid`, `vote`, `reason`, `at`) "
             "VALUES ('%s', %u, %d, '%s', %u)", c->key, guid, v, reason.c_str(), uint32(std::time(nullptr)));
+        // Thanked here, once kept: the client's own thanks would follow a refusal too.
+        ChatHandler(player->GetSession()).PSendSysMessage("Thanks for rating %s.", c->name);
     }
 
     // One racer's result in a started race: `place` 0 did not finish. The last of a race's

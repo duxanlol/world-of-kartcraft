@@ -2650,8 +2650,8 @@
 
         function BenillaKartRate_Send(vote, reason)
             BenillaKart_Send("Rate\t" .. BenillaKartRate.key .. "\t" .. vote .. "\t" .. reason)
+            -- The thanks is the server's, once the vote is kept (a track not raced is refused).
             BenillaKartRateFrame:Hide()
-            BenillaKart_Say("Thanks for rating " .. BenillaKart_CourseName(BenillaKartRate.key) .. ".")
         end
 
         -- ── The Kartcraft Guide ──
