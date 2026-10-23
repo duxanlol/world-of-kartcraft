@@ -2200,6 +2200,14 @@ fn the_menu_names_the_challenges_and_starts_their_time_trial() {
         )],
     );
     sent(&mut s);
+    // Chosen before the server has named them, on a day with no daily course: told so, and a
+    // later answer that names one (every menu open asks) starts no trial nobody asked for.
+    s.run("BenillaKartMenu_Run('daily')").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tCH"]);
+    from_server(&mut s, "R\tCH\t\tsprint\t0\t\t0\t0\t\t0");
+    from_server(&mut s, "R\tCH\tstormwind\tsprint\t0\tGoblin\t62400\t0\t\t0");
+    assert!(sent(&mut s).is_empty(), "no trial from the old choice");
+    s.run("BenillaKartChallenge = nil").unwrap();
     // Chosen before the server has named the courses: asked, and the trial goes on the answer.
     s.run("BenillaKartMenu_Run('daily')").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tCH"]);

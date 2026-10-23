@@ -2180,6 +2180,8 @@
                 BenillaKartMenu_PendingChallenge = which
                 BenillaKart_Send("CH")
             else
+                -- Answered: a later CH (every menu open asks) must not run it again.
+                BenillaKartMenu_PendingChallenge = nil
                 BenillaKart_Say("There is no " .. which .. " challenge course right now.")
             end
         end
