@@ -1885,9 +1885,21 @@ fn board(race: &Active) -> Vec<String> {
 
 /// A time trial's board: our time, against our best before this run, then the time trial record.
 fn trial_board(race: &Active) -> Vec<String> {
-    let Some((name, _, ms)) = race.finished.first() else {
+    let Some((name, place, ms)) = race.finished.first() else {
         return Vec::new();
     };
+    // Place 0 is out of time (the race's lifetime ran out): no time to set against a best.
+    if *place == 0 {
+        let mut lines = vec!["Out of time".to_string()];
+        if race.record.0 != 0 {
+            lines.push(format!(
+                "Time trial record: {} by {}",
+                clock(race.record.0),
+                race.record.1
+            ));
+        }
+        return lines;
+    }
     let mark = match race.bests.get(name) {
         Some(true) => "  (record)",
         Some(false) => "  (best)",
@@ -3324,6 +3336,13 @@ mod tests {
         assert_eq!(
             board(&first),
             ["Your time: 1:02.50", "Your first time trial here"]
+        );
+        // Out of time: no time and no gap, only the record.
+        let mut late = race.clone();
+        late.finished = vec![("Racer".into(), 0, 0)];
+        assert_eq!(
+            board(&late),
+            ["Out of time", "Time trial record: 0:58.00 by Goblin"]
         );
     }
 
