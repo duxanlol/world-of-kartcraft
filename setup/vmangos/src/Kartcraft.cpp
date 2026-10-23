@@ -861,13 +861,15 @@ namespace Kartcraft
             ScaleField(t.scale);
     }
 
-    // `t`'s course, new in s_userCourses: its gates from its spots, its Race Marshal's place its
-    // start (it has none; the start is where a racer hosts), no zone (it is in none of the Race
-    // Finder's).
-    static void MakeUserCourse(UserTrack& t)
+    // `t`'s course in s_userCourses, new or in the slot `reuse` names: its gates from its spots,
+    // its Race Marshal's place its start (it has none; the start is where a racer hosts), no zone
+    // (it is in none of the Race Finder's).
+    static void MakeUserCourse(UserTrack& t, size_t const* reuse = nullptr)
     {
-        s_userCourses.emplace_back();
-        UserCourse& uc = s_userCourses.back();
+        if (!reuse)
+            s_userCourses.emplace_back();
+        UserCourse& uc = reuse ? s_userCourses[*reuse] : s_userCourses.back();
+        uc = UserCourse{};
         uc.key = "pt-" + std::to_string(t.id);
         uc.name = t.name;
         Course& c = uc.course;
@@ -888,7 +890,7 @@ namespace Kartcraft
         c.marshal = c.points.empty() ? std::make_pair(0.f, 0.f) : c.points[0];
         c.z = t.z;
         c.scale = t.scale;
-        t.slot = s_userCourses.size() - 1;
+        t.slot = reuse ? *reuse : s_userCourses.size() - 1;
     }
 
     static std::string Roster(Race const& race)
@@ -7345,9 +7347,21 @@ namespace Kartcraft
             return no("The track's scale is not right: 0.2 to 3.");
         auto same = std::find_if(s_userTracks.begin(), s_userTracks.end(),
             [&t](UserTrack const& u) { return u.guid == t.guid && SameTrackName(u.name, t.name); });
+        // Published again: its old course's slot is reused when no race or Race Finder pop is on
+        // it, so republishing does not grow s_userCourses for good.
+        size_t oldSlot = 0;
+        bool reuse = false;
         if (same != s_userTracks.end())
         {
             t.id = same->id;
+            oldSlot = same->slot;
+            Course const* old = &s_userCourses[oldSlot].course;
+            reuse = std::none_of(s_races.begin(), s_races.end(),
+                        [old](std::pair<uint32 const, Race> const& r) { return r.second.course == old; }) &&
+                std::none_of(s_pops.begin(), s_pops.end(),
+                    [old](std::pair<uint32 const, Pop> const& p) { return p.second.course == old; });
+            if (reuse)
+                s_layouts.erase(old);
             s_userTracks.erase(same);
         }
         else
@@ -7360,7 +7374,7 @@ namespace Kartcraft
                 return no("The server holds all the tracks it can.");
             t.id = s_userTrackNext++;
         }
-        MakeUserCourse(t);
+        MakeUserCourse(t, reuse ? &oldSlot : nullptr);
         s_userTracks.push_back(t);
         s_published[guid] = now;
         std::string author = t.author, name = t.name, zone = t.zone;
