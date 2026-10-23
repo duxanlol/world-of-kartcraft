@@ -4593,6 +4593,13 @@ fn the_race_finder_s_player_tracks_tab_races_and_time_trials_a_player_track() {
     sent(&mut s);
     s.run("BenillaKartFinder_Pad('PAD4')").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tTB\tpt-5"]);
+    // Taken down, the picked track is no pick: the posted list lacks it.
+    from_server(&mut s, "R\tPubGone\t5");
+    assert_eq!(
+        s.eval::<String>("return tostring(BenillaKartFinder.track)")
+            .unwrap(),
+        "nil"
+    );
     // The Kartcraft menu's Find a race queues for the courses, whatever tab was left open.
     s.run("BenillaKartMenu_Run('find')").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tQ+\tany"]);

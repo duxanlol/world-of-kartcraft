@@ -966,6 +966,7 @@
             elseif verb == "PTE" then
                 BenillaKartPubTracks = BenillaKartPubIncoming or {}
                 BenillaKartPubIncoming = nil
+                BenillaKartFinder_DropGoneTrack()
                 BenillaKartTrackBrowser_Refresh()
                 BenillaKartFinder_Refresh()
             elseif verb == "PubOk" then
@@ -980,8 +981,21 @@
                 end
                 BenillaKartPubTracks = kept
                 BenillaKart_Say("Your track is taken down.")
+                BenillaKartFinder_DropGoneTrack()
                 BenillaKartTrackBrowser_Refresh()
+                BenillaKartFinder_Refresh()
             end
+        end
+
+        -- The Race Finder's picked player track, dropped once the posted list lacks it (taken
+        -- down): its time trial and queue would go to a course the server no longer has.
+        function BenillaKartFinder_DropGoneTrack()
+            local f = BenillaKartFinder
+            if not f.track then return end
+            for i = 1, table.getn(BenillaKartPubTracks) do
+                if BenillaKartPubTracks[i].id == f.track then return end
+            end
+            f.track = nil
         end
 
         -- Publish, asked first where one of ours published has its name: the server replaces it.
