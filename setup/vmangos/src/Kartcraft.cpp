@@ -6777,6 +6777,17 @@ namespace Kartcraft
                 return true;
             }
             mine->seen = now;
+            // Queued only for player tracks since taken down or republished (a new course slot):
+            // nothing can pop for them, so out of the queue, told why.
+            bool live = false;
+            for (size_t i = 0; i < mine->courses.size() && !live; ++i)
+                live = mine->courses[i] && CourseLive(i);
+            if (!live)
+            {
+                LeaveQueue(guid);
+                SendLine(player, "KARTCRAFT\tR\tQx\tcourse");
+                return true;
+            }
             size_t waiting = 0;
             for (Queued const& q : s_queue)
                 waiting += Overlap(q.courses, mine->courses) ? 1 : 0;

@@ -1491,6 +1491,9 @@
                 if line[3] == "world" then
                     BenillaKart_Say("The Race Finder takes you from out in the world: not from a dungeon, a raid or a battleground.")
                 end
+                if line[3] == "course" then
+                    BenillaKart_Say("You left the Race Finder's queue: the track you queued for is no longer posted.")
+                end
             elseif verb == "Qp" then
                 -- A party mate queued the party: we are queued too, and keep our place ourselves.
                 f.queued, f.waiting, f.waited, f.noticeUntil = line[3], nil, nil, 0

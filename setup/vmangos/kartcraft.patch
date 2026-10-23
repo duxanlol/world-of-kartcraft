@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..24d6ba7
+index 0000000..57d5710
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,8322 @@
+@@ -0,0 +1,8333 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -6890,6 +6890,17 @@ index 0000000..24d6ba7
 +                return true;
 +            }
 +            mine->seen = now;
++            // Queued only for player tracks since taken down or republished (a new course slot):
++            // nothing can pop for them, so out of the queue, told why.
++            bool live = false;
++            for (size_t i = 0; i < mine->courses.size() && !live; ++i)
++                live = mine->courses[i] && CourseLive(i);
++            if (!live)
++            {
++                LeaveQueue(guid);
++                SendLine(player, "KARTCRAFT\tR\tQx\tcourse");
++                return true;
++            }
 +            size_t waiting = 0;
 +            for (Queued const& q : s_queue)
 +                waiting += Overlap(q.courses, mine->courses) ? 1 : 0;
