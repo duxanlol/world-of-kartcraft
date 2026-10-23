@@ -1896,6 +1896,16 @@ namespace Kartcraft
         return player->HasItemCount(DELIVERY_PACKAGE, 1, true);
     }
 
+    // A courier delivery's quest in the log, its package lost or not: a marathon's package (the
+    // same item) would complete it. A rewarded repeatable quest is QUEST_STATUS_NONE again.
+    static bool OnCourierJob(Player const* player)
+    {
+        for (Delivery const& d : DELIVERIES)
+            if (player->GetQuestStatus(d.quest) != QUEST_STATUS_NONE)
+                return true;
+        return false;
+    }
+
     static std::string DeliveryClock(uint32 seconds)
     {
         char text[16];
@@ -1969,6 +1979,8 @@ namespace Kartcraft
         SendDeliveryTimer(player, *d, 0);
     }
 
+    static void GiveTokens(Player* player, uint32 count);
+
     void OnQuestRewarded(Player* player, Quest const* quest)
     {
         Delivery const* d = FindDelivery(quest->GetQuestId());
@@ -1994,16 +2006,10 @@ namespace Kartcraft
         ChatHandler chat(player->GetSession());
         if (bonus)
         {
-            ItemPosCountVec dest;
-            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, DELIVERY_TOKEN, DELIVERY_BONUS) == EQUIP_ERR_OK)
-            {
-                if (Item* item = player->StoreNewItem(dest, DELIVERY_TOKEN, true))
-                    player->SendNewItem(item, DELIVERY_BONUS, true, false);
-                chat.PSendSysMessage("Delivered in %s, under par (%s): %u bonus tokens!",
-                    DeliveryClock(seconds).c_str(), DeliveryClock(d->par).c_str(), DELIVERY_BONUS);
-            }
-            else
-                chat.SendSysMessage("Delivered under par, but your bags had no room for the bonus tokens.");
+            // Mailed when the bags are full, as every other token payout is (GiveTokens).
+            chat.PSendSysMessage("Delivered in %s, under par (%s): %u bonus tokens!",
+                DeliveryClock(seconds).c_str(), DeliveryClock(d->par).c_str(), DELIVERY_BONUS);
+            GiveTokens(player, DELIVERY_BONUS);
         }
         else if (seconds)
             chat.PSendSysMessage("Delivered in %s (par %s).", DeliveryClock(seconds).c_str(), DeliveryClock(d->par).c_str());
@@ -2199,7 +2205,7 @@ namespace Kartcraft
             if (OwnedSkins(guid).first.count(skin->key))
                 chat.SendSysMessage("That skin is already yours.");
             else if (tokens < skin->price)
-                chat.PSendSysMessage("That skin costs %u Kartcraft Tokens; you have %u. Courier deliveries pay them.",
+                chat.PSendSysMessage("That skin costs %u Kartcraft Tokens; you have %u in your bags. Courier deliveries pay them.",
                     skin->price, tokens);
             else
             {
@@ -2312,7 +2318,7 @@ namespace Kartcraft
             if (OwnedGoods(guid).first.count(good->key))
                 chat.SendSysMessage("That is already yours.");
             else if (tokens < good->price)
-                chat.PSendSysMessage("That costs %u Kartcraft Tokens; you have %u. Courier deliveries pay them.",
+                chat.PSendSysMessage("That costs %u Kartcraft Tokens; you have %u in your bags. Courier deliveries pay them.",
                     good->price, tokens);
             else
             {
@@ -2440,10 +2446,19 @@ namespace Kartcraft
             chat.SendSysMessage("You have claimed many caches today: the rest pay little until tomorrow.");
     }
 
-    // Opened on foot (or clicked from the kart): claimed, and no loot window.
+    // Opened on foot (or clicked from the kart): claimed, and no loot window. A use is handled on
+    // its map's thread (CMSG_GAMEOBJ_USE is PACKET_PROCESS_MAP), so the claim goes to the world
+    // thread, where every other claim and its shared state live.
     static bool CacheHello(Player* player, GameObject* go)
     {
-        CacheClaim(player, go);
+        ObjectGuid const guid = player->GetObjectGuid();
+        ObjectGuid const cache = go->GetObjectGuid();
+        sWorld.GetMessager().AddMessage([guid, cache](World*)
+        {
+            if (Player* p = ObjectAccessor::FindPlayer(guid))
+                if (p->IsInWorld())
+                    CacheClaim(p, p->GetMap()->GetGameObject(cache));
+        });
         return true;
     }
 
@@ -3305,7 +3320,7 @@ namespace Kartcraft
             else if (s.today >= CRATE_DAILY)
                 chat.PSendSysMessage("You have opened %u crates today; more tomorrow.", CRATE_DAILY);
             else if (tokens < CRATE_PRICE)
-                chat.PSendSysMessage("A Mystery Crate costs %u Kartcraft Tokens; you have %u.", CRATE_PRICE, tokens);
+                chat.PSendSysMessage("A Mystery Crate costs %u Kartcraft Tokens; you have %u in your bags.", CRATE_PRICE, tokens);
             else
             {
                 Good const* prize = left[tier][urand(0, uint32(left[tier].size()) - 1)];
@@ -5550,7 +5565,7 @@ namespace Kartcraft
         ObjectGuid guid;
         std::string name;
         size_t stop = 1;     // the next stop's index
-        uint8 place = 0;     // 0 not in
+        uint32 place = 0;    // 0 not in
         uint32 ms = 0;       // the time in
         bool out = false;    // dropped: the package gone
         uint32 offlineSince = 0; // ms, while logged out (MARATHON_OFFLINE)
@@ -5567,7 +5582,7 @@ namespace Kartcraft
         std::vector<ObjectGuid> queue;
         std::vector<MarathonRunner> runners;
         uint32 goAt = 0;     // ms
-        uint8 finishers = 0;
+        uint32 finishers = 0;
         uint32 reminded = 0; // the last reminder's minutes before the start
     };
 
@@ -5839,11 +5854,11 @@ namespace Kartcraft
             Player* p = ObjectAccessor::FindPlayer(guid);
             if (!p)
                 continue;
-            if (InAnyRace(guid) || !CanBeRacedOff(p))
+            if (InAnyRace(guid) || !CanBeRacedOff(p) || OnCourierJob(p))
             {
                 ChatHandler(p->GetSession()).SendSysMessage(
                     "The Marathon Delivery left without you: you were in a race, a fight, an instance or "
-                    "carrying a delivery.");
+                    "on a courier delivery.");
                 SendLine(p, "KARTCRAFT\tR\tMarEnd");
                 continue;
             }
@@ -6366,9 +6381,10 @@ namespace Kartcraft
         auto in = std::find(m.queue.begin(), m.queue.end(), guid);
         if (verb == "Mar+" && in == m.queue.end())
         {
-            if (CarryingDelivery(player))
+            if (CarryingDelivery(player) || OnCourierJob(player))
             {
-                ChatHandler(player->GetSession()).SendSysMessage("Deliver the package you're carrying first.");
+                ChatHandler(player->GetSession()).SendSysMessage(
+                    "Finish or abandon your courier delivery first.");
                 return true;
             }
             m.queue.push_back(guid);
@@ -6395,9 +6411,8 @@ namespace Kartcraft
         if (running || !player->HasItemCount(DELIVERY_PACKAGE, 1, true))
             return;
         // A courier delivery's own package: one of its quests in the log.
-        for (Delivery const& d : DELIVERIES)
-            if (player->GetQuestStatus(d.quest) != QUEST_STATUS_NONE)
-                return;
+        if (OnCourierJob(player))
+            return;
         TakePackage(player);
     }
 
