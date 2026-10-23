@@ -5504,6 +5504,8 @@ namespace Kartcraft
     constexpr uint32 MARATHON_OPEN = 10 * MINUTE;         // seconds before the start
     constexpr uint32 MARATHON_COUNTDOWN = 10 * IN_MILLISECONDS;
     constexpr uint32 MARATHON_LIMIT = 90 * MINUTE * IN_MILLISECONDS;
+    // How long a runner may be logged out and still be in it: a reconnect's time, not a race's.
+    constexpr uint32 MARATHON_OFFLINE = 5 * MINUTE * IN_MILLISECONDS;
     constexpr uint32 MARATHON_TICK = IN_MILLISECONDS;
     constexpr uint32 MARATHON_SCHEDULE_RECHECK = MINUTE * IN_MILLISECONDS;
     constexpr float MARATHON_ARRIVE = 40.f;
@@ -5520,6 +5522,7 @@ namespace Kartcraft
         uint8 place = 0;     // 0 not in
         uint32 ms = 0;       // the time in
         bool out = false;    // dropped: the package gone
+        uint32 offlineSince = 0; // ms, while logged out (MARATHON_OFFLINE)
     };
 
     struct Marathon
@@ -5931,9 +5934,18 @@ namespace Kartcraft
             Player* p = ObjectAccessor::FindPlayer(r.guid);
             if (!p)
             {
-                going = true; // logged out: their package and the marathon wait for them
+                // Logged out: their package and the marathon wait for them, MARATHON_OFFLINE at
+                // most, so one gone for good does not hold everyone's podium to the limit. Their
+                // login takes the package (MarathonLogin).
+                if (!r.offlineSince)
+                    r.offlineSince = now ? now : 1;
+                if (WorldTimer::getMSTimeDiff(r.offlineSince, now) >= MARATHON_OFFLINE)
+                    r.out = true;
+                else
+                    going = true;
                 continue;
             }
+            r.offlineSince = 0;
             if (!p->IsInWorld() || p->IsBeingTeleported())
             {
                 going = true;
