@@ -26,7 +26,7 @@ pub(super) const STATE_TTL: f32 = 0.5;
 pub(super) const WHEEL_RADIUS: f32 = 0.25;
 
 /// What a driver relays about their kart.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Relayed {
     /// Front-wheel steer, −1 right to 1 left.
     pub(crate) steer: f32,
@@ -51,6 +51,29 @@ pub(crate) struct Relayed {
     pub(crate) flag: u8,
     /// The race's scale they drive at ([`kartcraft::race_scale`]), 1 on an older client's line.
     pub(crate) scale: f32,
+}
+
+/// No state yet, or a stale one: a kart at rest at its own size. The scale is 1, as an older
+/// client's line reads; 0 draws no kart and makes the wheels' spin, a speed over the radius, NaN.
+impl Default for Relayed {
+    fn default() -> Self {
+        Self {
+            steer: 0.0,
+            drift: 0.0,
+            fire: 0,
+            engine: (0, 0),
+            grounded: false,
+            drifting: false,
+            boost_window: false,
+            failed_boost: false,
+            racer: String::new(),
+            wheelie: 0,
+            paint: 0,
+            trail: 0,
+            flag: 0,
+            scale: 1.0,
+        }
+    }
 }
 
 /// The line our kart relays:
@@ -123,6 +146,8 @@ pub(crate) fn parse_state(body: &str) -> Option<Relayed> {
             .split(',')
             .nth(11)
             .and_then(|v| v.trim().parse::<f32>().ok())
+            // `nan` parses, and `clamp` keeps it.
+            .filter(|h| h.is_finite())
             .map_or(1.0, |h| {
                 (h / 100.0).clamp(kartcraft::MIN_RACE_SCALE, kartcraft::MAX_RACE_SCALE)
             }),
@@ -492,6 +517,10 @@ mod tests {
         );
         let tiny = parse_state(&format!("{old},0,3,4,1,1")).unwrap().scale;
         assert_eq!(tiny, kartcraft::MIN_RACE_SCALE);
+        // Not a number is 1, as none; no state at all is a kart at its own size too.
+        let nan = parse_state(&format!("{old},0,3,4,1,nan")).unwrap().scale;
+        assert_eq!(nan, 1.0);
+        assert_eq!(Relayed::default().scale, 1.0);
         assert!(parse_state("1,2,3").is_none());
         assert!(parse_state("x,2,3,4,5,6").is_none());
     }
