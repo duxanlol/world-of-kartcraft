@@ -48,8 +48,8 @@ pub(crate) struct Track {
 impl Track {
     /// Where this racer was `t` seconds after GO, between the samples around it; `None` before
     /// its first sample or after its last.
-    fn pose_at(&self, t: f32, rate: u8) -> Option<Pose> {
-        let f = t * f32::from(rate) - self.from as f32;
+    fn pose_at(&self, t: f32, hz: f32) -> Option<Pose> {
+        let f = t * hz - self.from as f32;
         let last = self.poses.len().checked_sub(1)?;
         if f < 0.0 || f > last as f32 {
             return None;
@@ -61,8 +61,19 @@ impl Track {
         Some(self.poses[i].lerp(self.poses[i + 1], f - i as f32))
     }
 
-    fn end(&self, rate: u8) -> f32 {
-        (self.from as usize + self.poses.len().saturating_sub(1)) as f32 / f32::from(rate)
+    fn end(&self, hz: f32) -> f32 {
+        (self.from as usize + self.poses.len().saturating_sub(1)) as f32 / hz
+    }
+
+    /// Where this racer stands at `t`: as [`Self::pose_at`], held at its first sample before its run
+    /// and at its last after (a racer in long before the race's end).
+    fn held_at(&self, t: f32, hz: f32) -> Option<Pose> {
+        let last = self.poses.len().checked_sub(1)?;
+        let t = t.clamp(
+            self.from as f32 / hz,
+            (self.from as usize + last) as f32 / hz,
+        );
+        self.pose_at(t, hz).or(self.poses.last().copied())
     }
 }
 
@@ -77,7 +88,11 @@ pub(crate) struct Replay {
     pub(crate) place: u8,
     pub(crate) field: u8,
     pub(crate) time_trial: bool,
+    /// Samples a second, as the file has it.
     pub(crate) rate: u8,
+    /// A server take's step (ms), 66 a sample: its rate exactly, which `rate` rounds to 15. 0 for
+    /// ours, `rate` a second.
+    pub(crate) step_ms: u16,
     pub(crate) tracks: Vec<Track>,
 }
 
@@ -171,16 +186,24 @@ impl Replay {
             field,
             time_trial,
             rate,
+            step_ms: 0,
             tracks,
         })
     }
 
+    /// Samples a second: a server take's from its step, ours its rate.
+    pub(crate) fn hz(&self) -> f32 {
+        if self.step_ms > 0 {
+            1000.0 / f32::from(self.step_ms)
+        } else {
+            f32::from(self.rate.max(1))
+        }
+    }
+
     /// When the last racer's run ends, seconds after GO.
     pub(crate) fn length(&self) -> f32 {
-        self.tracks
-            .iter()
-            .map(|t| t.end(self.rate))
-            .fold(0.0, f32::max)
+        let hz = self.hz();
+        self.tracks.iter().map(|t| t.end(hz)).fold(0.0, f32::max)
     }
 
     /// Its line in the Replays window: the course, how we did, and when.
@@ -310,6 +333,7 @@ impl Recording {
             field: self.field,
             time_trial: self.time_trial,
             rate: RATE,
+            step_ms: 0,
             tracks,
         };
         (replay.tracks.iter().any(|t| t.us) && replay.length() >= MIN_SECS).then_some(replay)
@@ -529,6 +553,20 @@ pub(crate) fn update(
             }
         }
     }
+    // Asked for in a race (its grid, its laps): not played, then or once the race lets us go.
+    if !off && races.in_race() {
+        if replays.playing.is_none() {
+            info!("kart replay: {wanted} not played in a race");
+        }
+        replays.wanted = String::new();
+        cvars.set("KartReplay", "0");
+        if let Some(p) = replays.playing.take() {
+            for kart in p.karts.into_iter().flatten() {
+                spawner.despawn(kart);
+            }
+        }
+        return;
+    }
     // Asked for out of the kart, it waits for the kart.
     if !off && replays.playing.is_none() && drive.active && view.active {
         // A server replay (`s<key>`) is fetched first, waiting meanwhile.
@@ -625,7 +663,7 @@ pub(crate) fn update(
     let mut watched = None;
     for i in 0..n {
         let track = &p.replay.tracks[i];
-        let pose = track.pose_at(p.t.max(0.0), p.replay.rate);
+        let pose = track.pose_at(p.t.max(0.0), p.replay.hz());
         if p.karts[i].is_none() {
             p.karts[i] = spawner.spawn(&track.racer);
         }
@@ -661,7 +699,10 @@ pub(crate) fn update(
     }
 
     // The camera on the one watched.
-    let Some(pose) = watched.or_else(|| p.replay.tracks[p.watch].poses.first().copied()) else {
+    // One whose run has ended (in long before the last) or not begun: where they stand then, not
+    // back at their start.
+    let hz = p.replay.hz();
+    let Some(pose) = watched.or_else(|| p.replay.tracks[p.watch].held_at(p.t.max(0.0), hz)) else {
         return;
     };
     let yaw = {
@@ -844,6 +885,7 @@ mod tests {
             field: 3,
             time_trial: false,
             rate: RATE,
+            step_ms: 0,
             tracks: vec![
                 Track {
                     name: "Racer".into(),
@@ -861,6 +903,23 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn a_server_take_runs_at_its_step_and_a_racer_in_early_stands_where_they_stopped() {
+        let mut r = replay();
+        // Ours: RATE a second. A server take: 66 ms a sample, not the 15 its rate rounds to.
+        assert_eq!(r.hz(), f32::from(RATE));
+        r.rate = 15;
+        r.step_ms = 66;
+        assert!((r.hz() - 1000.0 / 66.0).abs() < 1e-4);
+        assert!((r.length() - 199.0 * 0.066).abs() < 1e-3, "{}", r.length());
+        // Past the second racer's run (150 samples from 10): held at its last, before it at its first.
+        let hz = r.hz();
+        let t = &r.tracks[1];
+        assert!(t.pose_at(20.0, hz).is_none());
+        assert_eq!(t.held_at(20.0, hz), Some(pose(149.0 * 2.0)));
+        assert_eq!(t.held_at(0.0, hz), Some(pose(0.0)));
     }
 
     #[test]
@@ -897,11 +956,20 @@ mod tests {
         let r = replay();
         let theirs = &r.tracks[1];
         let step = 1.0 / f32::from(RATE);
-        assert!(theirs.pose_at(step * 9.0, RATE).is_none(), "not yet seen");
-        assert_eq!(theirs.pose_at(step * 10.0, RATE), Some(theirs.poses[0]));
-        let mid = theirs.pose_at(step * 10.5, RATE).unwrap();
+        assert!(
+            theirs.pose_at(step * 9.0, f32::from(RATE)).is_none(),
+            "not yet seen"
+        );
+        assert_eq!(
+            theirs.pose_at(step * 10.0, f32::from(RATE)),
+            Some(theirs.poses[0])
+        );
+        let mid = theirs.pose_at(step * 10.5, f32::from(RATE)).unwrap();
         assert!((mid.pos.x - 1.0).abs() < 1e-4);
-        assert!(theirs.pose_at(step * 160.0, RATE).is_none(), "over");
+        assert!(
+            theirs.pose_at(step * 160.0, f32::from(RATE)).is_none(),
+            "over"
+        );
         assert!((r.length() - 199.0 * step).abs() < 1e-4);
     }
 

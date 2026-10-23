@@ -303,6 +303,7 @@ pub(crate) fn decode(file: &[u8], us: &str) -> Option<Replay> {
         field: count as u8,
         time_trial,
         rate,
+        step_ms: step.max(1),
         tracks,
     })
 }
@@ -370,6 +371,7 @@ mod tests {
             ("gp-azora", 1_792_320_000, false)
         );
         assert_eq!((r.rate, r.ms, r.place, r.field), (15, 61_250, 1, 1));
+        assert_eq!(r.step_ms, 66, "the take's own step, exactly");
         let t = &r.tracks[0];
         assert!(t.us && t.racer == "wok" && t.from == 3 && t.poses.len() == 3);
         assert_eq!(t.poses[1].pos, wow_to_bevy([-5650.0, -4029.0, -51.8]));
