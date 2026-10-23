@@ -640,6 +640,7 @@ namespace Kartcraft
         bool juiced = false;
         float x = 0.f, y = 0.f;
         bool shieldBomb = false;
+        uint8 breaks = 0; // crates it has broken (SHOT_BREAKS)
     };
 
     struct Race
@@ -3465,6 +3466,12 @@ namespace Kartcraft
     // size and slack, 16 yd. A dropped mine breaks only the crate it lands on: CRATE_RADIUS.
     constexpr float SHOT_SPEED = 92.f;
     constexpr float BREAK_REACH = 16.f;
+    // How far from where the server has the shooter a shot may leave: a kart's travel over a
+    // report's lag and more. A shot's place is the client's; this keeps it the shooter's.
+    constexpr float SHOT_ORIGIN = 40.f;
+    // The crates one shot breaks at most: every crate it touches on its way goes (a bomb rolling
+    // through two rows of four), never a course's.
+    constexpr uint8 SHOT_BREAKS = 8;
     // CTR's projectile pool, and the W lines one sender may send a second: half again the 20 a
     // second the client paces itself to, so a burst its sliding window allows never lands over a
     // fixed second here.
@@ -4211,7 +4218,8 @@ namespace Kartcraft
         if (f.size() < 3)
             return;
 
-        // The sender's race: one that has passed GO with them in it.
+        // The sender's race: one that has passed GO with them in it, the one they still race in
+        // before one they have finished (which stays theirs until its close, DNF_WAIT on).
         Race* race = nullptr;
         Racer* me = nullptr;
         for (auto& entry : s_races)
@@ -4220,10 +4228,11 @@ namespace Kartcraft
             if (!r.start || int32(now - r.start) < 0 || r.crates.empty() || r.timeTrial)
                 continue;
             if (Racer* x = FindRacer(r, player->GetGUIDLow()))
-            {
-                race = &r;
-                me = x;
-            }
+                if (!me || (me->finished && !x->finished))
+                {
+                    race = &r;
+                    me = x;
+                }
         }
         if (!race || player->GetMapId() != race->course->map ||
             (race->instance && player->GetInstanceId() != race->instance))
@@ -4267,7 +4276,9 @@ namespace Kartcraft
             auto found = race->shots.find((uint64(player->GetGUIDLow()) << 16) | shot);
             if (found == race->shots.end() || !LiveShot(found->second, now) || !BreaksCrates(found->second))
                 return;
-            Shot const& s = found->second;
+            Shot& s = found->second;
+            if (s.breaks >= SHOT_BREAKS)
+                return;
             Crate& crate = race->crates[index];
             if (crate.grownAt && int32(now - crate.grownAt) >= 0)
                 crate.grownAt = 0;
@@ -4281,6 +4292,7 @@ namespace Kartcraft
                 return;
             crate.up = false;
             crate.respawnAt = now + CRATE_RESPAWN;
+            ++s.breaks;
             // A warp orb or a mine breaks it for no one: taken by guid 0.
             bool reward = RewardsShooter(s);
             SendRace(*race, "KARTCRAFT\tW\tX\t" + std::to_string(index) + "\t" + (reward ? guid : std::string("0")));
@@ -4297,6 +4309,10 @@ namespace Kartcraft
                 return;
             std::string const place = ParsePlace(f[3]);
             if (place.empty())
+                return;
+            float px, py;
+            PlaceXY(place, px, py);
+            if (DistanceTo(player, { px, py }) > SHOT_ORIGIN)
                 return;
             uint32 target = uint32(std::strtoul(f[4].c_str(), nullptr, 10));
             std::string flags;
@@ -4334,8 +4350,9 @@ namespace Kartcraft
             {
                 // The leader, or the next racer when the shooter leads (RB_Warpball.c:127-198).
                 target = 0;
+                // Not one logged out: their kart is not there to be warped.
                 for (Racer* r : Standings(*race))
-                    if (r != me && !r->finished)
+                    if (r != me && !r->finished && ObjectAccessor::FindPlayer(r->guid))
                     {
                         target = r->guid.GetCounter();
                         break;
@@ -4378,6 +4395,10 @@ namespace Kartcraft
             }
             std::string const place = ParsePlace(f[3]);
             if (place.empty())
+                return;
+            float px, py;
+            PlaceXY(place, px, py);
+            if (DistanceTo(player, { px, py }) > SHOT_ORIGIN)
                 return;
             me->shieldAt = 0;
             Shot& record = race->shots[(uint64(player->GetGUIDLow()) << 16) | shot];
