@@ -1919,13 +1919,15 @@
             { name = "BenillaKartFinderFrame", buttons = "BenillaKartFinder_Pad", below = 26,
               legend = "D-pad: move    L1 / R1: page    Cross / A: tick, pick or join    Triangle / Y: a player track's trial\nStart: find race (again: leave the queue)    Circle / B: close" },
             { name = "BenillaKartGarageFrame" },
-            { name = "BenillaKartShopFrame" },
+            { name = "BenillaKartShopFrame", page = "BenillaKartShop_Turn",
+              legend = "L1 / R1: turn the page    D-pad: move    Cross / A: choose    Circle / B: close" },
             { name = "BenillaKartSettingsFrame" },
             { name = "BenillaKartCameraFrame" },
             { name = "BenillaKartGuideFrame", page = "BenillaKartGuide_Turn",
               legend = "L1 / R1: turn the page    D-pad: move    Cross / A: choose    Circle / B: close" },
             { name = "BenillaKartPadFrame" },
-            { name = "BenillaKartReplaysFrame" },
+            { name = "BenillaKartReplaysFrame", page = "BenillaKartReplays_Turn",
+              legend = "L1 / R1: turn the page    D-pad: move    Cross / A: choose    Circle / B: close" },
             { name = "BenillaKartRateFrame", buttons = "BenillaKartRate_Pad", legend = function()
                 if BenillaKartRateFrameGood:IsVisible() then
                     return "Start: good track    Select: bad track    Circle / B: not now"
@@ -2105,8 +2107,11 @@
                 BenillaPad.window = frame
                 focus = BenillaPad_First(items)
                 BenillaPad_Show(focus)
-                -- The first press only finds the focus, unless it is the one that acts on it.
-                if key ~= "PAD1" and key ~= "PAD2" then return true end
+                -- The first press only finds the focus, unless it is the one that acts on it, or a
+                -- page's turn, which needs none.
+                if key ~= "PAD1" and key ~= "PAD2" and key ~= "PADLSHOULDER" and key ~= "PADRSHOULDER" then
+                    return true
+                end
             end
             local dirs = { PADDUP = { 0, 1 }, PADDDOWN = { 0, -1 }, PADDLEFT = { -1, 0 }, PADDRIGHT = { 1, 0 } }
             local d = dirs[key]
