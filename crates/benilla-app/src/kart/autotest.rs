@@ -15,7 +15,7 @@
 //! - `:warp=<s>` hops to the next checkpoint when the autopilot has not reached it in that long
 //!   (it steers straight at it, and courses bend round buildings).
 //! - `host:<course>:alone` starts the race with us alone in it (the server takes a race of one;
-//!   its roll is then any item, `Kartcraft.cpp` `Roll`'s fallback).
+//!   its roll is then any item, `Kartcraft.cpp` `Roll`'s fallback); `:racers=<n>` once n are in.
 //!
 //! `WOW_KART_MARSHAL_NOGO=1` skips the hop. Every step logs `kart autotest:`.
 //!
@@ -110,6 +110,8 @@ struct Plan {
     ground: bool,
     /// `host:` starts the race with us alone in it (`:alone`).
     alone: bool,
+    /// `host:` starts it once this many are in (`:racers=<n>`), else two.
+    racers: Option<usize>,
 }
 
 fn plan() -> Option<&'static Plan> {
@@ -144,6 +146,10 @@ fn parse(spec: &str) -> Option<Plan> {
     };
     let ground = rest.iter().any(|p| *p == "ground" || *p == "ground=1");
     let alone = rest.contains(&"alone");
+    let racers = rest
+        .iter()
+        .find_map(|p| p.strip_prefix("racers="))
+        .and_then(|n| n.parse().ok());
     Some(Plan {
         role,
         course,
@@ -151,6 +157,7 @@ fn parse(spec: &str) -> Option<Plan> {
         warp_after: option("warp"),
         ground,
         alone,
+        racers,
     })
 }
 
@@ -366,7 +373,12 @@ fn drive(
                 if go {
                     test.step = Step::Racing;
                 } else if plan.role == Role::Host
-                    && roster.len() >= if plan.alone { 1 } else { 2 }
+                    && roster.len()
+                        >= if plan.alone {
+                            1
+                        } else {
+                            plan.racers.unwrap_or(2)
+                        }
                     && !test.start_asked
                 {
                     test.start_asked = true;
