@@ -7227,6 +7227,14 @@ namespace Kartcraft
 
     static void ListUserTracks(Player* player, uint32 now, bool now_please = false);
 
+    // One player's track names the same, as the table's key compares them: its collation ignores
+    // case, and the names are ASCII (CleanTrackText).
+    static bool SameTrackName(std::string const& a, std::string const& b)
+    {
+        return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(),
+            [](char x, char y) { return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y)); });
+    }
+
     static void PublishTrack(Player* player, std::vector<std::string> const& f, uint32 now)
     {
         auto no = [player](char const* why) { SendLine(player, std::string("KARTCRAFT\tR\tPubNo\t") + why); };
@@ -7273,7 +7281,7 @@ namespace Kartcraft
             (!ParseFloat(f[10], t.scale) || t.scale < MIN_RACE_SCALE || t.scale > MAX_RACE_SCALE))
             return no("The track's scale is not right: 0.2 to 3.");
         auto same = std::find_if(s_userTracks.begin(), s_userTracks.end(),
-            [&t](UserTrack const& u) { return u.guid == t.guid && u.name == t.name; });
+            [&t](UserTrack const& u) { return u.guid == t.guid && SameTrackName(u.name, t.name); });
         if (same != s_userTracks.end())
         {
             t.id = same->id;
@@ -7363,7 +7371,7 @@ namespace Kartcraft
         std::string const clean = CleanTrackText(name, 40);
         uint32 const guid = player->GetGUIDLow();
         auto t = std::find_if(s_userTracks.begin(), s_userTracks.end(),
-            [&](UserTrack const& u) { return u.guid == guid && u.name == clean; });
+            [&](UserTrack const& u) { return u.guid == guid && SameTrackName(u.name, clean); });
         if (t != s_userTracks.end())
             UnpublishTrack(player, t->id);
     }
