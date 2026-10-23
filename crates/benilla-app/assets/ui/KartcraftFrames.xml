@@ -4191,11 +4191,23 @@
             return table.concat(lines, "\n")
         end
 
+        -- Whether a crate may be opened now: open today with opens left, something still to find
+        -- (the server says "Your collection is complete" else), the tokens for it, and no reveal
+        -- still rolling (a second open would cut the first's prize short).
+        function BenillaKartCrate_CanOpen(price)
+            local c, shop = BenillaKartCrate, BenillaKartShop
+            local lacking = 0
+            for _, n in ipairs(c.lacking or {}) do lacking = lacking + n end
+            return c.open and (c.left or 0) > 0 and lacking > 0 and not c.reel
+                and not (shop.tokens and shop.tokens < price)
+        end
+
         -- The reveal: the crate's names roll by, slowing, and stop on the prize.
         function BenillaKartCrate_Reveal(key, tier)
             local c = BenillaKartCrate
             c.reel = { prize = BenillaKartGoods_Find(key), tier = tonumber(tier) or 1, t = 0, next = 0 }
             BenillaKartCrateReel:Show()
+            if BenillaKartShopFrame:IsVisible() then BenillaKartShop_Refresh() end
         end
 
         function BenillaKartCrate_OnUpdate(elapsed)
@@ -4213,6 +4225,11 @@
                 BenillaKart_Say(format("Mystery Crate: %s (%s).", name, BENILLA_KART_CRATE_TIERS[reel.tier] or "?"))
                 BenillaKartCrate.reel = nil
                 this:Hide()
+                -- Another may be opened now: the button as the refresh sets it, the prize's line kept.
+                local item = BenillaKartShopFrame:IsVisible() and BenillaKartShop_Item(BenillaKartShop.selected)
+                if item and item.kind == "crate" and BenillaKartCrate_CanOpen(item.price) then
+                    BenillaKartShopFrameBuy:Enable()
+                end
                 return
             end
             -- Slower toward the end, as CTR's item roulette slows.
@@ -4304,8 +4321,7 @@
                 if not BenillaKartCrate.reel then BenillaKartShopFrameAbout:SetText(BenillaKartCrate_About()) end
                 BenillaKartShopFrameSkinInfo:SetText(item.price .. " Kartcraft Tokens")
                 buy:SetText("Open one")
-                local c = BenillaKartCrate
-                if c.open and c.left > 0 and not (shop.tokens and shop.tokens < item.price) then buy:Enable() else buy:Disable() end
+                if BenillaKartCrate_CanOpen(item.price) then buy:Enable() else buy:Disable() end
                 wear:SetText("Wear")
                 wear:Disable()
                 return

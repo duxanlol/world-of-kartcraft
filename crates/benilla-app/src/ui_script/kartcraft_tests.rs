@@ -3980,8 +3980,13 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     assert!(enabled(&mut s, "BenillaKartShopFrameBuy"));
     s.run("BenillaKartShopFrameBuy:Click()").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tCrateBuy"]);
-    // The reel rolls, then stops on the prize.
+    // The reel rolls, the button off while it does, then stops on the prize.
     from_server(&mut s, "R\tCrate\tstudent\t2");
+    s.tick(0.1);
+    assert!(
+        !enabled(&mut s, "BenillaKartShopFrameBuy"),
+        "no second open mid-reveal"
+    );
     for _ in 0..40 {
         s.tick(0.1);
     }
@@ -3989,6 +3994,13 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
         text(&mut s, "BenillaKartShopFrameAbout"),
         "You found: Student Flag (Rare)!"
     );
+    assert!(enabled(&mut s, "BenillaKartShopFrameBuy"));
+    // Nothing left to find: the crate stays shut, as the server would refuse it.
+    from_server(
+        &mut s,
+        "R\tCrateOdds\t100\t4\t0\t0\t0,0,0,0\t60,28,10,2\t20\t50",
+    );
+    assert!(!enabled(&mut s, "BenillaKartShopFrameBuy"));
 
     // Closed, the pane's unit goes.
     s.run("BenillaKartShopFrame:Hide()").unwrap();
