@@ -1467,7 +1467,7 @@
         function BenillaKartMap_SetTrack(name)
             BenillaKartShortcuts.racing = name ~= nil and name ~= ""
             BenillaKartShortcuts_Update()
-            BenillaKart_StepAside(BENILLA_KART_RACE_HIDDEN_FRAMES, BenillaKartShortcuts.racing)
+            BenillaKart_ZoneTextAside()
         end
 
         -- The server's replies.
@@ -2725,8 +2725,27 @@
         end
 
         -- The banner, and the results as a board: one line a racer, the board as tall as them.
+        -- The zone's name aside while a race is under way or its banner is up ("Getting to the
+        -- start" lands where a new zone's name shows).
+        function BenillaKart_ZoneTextAside()
+            local s = BenillaKartShortcuts
+            local aside = s.racing or s.banner
+            BenillaKart_StepAside(BENILLA_KART_RACE_HIDDEN_FRAMES, aside)
+            -- Back hidden: their fade stopped under the holder, and a zone name from before the
+            -- race would show again; the next zone change shows them as ever.
+            if s.zoneAside and not aside then
+                for _, name in ipairs(BENILLA_KART_RACE_HIDDEN_FRAMES) do
+                    local frame = getglobal(name)
+                    if frame then frame:Hide() end
+                end
+            end
+            s.zoneAside = aside
+        end
+
         function BenillaKartRace_Show(banner, results)
             BenillaKartRaceBanner:SetText(banner or "")
+            BenillaKartShortcuts.banner = banner ~= nil and banner ~= ""
+            BenillaKart_ZoneTextAside()
             results = results or ""
             BenillaKartRaceResults:SetText(results)
             if results == "" then
