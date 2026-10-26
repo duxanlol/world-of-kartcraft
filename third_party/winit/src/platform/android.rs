@@ -195,13 +195,14 @@ pub mod gamepad {
 
     use android_activity::input::{Axis, KeyAction, KeyEvent, MotionEvent};
 
-    /// One controller event, keyed by Android's device id.
+    /// One controller event, keyed by Android's device id, with Android's time for it
+    /// (`getEventTime`, nanoseconds of `CLOCK_MONOTONIC`).
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum Event {
         /// A button: its `KEYCODE_*`, down or up.
-        Key { device: i32, keycode: u32, pressed: bool },
+        Key { device: i32, keycode: u32, pressed: bool, time: i64 },
         /// An axis (`AXIS_*`) at its new value.
-        Axis { device: i32, axis: u32, value: f32 },
+        Axis { device: i32, axis: u32, value: f32, time: i64 },
     }
 
     /// The axes a controller reports: both sticks, the hat (a D-pad as axes) and the triggers
@@ -241,16 +242,23 @@ pub mod gamepad {
         if pressed && key.repeat_count() > 0 {
             return;
         }
-        push([Event::Key { device: key.device_id(), keycode: key.key_code().into(), pressed }]);
+        push([Event::Key {
+            device: key.device_id(),
+            keycode: key.key_code().into(),
+            pressed,
+            time: key.event_time(),
+        }]);
     }
 
     pub(crate) fn axes(motion: &MotionEvent<'_>) {
         let device = motion.device_id();
+        let time = motion.event_time();
         let pointer = motion.pointer_at_index(0);
         push(AXES.iter().map(|&axis| Event::Axis {
             device,
             axis: axis.into(),
             value: pointer.axis_value(axis),
+            time,
         }));
     }
 }

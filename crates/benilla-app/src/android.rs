@@ -812,6 +812,7 @@ pub struct AndroidPlugin;
 impl Plugin for AndroidPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Pads>()
+            .init_resource::<PadLag>()
             .add_systems(PreUpdate, read_pads.before(InputSystems))
             .add_systems(Update, soft_keyboard)
             .add_systems(Startup, missing_screen)
@@ -863,21 +864,59 @@ fn soft_keyboard(
     }
 }
 
-/// Android's device id for each pad's entity, and the hat each last reported.
+/// Android's device id for each pad's entity, the hat each last reported, and its triggers under
+/// both their names (`LTRIGGER`, `RTRIGGER`, `GAS`, `BRAKE`).
 #[derive(Resource, Default)]
-struct Pads(HashMap<i32, (Entity, [f32; 2])>);
+struct Pads(HashMap<i32, (Entity, [f32; 2], [f32; 4])>);
 
+/// How late the pads' events are read: from Android's time for each (`getEventTime`) to the frame
+/// that reads it, and the frames meanwhile, logged every [`PadLag::EVERY`] while a pad is used.
+#[derive(Resource, Default)]
+struct PadLag {
+    since: f32,
+    events: u32,
+    worst_ms: f32,
+    sum_ms: f32,
+    frame_ms: f32,
+}
+
+impl PadLag {
+    const EVERY: f32 = 5.0;
+}
+
+/// `CLOCK_MONOTONIC` in nanoseconds, the clock Android stamps input with.
+fn monotonic_ns() -> i64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: a valid timespec to fill.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    ts.tv_sec * 1_000_000_000 + ts.tv_nsec
+}
+
+#[allow(clippy::too_many_arguments)]
 fn read_pads(
     mut commands: Commands,
     mut pads: ResMut<Pads>,
+    mut lag: ResMut<PadLag>,
+    time: Res<Time>,
     mut events: MessageWriter<RawGamepadEvent>,
     mut connections: MessageWriter<GamepadConnectionEvent>,
     mut buttons: MessageWriter<RawGamepadButtonChangedEvent>,
     mut axes: MessageWriter<RawGamepadAxisChangedEvent>,
 ) {
+    let now = monotonic_ns();
+    let frame_ms = time.delta_secs() * 1000.0;
+    lag.frame_ms = lag.frame_ms.max(frame_ms);
+    lag.since += time.delta_secs();
     for event in winit::platform::android::gamepad::take() {
-        let (Event::Key { device, .. } | Event::Axis { device, .. }) = event;
-        let (pad, hat) = pads.0.entry(device).or_insert_with(|| {
+        let (Event::Key { device, time, .. } | Event::Axis { device, time, .. }) = event;
+        let late = (now - time) as f32 / 1e6;
+        lag.events += 1;
+        lag.worst_ms = lag.worst_ms.max(late);
+        lag.sum_ms += late;
+        let (pad, hat, triggers) = pads.0.entry(device).or_insert_with(|| {
             let pad = commands.spawn_empty().id();
             let connected = GamepadConnectionEvent::new(
                 pad,
@@ -889,7 +928,7 @@ fn read_pads(
             );
             events.write(connected.clone().into());
             connections.write(connected);
-            (pad, [0.0; 2])
+            (pad, [0.0; 2], [0.0; 4])
         });
         let mut button = |button, value: f32| {
             events.write(RawGamepadButtonChangedEvent::new(*pad, button, value).into());
@@ -918,8 +957,21 @@ fn read_pads(
                         button(plus, f32::from(u8::from(value > 0.0)));
                     }
                 }
-                LTRIGGER | BRAKE => button(GamepadButton::LeftTrigger2, value),
-                RTRIGGER | GAS => button(GamepadButton::RightTrigger2, value),
+                // A pad reports a trigger under one name or both, the other at 0: the deeper.
+                LTRIGGER | BRAKE | RTRIGGER | GAS => {
+                    let (i, other, b) = match axis {
+                        LTRIGGER => (0, 3, GamepadButton::LeftTrigger2),
+                        BRAKE => (3, 0, GamepadButton::LeftTrigger2),
+                        RTRIGGER => (1, 2, GamepadButton::RightTrigger2),
+                        _ => (2, 1, GamepadButton::RightTrigger2),
+                    };
+                    let was = triggers[i].max(triggers[other]);
+                    triggers[i] = value;
+                    let now = triggers[i].max(triggers[other]);
+                    if now != was {
+                        button(b, now);
+                    }
+                }
                 _ => {
                     if let Some((a, sign)) = pad_axis(axis) {
                         events.write(RawGamepadAxisChangedEvent::new(*pad, a, sign * value).into());
@@ -928,6 +980,19 @@ fn read_pads(
                 }
             },
         }
+    }
+    if lag.since >= PadLag::EVERY {
+        if lag.events > 0 {
+            info!(
+                "pad: {} events in {:.0} s, read {:.0} ms after Android's time at worst, {:.0} on                  average; frames {:.0} ms at worst",
+                lag.events,
+                lag.since,
+                lag.worst_ms,
+                lag.sum_ms / lag.events as f32,
+                lag.frame_ms
+            );
+        }
+        *lag = PadLag::default();
     }
 }
 
