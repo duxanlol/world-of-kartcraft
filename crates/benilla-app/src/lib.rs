@@ -104,6 +104,8 @@ mod opaque2d;
 /// way out registers through it.
 mod shutdown;
 mod smart_rect;
+#[cfg(windows)]
+mod sony_pad;
 mod sound;
 /// The two talent spell-modifier tables (`SMSG_SET_FLAT_/PCT_SPELL_MODIFIER`) and the read that
 /// puts them on a number.
@@ -411,6 +413,9 @@ fn launch(build: BuildId, extend: Option<Extension<'_>>) -> AppExit {
     // Android's controllers (`android.rs`).
     #[cfg(target_os = "android")]
     app.add_plugins(android::AndroidPlugin);
+    // Sony's pads over HID where Windows.Gaming.Input has none (`sony_pad.rs`).
+    #[cfg(windows)]
+    app.add_plugins(sony_pad::SonyPadPlugin);
 
     // benilla-assets' loaders go into the live `AssetServer`, so they register after `AssetPlugin`.
     benilla_assets::register_asset_loaders(&mut app);

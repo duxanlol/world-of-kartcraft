@@ -129,6 +129,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
 ] }
+# Sony's pads over HID where Windows.Gaming.Input has none (`sony_pad.rs`), on its pure-Rust backend.
+hidapi = { version = "2.6", default-features = false, features = ["windows-native"] }
 
 # The login cycle's fake realmd runs the server half of SRP6 (`net::io::cycle_tests`).
 [dev-dependencies]
