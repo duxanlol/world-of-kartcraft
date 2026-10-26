@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..1e384cb
+index 0000000..1d00f35
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,8595 @@
+@@ -0,0 +1,8674 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -207,7 +207,7 @@ index 0000000..1e384cb
 +    struct Good
 +    {
 +        char const* key;
-+        char kind;    // 'K' a kart, 'F' a flag
++        char kind;    // 'K' a kart, 'F' a flag, 'H' a horn
 +        uint32 price; // tokens
 +        uint8 tier;   // 0 sold in the shop; 1 to 4 found only in Mystery Crates (common .. legendary)
 +    };
@@ -221,6 +221,21 @@ index 0000000..1e384cb
 +        // kart/wow_karts.rs).
 +        { "gnomecar", 'K', 500, 0 },
 +        { "goblincar", 'K', 500, 0 },
++        // Warsong Gulch's flags, drawn from each player's own install (the client's
++        // kart/wow_karts.rs).
++        { "hordeflag", 'F', 150, 0 },
++        { "allianceflag", 'F', 150, 0 },
++        // Horns sounded with Fire when no item is held, heard by the drivers around (RelayHorn);
++        // each a sound of each player's own install (the client's kartcraft goods.rs HORNS).
++        // Every driver has the Deadmines' steam whistle, none worn.
++        { "catcall", 'H', 50, 0 },
++        { "goober", 'H', 100, 0 },
++        { "dockbell", 'H', 100, 0 },
++        { "steamtonk", 'H', 100, 0 },
++        { "foghorn", 'H', 150, 0 },
++        { "dwarfhorn", 'H', 150, 0 },
++        { "trollgong", 'H', 150, 0 },
++        { "echeyakee", 'H', 200, 0 },
 +    };
 +
 +    static Good const* FindGood(std::string const& key)
@@ -231,12 +246,13 @@ index 0000000..1e384cb
 +        return nullptr;
 +    }
 +
-+    // A flag's wire index (the client's FLAGS: the flags in GOODS' order, from 1); 0 none.
-+    static uint32 FlagIndex(std::string const& key)
++    // A flag's or a horn's wire index (the client's FLAGS or HORNS: that kind in GOODS' order,
++    // from 1); 0 none.
++    static uint32 KindIndex(char kind, std::string const& key)
 +    {
 +        uint32 i = 0;
 +        for (Good const& g : GOODS)
-+            if (g.kind == 'F')
++            if (g.kind == kind)
 +            {
 +                ++i;
 +                if (key == g.key)
@@ -245,12 +261,18 @@ index 0000000..1e384cb
 +        return 0;
 +    }
 +
++    static uint32 FlagIndex(std::string const& key)
++    {
++        return KindIndex('F', key);
++    }
++
 +    // What a driver may show on the relay: the custom karts they own, the flag they fly, and the
 +    // paint and trail the server last found earned (SendCosmetics). By guid, s_stateMutex.
 +    struct Shown
 +    {
 +        std::set<std::string> karts;
 +        uint32 flag = 0;
++        uint32 horn = 0;
 +        uint32 paint = 0;
 +        uint32 trail = 0;
 +    };
@@ -263,6 +285,11 @@ index 0000000..1e384cb
 +    constexpr uint32 STATE_INTERVAL = 50;
 +    // A state line longer than this is not a kart's.
 +    constexpr size_t MAX_STATE_LENGTH = 120;
++    // A horn is heard this far (yards), sounded at most this often per driver (ms): about as
++    // long as the longest plays (the client's HORN_SECS).
++    constexpr float HORN_RANGE = 100.f;
++    constexpr uint32 HORN_INTERVAL = 2500;
++    static std::unordered_map<uint32, uint32> s_lastHorn; // player guid low -> ms, s_stateMutex
 +
 +    void LoadSkillLine()
 +    {
@@ -576,6 +603,29 @@ index 0000000..1e384cb
 +        ChatHandler::BuildChatPacket(data, CHAT_MSG_PARTY, held.c_str(), LANG_ADDON, CHAT_TAG_NONE,
 +            player->GetObjectGuid(), player->GetName());
 +        player->SendMessageToSetInRange(&data, STATE_RANGE, false);
++    }
++
++    // A driver's horn ("H"), sounded to the drivers around as "KARTCRAFT\tH\t<horn>" from them:
++    // the horn they wear (Shown), 0 the steam whistle every driver has.
++    static void RelayHorn(Player* player)
++    {
++        if (!player->HasAura(SPELL_SUMMON_KART))
++            return;
++        uint32 const now = WorldTimer::getMSTime();
++        uint32 horn = 0;
++        {
++            std::lock_guard<std::mutex> lock(s_stateMutex);
++            uint32& last = s_lastHorn[player->GetGUIDLow()];
++            if (last && WorldTimer::getMSTimeDiff(last, now) < HORN_INTERVAL)
++                return;
++            last = now;
++            horn = s_shown[player->GetGUIDLow()].horn;
++        }
++        std::string const line = "KARTCRAFT\tH\t" + std::to_string(horn);
++        WorldPacket data;
++        ChatHandler::BuildChatPacket(data, CHAT_MSG_PARTY, line.c_str(), LANG_ADDON, CHAT_TAG_NONE,
++            player->GetObjectGuid(), player->GetName());
++        player->SendMessageToSetInRange(&data, HORN_RANGE, false);
 +    }
 +
 +    // ── Races ──────────────────────────────────────────────────────────────────────────────────
@@ -2350,8 +2400,8 @@ index 0000000..1e384cb
 +    //
 +    // World of Kartcraft's own cosmetics, bought with Kartcraft Tokens in the client's shop: custom
 +    // karts (racer keys the client has built in, crates/kartcraft/src/goods.rs, whose catalogue
-+    // kartcraft_tests holds to this one) and flags flown on any kart. Owned in kartcraft_goods,
-+    // the flag worn there too. A kart is driven by the client's own pick (KartRacer); the relay
++    // kartcraft_tests holds to this one), flags flown on any kart and horns. Owned in
++    // kartcraft_goods, the flag flown and the horn worn there too, one of each kind. A kart is driven by the client's own pick (KartRacer); the relay
 +    // holds the karts, flags, paints and trails a driver shows to what is theirs (Shown).
 +
 +    static void CreateGoods()
@@ -2360,16 +2410,23 @@ index 0000000..1e384cb
 +            "CREATE TABLE IF NOT EXISTS `kartcraft_goods` ("
 +            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
 +            "`good` VARCHAR(16) NOT NULL COMMENT 'Kartcraft.cpp GOODS key', "
-+            "`worn` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'a flag flown', "
++            "`worn` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'a flag flown, a horn worn', "
 +            "`at` INT UNSIGNED NOT NULL COMMENT 'when bought, unix time', "
 +            "PRIMARY KEY (`guid`, `good`)"
 +            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
 +    }
 +
-+    // The goods a character owns, and the flag it flies ("" none).
-+    static std::pair<std::set<std::string>, std::string> OwnedGoods(uint32 guid)
++    // The goods a character owns, the flag it flies and the horn it wears ("" none).
++    struct Owned
 +    {
-+        std::pair<std::set<std::string>, std::string> out;
++        std::set<std::string> goods;
++        std::string flag;
++        std::string horn;
++    };
++
++    static Owned OwnedGoods(uint32 guid)
++    {
++        Owned out;
 +        std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
 +            "SELECT `good`, `worn` FROM `kartcraft_goods` WHERE `guid` = %u", guid);
 +        if (result)
@@ -2380,36 +2437,49 @@ index 0000000..1e384cb
 +                Good const* good = FindGood(key);
 +                if (!good)
 +                    continue;
-+                out.first.insert(key);
++                out.goods.insert(key);
 +                if (good->kind == 'F' && f[1].GetUInt8())
-+                    out.second = key;
++                    out.flag = key;
++                if (good->kind == 'H' && f[1].GetUInt8())
++                    out.horn = key;
 +            } while (result->NextRow());
 +        return out;
 +    }
 +
-+    static void ShowGoods(uint32 guid, std::pair<std::set<std::string>, std::string> const& owned)
++    static void ShowGoods(uint32 guid, Owned const& owned)
 +    {
 +        std::lock_guard<std::mutex> lock(s_stateMutex);
 +        Shown& shown = s_shown[guid];
 +        shown.karts.clear();
-+        for (std::string const& key : owned.first)
++        for (std::string const& key : owned.goods)
 +            if (Good const* g = FindGood(key))
 +                if (g->kind == 'K')
 +                    shown.karts.insert(key);
-+        shown.flag = FlagIndex(owned.second);
++        shown.flag = FlagIndex(owned.flag);
++        shown.horn = KindIndex('H', owned.horn);
 +    }
 +
-+    // "KARTCRAFT\tR\tGoods\t<tokens>\t<flag flown>\t<owned,...>": the shop's purse, the garage's
-+    // flag, and what is ours.
++    // "KARTCRAFT\tR\tGoods\t<tokens>\t<flag flown>\t<owned,...>\t<horn worn>": the shop's purse,
++    // the garage's flag, what is ours, and the garage's horn.
 +    static void SendGoods(Player* player)
 +    {
-+        std::pair<std::set<std::string>, std::string> owned = OwnedGoods(player->GetGUIDLow());
++        Owned const owned = OwnedGoods(player->GetGUIDLow());
 +        ShowGoods(player->GetGUIDLow(), owned);
 +        std::string list;
-+        for (std::string const& key : owned.first)
++        for (std::string const& key : owned.goods)
 +            list += (list.empty() ? "" : ",") + key;
 +        SendLine(player, "KARTCRAFT\tR\tGoods\t" + std::to_string(player->GetItemCount(DELIVERY_TOKEN)) +
-+            "\t" + owned.second + "\t" + list);
++            "\t" + owned.flag + "\t" + list + "\t" + owned.horn);
++    }
++
++    // The SQL list of GOODS' keys of `kind` ("'a','b'"), for wearing one of that kind alone.
++    static std::string KindKeys(char kind)
++    {
++        std::string out;
++        for (Good const& g : GOODS)
++            if (g.kind == kind)
++                out += std::string(out.empty() ? "" : ",") + "'" + g.key + "'";
++        return out;
 +    }
 +
 +    static void GoodsLogin(Player* player)
@@ -2418,7 +2488,8 @@ index 0000000..1e384cb
 +    }
 +
 +    // "R\tGoods" asks; "R\tGoodBuy\t<key>" buys with tokens; "R\tFlagWear\t<key>" flies an owned
-+    // flag, an empty key none. Each is answered with "Goods". On the world thread: it takes tokens
++    // flag and "R\tHornWear\t<key>" wears an owned horn, an empty key none (the steam whistle).
++    // Each is answered with "Goods". On the world thread: it takes tokens
 +    // out of the bags.
 +    static void HandleGoods(Player* player, std::string const& verb, std::string const& key)
 +    {
@@ -2430,7 +2501,7 @@ index 0000000..1e384cb
 +        else if (verb == "GoodBuy" && good)
 +        {
 +            uint32 const tokens = player->GetItemCount(DELIVERY_TOKEN);
-+            if (OwnedGoods(guid).first.count(good->key))
++            if (OwnedGoods(guid).goods.count(good->key))
 +                chat.SendSysMessage("That is already yours.");
 +            else if (tokens < good->price)
 +                chat.PSendSysMessage("That costs %u Kartcraft Tokens; you have %u in your bags. Courier deliveries pay them.",
@@ -2445,13 +2516,15 @@ index 0000000..1e384cb
 +                chat.PSendSysMessage("Bought for %u Kartcraft Tokens.", good->price);
 +            }
 +        }
-+        else if (verb == "FlagWear" && ((good && good->kind == 'F') || key.empty()))
++        else if ((verb == "FlagWear" || verb == "HornWear") && (!good || good->kind == (verb == "FlagWear" ? 'F' : 'H')) &&
++            (good || key.empty()))
 +        {
-+            if (good && !OwnedGoods(guid).first.count(good->key))
-+                chat.SendSysMessage("Buy that flag first.");
++            char const kind = verb == "FlagWear" ? 'F' : 'H';
++            if (good && !OwnedGoods(guid).goods.count(good->key))
++                chat.SendSysMessage(kind == 'F' ? "Buy that flag first." : "Buy that horn first.");
 +            else
-+                CharacterDatabase.DirectPExecute("UPDATE `kartcraft_goods` SET `worn` = (`good` = '%s') WHERE `guid` = %u",
-+                    good ? good->key : "", guid);
++                CharacterDatabase.DirectPExecute("UPDATE `kartcraft_goods` SET `worn` = (`good` = '%s') WHERE `guid` = %u "
++                    "AND `good` IN (%s)", good ? good->key : "", guid, KindKeys(kind).c_str());
 +        }
 +        SendGoods(player);
 +    }
@@ -3435,7 +3508,7 @@ index 0000000..1e384cb
 +    // The crate goods `guid` lacks, by tier (index 0 the commons).
 +    static std::vector<std::vector<Good const*>> CrateLeft(uint32 guid)
 +    {
-+        std::set<std::string> const owned = OwnedGoods(guid).first;
++        std::set<std::string> const owned = OwnedGoods(guid).goods;
 +        std::vector<std::vector<Good const*>> left(4);
 +        for (Good const& g : GOODS)
 +            if (g.tier >= 1 && g.tier <= 4 && !owned.count(g.key))
@@ -7849,7 +7922,7 @@ index 0000000..1e384cb
 +            });
 +            return;
 +        }
-+        if (f.size() >= 2 && (f[1] == "Goods" || f[1] == "GoodBuy" || f[1] == "FlagWear"))
++        if (f.size() >= 2 && (f[1] == "Goods" || f[1] == "GoodBuy" || f[1] == "FlagWear" || f[1] == "HornWear"))
 +        {
 +            ObjectGuid const guid = player->GetObjectGuid();
 +            std::string const verb = f[1], key = f.size() > 2 ? f[2] : std::string();
@@ -8271,6 +8344,12 @@ index 0000000..1e384cb
 +        // Relayed before the race lock: it reads no race, and every driver's lines wait on it.
 +        if (state)
 +            RelayState(player, PREFIX + body);
++        // A horn, the same: nothing of a race.
++        if (body == "H")
++        {
++            RelayHorn(player);
++            return;
++        }
 +        std::lock_guard<std::mutex> lock(s_mutex);
 +        uint32 const now = WorldTimer::getMSTime();
 +        WitnessSender(player, now);

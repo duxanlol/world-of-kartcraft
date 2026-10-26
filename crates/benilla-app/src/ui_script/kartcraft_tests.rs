@@ -3841,6 +3841,41 @@ fn the_track_browser_takes_us_to_the_track_s_marshal() {
     assert!(!enabled(&s));
 }
 
+/// The garage's Horn row: the steam whistle until a horn is ours, then its arrows step through
+/// the whistle and the horns we own, each worn through the server.
+#[test]
+fn the_garage_horn_row_steps_through_our_horns() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let name = |s: &mut UiScript| -> String {
+        s.eval("return BenillaKartGarageFrameHornName:GetText() or ''")
+            .unwrap()
+    };
+    garage(&mut s, 1);
+    s.run("BenillaKartGarage_Toggle()").unwrap();
+    sent(&mut s);
+    from_server(&mut s, "R\tGoods\t0\t\t\t");
+    assert_eq!(name(&mut s), "Steam Whistle");
+    assert!(s
+        .eval::<String>("return BenillaKartGarageFrameHornNeed:GetText()")
+        .unwrap()
+        .contains("shop"));
+    s.run("BenillaKartGarageFrameHornNext:Click()").unwrap();
+    assert!(sent(&mut s).is_empty(), "nothing else to wear");
+    from_server(&mut s, "R\tGoods\t0\t\tfoghorn,goober\t");
+    // In the catalogue's order: the whistle, Goober's Horn, the Foghorn.
+    s.run("BenillaKartGarageFrameHornNext:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tHornWear\tgoober"]);
+    from_server(&mut s, "R\tGoods\t0\t\tfoghorn,goober\tgoober");
+    assert_eq!(name(&mut s), "Goober's Horn");
+    s.run("BenillaKartGarageFrameHornPrev:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tHornWear\t"]);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 #[test]
 fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     benilla_formats::wow_data_or_skip!();
@@ -3870,24 +3905,28 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     assert_eq!(preview(&mut s), "3597");
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin1Name"), "Magni");
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin10Name"), "VanCleef");
-    // Sixteen skins fill the first page, then the six goods and the crate the second, the rest
-    // of its grid empty.
+    // Sixteen skins fill the first page, the sixteen goods the second, then the crate the third,
+    // the rest of its grid empty.
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin16Name"), "Zombie");
-    assert_eq!(text(&mut s, "BenillaKartShopFramePageText"), "Page 1 of 2");
+    assert_eq!(text(&mut s, "BenillaKartShopFramePageText"), "Page 1 of 3");
     assert!(!enabled(&mut s, "BenillaKartShopFramePrevPage"));
     s.run("BenillaKartShopFrameNextPage:Click()").unwrap();
-    assert_eq!(text(&mut s, "BenillaKartShopFramePageText"), "Page 2 of 2");
-    assert!(!enabled(&mut s, "BenillaKartShopFrameNextPage"));
+    assert_eq!(text(&mut s, "BenillaKartShopFramePageText"), "Page 2 of 3");
     assert_eq!(
         text(&mut s, "BenillaKartShopFrameSkin1Name"),
         "Student Flag"
     );
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin2Name"), "Fel Kart");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin16Name"), "Echeyakee");
+    s.run("BenillaKartShopFrameNextPage:Click()").unwrap();
+    assert_eq!(text(&mut s, "BenillaKartShopFramePageText"), "Page 3 of 3");
+    assert!(!enabled(&mut s, "BenillaKartShopFrameNextPage"));
     assert!(!s
-        .eval::<bool>("return BenillaKartShopFrameSkin8:IsVisible() == 1")
+        .eval::<bool>("return BenillaKartShopFrameSkin2:IsVisible() == 1")
         .unwrap());
     // The picked skin stays picked on another page.
     assert_eq!(preview(&mut s), "3597");
+    s.run("BenillaKartShopFramePrevPage:Click()").unwrap();
     s.run("BenillaKartShopFramePrevPage:Click()").unwrap();
     assert_eq!(
         text(&mut s, "BenillaKartShopFrameTokens"),
@@ -3970,10 +4009,31 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     );
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin2Price"), "Driven");
 
-    // The Mystery Crate: closed with no prizes in it, then open, its odds said, one opened.
-    s.run("BenillaKartShopFrameSkin7:Click()").unwrap();
+    // A horn: heard when picked, bought, worn, and the server's word sets the one Fire sounds.
+    s.run("BenillaKartShopFrameSkin9:Click()").unwrap();
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkinName"), "Cat Call");
+    assert!(text(&mut s, "BenillaKartShopFrameAbout").contains("Horn row"));
+    s.run("BenillaKartShopFrameBuy:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT	R	GoodBuy	catcall"]);
+    from_server(&mut s, "R	Goods	0	student	catcall,fel,student	");
+    s.run("BenillaKartShopFrameWear:Click()").unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT	R	HornWear	catcall"]);
+    from_server(&mut s, "R	Goods	0	student	catcall,fel,student	catcall");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin9Price"), "Worn");
     assert_eq!(
-        text(&mut s, "BenillaKartShopFrameSkin7Name"),
+        s.eval::<String>("return GetCVar('KartHorn')").unwrap(),
+        "catcall"
+    );
+    // An older server's line, no horn on it: the steam whistle.
+    from_server(&mut s, "R	Goods	50	student	fel,student");
+    assert_eq!(s.eval::<String>("return GetCVar('KartHorn')").unwrap(), "");
+
+    // The Mystery Crate, on the third page: closed with no prizes in it, then open, its odds
+    // said, one opened.
+    s.run("BenillaKartShopFrameNextPage:Click()").unwrap();
+    s.run("BenillaKartShopFrameSkin1:Click()").unwrap();
+    assert_eq!(
+        text(&mut s, "BenillaKartShopFrameSkin1Name"),
         "Mystery Crate"
     );
     from_server(&mut s, "R\tCrateOdds\t100\t5\t0\t0\t-\t60,28,10,2\t20\t50");
@@ -4093,6 +4153,7 @@ fn the_shop_sells_the_goods_the_server_sells_and_the_client_draws() {
             let kind = match kind {
                 "K" => "kart",
                 "F" => "flag",
+                "H" => "horn",
                 _ => return None,
             };
             Some((
@@ -4131,9 +4192,21 @@ fn the_shop_sells_the_goods_the_server_sells_and_the_client_draws() {
         let built = match good.kind {
             kartcraft::goods::Kind::Kart => "kart",
             kartcraft::goods::Kind::Flag => "flag",
+            kartcraft::goods::Kind::Horn => "horn",
         };
         assert_eq!(built, kind, "{key}");
     }
+    // A horn's row names the sound the shop plays, the one the kart sounds.
+    let sounds: Vec<(String, String)> = xml
+        .lines()
+        .filter(|l| l.trim_start().starts_with("{ key = ") && l.contains("kind = \"horn\""))
+        .filter_map(|l| Some((field(l, "key")?, field(l, "sound")?.replace("\\\\", "\\"))))
+        .collect();
+    let want: Vec<(String, String)> = kartcraft::goods::HORNS
+        .iter()
+        .map(|(k, p)| (k.to_string(), p.to_string()))
+        .collect();
+    assert_eq!(sounds, want, "each horn's sound");
     let flags: Vec<&str> = client
         .iter()
         .filter(|(_, kind, _, _)| kind == "flag")

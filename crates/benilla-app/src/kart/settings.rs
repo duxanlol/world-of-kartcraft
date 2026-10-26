@@ -303,6 +303,7 @@ pub(crate) fn on_cvar(
             }
         }
         "kartflag" => kartcraft::goods::set_our_flag(ev.new.trim()),
+        "karthorn" => kartcraft::goods::set_our_horn(ev.new.trim()),
         // A car built from the install is not there yet at the CVars' load; it is taken when built.
         "kartracer"
             if !kartcraft::model::set_our_kart(ev.new.trim())

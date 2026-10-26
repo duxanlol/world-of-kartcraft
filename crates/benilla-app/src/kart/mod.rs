@@ -21,6 +21,7 @@ mod ghost;
 pub(crate) mod goods_preview;
 pub(crate) mod gps;
 mod ground;
+mod horn;
 pub(crate) mod marshals;
 pub(crate) mod menu_ui;
 pub(crate) mod objects;
@@ -227,6 +228,7 @@ fn update(
         mouse,
         buttons,
         mut replays,
+        mut horn,
     ): (
         Res<remote::RemoteKarts>,
         ResMut<kartcraft::hud::HudExtras>,
@@ -238,6 +240,7 @@ fn update(
         Res<bevy::input::mouse::AccumulatedMouseMotion>,
         Res<ButtonInput<MouseButton>>,
         ResMut<replay::Replays>,
+        ResMut<horn::Horn>,
     ),
 ) {
     let now = time.elapsed_secs();
@@ -479,6 +482,8 @@ fn update(
             && holding
             && input::autofire(now, time.delta_secs()));
     arms.press(fire, controls.reverse);
+    // Fire with nothing to fire sounds the horn (`horn`).
+    horn.pressed |= controls.fire && !holding;
     arms.camera = view.camera;
     arms.camera_fov = view.fov;
     // Wumpa from the race's fruit, or all ten under Wumpa Juice; counted only in a race with
@@ -729,6 +734,8 @@ pub(crate) fn plugin(app: &mut App) {
         .net_handler(benilla_protocol::SessionEventKind::Chat, gps::on_chat)
         .init_resource::<gps::Gps>()
         .net_handler(benilla_protocol::SessionEventKind::Chat, weapons::on_chat)
+        .init_resource::<horn::Horn>()
+        .net_handler(benilla_protocol::SessionEventKind::Chat, horn::on_chat)
         .net_handler(benilla_protocol::SessionEventKind::Chat, showcase::on_chat)
         .net_handler(benilla_protocol::SessionEventKind::Chat, props::on_chat)
         .net_handler(
@@ -844,7 +851,7 @@ pub(crate) fn plugin(app: &mut App) {
                 sound::overtakes,
                 // After the drive: a replay playing takes its camera.
                 (ghost::update, replay::update).chain(),
-                weapons::update,
+                (weapons::update, horn::update).chain(),
                 race::beams,
                 // The delivery's way after the drive, then its chevrons and the arrow along it.
                 (gps::update, gps::chevrons, race::guide).chain(),

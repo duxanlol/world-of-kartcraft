@@ -8,6 +8,9 @@
 //! along −Y) turns into the kart's (+X left, +Y up, +Z forward, meters) by axis, scaled to the
 //! kart's size; the unlit kart shader gets a fixed light baked into the vertex colours, so the
 //! shapes read.
+//!
+//! Warsong Gulch's flags (`World\Generic\PVP\CTFflags`) are flags the same way, handed over as
+//! `kartcraft::goods::provide_flag`: the pole up, the banner along its +Y made the flag's +X.
 
 use benilla_assets::{LockRecover, WorldAssets};
 use bevy::prelude::*;
@@ -84,7 +87,8 @@ fn to_kart(p: [f32; 3], facing: Facing, scale: f32) -> [f32; 3] {
     [left * scale, up * scale, forward * scale]
 }
 
-/// Each car, built and handed over; one the install lacks is left out of the garage and shop.
+/// Each car and flag, built and handed over; a car the install lacks is left out of the garage
+/// and shop.
 pub(super) fn build_cars(assets: Option<Res<WorldAssets>>) {
     let Some(assets) = assets else { return };
     let mut chain = assets.chain.lock_recover();
@@ -94,6 +98,103 @@ pub(super) fn build_cars(assets: Option<Res<WorldAssets>>) {
             Err(e) => warn!("kart: {} from {}: {e:#}", car.key, car.model),
         }
     }
+    for (key, path) in FLAGS {
+        match build_flag(&mut chain, path) {
+            Ok(model) => kartcraft::goods::provide_flag(key, model),
+            Err(e) => warn!("kart goods: {key} from {path}: {e:#}"),
+        }
+    }
+}
+
+/// The flags built from the install: their goods' keys and their models.
+const FLAGS: [(&str, &str); 2] = [
+    ("hordeflag", r"World\Generic\PVP\CTFflags\HordeCTFflag.m2"),
+    (
+        "allianceflag",
+        r"World\Generic\PVP\CTFflags\AllianceCTFflag.m2",
+    ),
+];
+
+/// A flag's pole in a flag model's meters, the Student Flag's (`kartcraft::goods` sizes it on the
+/// kart): each CTF flag is made this tall.
+const POLE_METERS: f32 = 2.95;
+
+/// A CTF flag as a flag model: meters, +Y up, the pole's foot at the origin, the banner along +X.
+fn build_flag(
+    chain: &mut benilla_formats::Chain,
+    path: &str,
+) -> anyhow::Result<kartcraft::goods::FlagModel> {
+    let parts = benilla_formats::load_m2_mesh(chain, path)?;
+    let top = parts
+        .iter()
+        .flat_map(|p| p.positions.iter().map(|v| v[2]))
+        .fold(0.0f32, f32::max);
+    anyhow::ensure!(top > 0.0, "no pole");
+    let scale = POLE_METERS / top;
+    // The M2's (x, y, z) as the flag's (y, z, x): its banner's +Y the flag's +X, up its +Y.
+    let to_flag = |v: [f32; 3], s: f32| [v[1] * s, v[2] * s, v[0] * s];
+    let light = LIGHT.normalize();
+    let mut textures: Vec<Texture> = Vec::new();
+    let mut index: std::collections::HashMap<(String, bool), usize> = Default::default();
+    let mut surfaces = Vec::new();
+    for p in &parts {
+        let Some(path) = p.texture.as_deref() else {
+            continue;
+        };
+        let lower = path.to_ascii_lowercase();
+        // The banner is blended cloth; the staff opaque, or cut out.
+        let (blend, opaque) = match p.blend {
+            benilla_formats::ModelBlend::Opaque => ("", true),
+            benilla_formats::ModelBlend::AlphaTest => ("", false),
+            benilla_formats::ModelBlend::Blend => ("blend", false),
+            _ => continue,
+        };
+        let key = (lower.clone(), opaque);
+        let slot = match index.get(&key) {
+            Some(&i) => i,
+            None => {
+                let bytes = chain.read_file(&lower)?;
+                let (width, height, mut rgba) = benilla_formats::blp_to_rgba(&bytes)?;
+                if opaque {
+                    for px in rgba.as_chunks_mut::<4>().0 {
+                        px[3] = 255;
+                    }
+                }
+                textures.push(Texture {
+                    width,
+                    height,
+                    rgba,
+                });
+                index.insert(key, textures.len() - 1);
+                textures.len() - 1
+            }
+        };
+        let vertices = (0..p.positions.len())
+            .map(|i| {
+                let n = p
+                    .normals
+                    .get(i)
+                    .map_or(Vec3::Y, |n| Vec3::from_array(to_flag(*n, 1.0)));
+                // Cloth is lit on both faces.
+                let shade = 0.6 + 0.4 * n.normalize_or_zero().dot(light).abs();
+                Vertex {
+                    position: to_flag(p.positions[i], scale),
+                    normal: n.to_array(),
+                    uv: p.uvs.get(i).copied().unwrap_or_default(),
+                    color: [shade, shade, shade, 1.0],
+                }
+            })
+            .collect();
+        surfaces.push(Surface {
+            texture: Some(slot),
+            double_sided: p.two_sided || !blend.is_empty(),
+            blend: blend.to_string(),
+            vertices,
+            indices: p.indices.clone(),
+        });
+    }
+    anyhow::ensure!(!surfaces.is_empty(), "no parts kept");
+    Ok(kartcraft::goods::FlagModel { textures, surfaces })
 }
 
 fn build(chain: &mut benilla_formats::Chain, car: &Car) -> anyhow::Result<Model> {
@@ -182,6 +283,55 @@ fn build(chain: &mut benilla_formats::Chain, car: &Car) -> anyhow::Result<Model>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each CTF flag is a flag good, and builds standing up, its pole a Student Flag's, its banner
+    /// out along +X; and every horn is a sound the install has.
+    #[test]
+    fn the_ctf_flags_build_and_the_horns_sound_from_the_install() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("the install's archives");
+        for (key, path) in FLAGS {
+            assert_eq!(
+                kartcraft::goods::good(key).map(|g| g.kind),
+                Some(kartcraft::goods::Kind::Flag),
+                "{key} is a flag good"
+            );
+            let flag = build_flag(&mut chain, path).unwrap_or_else(|e| panic!("{key}: {e:#}"));
+            let all = || flag.surfaces.iter().flat_map(|s| s.vertices.iter());
+            let top = all().map(|v| v.position[1]).fold(f32::MIN, f32::max);
+            let out = all().map(|v| v.position[0]).fold(f32::MIN, f32::max);
+            assert!((top - POLE_METERS).abs() < 1e-3, "{key}: pole {top}");
+            assert!(out > 1.5, "{key}: banner out to {out}");
+            assert!(
+                flag.surfaces.iter().any(|s| s.blend == "blend"),
+                "{key}: the cloth"
+            );
+        }
+        let horns = kartcraft::goods::HORNS.iter().map(|(_, p)| *p);
+        for path in horns.chain([kartcraft::goods::HORN_DEFAULT]) {
+            let bytes = chain
+                .read_file(path)
+                .unwrap_or_else(|e| panic!("{path}: {e:#}"));
+            crate::sound::sfx_from_bytes(bytes).unwrap_or_else(|e| panic!("{path}: {e:#}"));
+        }
+        // The shop's icons for them are the install's too.
+        let xml = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui/KartcraftFrames.xml"),
+        )
+        .expect("the shop");
+        for row in xml.lines().filter(|l| {
+            l.trim_start().starts_with("{ key = ")
+                && (l.contains("kind = \"horn\"") || l.contains("kind = \"flag\""))
+        }) {
+            let icon = row
+                .split("icon = \"")
+                .nth(1)
+                .and_then(|r| r.split('"').next())
+                .unwrap_or_else(|| panic!("an icon: {row}"));
+            let path = format!(r"Interface\Icons\{icon}.blp");
+            assert!(chain.contains(&path), "{path}");
+        }
+    }
 
     /// Every car is a good of its own, and builds from the install with its pilot gone.
     #[test]

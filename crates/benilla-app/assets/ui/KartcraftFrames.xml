@@ -1664,14 +1664,16 @@
                 BenillaKart_Say(text .. ".")
                 PlaySound("LOOTWINDOWCOINSOUND")
             elseif verb == "Goods" then
-                -- Our own cosmetics: tokens, the flag we fly, the goods we own. A custom kart picked
-                -- but not ours (another character's pick) goes back to the CTR one.
+                -- Our own cosmetics: tokens, the flag we fly, the goods we own, the horn we wear. A
+                -- custom kart picked but not ours (another character's pick) goes back to the CTR one.
                 local goods = BenillaKartGoods
                 BenillaKartShop.tokens = tonumber(line[3])
                 goods.flag = line[4] or ""
                 goods.owned = {}
                 for key in string.gfind(line[5] or "", "[^,]+") do goods.owned[key] = 1 end
+                goods.horn = line[6] or ""
                 SetCVar("KartFlag", goods.flag)
+                SetCVar("KartHorn", goods.horn)
                 local racer = BenillaKartGoods_Find(GetCVar("KartRacer"))
                 if racer and not goods.owned[racer.key] then SetCVar("KartRacer", "crash") end
                 if BenillaKartShopFrame:IsVisible() then BenillaKartShop_Refresh() end
@@ -4112,10 +4114,11 @@
             { key = "goblin", name = "Goblin", short = "Goblin", display = 1233, price = 150, icon = "INV_Misc_Bomb_04" },
             { key = "zombie", name = "Zombie", short = "Zombie", display = 1200, price = 150, icon = "Ability_Racial_Cannibalize" },
         }
-        -- World of Kartcraft's own cosmetics, after the skins: custom karts and flags (the
-        -- server's GOODS, Kartcraft.cpp, and the client's built-in models, kartcraft goods.rs;
-        -- kartcraft_tests holds the three alike). A kart, once ours, is picked in the garage; a
-        -- flag is flown from here or the garage's Flag row ("R<TAB>FlagWear").
+        -- World of Kartcraft's own cosmetics, after the skins: custom karts, flags and horns
+        -- (the server's GOODS, Kartcraft.cpp, and the client's built-in models and horn sounds,
+        -- kartcraft goods.rs; kartcraft_tests holds the three alike). A kart, once ours, is picked
+        -- in the garage; a flag is flown and a horn worn from here or the garage's Flag and Horn
+        -- rows ("R<TAB>FlagWear", "R<TAB>HornWear"). A horn sounds with Fire when no item is held.
         BENILLA_KART_GOODS = {
             { key = "student", kind = "flag", tier = 0, name = "Student Flag", short = "Student Flag", price = 100, icon = "INV_BannerPVP_01", about = "A banner on a pole at the back of any kart you drive." },
             { key = "fel", kind = "kart", tier = 0, name = "Fel Kart", short = "Fel Kart", price = 400, icon = "Spell_Shadow_SummonFelHunter", about = "Dark armour, a horned skull and fel crystals." },
@@ -4123,15 +4126,28 @@
             { key = "wok", kind = "kart", tier = 0, name = "WoK Kart", short = "WoK Kart", price = 500, icon = "INV_Gizmo_01", about = "A blue and silver race car in the WoK livery." },
             { key = "gnomecar", kind = "kart", tier = 0, name = "Gnome Rocket Car", short = "Gnome Car", price = 500, icon = "INV_Gizmo_02", about = "The Mirage Raceway's gnomish racer, its rockets your turbos." },
             { key = "goblincar", kind = "kart", tier = 0, name = "Goblin Rocket Car", short = "Goblin Car", price = 500, icon = "INV_Gizmo_RocketBoot_01", about = "The Mirage Raceway's goblin racer, two rockets and a prayer." },
+            { key = "hordeflag", kind = "flag", tier = 0, name = "Warsong Flag", short = "Warsong Flag", price = 150, icon = "INV_BannerPVP_01", about = "The Horde's flag from Warsong Gulch, flown at the back of any kart." },
+            { key = "allianceflag", kind = "flag", tier = 0, name = "Silverwing Flag", short = "Silverwing", price = 150, icon = "INV_BannerPVP_02", about = "The Alliance's flag from Warsong Gulch, flown at the back of any kart." },
+            { key = "catcall", kind = "horn", tier = 0, name = "Cat Call", short = "Cat Call", price = 50, icon = "INV_Misc_Horn_03", sound = "Sound\\Character\\EmoteCatCallWhistle01.wav", about = "A horn: a whistle at whoever you pass. Fire with no item to sound it." },
+            { key = "goober", kind = "horn", tier = 0, name = "Goober's Horn", short = "Goober", price = 100, icon = "INV_Misc_Horn_02", sound = "Sound\\Doodad\\HornGoober.wav", about = "A horn: Goober's own honk. Fire with no item to sound it." },
+            { key = "dockbell", kind = "horn", tier = 0, name = "Dock Bell", short = "Dock Bell", price = 100, icon = "INV_Misc_Bell_01", sound = "Sound\\Doodad\\BoatDockedWarning.wav", about = "A horn: the bell of a ship coming in. Fire with no item to sound it." },
+            { key = "steamtonk", kind = "horn", tier = 0, name = "Steam Tonk", short = "Steam Tonk", price = 100, icon = "INV_Misc_Gear_01", sound = "Sound\\Creature\\SteamTonk\\SteamTonk.wav", about = "A horn: a steam tonk's rattle and hiss. Fire with no item to sound it." },
+            { key = "foghorn", kind = "horn", tier = 0, name = "Foghorn", short = "Foghorn", price = 150, icon = "INV_Misc_Horn_03", sound = "Sound\\Doodad\\LightHouseFogHorn.wav", about = "A horn: a lighthouse's foghorn. Fire with no item to sound it." },
+            { key = "dwarfhorn", kind = "horn", tier = 0, name = "Dwarven Horn", short = "Dwarven Horn", price = 150, icon = "INV_Misc_Horn_01", sound = "Sound\\Doodad\\DwarfHorn.wav", about = "A horn: the long call of Ironforge's horns. Fire with no item to sound it." },
+            { key = "trollgong", kind = "horn", tier = 0, name = "Troll Gong", short = "Troll Gong", price = 150, icon = "INV_Misc_Bell_01", sound = "Sound\\Doodad\\G_GongTroll01.wav", about = "A horn: a troll gong, struck. Fire with no item to sound it." },
+            { key = "echeyakee", kind = "horn", tier = 0, name = "Horn of Echeyakee", short = "Echeyakee", price = 200, icon = "INV_Misc_Horn_02", sound = "Sound\\Doodad\\G_HornofEcheyakee.wav", about = "A horn: the horn that calls Echeyakee. Fire with no item to sound it." },
         }
+        -- The horn every driver has, none worn: the Deadmines' steam whistle (goods.rs HORN_DEFAULT).
+        BENILLA_KART_HORN_DEFAULT = { name = "Steam Whistle", sound = "Sound\\Doodad\\DeadmineSteamWhistleOn.wav" }
         -- The goods by key.
         function BenillaKartGoods_Find(key)
             for _, g in ipairs(BENILLA_KART_GOODS) do
                 if g.key == key then return g end
             end
         end
-        -- The server's word on the goods: the ones we own (by key) and the flag we fly ("" none).
-        BenillaKartGoods = { owned = {}, flag = "" }
+        -- The server's word on the goods: the ones we own (by key), the flag we fly and the horn we
+        -- wear ("" none).
+        BenillaKartGoods = { owned = {}, flag = "", horn = "" }
 
         -- `copper` as gold, silver and copper ("1g 20s 5c"), the parts there are.
         function BenillaKart_Money(copper)
@@ -4278,6 +4294,7 @@
         function BenillaKartShop_Worn(item)
             if item.kind == "skin" then return BenillaKartShop.worn == item.key end
             if item.kind == "flag" then return BenillaKartGoods.flag == item.key end
+            if item.kind == "horn" then return BenillaKartGoods.horn == item.key end
             return GetCVar("KartRacer") == item.key
         end
 
@@ -4295,6 +4312,8 @@
             -- The pane turns a skin; a kart or a flag shows in the garage, and on the kart.
             SetCVar("KartSkinPreview", item.display or 0)
             SetCVar("KartGoodPreview", (item.kind == "kart" or item.kind == "flag") and item.key or "")
+            -- A horn is heard.
+            if item.sound then PlaySoundFile(item.sound) end
             BenillaKartShop_Refresh()
         end
 
@@ -4355,9 +4374,13 @@
                 BenillaKartShopFrameAbout:SetText("")
             else
                 BenillaKartShopFrameModel:Hide()
-                BenillaKartShopFrameAbout:SetText(item.about .. "\n\n" .. (item.kind == "kart"
-                    and "Yours to drive once bought: pick it in the garage (/garage)."
-                    or "Flown on your kart once bought: pick it here or in the garage's Flag row."))
+                local after = "Flown on your kart once bought: pick it here or in the garage's Flag row."
+                if item.kind == "kart" then
+                    after = "Yours to drive once bought: pick it in the garage (/garage)."
+                elseif item.kind == "horn" then
+                    after = "Heard by the drivers around once bought: pick it here or in the garage's Horn row. Click it again to hear it."
+                end
+                BenillaKartShopFrameAbout:SetText(item.about .. "\n\n" .. after)
             end
             local verb = item.kind == "kart" and "Drive" or "Wear"
             if BenillaKartShop_Owned(item) then
@@ -4403,6 +4426,9 @@
             elseif item.kind == "flag" then
                 if BenillaKartGoods.flag == key then key = "" end
                 BenillaKart_Send("FlagWear\t" .. key)
+            elseif item.kind == "horn" then
+                if BenillaKartGoods.horn == key then key = "" end
+                BenillaKart_Send("HornWear\t" .. key)
             else
                 SetCVar("KartRacer", key)
                 PlaySound("igMainMenuOptionCheckBoxOn")
@@ -4438,6 +4464,37 @@
             BenillaKartGarageFrameFlagName:SetText(g and g.name or "None")
             local any = table.getn(BenillaKartFlag_List()) > 1
             BenillaKartGarageFrameFlagNeed:SetText(any and "" or "Flags are sold in the shop (/kartshop).")
+        end
+
+        -- The garage's Horn row: the steam whistle, then the horns we own, stepped by its arrows,
+        -- worn and sounded.
+        function BenillaKartHorn_List()
+            local list = { "" }
+            for _, g in ipairs(BENILLA_KART_GOODS) do
+                if g.kind == "horn" and BenillaKartGoods.owned[g.key] then table.insert(list, g.key) end
+            end
+            return list
+        end
+
+        function BenillaKartHorn_Step(dir)
+            local list, at = BenillaKartHorn_List(), 1
+            for i, key in ipairs(list) do
+                if key == BenillaKartGoods.horn then at = i end
+            end
+            local n = table.getn(list)
+            local key = list[mod(at - 1 + dir + n, n) + 1]
+            if key ~= BenillaKartGoods.horn then
+                BenillaKart_Send("HornWear\t" .. key)
+                local g = BenillaKartGoods_Find(key) or BENILLA_KART_HORN_DEFAULT
+                PlaySoundFile(g.sound)
+            end
+        end
+
+        function BenillaKartHorn_Row()
+            local g = BenillaKartGoods_Find(BenillaKartGoods.horn) or BENILLA_KART_HORN_DEFAULT
+            BenillaKartGarageFrameHornName:SetText(g.name)
+            local any = table.getn(BenillaKartHorn_List()) > 1
+            BenillaKartGarageFrameHornNeed:SetText(any and "Fire with no item sounds it." or "Fire with no item sounds it. More in the shop.")
         end
 
         function BenillaKartGarage_Toggle()
@@ -4504,6 +4561,7 @@
             BenillaKartLook_Row("P", "Paint")
             BenillaKartLook_Row("T", "Trail")
             BenillaKartFlag_Row()
+            BenillaKartHorn_Row()
         end
 
         -- A class row clicked: picked if the skill has opened it.
@@ -5773,7 +5831,7 @@
     <!-- The kart garage: the engine class, as the Karting skill opens them, and whose kart we
          drive, each a CVar set as it is clicked. -->
     <Frame name="BenillaKartGarageFrame" toplevel="true" enableMouse="true" movable="true" clampedToScreen="true" hidden="true" parent="UIParent" frameStrata="DIALOG">
-        <Size><AbsDimension x="340" y="654"/></Size>
+        <Size><AbsDimension x="340" y="696"/></Size>
         <Anchors><Anchor point="CENTER"><Offset><AbsDimension x="0" y="60"/></Offset></Anchor></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
@@ -5850,6 +5908,18 @@
                 <FontString name="$parentFlagNeed" inherits="GameFontHighlightSmall" justifyH="CENTER">
                     <Size><AbsDimension x="260" y="12"/></Size>
                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="40" y="-588"/></Offset></Anchor></Anchors>
+                </FontString>
+                <!-- The Horn: the one Fire sounds when no item is held (the shop's goods). -->
+                <FontString name="$parentHornLabel" inherits="GameFontHighlight" text="Horn">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="24" y="-612"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentHornName" inherits="GameFontNormal" justifyH="CENTER">
+                    <Size><AbsDimension x="160" y="14"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="118" y="-612"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentHornNeed" inherits="GameFontHighlightSmall" justifyH="CENTER">
+                    <Size><AbsDimension x="260" y="12"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="40" y="-630"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>
@@ -5950,6 +6020,16 @@
                 <Size><AbsDimension x="26" y="20"/></Size>
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="282" y="-566"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartFlag_Step(1)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentHornPrev" inherits="UIPanelButtonTemplate" text="&lt;">
+                <Size><AbsDimension x="26" y="20"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="88" y="-608"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartHorn_Step(-1)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentHornNext" inherits="UIPanelButtonTemplate" text="&gt;">
+                <Size><AbsDimension x="26" y="20"/></Size>
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="282" y="-608"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartHorn_Step(1)</OnClick></Scripts>
             </Button>
             <Button name="$parentClose" inherits="UIPanelButtonTemplate" text="Close">
                 <Size><AbsDimension x="120" y="22"/></Size>

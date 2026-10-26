@@ -57,6 +57,7 @@ pub(crate) use kit::SoundKits;
 pub(crate) use message::MessageSounds;
 pub(crate) use mixer::set_track_position;
 pub(crate) use mixer::Mixer;
+pub(crate) use mixer::{amp_to_db, fade, sfx_from_bytes};
 pub(crate) use ui::{AutoEquipSound, LootPickupSound};
 pub(crate) use zone::ExplorationSounds;
 

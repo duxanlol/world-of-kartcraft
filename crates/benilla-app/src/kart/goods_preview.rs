@@ -82,6 +82,8 @@ pub(crate) fn update(
             let (racer, flag) = match good.kind {
                 Kind::Kart => (good.key, 0),
                 Kind::Flag => (kartcraft::model::our_kart(), goods::flag_index(good.key)),
+                // A horn is heard, not seen (the shop plays it): our kart as it is.
+                Kind::Horn => (kartcraft::model::our_kart(), goods::our_flag()),
             };
             let kart = spawner.spawn(racer)?;
             commands.entity(kart).insert((

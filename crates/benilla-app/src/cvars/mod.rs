@@ -651,6 +651,7 @@ fn load_config(world: &mut World) {
         cvars.own_for_session("KartPaint", None);
         cvars.own_for_session("KartTrail", None);
         cvars.own_for_session("KartFlag", None);
+        cvars.own_for_session("KartHorn", None);
         // The skin shop's preview is the open window's.
         cvars.own_for_session("KartSkinPreview", None);
         cvars.own_for_session("KartGoodPreview", None);
@@ -1978,7 +1979,8 @@ mod tests {
     /// The string-valued rows, a closed list, each default checked on its own terms: `realmName`
     /// (the reference's registered `""`, `0x882748`), `gxApi` and the kart's `KartReplay` and
     /// `KartReplays` (the replay playing and those on disk, `kart::replay`) and `KartPads` (the
-    /// controllers connected), `KartFlag` (the flag flown, `kartcraft::goods`) and
+    /// controllers connected), `KartFlag` and `KartHorn` (the flag flown and the horn worn,
+    /// `kartcraft::goods`) and
     /// `KartGoodPreview` (the shop's picked good, `kart::goods_preview`), `KartMenu` (the menu's
     /// presses and the entry it opens at) and `KartPadRumble` (a motor's name) are empty until
     /// the session writes them, and `KartPad` (the
@@ -2000,6 +2002,7 @@ mod tests {
                 "KartFlag",
                 "KartFreeCam",
                 "KartGoodPreview",
+                "KartHorn",
                 "KartMenu",
                 "KartNavGpsColor",
                 "KartPad",
@@ -2027,6 +2030,7 @@ mod tests {
         assert_eq!(default_of("KartNavGpsColor"), "ffbf26");
         assert_eq!(default_of("KartPad"), "");
         assert_eq!(default_of("KartFlag"), "");
+        assert_eq!(default_of("KartHorn"), "");
         assert_eq!(default_of("KartGoodPreview"), "");
         assert_eq!(default_of("KartPads"), "");
         assert_eq!(default_of("KartReplay"), "");

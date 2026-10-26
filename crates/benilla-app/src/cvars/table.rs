@@ -830,6 +830,13 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "",
         "Kartcraft's own — the kart's flag; 1.12 has no kart",
     ),
+    // The horn it sounds (`kartcraft::goods`), a key, empty the steam whistle; a string, as the
+    // flag's.
+    ours(
+        "KartHorn",
+        "",
+        "Kartcraft's own — the kart's horn; 1.12 has no kart",
+    ),
     // The shop's picked good (`kart::goods_preview`), a key the goods pane shows, empty none; for
     // the session only.
     ours(
