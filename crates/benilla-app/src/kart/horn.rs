@@ -1,8 +1,8 @@
 //! The kart's horn: Fire with no item held sounds it, and the drivers around hear it at our kart.
 //! The horn is the one we wear (`kartcraft::goods::HORNS`, a sound of the player's own install;
-//! the steam whistle none worn). Ours plays at once and goes to the server as "H", which sounds
-//! it to the drivers within its range as "KARTCRAFT\tH\t<horn>" from us (`Kartcraft.cpp`
-//! RelayHorn), at most once in [`HORN_SECS`], the longest a horn plays.
+//! CTR's honk none worn). Ours plays at once and goes to the server as "H", which sounds it to
+//! the drivers within its range as "KARTCRAFT\tH\t<horn>" from us (`Kartcraft.cpp` RelayHorn),
+//! at most once in [`HORN_GAP`]: a tapped honk, each press cutting the last one short.
 
 use std::collections::HashMap;
 
@@ -14,8 +14,12 @@ use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
 use super::profession::Profession;
 use super::remote::RemoteKarts;
 
-/// The longest a horn plays (s), and the least between two of ours: the server's HORN_INTERVAL.
+/// The longest a horn plays (s).
 const HORN_SECS: f32 = 2.5;
+/// The least between two of ours (s): the server's HORN_INTERVAL, and a little more.
+const HORN_GAP: f32 = 0.3;
+/// A horn cut short by the same driver's next fades this long (ms).
+const HORN_CUT_MS: u64 = 40;
 /// A horn cut at [`HORN_SECS`] fades this long (ms).
 const HORN_FADE_MS: u64 = 400;
 /// Another driver's horn is heard this far (yards), the server's HORN_RANGE, fading with it.
@@ -75,7 +79,7 @@ pub(super) fn update(
     let now = time.elapsed_secs();
     let horn = &mut *horn;
     let ours = std::mem::take(&mut horn.pressed)
-        && horn.last.is_none_or(|t| now - t >= HORN_SECS)
+        && horn.last.is_none_or(|t| now - t >= HORN_GAP)
         && profession.server_kart();
     if ours {
         horn.last = Some(now);
@@ -95,7 +99,13 @@ pub(super) fn update(
         decoded
             .entry(index)
             .or_insert_with(|| {
-                let path = kartcraft::goods::horn_sound(index);
+                let Some(path) = kartcraft::goods::horn_sound(index) else {
+                    let honk = kartcraft::sound::honk();
+                    if honk.is_none() {
+                        warn!("kart horn: no CTR honk (kart-data/audio/tnt_honk.wav)");
+                    }
+                    return honk;
+                };
                 let bytes = assets.as_ref()?.read_file_or_loose(path)?;
                 crate::sound::sfx_from_bytes(bytes)
                     .map_err(|e| warn!("kart horn: {path}: {e:#}"))
@@ -106,6 +116,7 @@ pub(super) fn update(
     if ours {
         if let Some(data) = sound(kartcraft::goods::our_horn()) {
             let data = data.volume(crate::sound::amp_to_db(LEVEL * sfx));
+            cut(&mut playing, None);
             if let Ok(handle) = mixer.play_2d(data) {
                 playing.push(Playing {
                     kart: None,
@@ -133,6 +144,7 @@ pub(super) fn update(
             continue;
         };
         let data = data.volume(crate::sound::amp_to_db(LEVEL * near * sfx));
+        cut(&mut playing, Some(kart));
         if let Ok((track, handle)) = mixer.play_3d(data, at, false) {
             playing.push(Playing {
                 kart: Some(kart),
@@ -160,5 +172,16 @@ pub(super) fn update(
             return false;
         }
         true
+    });
+}
+
+/// Stops the horn `kart` is playing (`None` ours): its driver's next one takes over.
+fn cut(playing: &mut Vec<Playing>, kart: Option<Entity>) {
+    playing.retain_mut(|p| {
+        if p.kart != kart {
+            return true;
+        }
+        p.sound.stop(crate::sound::fade(HORN_CUT_MS));
+        false
     });
 }

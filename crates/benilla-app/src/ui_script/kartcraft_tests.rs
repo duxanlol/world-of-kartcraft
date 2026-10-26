@@ -3848,8 +3848,8 @@ fn the_track_browser_takes_us_to_the_track_s_marshal() {
     assert!(!enabled(&s));
 }
 
-/// The garage's Horn row: the steam whistle until a horn is ours, then its arrows step through
-/// the whistle and the horns we own, each worn through the server.
+/// The garage's Horn row: CTR's honk until a horn is ours, then its arrows step through the honk
+/// and the horns we own, each worn through the server.
 #[test]
 fn the_garage_horn_row_steps_through_our_horns() {
     benilla_formats::wow_data_or_skip!();
@@ -3865,15 +3865,15 @@ fn the_garage_horn_row_steps_through_our_horns() {
     s.run("BenillaKartGarage_Toggle()").unwrap();
     sent(&mut s);
     from_server(&mut s, "R\tGoods\t0\t\t\t");
-    assert_eq!(name(&mut s), "Steam Whistle");
+    assert_eq!(name(&mut s), "Kart Horn");
     assert!(s
         .eval::<String>("return BenillaKartGarageFrameHornNeed:GetText()")
         .unwrap()
-        .contains("shop"));
+        .contains("Mystery Crates"));
     s.run("BenillaKartGarageFrameHornNext:Click()").unwrap();
     assert!(sent(&mut s).is_empty(), "nothing else to wear");
     from_server(&mut s, "R\tGoods\t0\t\tfoghorn,goober\t");
-    // In the catalogue's order: the whistle, Goober's Horn, the Foghorn.
+    // In the catalogue's order: the honk, Goober's Horn, the Foghorn.
     s.run("BenillaKartGarageFrameHornNext:Click()").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tHornWear\tgoober"]);
     from_server(&mut s, "R\tGoods\t0\t\tfoghorn,goober\tgoober");
@@ -3912,28 +3912,24 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     assert_eq!(preview(&mut s), "3597");
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin1Name"), "Magni");
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin10Name"), "VanCleef");
-    // Sixteen skins fill the first page, the sixteen goods the second, then the crate the third,
-    // the rest of its grid empty.
+    // Sixteen skins fill the first page, then the karts and the crate the second, the rest of
+    // its grid empty: the Student Flag is no longer sold, and the flags and horns are the crate's.
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkin16Name"), "Zombie");
-    assert_eq!(text(&mut s, "BenillaKartShopFramePageText"), "Page 1 of 3");
+    assert_eq!(text(&mut s, "BenillaKartShopFramePageText"), "Page 1 of 2");
     assert!(!enabled(&mut s, "BenillaKartShopFramePrevPage"));
     s.run("BenillaKartShopFrameNextPage:Click()").unwrap();
-    assert_eq!(text(&mut s, "BenillaKartShopFramePageText"), "Page 2 of 3");
-    assert_eq!(
-        text(&mut s, "BenillaKartShopFrameSkin1Name"),
-        "Student Flag"
-    );
-    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin2Name"), "Fel Kart");
-    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin16Name"), "Echeyakee");
-    s.run("BenillaKartShopFrameNextPage:Click()").unwrap();
-    assert_eq!(text(&mut s, "BenillaKartShopFramePageText"), "Page 3 of 3");
+    assert_eq!(text(&mut s, "BenillaKartShopFramePageText"), "Page 2 of 2");
     assert!(!enabled(&mut s, "BenillaKartShopFrameNextPage"));
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin1Name"), "Fel Kart");
+    assert_eq!(
+        text(&mut s, "BenillaKartShopFrameSkin6Name"),
+        "Mystery Crate"
+    );
     assert!(!s
-        .eval::<bool>("return BenillaKartShopFrameSkin2:IsVisible() == 1")
+        .eval::<bool>("return BenillaKartShopFrameSkin7:IsVisible() == 1")
         .unwrap());
     // The picked skin stays picked on another page.
     assert_eq!(preview(&mut s), "3597");
-    s.run("BenillaKartShopFramePrevPage:Click()").unwrap();
     s.run("BenillaKartShopFramePrevPage:Click()").unwrap();
     assert_eq!(
         text(&mut s, "BenillaKartShopFrameTokens"),
@@ -3974,31 +3970,14 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     assert_eq!(preview(&mut s), "617");
     assert_eq!(text(&mut s, "BenillaKartShopFrameSkinName"), "Murloc");
 
-    // A flag, on the second page: no unit in the pane, its words instead; bought, worn, flown
-    // on the kart.
+    // A kart, on the second page: no unit in the pane, its words instead. Not ours, it cannot be
+    // driven; picked anyway (another character's pick), the server's word puts us back in Crash's.
     s.run("BenillaKartShopFrameNextPage:Click()").unwrap();
     s.run("BenillaKartShopFrameSkin1:Click()").unwrap();
     assert_eq!(preview(&mut s), "0");
     assert!(!s
         .eval::<bool>("return BenillaKartShopFrameModel:IsVisible() == 1")
         .unwrap());
-    assert!(text(&mut s, "BenillaKartShopFrameAbout").contains("any kart"));
-    from_server(&mut s, "R\tGoods\t150\t\t");
-    assert!(enabled(&mut s, "BenillaKartShopFrameBuy"));
-    s.run("BenillaKartShopFrameBuy:Click()").unwrap();
-    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tGoodBuy\tstudent"]);
-    from_server(&mut s, "R\tGoods\t50\t\tstudent");
-    s.run("BenillaKartShopFrameWear:Click()").unwrap();
-    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tFlagWear\tstudent"]);
-    from_server(&mut s, "R\tGoods\t50\tstudent\tstudent");
-    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin1Price"), "Worn");
-    assert_eq!(
-        s.eval::<String>("return GetCVar('KartFlag')").unwrap(),
-        "student"
-    );
-    // A kart: not ours, it cannot be driven; picked anyway (another character's pick), the
-    // server's word puts us back in Crash's.
-    s.run("BenillaKartShopFrameSkin2:Click()").unwrap();
     assert_eq!(text(&mut s, "BenillaKartShopFrameWear"), "Drive");
     assert!(!enabled(&mut s, "BenillaKartShopFrameWear"));
     s.run("SetCVar('KartRacer', 'fel')").unwrap();
@@ -4007,6 +3986,11 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
         s.eval::<String>("return GetCVar('KartRacer')").unwrap(),
         "crash"
     );
+    // The Student Flag, no longer sold, flies for one who has it.
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartFlag')").unwrap(),
+        "student"
+    );
     // Ours: Drive picks it.
     from_server(&mut s, "R\tGoods\t50\tstudent\tfel,student");
     s.run("BenillaKartShopFrameWear:Click()").unwrap();
@@ -4014,35 +3998,22 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
         s.eval::<String>("return GetCVar('KartRacer')").unwrap(),
         "fel"
     );
-    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin2Price"), "Driven");
-
-    // A horn: heard when picked, bought, worn, and the server's word sets the one Fire sounds.
-    s.run("BenillaKartShopFrameSkin9:Click()").unwrap();
-    assert_eq!(text(&mut s, "BenillaKartShopFrameSkinName"), "Cat Call");
-    assert!(text(&mut s, "BenillaKartShopFrameAbout").contains("Horn row"));
-    s.run("BenillaKartShopFrameBuy:Click()").unwrap();
-    assert_eq!(sent(&mut s), ["KARTCRAFT	R	GoodBuy	catcall"]);
-    from_server(&mut s, "R	Goods	0	student	catcall,fel,student	");
-    s.run("BenillaKartShopFrameWear:Click()").unwrap();
-    assert_eq!(sent(&mut s), ["KARTCRAFT	R	HornWear	catcall"]);
-    from_server(&mut s, "R	Goods	0	student	catcall,fel,student	catcall");
-    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin9Price"), "Worn");
+    assert_eq!(text(&mut s, "BenillaKartShopFrameSkin1Price"), "Driven");
+    // The horn the server says we wear is the one Fire sounds; an older server's line, no horn
+    // on it: CTR's honk.
+    from_server(
+        &mut s,
+        "R\tGoods\t50\tstudent\tcatcall,fel,student\tcatcall",
+    );
     assert_eq!(
         s.eval::<String>("return GetCVar('KartHorn')").unwrap(),
         "catcall"
     );
-    // An older server's line, no horn on it: the steam whistle.
-    from_server(&mut s, "R	Goods	50	student	fel,student");
+    from_server(&mut s, "R\tGoods\t50\tstudent\tfel,student");
     assert_eq!(s.eval::<String>("return GetCVar('KartHorn')").unwrap(), "");
 
-    // The Mystery Crate, on the third page: closed with no prizes in it, then open, its odds
-    // said, one opened.
-    s.run("BenillaKartShopFrameNextPage:Click()").unwrap();
-    s.run("BenillaKartShopFrameSkin1:Click()").unwrap();
-    assert_eq!(
-        text(&mut s, "BenillaKartShopFrameSkin1Name"),
-        "Mystery Crate"
-    );
+    // The Mystery Crate: closed with no prizes in it, then open, its odds said, one opened.
+    s.run("BenillaKartShopFrameSkin6:Click()").unwrap();
     from_server(&mut s, "R\tCrateOdds\t100\t5\t0\t0\t-\t60,28,10,2\t20\t50");
     assert!(text(&mut s, "BenillaKartShopFrameAbout").starts_with("Coming soon"));
     assert!(!enabled(&mut s, "BenillaKartShopFrameBuy"));
@@ -4060,7 +4031,7 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     s.run("BenillaKartShopFrameBuy:Click()").unwrap();
     assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tCrateBuy"]);
     // The reel rolls, the button off while it does, then stops on the prize.
-    from_server(&mut s, "R\tCrate\tstudent\t2");
+    from_server(&mut s, "R\tCrate\tfoghorn\t2");
     s.tick(0.1);
     assert!(
         !enabled(&mut s, "BenillaKartShopFrameBuy"),
@@ -4071,7 +4042,7 @@ fn the_skin_shop_previews_buys_and_wears_through_the_server() {
     }
     assert_eq!(
         text(&mut s, "BenillaKartShopFrameAbout"),
-        "You found: Student Flag (Rare)!"
+        "You found: Foghorn (Rare)!"
     );
     assert!(enabled(&mut s, "BenillaKartShopFrameBuy"));
     // Nothing left to find: the crate stays shut, as the server would refuse it.

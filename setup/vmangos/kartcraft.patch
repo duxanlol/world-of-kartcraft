@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..1d00f35
+index 0000000..f8dd81a
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,8674 @@
+@@ -0,0 +1,8681 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -209,11 +209,14 @@ index 0000000..1d00f35
 +        char const* key;
 +        char kind;    // 'K' a kart, 'F' a flag, 'H' a horn
 +        uint32 price; // tokens
-+        uint8 tier;   // 0 sold in the shop; 1 to 4 found only in Mystery Crates (common .. legendary)
++        uint8 tier;   // 0 sold in the shop; 1 to 4 found only in Mystery Crates (common .. legendary);
++                      // 5 no longer had (TIER_RETIRED), worn by those who have it
 +    };
 +
++    constexpr uint8 TIER_RETIRED = 5;
++
 +    static Good const GOODS[] = {
-+        { "student", 'F', 100, 0 },
++        { "student", 'F', 100, 5 },
 +        { "fel", 'K', 400, 0 },
 +        { "alliance", 'K', 250, 0 },
 +        { "wok", 'K', 500, 0 },
@@ -223,19 +226,21 @@ index 0000000..1d00f35
 +        { "goblincar", 'K', 500, 0 },
 +        // Warsong Gulch's flags, drawn from each player's own install (the client's
 +        // kart/wow_karts.rs).
-+        { "hordeflag", 'F', 150, 0 },
-+        { "allianceflag", 'F', 150, 0 },
++        { "hordeflag", 'F', 150, 4 },
++        { "allianceflag", 'F', 150, 4 },
 +        // Horns sounded with Fire when no item is held, heard by the drivers around (RelayHorn);
 +        // each a sound of each player's own install (the client's kartcraft goods.rs HORNS).
-+        // Every driver has the Deadmines' steam whistle, none worn.
-+        { "catcall", 'H', 50, 0 },
-+        { "goober", 'H', 100, 0 },
-+        { "dockbell", 'H', 100, 0 },
-+        { "steamtonk", 'H', 100, 0 },
-+        { "foghorn", 'H', 150, 0 },
-+        { "dwarfhorn", 'H', 150, 0 },
-+        { "trollgong", 'H', 150, 0 },
-+        { "echeyakee", 'H', 200, 0 },
++        // The flags above and the horns are found in Mystery Crates.
++        // Every driver has CTR's honk, none worn.
++        { "catcall", 'H', 50, 1 },
++        { "goober", 'H', 100, 1 },
++        { "dockbell", 'H', 100, 1 },
++        { "steamtonk", 'H', 100, 1 },
++        { "foghorn", 'H', 150, 2 },
++        { "dwarfhorn", 'H', 150, 2 },
++        { "trollgong", 'H', 150, 3 },
++        { "echeyakee", 'H', 200, 3 },
++        { "whistle", 'H', 100, 2 },
 +    };
 +
 +    static Good const* FindGood(std::string const& key)
@@ -285,10 +290,10 @@ index 0000000..1d00f35
 +    constexpr uint32 STATE_INTERVAL = 50;
 +    // A state line longer than this is not a kart's.
 +    constexpr size_t MAX_STATE_LENGTH = 120;
-+    // A horn is heard this far (yards), sounded at most this often per driver (ms): about as
-+    // long as the longest plays (the client's HORN_SECS).
++    // A horn is heard this far (yards), sounded at most this often per driver (ms): a tap's
++    // pace, the client's HORN_GAP (a driver's next horn cuts their last short).
 +    constexpr float HORN_RANGE = 100.f;
-+    constexpr uint32 HORN_INTERVAL = 2500;
++    constexpr uint32 HORN_INTERVAL = 250;
 +    static std::unordered_map<uint32, uint32> s_lastHorn; // player guid low -> ms, s_stateMutex
 +
 +    void LoadSkillLine()
@@ -606,7 +611,7 @@ index 0000000..1d00f35
 +    }
 +
 +    // A driver's horn ("H"), sounded to the drivers around as "KARTCRAFT\tH\t<horn>" from them:
-+    // the horn they wear (Shown), 0 the steam whistle every driver has.
++    // the horn they wear (Shown), 0 CTR's honk every driver has.
 +    static void RelayHorn(Player* player)
 +    {
 +        if (!player->HasAura(SPELL_SUMMON_KART))
@@ -2496,7 +2501,9 @@ index 0000000..1d00f35
 +        ChatHandler chat(player->GetSession());
 +        uint32 const guid = player->GetGUIDLow();
 +        Good const* good = FindGood(key);
-+        if (verb == "GoodBuy" && good && good->tier)
++        if (verb == "GoodBuy" && good && good->tier == TIER_RETIRED)
++            chat.SendSysMessage("That is no longer sold.");
++        else if (verb == "GoodBuy" && good && good->tier)
 +            chat.SendSysMessage("That is found only in Mystery Crates.");
 +        else if (verb == "GoodBuy" && good)
 +        {

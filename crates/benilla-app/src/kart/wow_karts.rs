@@ -307,8 +307,7 @@ mod tests {
                 "{key}: the cloth"
             );
         }
-        let horns = kartcraft::goods::HORNS.iter().map(|(_, p)| *p);
-        for path in horns.chain([kartcraft::goods::HORN_DEFAULT]) {
+        for (_, path) in kartcraft::goods::HORNS {
             let bytes = chain
                 .read_file(path)
                 .unwrap_or_else(|e| panic!("{path}: {e:#}"));

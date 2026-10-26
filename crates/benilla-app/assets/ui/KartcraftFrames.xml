@@ -4122,25 +4122,27 @@
         -- in the garage; a flag is flown and a horn worn from here or the garage's Flag and Horn
         -- rows ("R<TAB>FlagWear", "R<TAB>HornWear"). A horn sounds with Fire when no item is held.
         BENILLA_KART_GOODS = {
-            { key = "student", kind = "flag", tier = 0, name = "Student Flag", short = "Student Flag", price = 100, icon = "INV_BannerPVP_01", about = "A banner on a pole at the back of any kart you drive." },
+            { key = "student", kind = "flag", tier = 5, name = "Student Flag", short = "Student Flag", price = 100, icon = "INV_BannerPVP_01", about = "A banner on a pole at the back of any kart you drive." },
             { key = "fel", kind = "kart", tier = 0, name = "Fel Kart", short = "Fel Kart", price = 400, icon = "Spell_Shadow_SummonFelHunter", about = "Dark armour, a horned skull and fel crystals." },
             { key = "alliance", kind = "kart", tier = 0, name = "Alliance Kart", short = "Alliance", price = 250, icon = "INV_BannerPVP_02", about = "The lion and Ashbringer, in blue and gold." },
             { key = "wok", kind = "kart", tier = 0, name = "WoK Kart", short = "WoK Kart", price = 500, icon = "INV_Gizmo_01", about = "A blue and silver race car in the WoK livery." },
             { key = "gnomecar", kind = "kart", tier = 0, name = "Gnome Rocket Car", short = "Gnome Car", price = 500, icon = "INV_Gizmo_02", about = "The Mirage Raceway's gnomish racer, its rockets your turbos." },
             { key = "goblincar", kind = "kart", tier = 0, name = "Goblin Rocket Car", short = "Goblin Car", price = 500, icon = "INV_Gizmo_RocketBoot_01", about = "The Mirage Raceway's goblin racer, two rockets and a prayer." },
-            { key = "hordeflag", kind = "flag", tier = 0, name = "Warsong Flag", short = "Warsong Flag", price = 150, icon = "INV_BannerPVP_01", about = "The Horde's flag from Warsong Gulch, flown at the back of any kart." },
-            { key = "allianceflag", kind = "flag", tier = 0, name = "Silverwing Flag", short = "Silverwing", price = 150, icon = "INV_BannerPVP_02", about = "The Alliance's flag from Warsong Gulch, flown at the back of any kart." },
-            { key = "catcall", kind = "horn", tier = 0, name = "Cat Call", short = "Cat Call", price = 50, icon = "INV_Misc_Horn_03", sound = "Sound\\Character\\EmoteCatCallWhistle01.wav", about = "A horn: a whistle at whoever you pass. Fire with no item to sound it." },
-            { key = "goober", kind = "horn", tier = 0, name = "Goober's Horn", short = "Goober", price = 100, icon = "INV_Misc_Horn_02", sound = "Sound\\Doodad\\HornGoober.wav", about = "A horn: Goober's own honk. Fire with no item to sound it." },
-            { key = "dockbell", kind = "horn", tier = 0, name = "Dock Bell", short = "Dock Bell", price = 100, icon = "INV_Misc_Bell_01", sound = "Sound\\Doodad\\BoatDockedWarning.wav", about = "A horn: the bell of a ship coming in. Fire with no item to sound it." },
-            { key = "steamtonk", kind = "horn", tier = 0, name = "Steam Tonk", short = "Steam Tonk", price = 100, icon = "INV_Misc_Gear_01", sound = "Sound\\Creature\\SteamTonk\\SteamTonk.wav", about = "A horn: a steam tonk's rattle and hiss. Fire with no item to sound it." },
-            { key = "foghorn", kind = "horn", tier = 0, name = "Foghorn", short = "Foghorn", price = 150, icon = "INV_Misc_Horn_03", sound = "Sound\\Doodad\\LightHouseFogHorn.wav", about = "A horn: a lighthouse's foghorn. Fire with no item to sound it." },
-            { key = "dwarfhorn", kind = "horn", tier = 0, name = "Dwarven Horn", short = "Dwarven Horn", price = 150, icon = "INV_Misc_Horn_01", sound = "Sound\\Doodad\\DwarfHorn.wav", about = "A horn: the long call of Ironforge's horns. Fire with no item to sound it." },
-            { key = "trollgong", kind = "horn", tier = 0, name = "Troll Gong", short = "Troll Gong", price = 150, icon = "INV_Misc_Bell_01", sound = "Sound\\Doodad\\G_GongTroll01.wav", about = "A horn: a troll gong, struck. Fire with no item to sound it." },
-            { key = "echeyakee", kind = "horn", tier = 0, name = "Horn of Echeyakee", short = "Echeyakee", price = 200, icon = "INV_Misc_Horn_02", sound = "Sound\\Doodad\\G_HornofEcheyakee.wav", about = "A horn: the horn that calls Echeyakee. Fire with no item to sound it." },
+            { key = "hordeflag", kind = "flag", tier = 4, name = "Warsong Flag", short = "Warsong Flag", price = 150, icon = "INV_BannerPVP_01", about = "The Horde's flag from Warsong Gulch, flown at the back of any kart." },
+            { key = "allianceflag", kind = "flag", tier = 4, name = "Silverwing Flag", short = "Silverwing", price = 150, icon = "INV_BannerPVP_02", about = "The Alliance's flag from Warsong Gulch, flown at the back of any kart." },
+            { key = "catcall", kind = "horn", tier = 1, name = "Cat Call", short = "Cat Call", price = 50, icon = "INV_Misc_Horn_03", sound = "Sound\\Character\\EmoteCatCallWhistle01.wav", about = "A horn: a whistle at whoever you pass. Fire with no item to sound it." },
+            { key = "goober", kind = "horn", tier = 1, name = "Goober's Horn", short = "Goober", price = 100, icon = "INV_Misc_Horn_02", sound = "Sound\\Doodad\\HornGoober.wav", about = "A horn: Goober's own honk. Fire with no item to sound it." },
+            { key = "dockbell", kind = "horn", tier = 1, name = "Dock Bell", short = "Dock Bell", price = 100, icon = "INV_Misc_Bell_01", sound = "Sound\\Doodad\\BoatDockedWarning.wav", about = "A horn: the bell of a ship coming in. Fire with no item to sound it." },
+            { key = "steamtonk", kind = "horn", tier = 1, name = "Steam Tonk", short = "Steam Tonk", price = 100, icon = "INV_Misc_Gear_01", sound = "Sound\\Creature\\SteamTonk\\SteamTonk.wav", about = "A horn: a steam tonk's rattle and hiss. Fire with no item to sound it." },
+            { key = "foghorn", kind = "horn", tier = 2, name = "Foghorn", short = "Foghorn", price = 150, icon = "INV_Misc_Horn_03", sound = "Sound\\Doodad\\LightHouseFogHorn.wav", about = "A horn: a lighthouse's foghorn. Fire with no item to sound it." },
+            { key = "dwarfhorn", kind = "horn", tier = 2, name = "Dwarven Horn", short = "Dwarven Horn", price = 150, icon = "INV_Misc_Horn_01", sound = "Sound\\Doodad\\DwarfHorn.wav", about = "A horn: the long call of Ironforge's horns. Fire with no item to sound it." },
+            { key = "trollgong", kind = "horn", tier = 3, name = "Troll Gong", short = "Troll Gong", price = 150, icon = "INV_Misc_Bell_01", sound = "Sound\\Doodad\\G_GongTroll01.wav", about = "A horn: a troll gong, struck. Fire with no item to sound it." },
+            { key = "echeyakee", kind = "horn", tier = 3, name = "Horn of Echeyakee", short = "Echeyakee", price = 200, icon = "INV_Misc_Horn_02", sound = "Sound\\Doodad\\G_HornofEcheyakee.wav", about = "A horn: the horn that calls Echeyakee. Fire with no item to sound it." },
+            { key = "whistle", kind = "horn", tier = 2, name = "Steam Whistle", short = "Steam Whistle", price = 100, icon = "INV_Misc_Gear_01", sound = "Sound\\Doodad\\DeadmineSteamWhistleOn.wav", about = "A horn: the Deadmines' steam whistle. Fire with no item to sound it." },
         }
-        -- The horn every driver has, none worn: the Deadmines' steam whistle (goods.rs HORN_DEFAULT).
-        BENILLA_KART_HORN_DEFAULT = { name = "Steam Whistle", sound = "Sound\\Doodad\\DeadmineSteamWhistleOn.wav" }
+        -- The horn every driver has, none worn: CTR's honk, from the player's own disc (goods.rs
+        -- HORNS, kartcraft sound.rs honk); not a file of the install, so the garage plays none.
+        BENILLA_KART_HORN_DEFAULT = { name = "Kart Horn" }
         -- The goods by key.
         function BenillaKartGoods_Find(key)
             for _, g in ipairs(BENILLA_KART_GOODS) do
@@ -4185,7 +4187,8 @@
             BenillaKartShop_Refresh()
         end
 
-        -- The goods sold in the shop (tier 0); the rest are found only in Mystery Crates.
+        -- The goods sold in the shop (tier 0); 1 to 4 are found only in Mystery Crates, and 5 is no
+        -- longer had (the Student Flag), flown by those who have it.
         function BenillaKartShop_Sold()
             local sold = {}
             for _, g in ipairs(BENILLA_KART_GOODS) do
@@ -4278,7 +4281,7 @@
             if reel.t >= reel.next then
                 local pool = {}
                 for _, g in ipairs(BENILLA_KART_GOODS) do
-                    if g.tier > 0 then table.insert(pool, g) end
+                    if g.tier > 0 and g.tier <= 4 then table.insert(pool, g) end
                 end
                 local pick = pool[math.random(math.max(1, table.getn(pool)))]
                 about:SetText("Opening...\n\n" .. (pick and pick.name or ""))
@@ -4465,7 +4468,7 @@
             local g = BenillaKartGoods_Find(BenillaKartGoods.flag)
             BenillaKartGarageFrameFlagName:SetText(g and g.name or "None")
             local any = table.getn(BenillaKartFlag_List()) > 1
-            BenillaKartGarageFrameFlagNeed:SetText(any and "" or "Flags are sold in the shop (/kartshop).")
+            BenillaKartGarageFrameFlagNeed:SetText(any and "" or "Flags are found in Mystery Crates (/kartshop).")
         end
 
         -- The garage's Horn row: the steam whistle, then the horns we own, stepped by its arrows,
@@ -4488,7 +4491,7 @@
             if key ~= BenillaKartGoods.horn then
                 BenillaKart_Send("HornWear\t" .. key)
                 local g = BenillaKartGoods_Find(key) or BENILLA_KART_HORN_DEFAULT
-                PlaySoundFile(g.sound)
+                if g.sound then PlaySoundFile(g.sound) else PlaySound("igMainMenuOptionCheckBoxOn") end
             end
         end
 
@@ -4496,7 +4499,7 @@
             local g = BenillaKartGoods_Find(BenillaKartGoods.horn) or BENILLA_KART_HORN_DEFAULT
             BenillaKartGarageFrameHornName:SetText(g.name)
             local any = table.getn(BenillaKartHorn_List()) > 1
-            BenillaKartGarageFrameHornNeed:SetText(any and "Fire with no item sounds it." or "Fire with no item sounds it. More in the shop.")
+            BenillaKartGarageFrameHornNeed:SetText(any and "Fire with no item sounds it." or "Fire with no item sounds it. More in Mystery Crates.")
         end
 
         function BenillaKartGarage_Toggle()

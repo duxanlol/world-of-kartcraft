@@ -35,7 +35,7 @@ pub struct Good {
     gz: Option<&'static [u8]>,
 }
 
-pub const GOODS: [Good; 16] = [
+pub const GOODS: [Good; 17] = [
     Good {
         key: "student",
         kind: Kind::Flag,
@@ -94,6 +94,7 @@ pub const GOODS: [Good; 16] = [
     horn("dwarfhorn", "Dwarven Horn"),
     horn("trollgong", "Troll Gong"),
     horn("echeyakee", "Horn of Echeyakee"),
+    horn("whistle", "Steam Whistle"),
 ];
 
 const fn horn(key: &'static str, name: &'static str) -> Good {
@@ -108,9 +109,9 @@ const fn horn(key: &'static str, name: &'static str) -> Good {
 /// The flags by wire index: index `i + 1` is `FLAGS[i]`, 0 none.
 pub const FLAGS: [&str; 3] = ["student", "hordeflag", "allianceflag"];
 
-/// The horns by wire index, each its sound in the install: index `i + 1` is `HORNS[i]`, 0 the
-/// steam whistle [`HORN_DEFAULT`] every driver has.
-pub const HORNS: [(&str, &str); 8] = [
+/// The horns by wire index, each its sound in the install: index `i + 1` is `HORNS[i]`, 0 CTR's
+/// honk every driver has ([`crate::sound::honk`]).
+pub const HORNS: [(&str, &str); 9] = [
     ("catcall", "Sound\\Character\\EmoteCatCallWhistle01.wav"),
     ("goober", "Sound\\Doodad\\HornGoober.wav"),
     ("dockbell", "Sound\\Doodad\\BoatDockedWarning.wav"),
@@ -119,10 +120,8 @@ pub const HORNS: [(&str, &str); 8] = [
     ("dwarfhorn", "Sound\\Doodad\\DwarfHorn.wav"),
     ("trollgong", "Sound\\Doodad\\G_GongTroll01.wav"),
     ("echeyakee", "Sound\\Doodad\\G_HornofEcheyakee.wav"),
+    ("whistle", "Sound\\Doodad\\DeadmineSteamWhistleOn.wav"),
 ];
-
-/// The horn every driver has, none worn: the Deadmines' steam whistle.
-pub const HORN_DEFAULT: &str = "Sound\\Doodad\\DeadmineSteamWhistleOn.wav";
 
 /// A horn's wire index by key; 0 for none or an unknown one.
 pub fn horn_index(key: &str) -> u8 {
@@ -132,22 +131,20 @@ pub fn horn_index(key: &str) -> u8 {
         .map_or(0, |i| u8::try_from(i + 1).unwrap_or(0))
 }
 
-/// The install's sound for horn `index`; the steam whistle for 0 or an unknown one.
-pub fn horn_sound(index: u8) -> &'static str {
-    usize::from(index)
-        .checked_sub(1)
-        .and_then(|i| HORNS.get(i))
-        .map_or(HORN_DEFAULT, |(_, path)| path)
+/// The install's sound for horn `index`; `None` for 0 or an unknown one, CTR's honk.
+pub fn horn_sound(index: u8) -> Option<&'static str> {
+    let i = usize::from(index).checked_sub(1)?;
+    HORNS.get(i).map(|(_, path)| *path)
 }
 
 static OUR_HORN: AtomicU8 = AtomicU8::new(0);
 
-/// The horn we wear, as the server last said (`KartHorn`, a key; "" the steam whistle).
+/// The horn we wear, as the server last said (`KartHorn`, a key; "" CTR's honk).
 pub fn set_our_horn(key: &str) {
     OUR_HORN.store(horn_index(key), Ordering::Relaxed);
 }
 
-/// Our horn's wire index, 0 the steam whistle.
+/// Our horn's wire index, 0 CTR's honk.
 pub fn our_horn() -> u8 {
     OUR_HORN.load(Ordering::Relaxed)
 }
@@ -371,12 +368,12 @@ mod tests {
     }
 
     #[test]
-    fn horns_go_by_their_index_and_none_is_the_steam_whistle() {
+    fn horns_go_by_their_index_and_none_is_ctr_s_honk() {
         assert_eq!(horn_index("catcall"), 1);
         assert_eq!(horn_index(""), 0);
-        assert_eq!(horn_sound(0), HORN_DEFAULT);
-        assert_eq!(horn_sound(99), HORN_DEFAULT);
-        assert_eq!(horn_sound(horn_index("foghorn")), HORNS[4].1);
+        assert_eq!(horn_sound(0), None);
+        assert_eq!(horn_sound(99), None);
+        assert_eq!(horn_sound(horn_index("foghorn")), Some(HORNS[4].1));
         let horns: Vec<&str> = GOODS
             .iter()
             .filter(|g| g.kind == Kind::Horn)

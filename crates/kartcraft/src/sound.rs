@@ -762,6 +762,14 @@ fn db(amp: f32) -> Decibels {
     }
 }
 
+/// CTR's honk, the TNT crate's countdown tick (`RB_TNT.c:208`, OtherFX 0x3e): the kart horn
+/// every driver has (`crate::goods::HORNS`); `None` without the player's CTR audio.
+pub fn honk() -> Option<StaticSoundData> {
+    static HONK: std::sync::OnceLock<Option<StaticSoundData>> = std::sync::OnceLock::new();
+    HONK.get_or_init(|| StaticSoundData::from_file(audio_root()?.join("tnt_honk.wav")).ok())
+        .clone()
+}
+
 /// The engine loop (the player's CTR sample, else synthesized), for other drivers' karts.
 pub fn engine_loop() -> StaticSoundData {
     static ENGINE: std::sync::OnceLock<StaticSoundData> = std::sync::OnceLock::new();
