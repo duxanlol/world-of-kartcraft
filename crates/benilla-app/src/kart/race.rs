@@ -295,6 +295,9 @@ const FINISH_WAIT_SECS: f32 = 75.0;
 /// leave reached it comes within a round trip, and a race of the same id again only after a
 /// server restart (its ids start over).
 const LEFT_STALE_SECS: f32 = 10.0;
+/// How long after a time trial is over the restart binding still starts another go at it (s): the
+/// way out's Retry is offered as long, and past it the binding is a restart's again, nothing else.
+const RETRY_SECS: f32 = 60.0;
 /// How long our progress may run ahead of the server's for us (s) before the checkpoints it lacks
 /// are reported again, and again as often while it still lacks them.
 const RESYNC_SECS: f32 = 1.5;
@@ -1081,6 +1084,8 @@ pub(crate) struct Races {
     /// The race we left once its results had shown, and when: a roster of it the server sent
     /// before our leave reached it puts us in no race (`LEFT_STALE_SECS`).
     left: Option<(u32, f32)>,
+    /// The time trial we last left, its course and when: the restart binding's another go at it.
+    last_trial: Option<(String, f32)>,
     pub(crate) race: Option<Active>,
     /// Our character's name, to find ourselves in rosters.
     pub(crate) me: String,
@@ -1208,7 +1213,9 @@ impl Races {
     /// We leave race `id`, its results shown: in no race, and its roster not ours for a while.
     fn leave_over(&mut self, id: u32, now: f32) {
         self.left = Some((id, now));
-        self.race = None;
+        if let Some(race) = self.race.take().filter(|r| r.time_trial && !r.practice) {
+            self.last_trial = Some((race.course, now));
+        }
     }
 
     fn hear(&mut self, f: &[String], now: f32) -> Heard {
@@ -1490,12 +1497,22 @@ pub(crate) struct RaceText {
 #[allow(clippy::too_many_arguments)]
 /// The server's restart of our time trial (its `TR`), while we are in one, its run under way or
 /// its results still up; nothing in a race with others, nor out of every race.
-pub(super) fn restart_line(races: &Races) -> Option<String> {
-    let race = races
-        .race
-        .as_ref()
-        .filter(|r| r.time_trial && !r.practice)?;
-    Some(format!("KARTCRAFT\tR\tTR\t{}", race.id))
+/// The restart binding's line: a time trial under way restarted ("TR"); one we have finished, its
+/// results still up or left within RETRY_SECS, gone again ("TA", the way out's Retry), since the
+/// server lets a finished trial go at once and a "TR" for it finds none.
+pub(super) fn restart_line(races: &Races, now: f32) -> Option<String> {
+    if let Some(race) = races.race.as_ref() {
+        if !race.time_trial || race.practice {
+            return None;
+        }
+        return Some(if race.done && !race.course.is_empty() {
+            format!("KARTCRAFT\tR\tTA\t{}", race.course)
+        } else {
+            format!("KARTCRAFT\tR\tTR\t{}", race.id)
+        });
+    }
+    let (course, at) = races.last_trial.as_ref()?;
+    (now - at <= RETRY_SECS).then(|| format!("KARTCRAFT\tR\tTA\t{course}"))
 }
 
 pub(crate) fn update(
@@ -1519,7 +1536,7 @@ pub(crate) fn update(
     if binds.ran(super::bindings::RESTART) {
         if let Some(race) = races.race.as_mut().filter(|r| r.practice) {
             race.restart_practice();
-        } else if let Some(line) = restart_line(races) {
+        } else if let Some(line) = restart_line(races, now) {
             info!("kart race: restarting the time trial");
             profession.send(line);
         }
@@ -3218,26 +3235,43 @@ mod tests {
     #[test]
     fn only_a_time_trial_of_ours_restarts() {
         let mut races = racer();
-        assert_eq!(restart_line(&races), None, "out of every race");
+        assert_eq!(restart_line(&races, 0.0), None, "out of every race");
         hear(&mut races, "L\t5\tRacer,Goblin", 1.0);
         hear(&mut races, "G\t5\t4000\tRacer,Goblin", 2.0);
-        assert_eq!(restart_line(&races), None, "a race with others");
+        assert_eq!(restart_line(&races, 2.0), None, "a race with others");
         hear(&mut races, "L\t7\tRacer", 3.0);
         hear(&mut races, "TT\t7", 3.0);
-        assert_eq!(restart_line(&races).as_deref(), Some("KARTCRAFT\tR\tTR\t7"));
+        hear(&mut races, "C\t7\tgp-azora\t0\t1:2;3:4", 3.0);
+        assert_eq!(
+            restart_line(&races, 3.0).as_deref(),
+            Some("KARTCRAFT\tR\tTR\t7")
+        );
         hear(&mut races, "G\t7\t4000\tRacer", 3.0);
+        // Finished: the server has let the trial go, so another go at its course, not a restart.
         hear(&mut races, "F\t7\tRacer\t1\t61000", 70.0);
         assert_eq!(
-            restart_line(&races).as_deref(),
-            Some("KARTCRAFT\tR\tTR\t7"),
+            restart_line(&races, 70.0).as_deref(),
+            Some("KARTCRAFT\tR\tTA\tgp-azora"),
             "its results still up"
         );
-        // The server's fresh one takes its place, and restarts in turn.
-        hear(&mut races, "L\t8\tRacer", 71.0);
-        hear(&mut races, "TT\t8", 71.0);
-        assert_eq!(restart_line(&races).as_deref(), Some("KARTCRAFT\tR\tTR\t8"));
-        hear(&mut races, "X", 80.0);
-        assert_eq!(restart_line(&races), None, "left");
+        // Its results closed: still another go, the way out's Retry, for RETRY_SECS.
+        races.leave_over(7, 75.0);
+        assert_eq!(
+            restart_line(&races, 80.0).as_deref(),
+            Some("KARTCRAFT\tR\tTA\tgp-azora")
+        );
+        assert_eq!(
+            restart_line(&races, 75.0 + RETRY_SECS + 1.0),
+            None,
+            "long after"
+        );
+        // The server's fresh one, and it restarts in turn.
+        hear(&mut races, "L\t8\tRacer", 81.0);
+        hear(&mut races, "TT\t8", 81.0);
+        assert_eq!(
+            restart_line(&races, 81.0).as_deref(),
+            Some("KARTCRAFT\tR\tTR\t8")
+        );
     }
 
     #[test]
@@ -4113,7 +4147,7 @@ mod tests {
         // Not held at the line, no ghost, and nothing for the server's restart.
         assert!(!races.holding(0.0));
         assert!(races.run().is_none());
-        assert!(restart_line(&races).is_none());
+        assert!(restart_line(&races, 0.0).is_none());
         let race = races.race.as_mut().unwrap();
         assert_eq!(race.next(), Some(0), "the start gate first");
         assert!(!race.practice_start(Some([-50.0, 30.0, 0.0]), [-40.0, 30.0, 0.0], 1.0));
