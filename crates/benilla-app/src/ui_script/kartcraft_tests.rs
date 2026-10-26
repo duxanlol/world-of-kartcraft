@@ -2708,7 +2708,14 @@ fn race_mode_is_asked_again_until_the_server_says_it_is_on() {
     sent(&mut s);
     s.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
     // Race mode, and (every login) what we wear on the kart.
-    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tM\t1", "KARTCRAFT\tR\tCO"]);
+    assert_eq!(
+        sent(&mut s),
+        [
+            "KARTCRAFT\tR\tM\t1",
+            "KARTCRAFT\tR\tCO",
+            "KARTCRAFT\tR\tGoods"
+        ]
+    );
     // No answer: not again at once, again 5 s on.
     s.tick(1.0);
     assert!(sent(&mut s).is_empty());
@@ -2732,7 +2739,7 @@ fn race_mode_is_asked_for_at_every_login_until_turned_off() {
         s.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
         sent(s)
             .into_iter()
-            .filter(|l| l != "KARTCRAFT\tR\tCO")
+            .filter(|l| l != "KARTCRAFT\tR\tCO" && l != "KARTCRAFT\tR\tGoods")
             .collect::<Vec<_>>()
     };
     s.run("SetCVar('KartRaceMode', '1') BenillaKartRaceMode = nil")

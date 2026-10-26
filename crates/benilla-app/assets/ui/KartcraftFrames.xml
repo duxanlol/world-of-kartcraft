@@ -3312,6 +3312,8 @@
                 if event == "PLAYER_ENTERING_WORLD" then
                     BenillaKart_WorldChatJoin()
                     BenillaKart_Send("CO")
+                    -- The flag we fly and the horn we wear, for our own kart.
+                    BenillaKart_Send("Goods")
                 end
             elseif event == "CHAT_MSG_CHANNEL_NOTICE" then
                 BenillaKart_WorldChatNotice()
