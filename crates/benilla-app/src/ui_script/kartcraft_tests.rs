@@ -1509,6 +1509,77 @@ fn the_race_marshal_opens_the_finder() {
     assert!(open(&s));
 }
 
+/// Toggle Flying and Toggle Hovering flip their CVars and say so; R2 held a moment shows the card
+/// of every binding it modifies, the right stick's among them, and letting go hides it.
+#[test]
+fn the_modes_toggle_and_a_held_modifier_shows_its_bindings() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    s.run("SetCVar('KartFlight', '1') SetCVar('KartHover', '1')")
+        .unwrap();
+    s.run("BenillaKart_ToggleMode('KartFlight')").unwrap();
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartFlight')").unwrap(),
+        "0"
+    );
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartHover')").unwrap(),
+        "1"
+    );
+    s.run("BenillaKart_ToggleMode('KartFlight')").unwrap();
+    assert_eq!(
+        s.eval::<String>("return GetCVar('KartFlight')").unwrap(),
+        "1"
+    );
+
+    s.run(
+        "SetBinding('SHIFT-PADRSTICKUP', 'KARTCRAFT_FLIGHT')          SetBinding('SHIFT-PADRSTICKDOWN', 'KARTCRAFT_HOVER')          SetBinding('SHIFT-PADDUP', 'KARTCRAFT_ABILITY1')",
+    )
+    .unwrap();
+    let shown = |s: &mut UiScript| -> bool {
+        s.eval("return BenillaPadModsFrame:IsVisible() == 1")
+            .unwrap()
+    };
+    s.fire_event(
+        "BENILLA_PAD_MODIFIER",
+        vec![ScriptValue::Str("SHIFT".into())],
+    );
+    assert!(shown(&mut s));
+    let text: String = s.eval("return BenillaPadModsFrameText:GetText()").unwrap();
+    assert!(
+        text.contains("Pad Right Stick Up:  Toggle Flying"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Pad Right Stick Down:  Toggle Hovering"),
+        "{text}"
+    );
+    assert!(text.contains("Pad Up:  Wumpa Juice"), "{text}");
+    assert_eq!(
+        s.eval::<String>("return BenillaPadModsFrameTitle:GetText()")
+            .unwrap(),
+        "R2 held"
+    );
+    // L2 has nothing bound: the card says so.
+    s.fire_event(
+        "BENILLA_PAD_MODIFIER",
+        vec![ScriptValue::Str("CTRL".into())],
+    );
+    assert!(s
+        .eval::<String>("return BenillaPadModsFrameText:GetText()")
+        .unwrap()
+        .contains("Nothing is bound"));
+    s.fire_event(
+        "BENILLA_PAD_MODIFIER",
+        vec![ScriptValue::Str(String::new())],
+    );
+    assert!(!shown(&mut s));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 /// The kart's controls are the layer's `Bindings.xml`: Key Bindings lists them as a "World of
 /// Kartcraft" section, each row by its name, and a row's binding runs the window it names.
 #[test]
@@ -1541,7 +1612,7 @@ fn key_bindings_lists_the_kart_s_controls_and_they_run() {
          Boost (Second Shoulder),Fire Item,Toggle Camera Distance,Look Back,Wumpa Juice,Turbo Boost,Super Engine,Aku Aku,\
          Summon / Dismiss Kart,Race Finder,Leave Race,Unstuck,Restart Time Trial,Courier Jobs,Kartcraft Settings,Kart Garage,\
          Clean Screen (hide all interface),Free Camera (fly, park, off),Next Kart,\
-         Kartcraft Guide,Kartcraft Menu"
+         Kartcraft Guide,Kartcraft Menu,Toggle Flying,Toggle Hovering"
     );
     s.run("RunBinding('KARTCRAFT_GARAGE')").unwrap();
     assert!(s

@@ -60,6 +60,8 @@ pub(crate) struct Sent {
     /// The race map's track and racers as last sent, and when the racers were.
     track: Option<Option<RaceMap>>,
     pad: Option<Option<crate::kart::PadView>>,
+    /// The held pad modifier as last sent ([`KartOverlay::pad_modifier`]).
+    pad_modifier: Option<&'static str>,
     track_edit: Option<crate::kart::track_edit::EditView>,
     my_tracks: Option<u32>,
 }
@@ -224,6 +226,14 @@ pub(crate) fn feed(
             script.fire_event("BENILLA_KART_PAD", args);
         }
         sent.pad = Some(overlay.pad.clone());
+    }
+    // R2 or L2 held a moment: the card of its bindings (`BenillaPadMods`), and gone with it.
+    if sent.pad_modifier != Some(overlay.pad_modifier) {
+        script.fire_event(
+            "BENILLA_PAD_MODIFIER",
+            vec![ScriptValue::Str(overlay.pad_modifier.to_string())],
+        );
+        sent.pad_modifier = Some(overlay.pad_modifier);
     }
     if sent.garage != Some(overlay.skill) {
         script.fire_event("BENILLA_KART_GARAGE", garage_args(overlay.skill));

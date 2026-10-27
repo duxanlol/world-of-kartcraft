@@ -38,6 +38,9 @@ pub(super) const ABILITIES: [&str; 4] = [
 pub(super) const SUMMON: &str = "KARTCRAFT_SUMMON";
 /// A time trial of ours starts over from its line ([`super::race::restart_line`]).
 pub(super) const RESTART: &str = "KARTCRAFT_RESTART";
+/// Flying and hovering on or off (`KartFlight`, `KartHover`), run by their Lua.
+pub(super) const FLIGHT: &str = "KARTCRAFT_FLIGHT";
+pub(super) const HOVER: &str = "KARTCRAFT_HOVER";
 
 /// The overlay plane: the controls the kart reads while it drives.
 const DRIVING: &[&str] = &[
@@ -96,9 +99,12 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("SHIFT-PADDLEFT", ABILITIES[3]),
     ("PADBACK", CAMERA),
     ("PADRSTICK", LOOK_BACK),
-    // And its free ones: △ or Y summons the kart, Options or Menu opens the Kartcraft menu.
+    // And its free ones: △ or Y summons the kart, Options or Menu opens the Kartcraft menu, R2
+    // with the right stick up turns flying on or off and down hovering.
     ("PAD4", SUMMON),
     ("PADFORWARD", "KARTCRAFT_MENU"),
+    ("SHIFT-PADRSTICKUP", FLIGHT),
+    ("SHIFT-PADRSTICKDOWN", HOVER),
     // On foot, ✕ or A jumps, as Space does beside its hop.
     ("PAD1", "JUMP"),
 ];
@@ -250,10 +256,13 @@ mod tests {
         ] {
             assert!(keys(command).is_empty(), "{command} starts unbound");
         }
+        // The modes' toggles on R2 with the right stick, up and down.
+        assert_eq!(keys(FLIGHT), ["SHIFT-PADRSTICKUP"]);
+        assert_eq!(keys(HOVER), ["SHIFT-PADRSTICKDOWN"]);
         // Every row the file declares is a command the kart names or a Lua one.
         assert_eq!(
             benilla_ui::bindings_xml::parse(xml).unwrap().len(),
-            DRIVING.len() + 13
+            DRIVING.len() + 15
         );
     }
 

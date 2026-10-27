@@ -45,9 +45,10 @@ pub(crate) enum BindKey {
 
 /// Bevy's controller buttons by their binding names
 /// ([`benilla_ui::script::keybind::PAD_KEYS`]), Kartcraft's deviation: bottom, right, left and
-/// top face buttons (✕ ○ □ △, A B X Y), the D-pad, L1 and R1, L2 and R2, the stick clicks, then
-/// Options, Create and the PS button.
-pub(crate) const PAD_BUTTONS: [(GamepadButton, &str); 17] = [
+/// top face buttons (✕ ○ □ △, A B X Y), the D-pad, L1 and R1, L2 and R2, the stick clicks,
+/// Options, Create and the PS button, then the right stick's four directions
+/// ([`kartcraft::input::RIGHT_STICK_BUTTONS`]).
+pub(crate) const PAD_BUTTONS: [(GamepadButton, &str); 21] = [
     (GamepadButton::South, "PAD1"),
     (GamepadButton::East, "PAD2"),
     (GamepadButton::West, "PAD3"),
@@ -65,6 +66,10 @@ pub(crate) const PAD_BUTTONS: [(GamepadButton, &str); 17] = [
     (GamepadButton::Start, "PADFORWARD"),
     (GamepadButton::Select, "PADBACK"),
     (GamepadButton::Mode, "PADSYSTEM"),
+    (kartcraft::input::RIGHT_STICK_BUTTONS[0], "PADRSTICKUP"),
+    (kartcraft::input::RIGHT_STICK_BUTTONS[1], "PADRSTICKDOWN"),
+    (kartcraft::input::RIGHT_STICK_BUTTONS[2], "PADRSTICKLEFT"),
+    (kartcraft::input::RIGHT_STICK_BUTTONS[3], "PADRSTICKRIGHT"),
 ];
 
 /// A controller button's binding name.

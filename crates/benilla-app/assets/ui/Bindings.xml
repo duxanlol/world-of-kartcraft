@@ -35,4 +35,6 @@
     <Binding name="KARTCRAFT_NEXTKART">BenillaKartGarage_Next()</Binding>
     <Binding name="KARTCRAFT_GUIDE">BenillaKartGuide_Toggle()</Binding>
     <Binding name="KARTCRAFT_MENU">BenillaKartMenu_Toggle()</Binding>
+    <Binding name="KARTCRAFT_FLIGHT">BenillaKart_ToggleMode("KartFlight")</Binding>
+    <Binding name="KARTCRAFT_HOVER">BenillaKart_ToggleMode("KartHover")</Binding>
 </Bindings>

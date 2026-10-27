@@ -854,7 +854,7 @@ pub(crate) fn plugin(app: &mut App) {
         // frame's pad events are in and before anything reads the pads.
         .add_systems(
             PreUpdate,
-            input::stick_dpad.after(bevy::input::InputSystems),
+            (input::stick_dpad, input::right_stick_buttons).after(bevy::input::InputSystems),
         )
         .add_systems(
             Update,
@@ -887,7 +887,7 @@ pub(crate) fn plugin(app: &mut App) {
                 (sound::update, sound::wow_voices).chain(),
                 kartcraft::rumble::send,
                 score::track_skill,
-                (ui::pad_view, ui::publish).chain(),
+                (ui::pad_view, ui::pad_modifier, ui::publish).chain(),
                 // Into the VM only once the interface is up, or the first frame's events are lost;
                 // then the editor's panels as the frame left them, their keys card from the feed.
                 // The Kartcraft menu's presses (after `UiInput` hands it the controller's) before

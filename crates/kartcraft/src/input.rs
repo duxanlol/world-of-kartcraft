@@ -241,6 +241,53 @@ pub fn stick_dpad(
     }
 }
 
+/// The right stick's four directions as buttons, for bindings (Kartcraft's: the kart steers with
+/// the left stick and the right does nothing in it): up, down, left, right, pressed past
+/// [`RIGHT_STICK_ON`] and let go under [`RIGHT_STICK_OFF`]. Bevy names no such buttons; these
+/// `Other` ids stand clear of any a controller reports.
+pub const RIGHT_STICK_BUTTONS: [GamepadButton; 4] = [
+    GamepadButton::Other(200),
+    GamepadButton::Other(201),
+    GamepadButton::Other(202),
+    GamepadButton::Other(203),
+];
+const RIGHT_STICK_ON: f32 = 0.6;
+const RIGHT_STICK_OFF: f32 = 0.4;
+
+/// Which of [`RIGHT_STICK_BUTTONS`] the right stick holds down.
+#[derive(Component, Default)]
+pub struct RightStickHeld([bool; 4]);
+
+/// Presses and lets go of [`RIGHT_STICK_BUTTONS`] as the right stick goes past half and comes
+/// back, after the input set has read the frame's events and before anything reads the pads.
+pub fn right_stick_buttons(
+    mut commands: Commands,
+    mut pads: Query<(Entity, &mut Gamepad, Option<&mut RightStickHeld>)>,
+) {
+    for (entity, mut pad, held) in &mut pads {
+        let Some(mut held) = held else {
+            commands.entity(entity).insert(RightStickHeld::default());
+            continue;
+        };
+        let x = pad.get(GamepadAxis::RightStickX).unwrap_or(0.0);
+        let y = pad.get(GamepadAxis::RightStickY).unwrap_or(0.0);
+        for (i, along) in [y, -y, -x, x].into_iter().enumerate() {
+            let want = if held.0[i] {
+                along > RIGHT_STICK_OFF
+            } else {
+                along > RIGHT_STICK_ON
+            };
+            let button = RIGHT_STICK_BUTTONS[i];
+            if want && !held.0[i] {
+                pad.digital_mut().press(button);
+            } else if !want && held.0[i] {
+                pad.digital_mut().release(button);
+            }
+            held.0[i] = want;
+        }
+    }
+}
+
 /// A controller the player did not choose (the host's controller setting): nothing reads it.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct PadIgnored;
@@ -486,6 +533,7 @@ const AUTOFIRE_SECS: f32 = 1.5;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
 
     #[test]
     fn a_pad_s_buttons_drive_as_bound_and_its_brake_reverses_only_with_the_stick() {
@@ -515,6 +563,32 @@ mod tests {
             })
             .reverse
         );
+    }
+
+    /// The right stick past 0.6 presses its direction's button, and lets it go only under 0.4.
+    #[test]
+    fn the_right_stick_presses_its_directions() {
+        let mut world = World::new();
+        let pad = world.spawn(Gamepad::default()).id();
+        let step = |y: f32, world: &mut World| {
+            world
+                .get_mut::<Gamepad>(pad)
+                .unwrap()
+                .analog_mut()
+                .set(GamepadAxis::RightStickY, y);
+            world.run_system_once(right_stick_buttons).unwrap();
+            let g = world.get::<Gamepad>(pad).unwrap();
+            (
+                g.pressed(RIGHT_STICK_BUTTONS[0]),
+                g.pressed(RIGHT_STICK_BUTTONS[1]),
+            )
+        };
+        step(0.0, &mut world);
+        assert_eq!(step(0.5, &mut world), (false, false), "not past 0.6");
+        assert_eq!(step(0.8, &mut world), (true, false), "up");
+        assert_eq!(step(0.5, &mut world), (true, false), "held over 0.4");
+        assert_eq!(step(0.3, &mut world), (false, false), "let go");
+        assert_eq!(step(-0.9, &mut world), (false, true), "down");
     }
 
     #[test]

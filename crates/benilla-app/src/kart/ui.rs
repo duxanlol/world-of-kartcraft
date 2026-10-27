@@ -50,6 +50,9 @@ pub(crate) struct KartOverlay {
     pub(crate) seated: bool,
     /// The controller test's view of the pad the kart reads (`/kartpad`), while it is open.
     pub(crate) pad: Option<PadView>,
+    /// A pad modifier held a moment, for the card of its bindings: `SHIFT` (R2), `CTRL` (L2),
+    /// else empty ([`pad_modifier`]).
+    pub(crate) pad_modifier: &'static str,
     /// Leaving the kart in a race, held for: how far, in percent.
     pub(crate) leaving: Option<u8>,
     /// A delivery's town and the yards left to it by road (`super::gps`).
@@ -90,6 +93,42 @@ const PAD_TOKENS: [(bevy::input::gamepad::GamepadButton, &str); 18] = {
         (B::Other(0), "Touchpad"),
     ]
 };
+
+/// How long R2 or L2 is held before the card of its bindings shows (s): a chord's quick press
+/// never shows it.
+const MODIFIER_CARD_SECS: f32 = 0.35;
+
+/// R2 or L2 held as the pad's modifier ([`kartcraft::input::modifier_down`]) for
+/// [`MODIFIER_CARD_SECS`]: the interface's card of every binding it modifies shows while it is.
+pub(super) fn pad_modifier(
+    time: Res<Time>,
+    pads: Query<&bevy::input::gamepad::Gamepad, Without<kartcraft::input::PadIgnored>>,
+    mut overlay: ResMut<KartOverlay>,
+    mut since: Local<Option<(&'static str, f32)>>,
+) {
+    use kartcraft::input::{modifier_down, PAD_CTRL, PAD_MODIFIER};
+    let held = pads.iter().find_map(|p| {
+        if modifier_down(p, PAD_MODIFIER) {
+            Some("SHIFT")
+        } else if modifier_down(p, PAD_CTRL) {
+            Some("CTRL")
+        } else {
+            None
+        }
+    });
+    let now = time.elapsed_secs();
+    *since = match (held, *since) {
+        (Some(m), Some((was, at))) if m == was => Some((was, at)),
+        (Some(m), _) => Some((m, now)),
+        (None, _) => None,
+    };
+    let shown = since
+        .filter(|(_, at)| now - at >= MODIFIER_CARD_SECS)
+        .map_or("", |(m, _)| m);
+    if overlay.pad_modifier != shown {
+        overlay.pad_modifier = shown;
+    }
+}
 
 /// The controller test's view, while `KartPadTest` holds it open: the pad
 /// [`kartcraft::input::read`] would drive with.

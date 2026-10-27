@@ -61,8 +61,9 @@ pub fn normalize_binding_key(key: &str) -> Option<String> {
 /// The controller's buttons as binding keys, by the names later clients give them: `PAD1` to
 /// `PAD4` the face buttons (bottom, right, left, top), the D-pad, the shoulders and triggers, the
 /// stick clicks, and the middle buttons (`PADFORWARD` Options or Menu, `PADBACK` Create or View,
-/// `PADSYSTEM` the PS or Guide button). Kartcraft's deviation: 1.12 binds no controller.
-pub const PAD_KEYS: [&str; 17] = [
+/// `PADSYSTEM` the PS or Guide button), then the right stick pushed up, down, left and right.
+/// Kartcraft's deviation: 1.12 binds no controller.
+pub const PAD_KEYS: [&str; 21] = [
     "PAD1",
     "PAD2",
     "PAD3",
@@ -80,6 +81,10 @@ pub const PAD_KEYS: [&str; 17] = [
     "PADFORWARD",
     "PADBACK",
     "PADSYSTEM",
+    "PADRSTICKUP",
+    "PADRSTICKDOWN",
+    "PADRSTICKLEFT",
+    "PADRSTICKRIGHT",
 ];
 
 /// `IsValidBindingKeyString 0x4b7890`, arm for arm, and the controller's keys.

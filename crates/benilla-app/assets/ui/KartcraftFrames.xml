@@ -78,6 +78,8 @@
         BINDING_NAME_KARTCRAFT_FREECAM = "Free Camera (fly, park, off)"
         BINDING_NAME_KARTCRAFT_NEXTKART = "Next Kart"
         BINDING_NAME_KARTCRAFT_GUIDE = "Kartcraft Guide"
+        BINDING_NAME_KARTCRAFT_FLIGHT = "Toggle Flying"
+        BINDING_NAME_KARTCRAFT_HOVER = "Toggle Hovering"
         BENILLA_KART_PREFIX = "KARTCRAFT"
         -- What the finder offers, { key, name } in the kart's order, from BENILLA_KART_COURSES:
         -- the zones, keyed "z<place>".
@@ -1942,7 +1944,57 @@
             PADFORWARD = "Pad Options / Menu",
             PADBACK = "Pad Create / View",
             PADSYSTEM = "Pad PS / Guide",
+            PADRSTICKUP = "Pad Right Stick Up",
+            PADRSTICKDOWN = "Pad Right Stick Down",
+            PADRSTICKLEFT = "Pad Right Stick Left",
+            PADRSTICKRIGHT = "Pad Right Stick Right",
         }
+
+        -- The kart's modes on or off (KartFlight, KartHover; the settings window's boxes and the
+        -- bindings Toggle Flying and Toggle Hovering), said on the screen.
+        BENILLA_KART_MODE_NAMES = { KartFlight = "Flying", KartHover = "Hovering on water" }
+        function BenillaKart_ToggleMode(cvar)
+            local on = GetCVar(cvar) ~= "1"
+            SetCVar(cvar, on and "1" or "0")
+            local name = BENILLA_KART_MODE_NAMES[cvar] or cvar
+            UIErrorsFrame:AddMessage(name .. (on and ": on (out of races)" or ": off"), 1, 0.82, 0, 1, 3)
+            PlaySound(on and "igMainMenuOptionCheckBoxOn" or "igMainMenuOptionCheckBoxOff")
+            if BenillaKartSettingsFrame:IsVisible() then BenillaKartSettings_Refresh() end
+        end
+
+        -- The card of a held pad modifier's bindings (BENILLA_PAD_MODIFIER: "SHIFT" while R2 is
+        -- held a moment, "CTRL" for L2, "" let go): every key bound with it, live from the
+        -- bindings, so a rebinding shows at once.
+        BENILLA_PAD_MOD_NAMES = { SHIFT = "R2", CTRL = "L2" }
+        function BenillaPadMods_Lines(modifier)
+            local lines, prefix = {}, modifier .. "-"
+            for i = 1, GetNumBindings() do
+                local command, key1, key2 = GetBinding(i)
+                for _, key in ipairs({ key1, key2 }) do
+                    if key and string.sub(key, 1, string.len(prefix)) == prefix and string.find(key, "PAD") then
+                        local name = getglobal("BINDING_NAME_" .. command) or command
+                        local button = BenillaKeyBindings_KeyText(string.sub(key, string.len(prefix) + 1))
+                        table.insert(lines, button .. ":  " .. name)
+                    end
+                end
+            end
+            return lines
+        end
+
+        function BenillaPadMods_Show(modifier)
+            local frame = BenillaPadModsFrame
+            if modifier == "" then
+                frame:Hide()
+                return
+            end
+            local lines = BenillaPadMods_Lines(modifier)
+            local title = (BENILLA_PAD_MOD_NAMES[modifier] or modifier) .. " held"
+            if table.getn(lines) == 0 then lines = { "Nothing is bound with it." } end
+            BenillaPadModsFrameTitle:SetText(title)
+            BenillaPadModsFrameText:SetText(table.concat(lines, "\n"))
+            frame:SetHeight(BenillaPadModsFrameText:GetHeight() + 44)
+            frame:Show()
+        end
         BINDING_NAME_KARTCRAFT_MENU = "Kartcraft Menu"
 
         -- The windows the controller drives, the first one shown in this order: its buttons, check
@@ -7409,6 +7461,36 @@
             </OnClick>
         </Scripts>
     </Button>
+    <!-- R2 or L2 held a moment: every binding it modifies (BenillaPadMods_Show), the controller
+         legend's look. -->
+    <Frame name="BenillaPadModsFrame" hidden="true" parent="UIParent" frameStrata="FULLSCREEN_DIALOG">
+        <Size><AbsDimension x="300" y="80"/></Size>
+        <Anchors><Anchor point="RIGHT"><Offset><AbsDimension x="-40" y="40"/></Offset></Anchor></Anchors>
+        <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+            <BackgroundInsets><AbsInset left="5" right="5" top="5" bottom="5"/></BackgroundInsets>
+            <TileSize><AbsValue val="16"/></TileSize>
+            <EdgeSize><AbsValue val="16"/></EdgeSize>
+        </Backdrop>
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentTitle" inherits="GameFontNormal" justifyH="LEFT">
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="14" y="-12"/></Offset></Anchor></Anchors>
+                </FontString>
+                <FontString name="$parentText" inherits="GameFontHighlightSmall" justifyH="LEFT" justifyV="TOP">
+                    <Size><AbsDimension x="272" y="0"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="14" y="-30"/></Offset></Anchor></Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Scripts>
+            <OnLoad>
+                this:SetBackdropColor(0, 0, 0, 0.85)
+                this:SetBackdropBorderColor(1, 0.82, 0, 1)
+                this:RegisterEvent("BENILLA_PAD_MODIFIER")
+            </OnLoad>
+            <OnEvent>BenillaPadMods_Show(arg1 or "")</OnEvent>
+        </Scripts>
+    </Frame>
     <Frame name="BenillaPadLegendFrame" parent="UIParent" hidden="true" frameStrata="DIALOG">
         <Size><AbsDimension x="320" y="40"/></Size>
         <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
