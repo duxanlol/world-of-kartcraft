@@ -307,20 +307,32 @@ impl Terrain {
     pub const NONE: Terrain = crate::Ground::None.terrain();
     /// Deviates (the owner's call, World of Kartcraft): afloat on deep water ([`Kart::water`]).
     /// CTR has no floating (its shallow water is a ground row, deep water a kill plane): a
-    /// hovercraft's feel, CTR's Water row's speed lifted a little, grip let go to a slide, the
-    /// steering softer, Water's flags (its rolling sound).
+    /// hovercraft, between CTR's Ice row and the road (DKR's hovercraft keeps 93% of its sideways
+    /// speed a frame, `racer.c:2116`, and its heading weathervanes after its travel): the top
+    /// speed whole, the engine heavy, the travel lagging the nose (lean) and the sideways grip
+    /// weak, so it carries its momentum wide; the counter-steer softer. Water's flags (its sound).
     pub const AFLOAT: Terrain = Terrain {
-        speed: 200,
-        accel: 200,
-        counter_steer: 256,
-        lean: 256,
-        ground_friction: 96,
+        speed: 256,
+        accel: 140,
+        counter_steer: 128,
+        lean: 96,
+        ground_friction: 48,
         turn_angle: 256,
-        turn_response: 200,
+        turn_response: 220,
         flags: crate::Ground::Water.terrain().flags,
     };
-    /// Afloat with a boost burning: CTR's FastWater, the kart planing at full grip.
-    pub const PLANING: Terrain = crate::Ground::FastWater.terrain();
+    /// Afloat with a boost burning: planing, the hull up on the water and gripping it, so a turbo
+    /// snaps the slide straight (FastWater's speed and engine).
+    pub const PLANING: Terrain = Terrain {
+        speed: 256,
+        accel: 256,
+        counter_steer: 192,
+        lean: 160,
+        ground_friction: 96,
+        turn_angle: 256,
+        turn_response: 240,
+        flags: crate::Ground::FastWater.terrain().flags,
+    };
 }
 
 /// How deep a floating kart sits in the water at rest, lu: its floor is the surface less its
@@ -332,6 +344,17 @@ pub const DRAFT: f32 = 12.0;
 /// rather than felt: the kart's floor stays CTR's, so a hop or a powerslide on water is the
 /// ground's. At rest it bobs [`BOB_LU`] at [`BOB_RATE`] radians a frame, still by a third of top speed.
 const SPLASH_PER_FALL: f32 = 1.0 / 512.0;
+/// A hop off the water's force, /256 of a hop's.
+const WATER_HOP: i32 = 330;
+/// The engine's distortion lifted on the water: `64 * log2(1.3)`.
+const WATER_ENGINE: i32 = 24;
+/// The drawn hull on the water: its lean into the slide (radians a radian of slip, at most
+/// [`HULL_LEAN_MAX`]), its nose up at speed (DKR's 0x3C0 bias, 5.3°, `racer.c:2489`), and the
+/// waves' rocking at rest.
+const HULL_LEAN: f32 = 0.5;
+const HULL_LEAN_MAX: f32 = 0.22;
+const HULL_NOSE_UP: f32 = 0.09;
+const HULL_ROCK: f32 = 0.035;
 const SPLASH_MAX: f32 = 28.0;
 const SPLASH_STIFFNESS: f32 = 0.18;
 const SPLASH_DAMPING: f32 = 0.82;
@@ -343,7 +366,8 @@ const BOB_RATE: f32 = 0.16;
 /// the nose, so a dive gains it and a climb spends it; the wing's lift takes gravity away with speed
 /// (DKR's `G = 1 - clamp(|v| - 2, 0, 4) / 4`: full gravity at a sixth of top speed, none at half);
 /// body drag damps the sink, so it settles to a glide. The engine pushes no more in the air than on
-/// a CTR hop: turbo reserves are the thrust, so the powerslide's turbos keep a kart up.
+/// a CTR hop: turbo reserves are the thrust, so a flight goes as far as the turbo it takes off
+/// with (a powerslide's, a pad's, an item's) and no powerslide starts in the air.
 ///
 /// The wings open by themselves on a fall longer than a CTR jump: a second in the air (past hang
 /// time's middle tier, 960 ms; a CTR ledge's drop lands in two thirds of one) with still this far
@@ -389,8 +413,8 @@ const FLY_STALL_LIFT: f32 = 0.25;
 /// Past this share of the top speed /256 a dive's extra speed bleeds off this much a frame more.
 const FLY_OVERSPEED: i32 = 300;
 const FLY_OVERSPEED_DRAG: f32 = 0.015;
-/// The bank: its reach (a powerslide's ×1.5, DKR's hard bank on R), its rate, and the yaw a
-/// frame at full bank (90° a second; a powerslide's 135°). The turn rate follows the bank, a
+/// The bank: its reach (×1.5 with a hop button held, DKR's hard bank on R), its rate, and the
+/// yaw a frame at full bank (90° a second; a hard bank's 135°). The turn rate follows the bank, a
 /// coordinated turn (DKR: `steerVisualRotation -= (-bank >> 6) * handling`).
 const FLY_BANK_MAX: i32 = 0x180;
 const FLY_BANK_RATE: i32 = 32;
@@ -1245,7 +1269,10 @@ impl Kart {
                 self.engine_whine = ((TURBO_MAX_ROOM_MS >> 5) >> 1) - (self.turbo_meter >> 6);
             }
         }
-        let distortion = (pitch + self.engine_whine).clamp(0, 0xFF);
+        // On the water the engine sings higher, freed of the road (DKR's hovercraft: +0.3 to its
+        // pitch over water, `audio_vehicle.c:379`; CTR's rate is 2^((d - 128) / 64)).
+        let water = if self.afloat { WATER_ENGINE } else { 0 };
+        let distortion = (pitch + self.engine_whine + water).clamp(0, 0xFF);
         self.engine_sound = (distortion as u8, volume.clamp(0, 0xFF) as u8);
     }
 
@@ -1449,6 +1476,9 @@ impl Kart {
             scale = Vec3::new(x, y, z);
         }
         offset.y += self.water_bob();
+        if self.afloat {
+            basis *= self.hull_attitude();
+        }
         // In flight the nose pitches up about the kart's own +X and it banks into the turn, the
         // inside (+X, left, for a left turn) going down.
         if let Some(f) = self.flight {
@@ -2087,13 +2117,9 @@ impl Kart {
                     Button::R1 => input.r1,
                     Button::L1 => input.l1,
                 };
-                // In flight a tap of the drift's button while steering banks into an air drift,
-                // CTR's powerslide in the air: the same meter and the same boosts.
-                let start = if self.flight.is_some() {
-                    tapped
-                } else {
-                    self.flags & STARTED_TOUCH_GROUND != 0
-                };
+                // No powerslide in flight: its turbos would keep a kart up for ever. A flight burns
+                // the turbo it took off with.
+                let start = self.flight.is_none() && self.flags & STARTED_TOUCH_GROUND != 0;
                 if start
                     && self.simp_turn.abs() > self.stats.turn_rate / 2
                     && held
@@ -2697,6 +2723,10 @@ impl Kart {
             speed: self.vel.length().min(MAX_SPEED as f32),
             sink: 0.0,
         });
+        // A powerslide off the edge ends at take-off: its meter pays nothing in the air.
+        if self.state == State::Drifting {
+            self.end_drift();
+        }
         self.events.push(Event::TakeOff);
     }
 
@@ -2730,20 +2760,15 @@ impl Kart {
             FLY_DIVE_PITCH
         };
         f.pitch = approach_i(f.pitch, FLY_PITCH_RATE, pitch_to).clamp(FLY_PITCH_DOWN, FLY_PITCH_UP);
-        // The bank from the steer (+ left), harder in an air drift; the yaw follows it.
-        let drifting = self.state == State::Drifting;
-        let reach = if drifting {
+        // The bank from the steer (+ left), harder with a hop button held (DKR's hard bank on R,
+        // no meter and no turbo); the yaw follows it.
+        let hard = input.r1 || input.l1;
+        let reach = if hard {
             FLY_BANK_MAX * 3 / 2
         } else {
             FLY_BANK_MAX
         };
         let steer = (self.simp_turn as f32 / self.stats.turn_rate.max(1) as f32).clamp(-1.0, 1.0);
-        let steer = if drifting && steer.abs() < 0.5 {
-            // An air drift keeps turning its way, as a powerslide does.
-            self.mult_drift.signum() as f32 * 0.5
-        } else {
-            steer
-        };
         f.bank = approach_i(f.bank, FLY_BANK_RATE, (steer * reach as f32) as i32);
         let yaw = FLY_YAW_AT_FULL_BANK * f.bank as f32 / FLY_BANK_MAX as f32;
         self.angle = wrap(self.angle + yaw.round() as i32);
@@ -3127,6 +3152,20 @@ impl Kart {
         }
     }
 
+    /// The drawn hull's turn on the water: leaning out of the slide (the way its travel lags its
+    /// nose), its nose up as it gathers speed, and rocking on the waves when slow.
+    fn hull_attitude(&self) -> Mat3 {
+        let slip = rad(wrap_signed(self.vel_yaw - self.angle));
+        let third = (self.stats.speed / 3).max(1) as f32;
+        let pace = (self.speed_approx.abs() as f32 / third).min(1.0);
+        let slow = 1.0 - pace;
+        let t = self.frame as f32;
+        let roll = (slip * HULL_LEAN).clamp(-HULL_LEAN_MAX, HULL_LEAN_MAX)
+            + (t * 0.11).sin() * HULL_ROCK * slow;
+        let pitch = HULL_NOSE_UP * pace + (t * 0.07).cos() * HULL_ROCK * slow;
+        Mat3::from_rotation_x(-pitch) * Mat3::from_rotation_z(roll)
+    }
+
     /// The drawn kart's height on the water against its floor, lu: the splash's dip and, slow, the
     /// bob ([`SPLASH_STIFFNESS`]); 0 off the water.
     pub fn water_bob(&self) -> f32 {
@@ -3188,7 +3227,13 @@ impl Kart {
             self.process_jump(&mut mv);
         } else if !lockout && self.coyote != 0 && self.jump_buffer != 0 && self.jump_cooldown == 0 {
             self.jump_forced = JUMP_FORCED_MS;
-            self.jump_vel = JUMP_FORCE;
+            // Off the water a hovercraft hops higher (DKR's 4.5 against 3.5 off land,
+            // `racer.c:2210-2221`).
+            self.jump_vel = if self.afloat {
+                JUMP_FORCE * WATER_HOP / 256
+            } else {
+                JUMP_FORCE
+            };
             self.process_jump(&mut mv);
             self.hopped = true;
             self.events.push(Event::Hop);

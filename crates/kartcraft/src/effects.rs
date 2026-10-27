@@ -683,6 +683,8 @@ const SPARK_LANDING_FALL: i32 = 22 * 256;
 const SPARK_LANDING_COUNT: usize = 10;
 /// A splash-down's spray, twice a landing's sparks.
 const SPLASH_COUNT: usize = 20;
+/// A turbo's rooster tail on the water, a frame.
+const ROOSTER_TAIL: usize = 3;
 /// `VEH_EMITTER_WALL_SPARK_MIN_SPEED` (`VehEmitter.c:112`), speed units.
 const SPARK_WALL_SPEED: i32 = 2 * 256;
 /// `VEH_EMITTER_TERRAIN_MIN_SPEED` (`VehEmitter.c:72`): the tyres throw dirt from this speed.
@@ -779,6 +781,13 @@ impl KartEffects {
             for tyre in &TYRES[tyres] {
                 let at = Vec3::new(tyre[0], 10.0 / 51.2, tyre[2]);
                 self.spawn(kind, t, at, to_yards);
+            }
+            // A turbo on the water throws a rooster tail behind (DKR's wake, emitters 7 and 8).
+            if kind == SparkKind::Spray && status.fire > 0 {
+                for _ in 0..ROOSTER_TAIL {
+                    let at = Vec3::new((self.random() - 0.5) * 0.3, 10.0 / 51.2, -0.9);
+                    self.spawn(SparkKind::Spray, t, at, to_yards);
+                }
             }
         }
         if status.feedback.wall_frames > 0 && speed > SPARK_WALL_SPEED {
@@ -1018,6 +1027,11 @@ mod tests {
         fx.dirt_and_wall_sparks(&t, &s, 1.0);
         assert_eq!(fx.sparks.len(), 6);
         assert!(fx.sparks.iter().all(|p| p.kind == SparkKind::Spray));
+        // On a turbo, a rooster tail behind besides.
+        s.fire = 6;
+        fx.dirt_and_wall_sparks(&t, &s, 1.0);
+        assert_eq!(fx.sparks.len(), 6 + 4 + ROOSTER_TAIL);
+        s.fire = 0;
         fx.sparks.clear();
         s.feedback = Feedback {
             landing: Some((SPARK_LANDING_FALL, 0)),

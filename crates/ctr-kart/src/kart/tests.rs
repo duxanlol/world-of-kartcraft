@@ -1588,10 +1588,10 @@ fn a_turbo_keeps_a_flying_kart_up() {
     assert!(powered > glide + 300.0, "{powered} against {glide}");
 }
 
-/// In the air a tap of the drift button while steering banks into an air drift: CTR's meter,
-/// and a tap of the other shoulder in its red zone pays the turbos, 1, 2 and 3.
+/// No powerslide in flight: the drift's button banks harder, but no meter fills and no turbo is
+/// paid, so a flight burns only what it took off with; a powerslide carried off the edge ends.
 #[test]
-fn an_air_drift_pays_ctr_s_turbos() {
+fn a_flight_has_no_powerslide() {
     let w = cliff(12000.0);
     let mut kart = off_the_cliff(&w, 12000.0);
     while !kart.flying() {
@@ -1600,27 +1600,35 @@ fn an_air_drift_pays_ctr_s_turbos() {
     let steer = Input { steer: -1.0, ..GAS };
     run(&mut kart, &w, steer, 2);
     let hold = Input { r1: true, ..steer };
-    kart.tick(&w, &hold, &NONE);
-    assert_eq!(kart.state, State::Drifting, "an air drift");
     let tap = Input { l1: true, ..hold };
-    let mut stages = Vec::new();
-    for _ in 0..3 {
-        while !kart.turbo_meter().is_some_and(|(_, red)| red) {
-            kart.tick(&w, &hold, &NONE);
-            assert!(kart.flying() && kart.state == State::Drifting);
-        }
-        run(&mut kart, &w, hold, 10);
-        kart.events.clear();
-        kart.tick(&w, &tap, &NONE);
-        stages.extend(kart.events.iter().filter_map(|e| match e {
-            Event::Boost { stage, .. } => Some(*stage),
-            _ => None,
-        }));
+    kart.events.clear();
+    for frame in 0..90 {
+        let input = if frame % 10 == 9 { tap } else { hold };
+        kart.tick(&w, &input, &NONE);
+        assert_ne!(kart.state, State::Drifting, "no powerslide in the air");
+        assert!(kart.turbo_meter().is_none());
     }
-    assert_eq!(stages, [1, 2, 3]);
-    assert!(kart.reserves() > 0);
+    assert!(!kart.events.iter().any(|e| matches!(e, Event::Boost { .. })));
+    assert_eq!(kart.reserves(), 0);
     let (_, bank) = kart.flight_attitude().unwrap();
-    assert!(bank > 0.5, "banked hard left: {bank}");
+    assert!(bank > 0.6, "banked hard left: {bank}");
+
+    // Mid-powerslide off the plateau's edge: the slide ends as the wings open.
+    let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 12001.0, -9000.0), 0);
+    run(&mut kart, &w, GAS, 90);
+    let slide = Input {
+        steer: -0.3,
+        r1: true,
+        ..GAS
+    };
+    for _ in 0..400 {
+        kart.tick(&w, &slide, &NONE);
+        if kart.flying() {
+            break;
+        }
+    }
+    assert!(kart.flying(), "off the edge and flying");
+    assert_ne!(kart.state, State::Drifting);
 }
 
 /// Pulled up the nose climbs, spending speed, until too slow for the wing: it stalls and sinks.
@@ -1733,4 +1741,49 @@ fn a_kart_takes_off_from_a_hop_on_the_flat() {
         "back down at {}",
         kart.pos.y
     );
+}
+
+/// On the water a hovercraft carries its momentum: the same turn at speed leaves its travel
+/// further behind its nose than on the road.
+#[test]
+fn a_turn_on_water_slides_wider_than_on_the_road() {
+    let w = world(floor(200000.0));
+    let slip = |water: Option<f32>| {
+        let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 1.0, 0.0), 0);
+        kart.water = water;
+        run(&mut kart, &w, GAS, 120);
+        let turn = Input { steer: -1.0, ..GAS };
+        let mut most = 0;
+        for _ in 0..30 {
+            kart.tick(&w, &turn, &NONE);
+            most = most.max(wrap_signed(kart.vel_yaw - kart.angle).abs());
+        }
+        most
+    };
+    let (road, water) = (slip(None), slip(Some(200.0)));
+    assert!(
+        water > road * 2 + 20,
+        "water slips {water}, the road {road}"
+    );
+}
+
+/// A hop off the water goes higher than one off the road (DKR's hovercraft).
+#[test]
+fn a_hop_off_the_water_goes_higher() {
+    let w = world(floor(200000.0));
+    let apex = |water: Option<f32>| {
+        let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 1.0, 0.0), 0);
+        kart.water = water;
+        run(&mut kart, &w, GAS, 60);
+        let from = kart.pos.y;
+        kart.tick(&w, &Input { r1: true, ..GAS }, &NONE);
+        let mut top = from;
+        for _ in 0..20 {
+            kart.tick(&w, &GAS, &NONE);
+            top = top.max(kart.pos.y);
+        }
+        top - from
+    };
+    let (road, water) = (apex(None), apex(Some(200.0)));
+    assert!(water > road * 1.2, "off the water {water}, the road {road}");
 }
