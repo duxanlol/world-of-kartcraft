@@ -10,8 +10,10 @@ use ctr_kart::{Class, Collision, Event, Ground, Input, Kart, Modifiers, Pose, St
 
 use crate::{from_lu, heading_of, lu_per_yard, to_lu, yaw_of};
 
-/// Half extents (yards) of the collision box gathered around the kart.
-const GATHER_HALF: Vec3 = Vec3::new(120.0, 60.0, 120.0);
+/// Half extents (yards) of the collision box gathered around the kart: as tall as a flight goes
+/// over the ground (`ctr_kart`'s lift is gone by 142 yd over it at scale 1), so a flier has the
+/// ground under it in the box and is never taken for a kart at the loaded world's edge.
+const GATHER_HALF: Vec3 = Vec3::new(120.0, 200.0, 120.0);
 /// How far (yards) the kart drives from the box centre before it is rebuilt around it.
 const RECENTRE: f32 = 50.0;
 /// Seconds between rebuilds while driving, so terrain streamed in since becomes solid.
@@ -23,8 +25,6 @@ const CELL_LU: f32 = 160.0;
 const VOID_PROBE_LU: f32 = 200.0;
 /// How far down (lu) the look for anything below the kart goes: deeper than any fall.
 const VOID_DEPTH_LU: f32 = 1.0e6;
-/// Seconds off the ground before a falling kart is put back where it last stood.
-const RESCUE_AFTER: f32 = 3.0;
 /// CTR's wheel radius, lu, for the wheels' roll.
 const WHEEL_RADIUS_LU: f32 = 10.0;
 
@@ -119,10 +119,6 @@ pub struct Session {
     camera: crate::camera::ChaseCamera,
     shots: Option<(crate::camera::Shot, crate::camera::Shot)>,
     wheel_spin: f32,
-    /// Where the kart last stood on the ground, its heading, and how long it has been off it
-    /// since (s): a kart lost in a fall is put back, as Aku Aku lifts a fallen racer.
-    last_ground: Option<(Vec3, i32)>,
-    falling: f32,
     /// Held where it stands across the ground (a race's countdown): it settles onto the ground
     /// but neither rolls nor slides, however the start slopes.
     pinned: bool,
@@ -360,8 +356,6 @@ impl Session {
         self.world = Some(Arc::new(world));
         self.owed = 0.0;
         self.camera.reset();
-        self.last_ground = None;
-        self.falling = 0.0;
         self.shots = None;
         Ok(faces)
     }
@@ -373,8 +367,6 @@ impl Session {
         self.previous = None;
         self.current = None;
         self.camera.reset();
-        self.last_ground = None;
-        self.falling = 0.0;
         self.shots = None;
     }
 
@@ -583,29 +575,12 @@ impl Session {
                     fb.landing = Some((fall, kart.speed()));
                 }
             }
-            if kart.grabbed() {
-                // Aku Aku carries it: over the void and off the ground as he pleases.
-                self.falling = 0.0;
-            } else {
+            // No rescue off the ground (the owner's call, 2026-10-27): a kart falls until it lands,
+            // as a flight glides on. Aku Aku carries it over the void as he pleases.
+            if !kart.grabbed() {
                 hold_at_void(&world, kart, before);
                 if self.pinned {
                     pin_in_place(kart, before);
-                }
-                if kart.grounded() {
-                    let pose = kart.pose();
-                    self.last_ground = Some((pose.position, pose.heading));
-                    self.falling = 0.0;
-                } else if kart.flying() {
-                    // A flying kart is where it means to be.
-                    self.falling = 0.0;
-                } else {
-                    self.falling += ctr_kart::TICK;
-                    if self.falling > RESCUE_AFTER {
-                        if let Some((at, heading)) = self.last_ground {
-                            kart.mask_grab(at, heading);
-                        }
-                        self.falling = 0.0;
-                    }
                 }
             }
             // The weapons step after the kart is where this tick leaves it, and see its events
