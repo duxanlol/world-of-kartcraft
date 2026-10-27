@@ -426,14 +426,16 @@ mod tests {
         assert_eq!(
             line_for(&Event::Land {
                 air_ms: 1200,
-                fall: 0
+                fall: 0,
+                water: false
             }),
             Some(line::HANG_TIME)
         );
         assert_eq!(
             line_for(&Event::Land {
                 air_ms: 600,
-                fall: 0
+                fall: 0,
+                water: false
             }),
             None
         );

@@ -42,6 +42,7 @@ mod showcase;
 mod skins;
 mod skyhop;
 mod sound;
+mod splash;
 pub(crate) mod track_edit;
 pub(crate) mod track_edit_ui;
 mod ui;
@@ -231,6 +232,7 @@ fn update(
         buttons,
         mut replays,
         mut horn,
+        mut splashes,
     ): (
         Res<remote::RemoteKarts>,
         ResMut<kartcraft::hud::HudExtras>,
@@ -243,6 +245,7 @@ fn update(
         Res<ButtonInput<MouseButton>>,
         ResMut<replay::Replays>,
         ResMut<horn::Horn>,
+        ResMut<splash::Splashes>,
     ),
 ) {
     let now = time.elapsed_secs();
@@ -554,6 +557,9 @@ fn update(
         match event {
             kartcraft::Event::TakeOff => info!("kart: flying from {:?}", drive.pos),
             kartcraft::Event::Touchdown => info!("kart: down from a flight at {:?}", drive.pos),
+            kartcraft::Event::Land {
+                water: true, fall, ..
+            } => splashes.0.push((None, splash::size(*fall))),
             _ => {}
         }
         audio.observe(event);
@@ -756,6 +762,7 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<gps::Gps>()
         .net_handler(benilla_protocol::SessionEventKind::Chat, weapons::on_chat)
         .init_resource::<horn::Horn>()
+        .init_resource::<splash::Splashes>()
         .net_handler(benilla_protocol::SessionEventKind::Chat, horn::on_chat)
         .net_handler(benilla_protocol::SessionEventKind::Chat, showcase::on_chat)
         .net_handler(benilla_protocol::SessionEventKind::Chat, props::on_chat)
@@ -872,7 +879,7 @@ pub(crate) fn plugin(app: &mut App) {
                 sound::overtakes,
                 // After the drive: a replay playing takes its camera.
                 (ghost::update, replay::update).chain(),
-                (weapons::update, horn::update).chain(),
+                (weapons::update, horn::update, splash::play).chain(),
                 race::beams,
                 // The delivery's way after the drive, then its chevrons and the arrow along it.
                 (gps::update, gps::chevrons, race::guide).chain(),

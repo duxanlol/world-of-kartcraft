@@ -393,6 +393,7 @@ pub(crate) fn update(
         *wheels = KartWheels {
             steer: pose.steer,
             spin: ghosts.spin,
+            ..Default::default()
         };
     }
 }

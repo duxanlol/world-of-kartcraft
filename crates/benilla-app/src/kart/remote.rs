@@ -187,6 +187,10 @@ pub(crate) struct Remote {
     /// Whose kart is drawn ("" until the driver's first state names it), in which paint.
     racer: String,
     paint: u8,
+    /// On the water, and in the air, as its last relayed line said: a splash when it comes down
+    /// on the water.
+    afloat: bool,
+    airborne: bool,
 }
 
 #[derive(Resource, Default)]
@@ -323,6 +327,7 @@ pub(crate) fn update(
     weapons: Res<kartcraft::weapons::Weapons>,
     mut fits: ResMut<super::seat::SeatFits>,
     anim_data: Option<Res<crate::creature_anim::AnimData>>,
+    mut splashes: ResMut<super::splash::Splashes>,
 ) {
     let catalog = anim_data.as_deref().map(|d| &d.0);
     let now = time.elapsed_secs();
@@ -358,6 +363,8 @@ pub(crate) fn update(
                         spin: 0.0,
                         racer,
                         paint,
+                        afloat: false,
+                        airborne: false,
                     },
                 );
                 karts.karts.get_mut(&entity).unwrap()
@@ -383,6 +390,12 @@ pub(crate) fn update(
             .get(&remote.guid)
             .filter(|(_, t)| now - t < STATE_TTL);
         let state = state.map(|(s, _)| s.clone()).unwrap_or_default();
+        // Down on the water out of the air: a splash where it lands.
+        if state.afloat && !remote.afloat && remote.airborne {
+            splashes.0.push((Some(remote.kart), 1));
+        }
+        remote.afloat = state.afloat;
+        remote.airborne = !state.grounded;
         // The driver named their kart, or painted it: redraw it so.
         if !state.racer.is_empty() && (state.racer != remote.racer || state.paint != remote.paint) {
             if let Some(kart) = spawner.spawn_painted(&state.racer, state.paint) {
@@ -446,6 +459,8 @@ pub(crate) fn update(
             *wheels = KartWheels {
                 steer: state.steer,
                 spin: remote.spin,
+                water: state.afloat,
+                flying: state.flying,
             };
             *status = KartStatus {
                 fire: state.fire,
@@ -457,8 +472,12 @@ pub(crate) fn update(
                 speed,
                 // The wire carries the powerslide, not the skid flags: a remote kart marks the
                 // ground through its drifts only.
-                skids: (state.drifting, state.drifting),
+                skids: (
+                    state.drifting && !state.afloat,
+                    state.drifting && !state.afloat,
+                ),
                 trail: state.trail,
+                flying: state.flying,
                 // On the water its tyres throw spray, as ours do.
                 ground: if state.afloat {
                     kartcraft::Ground::Water

@@ -296,6 +296,8 @@ impl KartAudio {
         }
         let cue = match *event {
             Event::Hop => Cue::Hop,
+            // On the water the host plays a splash instead.
+            Event::Land { water: true, .. } => return,
             // Every touchdown thumps, softly for a small hop (`COLL.c:1504-1514`).
             Event::Land { fall, .. } => Cue::Land {
                 volume: landing_volume(fall),
@@ -1379,10 +1381,12 @@ mod tests {
         a.observe(&Event::Land {
             air_ms: 64,
             fall: 100,
+            water: false,
         });
         a.observe(&Event::Land {
             air_ms: 900,
             fall: 12000,
+            water: false,
         });
         a.observe(&Event::Boost {
             stage: 2,

@@ -438,12 +438,15 @@ pub struct GhostKart;
 /// A ghost kart's opacity.
 const GHOST_ALPHA: f32 = 0.4;
 
-/// A kart's moving parts this frame: front-wheel steer (−1 right to 1 left) and the wheels' roll
-/// (radians).
+/// A kart's moving parts this frame: front-wheel steer (−1 right to 1 left), the wheels' roll
+/// (radians), and its mode: on the water the wheels turn flat as a hovercraft's pads, in flight
+/// they fold up as a plane's gear does (DKR's, `racer.c:3300-3320`).
 #[derive(Component, Default, Clone, Copy, Debug, PartialEq)]
 pub struct KartWheels {
     pub steer: f32,
     pub spin: f32,
+    pub water: bool,
+    pub flying: bool,
 }
 
 /// What a kart is doing, for its effects and sounds: the turbo flame's size (0 none, else 4 to
@@ -468,14 +471,29 @@ pub struct KartStatus {
     pub feedback: crate::session::Feedback,
     /// The boost trail it wears ([`crate::cosmetic::TRAILS`]), 0 none.
     pub trail: u8,
+    /// Flying: contrails off its sides ([`crate::effects`]).
+    pub flying: bool,
 }
 
-/// A wheel's steering pivot and its rolling hub, each knowing its kart.
+/// A wheel's steering pivot and its rolling hub, each knowing its kart; where it rests, and how
+/// far it is turned flat (the water) and folded up (flight), each 0 to 1.
 #[derive(Component)]
 pub struct WheelPivot {
     steers: bool,
     root: Entity,
+    rest: Vec3,
+    radius: f32,
+    flat: f32,
+    tuck: f32,
 }
+
+/// How fast the wheels turn flat or fold up, of the whole way a second.
+const WHEEL_FOLD_RATE: f32 = 4.0;
+/// Folded up, a wheel rises this share of its radius, moves this share of the way in, and shrinks
+/// to this size.
+const WHEEL_TUCK_RISE: f32 = 0.9;
+const WHEEL_TUCK_IN: f32 = 0.25;
+const WHEEL_TUCK_SIZE: f32 = 0.55;
 
 #[derive(Component)]
 pub struct WheelHub {
@@ -691,6 +709,10 @@ impl KartSpawner<'_, '_> {
                     WheelPivot {
                         steers: w.steers,
                         root,
+                        rest: Vec3::from_array(w.center),
+                        radius: w.radius,
+                        flat: 0.0,
+                        tuck: 0.0,
                     },
                     Transform::from_translation(Vec3::from_array(w.center)),
                     Visibility::Inherited,
@@ -789,6 +811,8 @@ pub fn update(
     *wheels = KartWheels {
         steer: view.steer,
         spin: view.wheel_spin,
+        water: view.afloat,
+        flying: view.flying,
     };
     *status = KartStatus {
         fire: view.fire,
@@ -802,6 +826,7 @@ pub fn update(
         ground: view.ground,
         feedback: view.feedback,
         trail: crate::cosmetic::ours().1,
+        flying: view.flying,
     };
     flag.set_if_neq(crate::goods::KartFlag(crate::goods::our_flag()));
 }
@@ -817,20 +842,42 @@ pub fn boost_window(meter: Option<(f32, bool)>) -> bool {
 
 /// Turns every kart's front wheels and rolls all of them.
 pub fn animate_wheels(
+    time: Res<Time>,
     karts: Query<&KartWheels>,
-    mut pivots: Query<(&WheelPivot, &mut Transform)>,
+    mut pivots: Query<(&mut WheelPivot, &mut Transform)>,
     mut hubs: Query<(&WheelHub, &mut Transform), Without<WheelPivot>>,
 ) {
-    for (pivot, mut t) in &mut pivots {
+    let step = WHEEL_FOLD_RATE * time.delta_secs().min(0.1);
+    for (mut pivot, mut t) in &mut pivots {
         let Ok(w) = karts.get(pivot.root) else {
             continue;
         };
-        // CTR's front wheels turn up to about 20° with the steer.
-        t.rotation = if pivot.steers {
+        let ease = |v: f32, on: bool| {
+            if on {
+                (v + step).min(1.0)
+            } else {
+                (v - step).max(0.0)
+            }
+        };
+        pivot.flat = ease(pivot.flat, w.water || w.flying);
+        pivot.tuck = ease(pivot.tuck, w.flying);
+        // CTR's front wheels turn up to about 20° with the steer; on the water and in the air a
+        // wheel lies flat about the kart's length, its tread out, and in the air folds up into
+        // the body.
+        let steer = if pivot.steers {
             Quat::from_rotation_y(w.steer * 0.35)
         } else {
             Quat::IDENTITY
         };
+        let side = if pivot.rest.x >= 0.0 { 1.0 } else { -1.0 };
+        let flat = Quat::from_rotation_z(side * pivot.flat * std::f32::consts::FRAC_PI_2);
+        t.rotation = steer * flat;
+        t.translation = Vec3::new(
+            pivot.rest.x * (1.0 - WHEEL_TUCK_IN * pivot.tuck),
+            pivot.rest.y + pivot.radius * WHEEL_TUCK_RISE * pivot.tuck,
+            pivot.rest.z,
+        );
+        t.scale = Vec3::splat(1.0 - (1.0 - WHEEL_TUCK_SIZE) * pivot.tuck);
     }
     for (hub, mut t) in &mut hubs {
         if let Ok(w) = karts.get(hub.root) {

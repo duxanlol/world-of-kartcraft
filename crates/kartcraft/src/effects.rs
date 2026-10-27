@@ -70,6 +70,12 @@ pub const TRAIL_LIFE: f32 = 0.3;
 const TRAIL_WIDTH: f32 = 0.35;
 /// Its brightness where it starts (additive: 1 is full).
 const TRAIL_GLOW: f32 = 0.7;
+/// Flying, a kart streams contrails off its sides (Kartcraft's: the sign it flies): from these
+/// points (m, the left; the right mirrored), thin, pale and longer-lived than a boost trail.
+const CONTRAIL_FROM: [f32; 3] = [0.75, 0.35, -0.2];
+const CONTRAIL_WIDTH: f32 = 0.07;
+const CONTRAIL_LIFE: f32 = 0.9;
+const CONTRAIL_COLOUR: [f32; 3] = [0.8, 0.86, 1.0];
 
 #[derive(serde::Deserialize)]
 pub(crate) struct Texture {
@@ -252,12 +258,16 @@ pub struct KartEffects {
     marks: HashMap<(Entity, usize), VecDeque<Option<Section>>>,
     /// Each kart's boost trail, oldest first.
     trails: HashMap<Entity, VecDeque<TrailPoint>>,
+    /// Each flying kart's contrails, left and right ([`CONTRAIL_FROM`]).
+    contrails: HashMap<(Entity, bool), VecDeque<TrailPoint>>,
 }
 
 /// A point of a boost trail: where, how old, its width (yd) and which trail.
 struct TrailPoint {
     at: Vec3,
     age: f32,
+    /// How long it lasts (s).
+    life: f32,
     width: f32,
     trail: crate::cosmetic::Trail,
 }
@@ -535,9 +545,29 @@ pub fn tick(
                 points.push_back(TrailPoint {
                     at,
                     age: 0.0,
+                    life: TRAIL_LIFE,
                     width: TRAIL_WIDTH * to_yards,
                     trail,
                 });
+            }
+        }
+        if status.flying {
+            for right in [false, true] {
+                let [x, y, z] = CONTRAIL_FROM;
+                let at = t.transform_point(Vec3::new(if right { -x } else { x }, y, z));
+                let points = state.contrails.entry((kart, right)).or_default();
+                if points
+                    .back()
+                    .is_none_or(|p| p.at.distance(at) > TRAIL_STEP * to_yards)
+                {
+                    points.push_back(TrailPoint {
+                        at,
+                        age: 0.0,
+                        life: CONTRAIL_LIFE,
+                        width: CONTRAIL_WIDTH * to_yards,
+                        trail: crate::cosmetic::Trail::Colour(CONTRAIL_COLOUR),
+                    });
+                }
             }
         }
         // Puffs and marks, once per game frame elapsed.
@@ -577,15 +607,21 @@ pub fn tick(
         state.landing_sparks(t, status, to_yards);
     }
     state.marks.retain(|(kart, _), _| live.contains(kart));
-    state.trails.retain(|kart, points| {
+    let age = |points: &mut VecDeque<TrailPoint>| {
         for p in points.iter_mut() {
             p.age += dt;
         }
-        while points.front().is_some_and(|p| p.age >= TRAIL_LIFE) {
+        while points.front().is_some_and(|p| p.age >= p.life) {
             points.pop_front();
         }
-        live.contains(kart) && !points.is_empty()
-    });
+        !points.is_empty()
+    };
+    state
+        .trails
+        .retain(|kart, points| age(points) && live.contains(kart));
+    state
+        .contrails
+        .retain(|(kart, _), points| age(points) && live.contains(kart));
     state.puffs.retain(|p| live.contains(&p.kart));
     for p in &mut state.puffs {
         p.age += dt;
@@ -959,12 +995,12 @@ pub fn draw(
     }
     // The boost trails: each leg a quad facing the eye, narrowing and darkening (additive: fading)
     // with its points' age.
-    for points in state.trails.values() {
+    for points in state.trails.values().chain(state.contrails.values()) {
         let pts: Vec<&TrailPoint> = points.iter().collect();
         for (i, pair) in pts.windows(2).enumerate() {
             let (a, b) = (pair[0], pair[1]);
             let edge = |p: &TrailPoint, along: Vec3| {
-                let left = 1.0 - p.age / TRAIL_LIFE;
+                let left = 1.0 - p.age / p.life;
                 let side = along.cross(eye_at - p.at).normalize_or_zero() * (p.width * 0.5 * left);
                 let [r, g, b] = crate::cosmetic::trail_colour(p.trail, p.age + i as f32 * 0.04);
                 let glow = TRAIL_GLOW * left * left;

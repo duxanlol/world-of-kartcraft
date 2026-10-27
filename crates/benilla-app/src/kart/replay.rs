@@ -692,6 +692,7 @@ pub(crate) fn update(
         *wheels = KartWheels {
             steer: pose.steer,
             spin: *spin,
+            ..Default::default()
         };
         if i == p.watch {
             watched = Some(pose);

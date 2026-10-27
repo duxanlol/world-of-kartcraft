@@ -1787,3 +1787,28 @@ fn a_hop_off_the_water_goes_higher() {
     let (road, water) = (apex(None), apex(Some(200.0)));
     assert!(water > road * 1.2, "off the water {water}, the road {road}");
 }
+
+/// A powerslide on the water leaves no skid marks: the water takes none.
+#[test]
+fn the_water_takes_no_skid_marks() {
+    let w = world(floor(200000.0));
+    let slide = |water: Option<f32>| {
+        let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 1.0, 0.0), 0);
+        kart.water = water;
+        run(&mut kart, &w, GAS, 90);
+        let hold = Input {
+            steer: -1.0,
+            r1: true,
+            ..GAS
+        };
+        let mut marked = false;
+        for _ in 0..40 {
+            kart.tick(&w, &hold, &NONE);
+            marked |= kart.skids() != (false, false);
+        }
+        assert_eq!(kart.state, State::Drifting);
+        marked
+    };
+    assert!(slide(None), "the road takes them");
+    assert!(!slide(Some(200.0)), "the water does not");
+}

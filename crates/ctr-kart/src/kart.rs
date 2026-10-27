@@ -52,10 +52,12 @@ pub enum Event {
     TakeOff,
     /// Down out of a flight, on the ground or the water.
     Touchdown,
-    /// Back on the ground after `air_ms` CTR-ms, landing at `fall` speed units downward.
+    /// Back on the ground after `air_ms` CTR-ms, landing at `fall` speed units downward; on the
+    /// water with `water`.
     Land {
         air_ms: i32,
         fall: i32,
+        water: bool,
     },
     DriftStart {
         left: bool,
@@ -1788,7 +1790,8 @@ impl Kart {
     /// that forces them (`VehPhysForce.c:630-633`, `VehEmitter.c:1413-1419`); on the ground only,
     /// as `VehEmitter` draws and plays them (`:1449-1456`).
     pub fn skids(&self) -> (bool, bool) {
-        if !self.grounded() {
+        // Off the ground, and on the water, which takes no marks.
+        if !self.grounded() || self.afloat {
             return (false, false);
         }
         let all = self.state == State::Drifting
@@ -3113,6 +3116,7 @@ impl Kart {
                 self.events.push(Event::Land {
                     air_ms: self.airtime,
                     fall: self.fall,
+                    water: self.afloat,
                 });
             }
             self.coyote = COYOTE_MS;
