@@ -135,6 +135,9 @@ pub struct Session {
     /// The surface of deep water under the kart, Bevy world height, for it to float on
     /// ([`Session::set_water`], [`ctr_kart::Kart::water`]); none on land.
     water: Option<f32>,
+    /// Whether the kart may fly ([`Session::set_flight`]); off until the host says, so a session
+    /// of its own (the showcase's) never does.
+    flight_allowed: bool,
     /// The turbo pads to fire, Bevy world ([`crate::pads`]), and whether they are off for now.
     pads: Vec<crate::pads::Pad>,
     pads_off: bool,
@@ -407,6 +410,11 @@ impl Session {
         self.water = surface;
     }
 
+    /// Whether the kart may fly for the coming ticks ([`Kart::flight_allowed`]): the host's word.
+    pub fn set_flight(&mut self, allowed: bool) {
+        self.flight_allowed = allowed;
+    }
+
     /// The props the kart drives on (their faces, Bevy world), in the grids built from now on.
     pub fn set_props(&mut self, props: Props) {
         if !Arc::ptr_eq(&self.props, &props) {
@@ -562,6 +570,7 @@ impl Session {
                 from_lu(before, origin),
             );
             kart.water = self.water.map(|y| (y - origin.y) * lu_per_yard());
+            kart.flight_allowed = self.flight_allowed;
             let controls = input(kart);
             kart.tick_among(&world, &controls, mods, &others);
             let fb = &mut self.feedback;

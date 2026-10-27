@@ -720,6 +720,9 @@ pub struct Kart {
     pub water: Option<f32>,
     /// On the water's floor this tick ([`Kart::water`]).
     afloat: bool,
+    /// Deviates (the owner's call): whether the wings may open ([`FLY_ENTER_HEIGHT`]), the host's
+    /// to set; a race's kart has none, and one flying when it is taken away comes down as CTR's.
+    pub flight_allowed: bool,
     /// The drawn kart's dip into the water and its rate, lu and lu a frame ([`SPLASH_STIFFNESS`]).
     splash: (f32, f32),
     /// Flying ([`FLY_ENTER_HEIGHT`]): the nose's pitch and the bank (CTR angle units, + up and +
@@ -883,6 +886,7 @@ impl Kart {
             ground_type: Terrain::ASPHALT,
             water: None,
             afloat: false,
+            flight_allowed: true,
             splash: (0.0, 0.0),
             flight: None,
             height: 0.0,
@@ -2690,6 +2694,14 @@ impl Kart {
     /// tapped in the air. Off a launch the flight keeps the kart's speed and its climb.
     fn take_off(&mut self, tapped: bool) {
         self.reopen = (self.reopen - 1).max(0);
+        if !self.flight_allowed {
+            // Taken away mid-flight (a race's start): the wings fold, the kart falls on as CTR's.
+            if self.flight.take().is_some() {
+                self.vel_yaw = self.angle;
+                self.events.push(Event::Touchdown);
+            }
+            return;
+        }
         if self.flight.is_some()
             || self.reopen > 0
             || self.grounded()

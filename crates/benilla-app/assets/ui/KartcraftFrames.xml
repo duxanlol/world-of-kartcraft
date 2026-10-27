@@ -3708,6 +3708,8 @@
             BenillaKartSettingsFrameTerrain:SetChecked(BenillaKart_Flag("KartTerrain"))
             BenillaKartSettingsFrameRumble:SetChecked(BenillaKart_Flag("KartRumble"))
             BenillaKartSettingsFrameWowVoices:SetChecked(BenillaKart_Flag("KartWowVoices"))
+            BenillaKartSettingsFrameHover:SetChecked(BenillaKart_Flag("KartHover"))
+            BenillaKartSettingsFrameFlight:SetChecked(BenillaKart_Flag("KartFlight"))
             BenillaKartSettingsFrameShortcuts:SetChecked(BenillaKart_Flag("KartShortcuts"))
             BenillaKartSettingsFrameGateHeight:SetValue(tonumber(GetCVar("KartGateHeight")) or 8)
             frame.refreshing = nil
@@ -5458,6 +5460,13 @@
             <CheckButton name="$parentPadTriggers" inherits="BenillaKartSettingsCheckTemplate">
                 <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="364" y="-326"/></Offset></Anchor></Anchors>
             </CheckButton>
+            <!-- The kart's modes out of a race: hovering on water and flying (none in a race). -->
+            <CheckButton name="$parentHover" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="364" y="-352"/></Offset></Anchor></Anchors>
+            </CheckButton>
+            <CheckButton name="$parentFlight" inherits="BenillaKartSettingsCheckTemplate">
+                <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="364" y="-378"/></Offset></Anchor></Anchors>
+            </CheckButton>
             <!-- Every kind of guidance on or off, in a window of its own. -->
             <Button name="$parentNavigation" inherits="UIPanelButtonTemplate" text="Navigation...">
                 <Size><AbsDimension x="120" y="22"/></Size>
@@ -5485,6 +5494,8 @@
                     { "WowVoices", "KartWowVoices", "WoW character voices (off: CTR's racers)" },
                     { "Shortcuts", "KartShortcuts", "Show the Time trial and Race Finder bar" },
                     { "PadTriggers", "KartPadTriggers", "Triggers as buttons (off: R2 Shift, L2 Ctrl)" },
+                    { "Hover", "KartHover", "Hover on water (not in races)" },
+                    { "Flight", "KartFlight", "Fly off jumps (not in races)" },
                 }
                 for i = 1, table.getn(boxes) do
                     local box = getglobal(this:GetName() .. boxes[i][1])

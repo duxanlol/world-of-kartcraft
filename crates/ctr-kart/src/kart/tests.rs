@@ -1812,3 +1812,31 @@ fn the_water_takes_no_skid_marks() {
     assert!(slide(None), "the road takes them");
     assert!(!slide(Some(200.0)), "the water does not");
 }
+
+/// With flight not allowed (a race) the wings never open, a double tap or a long fall; taken away
+/// mid-flight, the wings fold and the kart comes down as CTR's.
+#[test]
+fn a_kart_without_flight_never_takes_off() {
+    let w = cliff(9000.0);
+    let mut kart = off_the_cliff(&w, 9000.0);
+    kart.flight_allowed = false;
+    let tap = Input { r1: true, ..GAS };
+    for frame in 0..200 {
+        let input = if frame % 4 < 2 { tap } else { GAS };
+        kart.tick(&w, &input, &NONE);
+        assert!(!kart.flying(), "frame {frame}");
+        if kart.grounded() {
+            break;
+        }
+    }
+    assert!(kart.grounded(), "down as CTR's");
+
+    let mut kart = off_the_cliff(&w, 9000.0);
+    while !kart.flying() {
+        kart.tick(&w, &GAS, &NONE);
+    }
+    kart.events.clear();
+    kart.flight_allowed = false;
+    kart.tick(&w, &GAS, &NONE);
+    assert!(!kart.flying() && kart.events.contains(&Event::Touchdown));
+}

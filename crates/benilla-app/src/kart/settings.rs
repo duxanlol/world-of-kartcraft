@@ -20,6 +20,8 @@
 //!   `off`, `fly`, `tripod`, `low` or `orbit`; held for the session only.
 //! - `KartGateHeight`: how tall a race checkpoint's sheet of light stands (yards, 0 to 40; 0 leaves
 //!   the beams at its ends alone). How it looks only: the gate passed is as wide as ever.
+//! - `KartHover`, `KartFlight`: out of a race, the kart hovers on deep water and flies (a race,
+//!   a time trial, a test lap and a Skyhop run have neither: [`KartSettings::modes`]).
 //! - `KartWowVoices`: the racers speak in their WoW characters' voices (wound vocals and
 //!   text-emote voices, [`kartcraft::voice::WowLine`]) instead of CTR's cast, on by default.
 //! - `KartRumble`: the controller shakes on crashes, hard landings and wall scrapes
@@ -126,6 +128,9 @@ pub(crate) struct KartSettings {
     pub(crate) rumble: bool,
     /// The racers speak in their WoW characters' voices, not CTR's cast's.
     pub(crate) wow_voices: bool,
+    /// Out of a race, the kart hovers on deep water and flies ([`Self::modes`]).
+    pub(crate) hover: bool,
+    pub(crate) flight: bool,
     /// A checkpoint gate's sheet of light, its height in yards.
     pub(crate) gate_height: f32,
     /// The controller test window is open.
@@ -134,6 +139,16 @@ pub(crate) struct KartSettings {
     pub(crate) camera: CameraTuning,
     /// Which navigation shows.
     pub(crate) nav: Navigation,
+}
+
+impl KartSettings {
+    /// Whether the kart may hover on deep water and fly: by the settings in the open world, and
+    /// never in a race, a time trial or a test lap (`racing`) or a Skyhop run (`hopping`), whose
+    /// courses are CTR's to drive.
+    pub(crate) fn modes(&self, racing: bool, hopping: bool) -> (bool, bool) {
+        let open = !racing && !hopping;
+        (self.hover && open, self.flight && open)
+    }
 }
 
 /// Which navigation shows, each on unless switched off (`KartNav*`): a race's next checkpoint on
@@ -195,6 +210,8 @@ impl Default for KartSettings {
             terrain: false,
             rumble: true,
             wow_voices: true,
+            hover: true,
+            flight: true,
             gate_height: GATE_HEIGHT_DEFAULT,
             pad_test: false,
             nav: Navigation::default(),
@@ -250,6 +267,8 @@ pub(crate) fn on_cvar(
         "kartrumble" => settings.rumble = ev.flag(),
         "kartpadtriggers" => kartcraft::input::set_triggers_are_buttons(ev.flag()),
         "kartwowvoices" => settings.wow_voices = ev.flag(),
+        "karthover" => settings.hover = ev.flag(),
+        "kartflight" => settings.flight = ev.flag(),
         "karthidehud" => {
             hidden.0 = ev.flag();
             hud.clean = ev.flag();
@@ -318,6 +337,18 @@ pub(crate) fn on_cvar(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The kart's modes are the settings' in the open world, and none in a race, a time trial,
+    /// a test lap or a Skyhop run.
+    #[test]
+    fn a_race_has_neither_mode() {
+        let mut s = KartSettings::default();
+        assert_eq!(s.modes(false, false), (true, true));
+        assert_eq!(s.modes(true, false), (false, false));
+        assert_eq!(s.modes(false, true), (false, false));
+        s.flight = false;
+        assert_eq!(s.modes(false, false), (true, false));
+    }
     use crate::cvars::{CvarChanged, REGISTERED};
 
     fn app() -> App {

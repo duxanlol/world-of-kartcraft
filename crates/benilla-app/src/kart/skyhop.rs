@@ -52,6 +52,13 @@ pub(crate) struct Run {
     said: Option<(String, f32)>,
 }
 
+impl Run {
+    /// A challenge under way.
+    pub(crate) fn running(&self) -> bool {
+        matches!(self.state, State::Running { .. })
+    }
+}
+
 #[derive(Default, Clone, Copy, PartialEq, Debug)]
 enum State {
     #[default]

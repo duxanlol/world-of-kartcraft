@@ -780,6 +780,18 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "",
         "Kartcraft's own — the controller test's rumble; 1.12 has no kart",
     ),
+    // The kart's modes out of a race: hovering on deep water and flying (`kart::settings`); a
+    // race or a time trial has neither, whatever these say.
+    ours(
+        "KartHover",
+        "1",
+        "Kartcraft's own — the kart hovers on water; 1.12 has no kart",
+    ),
+    ours(
+        "KartFlight",
+        "1",
+        "Kartcraft's own — the kart flies; 1.12 has no kart",
+    ),
     // The racers' voices: their WoW characters' (`kart::sound::wow_voices`), else CTR's cast's.
     ours(
         "KartWowVoices",
