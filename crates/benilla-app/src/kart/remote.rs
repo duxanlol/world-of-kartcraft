@@ -18,6 +18,10 @@ use crate::net::{Guid, ObjectStore, RemoteMotion, SelfPlayer};
 
 /// How far behind its last packet a remote kart is drawn (s): one heartbeat and a margin.
 const DELAY: f32 = 0.15;
+/// A flying kart's drawn pitch at most (radians, as ours reaches, `ctr_kart`'s dive), and its bank
+/// at full steer.
+const FLY_PITCH_DRAWN: f32 = 0.55;
+const FLY_BANK_DRAWN: f32 = 0.6;
 /// How long past its last sample a kart may coast before it holds (s).
 const MAX_COAST: f32 = 0.25;
 /// A relayed state this old no longer applies (s).
@@ -39,6 +43,9 @@ pub(crate) struct Relayed {
     pub(crate) drifting: bool,
     pub(crate) boost_window: bool,
     pub(crate) failed_boost: bool,
+    /// Hovering on water and flying: its modes (the flags' 16 and 32).
+    pub(crate) afloat: bool,
+    pub(crate) flying: bool,
     /// Whose kart it is (`crash`, `coco`, ...), for its colours.
     pub(crate) racer: String,
     /// The boost wheelie's frame ([`kartcraft::wheelie_frame`]), 0 none; absent from an older
@@ -66,6 +73,8 @@ impl Default for Relayed {
             drifting: false,
             boost_window: false,
             failed_boost: false,
+            afloat: false,
+            flying: false,
             racer: String::new(),
             wheelie: 0,
             paint: 0,
@@ -79,12 +88,15 @@ impl Default for Relayed {
 /// The line our kart relays:
 /// `S\t<steer>,<drift>,<fire>,<distortion>,<volume>,<flags>,<racer>,<wheelie>,<paint>,<trail>,
 /// <flag>,<scale>` (the race's scale in hundredths); an older client reads the first seven and
-/// ignores the rest.
+/// ignores the rest. The flags: grounded 1, drifting 2, the boost window 4, a failed boost 8,
+/// hovering on water 16, flying 32 (an older client ignores the last two).
 pub(crate) fn state_line(view: &KartView) -> String {
     let flags = u8::from(view.grounded)
         | (u8::from(view.state == kartcraft::State::Drifting) << 1)
         | (u8::from(kartcraft::model::boost_window(view.meter)) << 2)
-        | (u8::from(view.failed_boost) << 3);
+        | (u8::from(view.failed_boost) << 3)
+        | (u8::from(view.afloat) << 4)
+        | (u8::from(view.flying) << 5);
     format!(
         "KARTCRAFT\tS\t{},{},{},{},{},{},{},{},{},{},{},{}",
         (view.steer * 100.0).round() as i32,
@@ -131,6 +143,8 @@ pub(crate) fn parse_state(body: &str) -> Option<Relayed> {
         drifting: flags & 2 != 0,
         boost_window: flags & 4 != 0,
         failed_boost: flags & 8 != 0,
+        afloat: flags & 16 != 0,
+        flying: flags & 32 != 0,
         racer,
         wheelie: field(body, 7).filter(|&w| w <= 21).unwrap_or(0),
         paint: field(body, 8)
@@ -379,13 +393,29 @@ pub(crate) fn update(
             }
         }
 
-        // The kart's frame: its heading (plus the powerslide's look) on the ground's normal.
+        // The kart's frame: its heading (plus the powerslide's look) on the ground's normal; in
+        // flight on the world's up, its nose along its climb or dive and banked by its steer, as
+        // ours is drawn (`ctr_kart::Kart::pose`).
         let heading = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
-        let n = ground_normal(&collide, at, heading);
+        let n = if state.flying {
+            Vec3::Y
+        } else {
+            ground_normal(&collide, at, heading)
+        };
         let drawn = yaw + state.drift;
         let fwd = Vec3::new(-drawn.sin(), 0.0, -drawn.cos());
         let z = (fwd - n * fwd.dot(n)).normalize_or(fwd);
-        let rotation = Quat::from_mat3(&Mat3::from_cols(n.cross(z), n, z));
+        let mut rotation = Quat::from_mat3(&Mat3::from_cols(n.cross(z), n, z));
+        if state.flying {
+            let flat = Vec3::new(velocity.x, 0.0, velocity.z).length();
+            let pitch = velocity
+                .y
+                .atan2(flat.max(0.1))
+                .clamp(-FLY_PITCH_DRAWN, FLY_PITCH_DRAWN);
+            rotation = rotation
+                * Quat::from_rotation_x(-pitch)
+                * Quat::from_rotation_z(-state.steer * FLY_BANK_DRAWN);
+        }
         let mut kart = Transform {
             translation: at,
             rotation,
@@ -429,6 +459,12 @@ pub(crate) fn update(
                 // ground through its drifts only.
                 skids: (state.drifting, state.drifting),
                 trail: state.trail,
+                // On the water its tyres throw spray, as ours do.
+                ground: if state.afloat {
+                    kartcraft::Ground::Water
+                } else {
+                    kartcraft::Ground::Asphalt
+                },
                 ..Default::default()
             };
         }
@@ -492,6 +528,17 @@ mod tests {
         );
         assert_eq!(s.wheelie, 12);
         assert_eq!((s.paint, s.trail), kartcraft::cosmetic::ours());
+        assert!(!s.afloat && !s.flying);
+        // The modes ride in the flags: hovering, then flying.
+        for (afloat, flying) in [(true, false), (false, true)] {
+            let line = state_line(&KartView {
+                afloat,
+                flying,
+                ..view.clone()
+            });
+            let s = parse_state(line.strip_prefix("KARTCRAFT	S	").unwrap()).unwrap();
+            assert_eq!((s.afloat, s.flying), (afloat, flying));
+        }
         // An older client's line, without the wheelie and the cosmetics, still reads; a nonsense
         // one is none.
         let old: Vec<&str> = body.split(',').take(7).collect();

@@ -54,6 +54,8 @@ const GRADE_MAX: f32 = 0.75;
 /// The tilt's pivot over the kart's origin (lu): the kart's middle, which keeps its place on the
 /// screen however the rig tilts.
 const PIVOT_H: f32 = 32.0;
+/// In flight, the share of the nose's pitch the rig tilts by.
+const FLY_TILT: f32 = 0.6;
 /// How far the look-at moves toward or away from the kart a tick (lu, `CAM.c:1251-1271`).
 const AHEAD_STEP: f32 = 8.0;
 /// The turbo push-back grows 8 lu a tick and comes back 2 (lu·256, `CAM.c:1159-1196`).
@@ -467,7 +469,11 @@ impl ChaseCamera {
         let roof = world
             .ray(k.position + Vec3::Y * PIVOT_H, Vec3::Y, ROOF_REACH)
             .map_or(f32::INFINITY, |hit| k.position.y + PIVOT_H + hit.distance);
-        let target = if tuning.tilt > 0.0 {
+        // In flight the rig tilts with the nose instead, part of the way (DKR's plane camera follows
+        // the plane's pitch, clamped, `update_camera_plane`, racer.c:3462).
+        let target = if let Some(pitch) = k.flight_pitch {
+            pitch * FLY_TILT
+        } else if tuning.tilt > 0.0 {
             grade(world, k.position, k.heading, roof)
                 .map_or(self.tilt[1], |g| g.atan() * tuning.tilt)
         } else {
@@ -866,6 +872,7 @@ mod tests {
             ground: 0.0,
             cut: false,
             mask_grab: None,
+            flight_pitch: None,
         }
     }
 
@@ -873,6 +880,28 @@ mod tests {
     fn view_deg(shot: &Shot) -> f32 {
         let d = shot.look - shot.eye;
         d.x.atan2(d.z).to_degrees()
+    }
+
+    /// In flight the rig tilts with the nose: climbing, the view looks up more than level, diving,
+    /// down more.
+    #[test]
+    fn in_flight_the_view_tilts_with_the_nose() {
+        let elevation = |pitch: Option<f32>| {
+            let (mut cam, world) = (ChaseCamera::default(), flat());
+            let mut k = input(13000);
+            k.position.y = 2000.0;
+            k.grounded = false;
+            k.flight_pitch = pitch;
+            let mut shot = cam.tick(&k, &world);
+            for _ in 0..60 {
+                shot = cam.tick(&k, &world);
+            }
+            let d = shot.look - shot.eye;
+            d.y.atan2(d.x.hypot(d.z))
+        };
+        let level = elevation(Some(0.0));
+        assert!(elevation(Some(0.4)) > level + 0.1, "climbing looks up");
+        assert!(elevation(Some(-0.4)) < level - 0.1, "diving looks down");
     }
 
     #[test]

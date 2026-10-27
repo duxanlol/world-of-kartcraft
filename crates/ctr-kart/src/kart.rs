@@ -652,6 +652,8 @@ pub struct CameraInput {
     /// Lowered by Aku Aku: the height the eye keeps over, lu, in place of the kart's
     /// (`CAMERA_FLAG_MASK_GRAB`, `CAM.c:1221-1224`).
     pub mask_grab: Option<f32>,
+    /// In flight, the nose's pitch, radians, + up ([`Kart::flight_attitude`]).
+    pub flight_pitch: Option<f32>,
 }
 
 /// The world view of a kart, for drawing and the camera.
@@ -1050,6 +1052,7 @@ impl Kart {
             ground: self.ground,
             cut: std::mem::take(&mut self.camera_cut),
             mask_grab: self.grab.as_ref().and_then(MaskGrab::camera_height),
+            flight_pitch: self.flight_attitude().map(|(pitch, _)| pitch),
         }
     }
 

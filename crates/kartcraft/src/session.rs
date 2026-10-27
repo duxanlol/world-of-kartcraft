@@ -52,6 +52,9 @@ pub struct KartView {
     /// The wheels' roll, radians.
     pub wheel_spin: f32,
     pub grounded: bool,
+    /// Hovering on deep water ([`Kart::afloat`]) and flying ([`Kart::flying`]): the kart's modes.
+    pub afloat: bool,
+    pub flying: bool,
     pub state: State,
     /// Turbo time left, seconds.
     pub reserves: f32,
@@ -660,6 +663,8 @@ impl Session {
             steer: current.steer,
             wheel_spin: self.wheel_spin,
             grounded: current.grounded,
+            afloat: kart.afloat(),
+            flying: kart.flying(),
             state: current.state,
             reserves: kart.reserves() as f32 / 960.0,
             meter: kart.turbo_meter(),
