@@ -14,7 +14,8 @@ pub use collision::Collision;
 pub use grab::GrabMask;
 pub use kart::{
     clock_slowdown, wheelie_frame, CameraInput, CloudEffect, Event, HitKind, Input, Kart,
-    Modifiers, OtherKart, Pose, Ram, Shield, State, Terrain, Wheelie, MS, RAM_TURBO_IMPACT, TICK,
+    Modifiers, OtherKart, Pose, Ram, Shield, State, Terrain, Wheelie, DRAFT, MS, RAM_TURBO_IMPACT,
+    TICK,
 };
 pub use rev::{RevEngine, RevState, StartBoost};
 pub use stats::Class;

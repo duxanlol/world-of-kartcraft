@@ -310,8 +310,25 @@ impl Terrain {
     pub const PLANING: Terrain = crate::Ground::FastWater.terrain();
 }
 
-/// How deep a floating kart sits in the water, lu: its floor is the surface less this.
+/// How deep a floating kart sits in the water at rest, lu: its floor is the surface less its
+/// draft ([`Kart::draft`]).
 pub const DRAFT: f32 = 12.0;
+/// The drawn kart caught by the water: a landing on it dips the kart by the fall
+/// (`SPLASH_PER_FALL` lu a speed unit, at most [`SPLASH_MAX`]), and a damped spring brings it back,
+/// DKR's soft catch of a fall onto water (`racer.c:2247-2252`, stiffness eased in from 0.11) seen
+/// rather than felt: the kart's floor stays CTR's, so a hop or a powerslide on water is the
+/// ground's. At rest it bobs [`BOB_LU`] at [`BOB_RATE`] radians a frame, still by a third of top speed.
+const SPLASH_PER_FALL: f32 = 1.0 / 512.0;
+const SPLASH_MAX: f32 = 28.0;
+const SPLASH_STIFFNESS: f32 = 0.18;
+const SPLASH_DAMPING: f32 = 0.82;
+const BOB_LU: f32 = 1.5;
+const BOB_RATE: f32 = 0.16;
+
+/// How deep it sits at speed, lu: a hovercraft rides up out of the water as it goes faster, at
+/// the water line plus `0.8 * min(|v|, 4)` (DKR `func_80046524`, `racer.c:2235-2245`), all of it
+/// by a third of its top speed.
+pub const DRAFT_SKIMMING: f32 = 4.0;
 
 // `actionsFlagSet` bits that matter here.
 const TOUCH_GROUND: u32 = 0x1;
@@ -598,6 +615,8 @@ pub struct Kart {
     pub water: Option<f32>,
     /// On the water's floor this tick ([`Kart::water`]).
     afloat: bool,
+    /// The drawn kart's dip into the water and its rate, lu and lu a frame ([`SPLASH_STIFFNESS`]).
+    splash: (f32, f32),
     /// `terrainMeta2`, the terrain the speed multiplier comes from: it stays through a hop and
     /// is let go 128 lu above the ground (`COLL.c:1431-1435`).
     speed_terrain: Terrain,
@@ -749,6 +768,7 @@ impl Kart {
             ground_type: Terrain::ASPHALT,
             water: None,
             afloat: false,
+            splash: (0.0, 0.0),
             speed_terrain: Terrain::ASPHALT,
             terrain_base: 0,
             on_pad: false,
@@ -1140,6 +1160,18 @@ impl Kart {
         self.afloat
     }
 
+    /// How deep it sits in the water now, lu: [`DRAFT`] at rest, rising to [`DRAFT_SKIMMING`] by
+    /// a third of the class's top speed once afloat. Water is only floated on at least [`DRAFT`]
+    /// deep, so the shallows drive their bed at any speed.
+    pub fn draft(&self) -> f32 {
+        if !self.afloat {
+            return DRAFT;
+        }
+        let third = (self.stats.speed / 3).max(1) as f32;
+        let skim = (self.speed_approx.abs() as f32 / third).min(1.0);
+        DRAFT + (DRAFT_SKIMMING - DRAFT) * skim
+    }
+
     pub fn grounded(&self) -> bool {
         self.flags & TOUCH_GROUND != 0
     }
@@ -1312,6 +1344,7 @@ impl Kart {
             let (x, y, z) = rev.scale();
             scale = Vec3::new(x, y, z);
         }
+        offset.y += self.water_bob();
         Pose {
             position: self.pos,
             basis,
@@ -2632,7 +2665,7 @@ impl Kart {
         let steps = (delta.length() / (r * 0.4)).ceil().clamp(1.0, 32.0) as usize;
         let step = delta / steps as f32;
         let mut slammed = false;
-        let floor = self.water.map(|s| s - DRAFT);
+        let floor = self.water.map(|s| s - self.draft());
         'outer: for _ in 0..steps {
             centre += step;
             for _ in 0..4 {
@@ -2718,9 +2751,11 @@ impl Kart {
     fn ground_probe(&mut self, world: &Collision) {
         let was = self.flags_prev & TOUCH_GROUND != 0;
         let mut hit = world.ground(self.pos + Vec3::Y * 128.0, 384.0);
-        // The water's floor, where it is above the ground (or there is none in reach).
+        // The water's floor, where it is above the ground (or there is none in reach), at the
+        // draft the sweep floated on.
+        let draft = self.draft();
         self.afloat = false;
-        if let Some(f) = self.water.map(|s| s - DRAFT) {
+        if let Some(f) = self.water.map(|s| s - draft) {
             let from = self.pos.y + 128.0;
             if f <= from && hit.as_ref().is_none_or(|h| f > h.point.y) && from - f <= 384.0 {
                 hit = Some(crate::collision::Hit {
@@ -2765,6 +2800,9 @@ impl Kart {
             if !was {
                 self.flags |= STARTED_TOUCH_GROUND | TURBO_LATCH;
                 self.grip_timer = LANDING_GRIP_MS;
+                if self.afloat {
+                    self.splash.1 = -(self.fall as f32 * SPLASH_PER_FALL).min(SPLASH_MAX);
+                }
                 self.events.push(Event::Land {
                     air_ms: self.airtime,
                     fall: self.fall,
@@ -2793,6 +2831,28 @@ impl Kart {
         if self.grip_timer > 0 {
             self.grip_timer = (self.grip_timer - MS).max(0);
         }
+        let (dip, rate) = &mut self.splash;
+        *rate = (*rate - *dip * SPLASH_STIFFNESS) * SPLASH_DAMPING;
+        *dip += *rate;
+        if !self.afloat {
+            *dip *= 0.5;
+        }
+    }
+
+    /// The drawn kart's height on the water against its floor, lu: the splash's dip and, slow, the
+    /// bob ([`SPLASH_STIFFNESS`]); 0 off the water.
+    pub fn water_bob(&self) -> f32 {
+        if !self.afloat && self.splash.0.abs() < 0.01 {
+            return 0.0;
+        }
+        let third = (self.stats.speed / 3).max(1) as f32;
+        let slow = 1.0 - (self.speed_approx.abs() as f32 / third).min(1.0);
+        let bob = if self.afloat {
+            (self.frame as f32 * BOB_RATE).sin() * BOB_LU * slow
+        } else {
+            0.0
+        };
+        self.splash.0 + bob
     }
 
     /// JUMP_FRICTION (3.3 to 3.5, 6.2, 6.3): turn penalty, the engine, the hop, velocity to speed.

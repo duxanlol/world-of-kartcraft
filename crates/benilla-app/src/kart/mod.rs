@@ -97,6 +97,8 @@ pub(crate) struct KartDrive {
     pub(crate) held: bool,
     /// Leaving the kart in a race, held for: how far, in percent; `None` when not.
     pub(crate) leaving: Option<u8>,
+    /// Hovering on deep water, as the session last stepped it.
+    pub(crate) afloat: bool,
 }
 
 /// The kart's drive for the frame, which writes [`KartDrive`].
@@ -534,6 +536,19 @@ fn update(
     };
     arms.blend = host.session.tick_fraction();
     arms.feed(&mut audio);
+    let afloat = host.session.kart().is_some_and(|k| k.afloat());
+    if afloat != drive.afloat {
+        drive.afloat = afloat;
+        info!(
+            "kart: {} at {:?}",
+            if afloat {
+                "hovering on the water"
+            } else {
+                "off the water"
+            },
+            drive.pos
+        );
+    }
     for event in &events {
         audio.observe(event);
         rumble.observe(event);

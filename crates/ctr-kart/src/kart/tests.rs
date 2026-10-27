@@ -1297,8 +1297,9 @@ fn on_water(surface: Option<f32>, frames: usize) -> Kart {
 fn deep_water_floats_the_kart_and_the_shallows_drive_their_bed() {
     let deep = on_water(Some(200.0), 150);
     assert!(deep.afloat() && deep.grounded(), "afloat");
+    // At speed it rides up, skimming.
     assert!(
-        (deep.pos.y - (200.0 - DRAFT)).abs() < 2.0,
+        (deep.pos.y - (200.0 - DRAFT_SKIMMING)).abs() < 2.0,
         "at {}",
         deep.pos.y
     );
@@ -1319,6 +1320,98 @@ fn deep_water_floats_the_kart_and_the_shallows_drive_their_bed() {
     assert_eq!((under.pos, under.speed()), (dry.pos, dry.speed()));
 }
 
+/// Afloat at rest the kart sits its whole draft deep; at speed it rides up out of the water, as a
+/// hovercraft does (DKR's ride height grows with speed).
+#[test]
+fn a_kart_rides_higher_on_water_the_faster_it_goes() {
+    let w = world(floor(200000.0));
+    let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 1.0, 0.0), 0);
+    kart.water = Some(200.0);
+    run(&mut kart, &w, Input { gas: false, ..GAS }, 60);
+    assert!(kart.afloat());
+    assert!(
+        (kart.pos.y - (200.0 - DRAFT)).abs() < 1.0,
+        "at rest {}",
+        kart.pos.y
+    );
+    run(&mut kart, &w, GAS, 150);
+    assert!(kart.afloat());
+    assert!(
+        (kart.pos.y - (200.0 - DRAFT_SKIMMING)).abs() < 1.0,
+        "skimming {}",
+        kart.pos.y
+    );
+}
+
+/// On the water a powerslide is CTR's: hop into it, and a tap in the red zone pays a turbo that
+/// planes the kart, the three boosts as on the ground.
+#[test]
+fn a_powerslide_on_water_pays_ctr_s_turbos() {
+    let w = world(floor(200000.0));
+    let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 1.0, 0.0), 0);
+    kart.water = Some(200.0);
+    run(&mut kart, &w, GAS, 90);
+    assert!(kart.afloat());
+    let hold = Input {
+        steer: -1.0,
+        r1: true,
+        ..GAS
+    };
+    let tap = Input { l1: true, ..hold };
+    for _ in 0..20 {
+        kart.tick(&w, &hold, &NONE);
+        if kart.state == State::Drifting {
+            break;
+        }
+    }
+    assert_eq!(kart.state, State::Drifting, "a powerslide on the water");
+    let mut stages = Vec::new();
+    for _ in 0..3 {
+        while !kart.turbo_meter().is_some_and(|(_, red)| red) {
+            kart.tick(&w, &hold, &NONE);
+            assert_eq!(kart.state, State::Drifting);
+        }
+        run(&mut kart, &w, hold, 10);
+        kart.events.clear();
+        kart.tick(&w, &tap, &NONE);
+        stages.extend(kart.events.iter().filter_map(|e| match e {
+            Event::Boost { stage, .. } => Some(*stage),
+            _ => None,
+        }));
+    }
+    assert_eq!(stages, [1, 2, 3]);
+    run(&mut kart, &w, hold, 2);
+    assert!(kart.afloat() && kart.reserves() > 0, "planing on its turbo");
+}
+
+/// A drop onto the water dips the drawn kart under its floor and the water brings it back up
+/// within a second; the floor itself never gives.
+#[test]
+fn a_drop_onto_water_dips_the_kart_and_it_bobs_back() {
+    let w = world(floor(200000.0));
+    let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 1200.0, 0.0), 0);
+    kart.water = Some(300.0);
+    let idle = Input { gas: false, ..GAS };
+    let mut deepest = 0.0f32;
+    for _ in 0..90 {
+        kart.tick(&w, &idle, &NONE);
+        if kart.afloat() {
+            deepest = deepest.min(kart.water_bob());
+            assert!(
+                (kart.pos.y - (300.0 - DRAFT)).abs() < 2.0,
+                "the floor holds"
+            );
+        }
+    }
+    assert!(deepest < -6.0, "dipped {deepest}");
+    run(&mut kart, &w, idle, 30);
+    assert!(
+        kart.water_bob().abs() <= BOB_LU + 0.5,
+        "settled {}",
+        kart.water_bob()
+    );
+}
+
 /// Dropped from high over water, the kart lands on it, and a hop off it lands back on it.
 #[test]
 fn a_kart_lands_on_water_and_hops_off_it() {
@@ -1329,7 +1422,11 @@ fn a_kart_lands_on_water_and_hops_off_it() {
     run(&mut kart, &w, GAS, 120);
     assert!(kart.afloat(), "on the water at {}", kart.pos.y);
     assert!(kart.events.iter().any(|e| matches!(e, Event::Land { .. })));
-    assert!((kart.pos.y - (300.0 - DRAFT)).abs() < 2.0, "{}", kart.pos.y);
+    assert!(
+        (kart.pos.y - (300.0 - kart.draft())).abs() < 2.0,
+        "{}",
+        kart.pos.y
+    );
     kart.events.clear();
     kart.tick(&w, &Input { r1: true, ..GAS }, &NONE);
     run(&mut kart, &w, GAS, 3);

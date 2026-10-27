@@ -72,24 +72,22 @@ pub(super) fn sample(
     races: Res<super::race::Races>,
     world: WorldPoint,
     footsteps: Option<Res<Footsteps>>,
+    player: Res<crate::player::Player>,
     mut host: ResMut<super::Host>,
 ) {
     let physics = drives_on_ground(races.ground_types(), settings.terrain);
     // The water under the kart, in the air too, for it to float on (Kartcraft's deviation,
     // `ctr_kart::Kart::water`): its surface, the water kinds only (magma and slime are none).
-    // Only a kart that floats, and only in a race or a time trial.
-    let floats = races.race.is_some() && kartcraft::model::floats(kartcraft::model::our_kart());
-    if view.active && floats {
-        let wow = bevy_to_wow(view.transform.translation);
-        let surface = world.water_surface_at(Subject::Player, wow);
-        trace!(
-            "kart ground: water {surface:?} under {:?}",
-            view.transform.translation
-        );
-        host.session.set_water(surface);
+    // Every kart hovers on deep water, in a race or out of one; out of the kart, the water under
+    // the body, for the kart to start on (a swimmer's lake bed may be out of its reach).
+    let at = if view.active {
+        view.transform.translation
     } else {
-        host.session.set_water(None);
-    }
+        player.pos
+    };
+    let surface = world.water_surface_at(Subject::Player, bevy_to_wow(at));
+    trace!("kart ground: water {surface:?} under {at:?}");
+    host.session.set_water(surface);
     if !view.active || !view.grounded {
         let ground = view.ground;
         host.session.set_ground(ground, physics);

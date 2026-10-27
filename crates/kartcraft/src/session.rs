@@ -247,7 +247,10 @@ fn spawn_builder() -> std::io::Result<Builder> {
 /// and slides down as CTR's walls have it. Asking for ground alone held it there in mid-air.
 fn hold_at_void(world: &Collision, kart: &mut Kart, before: Vec3) -> bool {
     let probe = kart.pose().position + Vec3::Y * VOID_PROBE_LU;
-    let void = !kart.grounded() && world.ray(probe, Vec3::NEG_Y, VOID_DEPTH_LU).is_none();
+    // Water under the kart is something to come down on, however deep its bed.
+    let water_below = kart.water.is_some_and(|w| w <= probe.y);
+    let void =
+        !kart.grounded() && !water_below && world.ray(probe, Vec3::NEG_Y, VOID_DEPTH_LU).is_none();
     if void {
         kart.halt_at(before);
     }
@@ -324,18 +327,27 @@ impl Session {
         let world = Collision::new(triangles(&pieces, &self.props, at, at), CELL_LU);
         let faces = world.len();
         // The ground under us, from a little above the feet: a body the server put a little under
-        // the terrain (its positions are not exact) must not start the kart beneath it. Without
-        // it nothing starts, and a kart already driving keeps its own scale.
-        let Some(ground) = world.ground(Vec3::Y * 200.0, 800.0) else {
-            crate::restore_scale(was);
-            return Ok(0);
+        // the terrain (its positions are not exact) must not start the kart beneath it; or the
+        // water's floor where it is higher (a swimmer starts afloat, the lake bed perhaps out of
+        // reach). Without either nothing starts, and a kart already driving keeps its own scale.
+        let water = self
+            .water
+            .map(|y| (y - at.y) * lu_per_yard() - ctr_kart::DRAFT);
+        let floor = match (world.ground(Vec3::Y * 200.0, 800.0), water) {
+            (Some(g), Some(w)) => g.point.y.max(w),
+            (Some(g), None) => g.point.y,
+            (None, Some(w)) => w,
+            (None, None) => {
+                crate::restore_scale(was);
+                return Ok(0);
+            }
         };
         self.epoch = self.epoch.wrapping_add(1);
         self.origin = at;
         self.centre = at;
         self.gathered_at = now;
         // A little above the ground: the first ticks settle the kart onto it.
-        let kart = Kart::new(class, ground.point + Vec3::Y * 4.0, heading_of(yaw));
+        let kart = Kart::new(class, Vec3::new(0.0, floor + 4.0, 0.0), heading_of(yaw));
         self.current = Some(kart.pose());
         self.previous = self.current;
         self.kart = Some(kart);

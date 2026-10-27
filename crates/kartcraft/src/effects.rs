@@ -623,6 +623,10 @@ enum SparkKind {
     Dirt,
     /// `emSet_GrassL/R` (`zGlobal_DATA.c:6642-6899`): green, 10 frames, thrown higher.
     Grass,
+    /// Water thrown off a kart on the water (Kartcraft's: CTR's water has no emitter): pale
+    /// blue-white, 14 frames, thrown higher still, as DKR's hovercraft spray (`racer.c` emitters
+    /// 1 to 4, keyed on speed).
+    Spray,
 }
 
 impl SparkKind {
@@ -630,6 +634,7 @@ impl SparkKind {
         match self {
             SparkKind::Spark => 8.0 * FRAME,
             SparkKind::Dirt | SparkKind::Grass => 10.0 * FRAME,
+            SparkKind::Spray => 14.0 * FRAME,
         }
     }
 
@@ -639,6 +644,7 @@ impl SparkKind {
             SparkKind::Spark => ([1.0, 1.0, 0.5], [7680.0, 7680.0, 3840.0]),
             SparkKind::Dirt => ([1.0, 0.5, 0.0], [2048.0, 1024.0, 0.0]),
             SparkKind::Grass => ([15360.0 / 65280.0, 1.0, 0.0], [0.0; 3]),
+            SparkKind::Spray => ([0.55, 0.75, 1.0], [1200.0, 1500.0, 1800.0]),
         };
         std::array::from_fn(|i| (start[i] - fall[i] / 65280.0 * 30.0 * age).max(0.0))
     }
@@ -648,6 +654,7 @@ impl SparkKind {
         match self {
             SparkKind::Spark => 2.0,
             SparkKind::Dirt | SparkKind::Grass => 1.0,
+            SparkKind::Spray => 1.5,
         }
     }
 }
@@ -674,6 +681,8 @@ const SPARK_LANDING_SPEED: i32 = 6 * 256;
 const SPARK_LANDING_FALL: i32 = 22 * 256;
 /// `VEH_EMITTER_GROUND_SPARK_COUNT` (`VehEmitter.c:70`).
 const SPARK_LANDING_COUNT: usize = 10;
+/// A splash-down's spray, twice a landing's sparks.
+const SPLASH_COUNT: usize = 20;
 /// `VEH_EMITTER_WALL_SPARK_MIN_SPEED` (`VehEmitter.c:112`), speed units.
 const SPARK_WALL_SPEED: i32 = 2 * 256;
 /// `VEH_EMITTER_TERRAIN_MIN_SPEED` (`VehEmitter.c:72`): the tyres throw dirt from this speed.
@@ -721,6 +730,13 @@ impl KartEffects {
                 -300.0,
                 2560.0 / 256.0 / 51.2,
             ),
+            // Spray: wider and higher than grass.
+            SparkKind::Spray => (
+                fp8_per_frame(800.0),
+                (fp8_per_frame(2200.0), fp8_per_frame(3000.0)),
+                -300.0,
+                2560.0 / 256.0 / 51.2,
+            ),
         };
         let jitter = Vec3::new(
             spread(self.random(), -offset, offset),
@@ -755,6 +771,7 @@ impl KartEffects {
         let thrown = match status.ground {
             Ground::Dirt | Ground::SlowDirt => Some(SparkKind::Dirt),
             Ground::Grass | Ground::SlowGrass => Some(SparkKind::Grass),
+            Ground::Water | Ground::FastWater => Some(SparkKind::Spray),
             _ => None,
         };
         if let Some(kind) = thrown.filter(|_| status.grounded && speed >= DIRT_SPEED) {
@@ -777,6 +794,22 @@ impl KartEffects {
         let Some((fall, speed)) = status.feedback.landing else {
             return;
         };
+        // A splash-down on water throws a ring of spray however it lands.
+        if matches!(
+            status.ground,
+            ctr_kart::Ground::Water | ctr_kart::Ground::FastWater
+        ) && fall > SPARK_LANDING_FALL / 2
+        {
+            for _ in 0..SPLASH_COUNT {
+                let at = Vec3::new(
+                    (self.random() - 0.5) * 1.6,
+                    10.0 / 51.2,
+                    (self.random() - 0.5) * 2.0,
+                );
+                self.spawn(SparkKind::Spray, t, at, to_yards);
+            }
+            return;
+        }
         if status.ground.terrain().flags & ctr_kart::terrain::flags::LANDING_SPARKS == 0 {
             return;
         }
@@ -965,6 +998,33 @@ mod tests {
     /// yd/s for a speed in CTR's units.
     fn yards(speed: i32) -> f32 {
         speed as f32 * 30.0 / 256.0 / crate::lu_per_yard()
+    }
+
+    /// On the water the tyres throw spray as dirt's emitter would (two, four drifting), and a
+    /// splash-down throws a ring of it.
+    #[test]
+    fn a_kart_on_the_water_throws_spray() {
+        let t = Transform::IDENTITY;
+        let mut fx = KartEffects::default();
+        let mut s = KartStatus {
+            grounded: true,
+            speed: yards(0x1000),
+            ground: ctr_kart::Ground::Water,
+            ..Default::default()
+        };
+        fx.dirt_and_wall_sparks(&t, &s, 1.0);
+        assert_eq!(fx.sparks.len(), 2);
+        s.drifting = true;
+        fx.dirt_and_wall_sparks(&t, &s, 1.0);
+        assert_eq!(fx.sparks.len(), 6);
+        assert!(fx.sparks.iter().all(|p| p.kind == SparkKind::Spray));
+        fx.sparks.clear();
+        s.feedback = Feedback {
+            landing: Some((SPARK_LANDING_FALL, 0)),
+            ..Default::default()
+        };
+        fx.landing_sparks(&t, &s, 1.0);
+        assert_eq!(fx.sparks.len(), SPLASH_COUNT);
     }
 
     #[test]
