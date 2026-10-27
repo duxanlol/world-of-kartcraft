@@ -432,6 +432,7 @@ fn update(
                     ..Default::default()
                 }
             }
+            None if input::autopilot_flies() => input::autopilot_fly(now, view.grounded),
             None => input::autopilot(now, view.meter),
         }
     } else if ui.typing {
@@ -550,6 +551,11 @@ fn update(
         );
     }
     for event in &events {
+        match event {
+            kartcraft::Event::TakeOff => info!("kart: flying from {:?}", drive.pos),
+            kartcraft::Event::Touchdown => info!("kart: down from a flight at {:?}", drive.pos),
+            _ => {}
+        }
         audio.observe(event);
         rumble.observe(event);
         // A showcase run earns no chain: it is a recording, not driving.

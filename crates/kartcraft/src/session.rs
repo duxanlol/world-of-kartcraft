@@ -583,6 +583,9 @@ impl Session {
                     let pose = kart.pose();
                     self.last_ground = Some((pose.position, pose.heading));
                     self.falling = 0.0;
+                } else if kart.flying() {
+                    // A flying kart is where it means to be.
+                    self.falling = 0.0;
                 } else {
                     self.falling += ctr_kart::TICK;
                     if self.falling > RESCUE_AFTER {

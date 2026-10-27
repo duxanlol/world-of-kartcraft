@@ -438,6 +438,27 @@ pub fn autopilot_on() -> bool {
     std::env::var_os("WOW_KART_AUTOPILOT").is_some()
 }
 
+/// `WOW_KART_AUTOPILOT=fly`: the autopilot drives straight and, in the air, taps the hop button
+/// twice in a row now and then, which opens the wings ([`autopilot_fly`]).
+pub fn autopilot_flies() -> bool {
+    std::env::var("WOW_KART_AUTOPILOT").is_ok_and(|v| v == "fly")
+}
+
+/// The flying autopilot's controls `t` seconds in: full gas straight on, a hop every two seconds,
+/// and off the ground a hop tapped every fourth frame, a double tap.
+pub fn autopilot_fly(t: f32, grounded: bool) -> Controls {
+    let frame = (t * 30.0) as i32;
+    Controls {
+        accelerate: true,
+        hop: if grounded {
+            frame % 60 < 2
+        } else {
+            frame % 4 < 2
+        },
+        ..Default::default()
+    }
+}
+
 /// The autopilot's controls `t` seconds in: gas, a long sweeping powerslide with a boost now and
 /// then in the meter's red, then straight again.
 pub fn autopilot(t: f32, meter: Option<(f32, bool)>) -> Controls {

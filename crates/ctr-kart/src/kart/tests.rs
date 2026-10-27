@@ -1491,3 +1491,246 @@ fn mashing_the_gas_with_the_steer_held_spins_the_kart_round() {
     assert!((90.0..130.0).contains(&held), "held: {held:.0}°");
     assert!(mashed > 2.5 * held, "mashed: {mashed:.0}°, held {held:.0}°");
 }
+
+/// A plateau `height` lu up for z < 0, a cliff at z = 0, and the flat a long way out below it.
+fn cliff(height: f32) -> Collision {
+    let mut tris = Vec::new();
+    let tile = 2000.0;
+    for i in -3..3 {
+        for j in -6..0 {
+            let (x0, z0) = (i as f32 * tile, j as f32 * tile);
+            let (x1, z1) = (x0 + tile, z0 + tile);
+            tris.push([[x0, height, z0], [x0, height, z1], [x1, height, z1]]);
+            tris.push([[x0, height, z0], [x1, height, z1], [x1, height, z0]]);
+        }
+    }
+    for i in -20..20 {
+        for j in 0..120 {
+            let (x0, z0) = (i as f32 * tile, j as f32 * tile);
+            let (x1, z1) = (x0 + tile, z0 + tile);
+            tris.push([[x0, 0.0, z0], [x0, 0.0, z1], [x1, 0.0, z1]]);
+            tris.push([[x0, 0.0, z0], [x1, 0.0, z1], [x1, 0.0, z0]]);
+        }
+    }
+    world(tris)
+}
+
+/// Full gas off the plateau's edge from far enough back to be at top speed; returns the kart
+/// the frame it went over.
+fn off_the_cliff(w: &Collision, height: f32) -> Kart {
+    let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, height + 1.0, -9000.0), 0);
+    for _ in 0..600 {
+        kart.tick(w, &GAS, &NONE);
+        if !kart.grounded() && kart.pos.z > 0.0 {
+            return kart;
+        }
+    }
+    panic!("never left the plateau: {:?}", kart.pos);
+}
+
+/// Off a cliff the wings open and the kart glides: far longer in the air than a fall, landing
+/// well out, and it drives on from the touchdown at speed.
+#[test]
+fn off_a_cliff_the_kart_takes_off_and_glides_down() {
+    let w = cliff(9000.0);
+    let mut kart = off_the_cliff(&w, 9000.0);
+    kart.events.clear();
+    let mut frames = 0;
+    let mut took_off = false;
+    while frames < 900 {
+        kart.tick(&w, &GAS, &NONE);
+        frames += 1;
+        took_off |= kart.events.contains(&Event::TakeOff);
+        if took_off && kart.grounded() {
+            break;
+        }
+    }
+    assert!(took_off, "the wings opened");
+    assert!(
+        kart.grounded() && !kart.flying(),
+        "down after {frames} frames"
+    );
+    assert!(kart.events.contains(&Event::Touchdown));
+    // A fall of 9000 lu takes about 70 frames; the glide several times that.
+    assert!(frames > 200, "glided {frames} frames");
+    assert!(kart.pos.z > 25000.0, "out to {}", kart.pos.z);
+    run(&mut kart, &w, GAS, 2);
+    assert!(
+        kart.speed() > Class::Balanced.stats().speed / 2,
+        "drives on at {}",
+        kart.speed()
+    );
+}
+
+/// A turbo pushes a flying kart along the nose: turbos fired through a flight keep it higher
+/// than a glide alone.
+#[test]
+fn a_turbo_keeps_a_flying_kart_up() {
+    let w = cliff(9000.0);
+    let fly = |turbo: bool| {
+        let mut kart = off_the_cliff(&w, 9000.0);
+        while !kart.flying() {
+            kart.tick(&w, &GAS, &NONE);
+        }
+        // Out of the dive and into the glide first.
+        run(&mut kart, &w, GAS, 60);
+        let from = kart.pos.y;
+        for frame in 0..90 {
+            if turbo && frame % 20 == 0 {
+                kart.fire_turbo(false);
+            }
+            kart.tick(&w, &GAS, &NONE);
+        }
+        assert!(kart.flying(), "still up");
+        kart.pos.y - from
+    };
+    let (glide, powered) = (fly(false), fly(true));
+    assert!(powered > glide + 300.0, "{powered} against {glide}");
+}
+
+/// In the air a tap of the drift button while steering banks into an air drift: CTR's meter,
+/// and a tap of the other shoulder in its red zone pays the turbos, 1, 2 and 3.
+#[test]
+fn an_air_drift_pays_ctr_s_turbos() {
+    let w = cliff(12000.0);
+    let mut kart = off_the_cliff(&w, 12000.0);
+    while !kart.flying() {
+        kart.tick(&w, &GAS, &NONE);
+    }
+    let steer = Input { steer: -1.0, ..GAS };
+    run(&mut kart, &w, steer, 2);
+    let hold = Input { r1: true, ..steer };
+    kart.tick(&w, &hold, &NONE);
+    assert_eq!(kart.state, State::Drifting, "an air drift");
+    let tap = Input { l1: true, ..hold };
+    let mut stages = Vec::new();
+    for _ in 0..3 {
+        while !kart.turbo_meter().is_some_and(|(_, red)| red) {
+            kart.tick(&w, &hold, &NONE);
+            assert!(kart.flying() && kart.state == State::Drifting);
+        }
+        run(&mut kart, &w, hold, 10);
+        kart.events.clear();
+        kart.tick(&w, &tap, &NONE);
+        stages.extend(kart.events.iter().filter_map(|e| match e {
+            Event::Boost { stage, .. } => Some(*stage),
+            _ => None,
+        }));
+    }
+    assert_eq!(stages, [1, 2, 3]);
+    assert!(kart.reserves() > 0);
+    let (_, bank) = kart.flight_attitude().unwrap();
+    assert!(bank > 0.5, "banked hard left: {bank}");
+}
+
+/// Pulled up the nose climbs, spending speed, until too slow for the wing: it stalls and sinks.
+#[test]
+fn pulled_up_the_kart_climbs_then_stalls() {
+    let w = cliff(9000.0);
+    let mut kart = off_the_cliff(&w, 9000.0);
+    while !kart.flying() {
+        kart.tick(&w, &GAS, &NONE);
+    }
+    // Out of the dive into the glide, then a turbo and the stick back.
+    run(&mut kart, &w, GAS, 80);
+    kart.fire_turbo(false);
+    let up = Input { down: true, ..GAS };
+    let start = kart.pos.y;
+    let mut top = start;
+    for _ in 0..200 {
+        kart.tick(&w, &up, &NONE);
+        top = top.max(kart.pos.y);
+    }
+    assert!(top > start + 100.0, "climbed from {start} to {top}");
+    assert!(
+        kart.pos.y < top - 100.0,
+        "stalled, sinking from {top} to {}",
+        kart.pos.y
+    );
+}
+
+/// A flight over water lands on it: the kart hovers from the touchdown.
+#[test]
+fn a_flight_lands_on_water() {
+    let w = cliff(9000.0);
+    let mut kart = off_the_cliff(&w, 9000.0);
+    kart.water = Some(1500.0);
+    for _ in 0..900 {
+        kart.tick(&w, &GAS, &NONE);
+        if kart.events.contains(&Event::Touchdown) {
+            break;
+        }
+    }
+    assert!(
+        kart.afloat() && !kart.flying(),
+        "on the water at {}",
+        kart.pos.y
+    );
+}
+
+/// Off a ledge a CTR jump stays one (its hang time is CTR's); a double tap of the hop button in
+/// the air opens the wings, a single tap does not.
+#[test]
+fn a_double_tap_in_the_air_opens_the_wings() {
+    let w = cliff(2000.0);
+    let mut kart = off_the_cliff(&w, 2000.0);
+    let tap = Input { r1: true, ..GAS };
+    run(&mut kart, &w, GAS, 6);
+    kart.tick(&w, &tap, &NONE);
+    run(&mut kart, &w, GAS, 3);
+    assert!(!kart.flying(), "one tap buffers a hop");
+    kart.tick(&w, &tap, &NONE);
+    run(&mut kart, &w, GAS, 2);
+    kart.tick(&w, &tap, &NONE);
+    assert!(kart.flying(), "a double tap opens the wings");
+    // And a plain drive off the same ledge lands as CTR's would.
+    let mut plain = off_the_cliff(&w, 2000.0);
+    for _ in 0..120 {
+        plain.tick(&w, &GAS, &NONE);
+        assert!(!plain.flying());
+        if plain.grounded() {
+            break;
+        }
+    }
+    assert!(plain.grounded());
+}
+
+/// On the flat a hop's double tap opens the wings at its top; on a turbo the kart climbs away,
+/// and without one it glides back down to the ground.
+#[test]
+fn a_kart_takes_off_from_a_hop_on_the_flat() {
+    let w = world(floor(200000.0));
+    let mut kart = Kart::new(Class::Balanced, Vec3::new(0.0, 1.0, 0.0), 0);
+    run(&mut kart, &w, GAS, 90);
+    kart.fire_turbo(false);
+    let tap = Input { r1: true, ..GAS };
+    kart.tick(&w, &tap, &NONE);
+    let mut opened = false;
+    for frame in 0..20 {
+        let input = if frame % 4 < 2 { tap } else { GAS };
+        kart.tick(&w, &input, &NONE);
+        if kart.flying() {
+            opened = true;
+            break;
+        }
+    }
+    assert!(opened, "the wings opened off the hop");
+    let from = kart.pos.y;
+    run(&mut kart, &w, GAS, 30);
+    assert!(
+        kart.pos.y > from,
+        "climbing on its turbo: {from} to {}",
+        kart.pos.y
+    );
+    for _ in 0..600 {
+        kart.tick(&w, &GAS, &NONE);
+        if kart.grounded() {
+            break;
+        }
+    }
+    assert!(
+        kart.grounded() && !kart.flying(),
+        "back down at {}",
+        kart.pos.y
+    );
+}

@@ -48,6 +48,10 @@ pub struct Modifiers {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
     Hop,
+    /// The wings open: flying ([`Kart::flying`]).
+    TakeOff,
+    /// Down out of a flight, on the ground or the water.
+    Touchdown,
     /// Back on the ground after `air_ms` CTR-ms, landing at `fall` speed units downward.
     Land {
         air_ms: i32,
@@ -246,6 +250,15 @@ struct ShieldState {
     ms: i32,
 }
 
+/// A kart in flight ([`Kart::flying`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Flight {
+    pitch: i32,
+    bank: i32,
+    speed: f32,
+    sink: f32,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum State {
     #[default]
@@ -324,6 +337,70 @@ const SPLASH_STIFFNESS: f32 = 0.18;
 const SPLASH_DAMPING: f32 = 0.82;
 const BOB_LU: f32 = 1.5;
 const BOB_RATE: f32 = 0.16;
+
+/// Flight (the owner's call, World of Kartcraft: every kart flies; CTR has no flight). Diddy Kong
+/// Racing's plane is the reference (`func_80049794`, `racer.c:2521`), as a glider: speed goes along
+/// the nose, so a dive gains it and a climb spends it; the wing's lift takes gravity away with speed
+/// (DKR's `G = 1 - clamp(|v| - 2, 0, 4) / 4`: full gravity at a sixth of top speed, none at half);
+/// body drag damps the sink, so it settles to a glide. The engine pushes no more in the air than on
+/// a CTR hop: turbo reserves are the thrust, so the powerslide's turbos keep a kart up.
+///
+/// The wings open by themselves on a fall longer than a CTR jump: a second in the air (past hang
+/// time's middle tier, 960 ms; a CTR ledge's drop lands in two thirds of one) with still this far
+/// (lu) to fall, so a hop, a ledge and its hang time are CTR's.
+/// Or a hop button tapped twice in the air within [`FLY_DOUBLE_TAP_FRAMES`] (DKR's double-tap of R,
+/// 22 ticks at 60 Hz) at least [`FLY_DEPLOY_HEIGHT`] up, half a hop's height, so a kart takes off
+/// from a hop anywhere: one tap buffers a hop or a drift for the landing, as in CTR.
+const FLY_ENTER_HEIGHT: f32 = 320.0;
+const FLY_ENTER_AIRTIME_MS: i32 = 1000;
+const FLY_DEPLOY_HEIGHT: f32 = 24.0;
+const FLY_DOUBLE_TAP_FRAMES: i32 = 11;
+/// Frames after a touchdown before the wings may open again, so a kart scraping along a wall does
+/// not flicker in and out of flight.
+const FLY_REOPEN_FRAMES: i32 = 10;
+/// The lift's span, of the class's top speed /256: none at a sixth, all at half (DKR's 2 and 6 of a
+/// 12.2 top speed).
+const FLY_LIFT_FROM: i32 = 42;
+const FLY_LIFT_FULL: i32 = 128;
+/// Without a turbo the lift never quite holds the kart up: it glides down.
+const FLY_GLIDE_LIFT: f32 = 0.9;
+/// The sink's body drag a frame (DKR's body-vertical `kv`, 0.02 and 0.08 linear).
+const FLY_SINK_KEEP: f32 = 0.9;
+/// Speed lost a frame to drag (DKR's forward `kf`, about its share at a glide's pace), and to the
+/// air brake (□, which drops the reserves as on the ground).
+const FLY_DRAG: f32 = 0.004;
+const FLY_AIR_BRAKE: f32 = 0.03;
+/// The share of gravity along the nose: a dive gains speed and a climb spends it.
+const FLY_NOSE_GRAVITY: f32 = 0.6;
+/// A turbo's push a frame, toward the turbo's top speed (the target the ground's engine reaches).
+const FLY_TURBO_ACCEL: f32 = 640.0;
+/// The nose's pitch, CTR angle units (4096 a turn): its reach up and down, its rate a frame, and
+/// where it settles: a glide on the gas that holds about the top speed (gravity's share along the
+/// nose against the drag), a dive off it, pulled up with ↓. Too slow for the wing, the nose drops
+/// whatever the stick says (DKR's stall droop, `racer.c:2692`) until it flies again.
+const FLY_PITCH_UP: i32 = 0x120;
+const FLY_PITCH_DOWN: i32 = -0x160;
+const FLY_PITCH_RATE: i32 = 12;
+const FLY_GLIDE_PITCH: i32 = -0x40;
+/// On a turbo, the gas holds the nose a little up instead: boosting is how a kart climbs.
+const FLY_BOOST_PITCH: i32 = 0x30;
+const FLY_DIVE_PITCH: i32 = -0x100;
+const FLY_STALL_LIFT: f32 = 0.25;
+/// Past this share of the top speed /256 a dive's extra speed bleeds off this much a frame more.
+const FLY_OVERSPEED: i32 = 300;
+const FLY_OVERSPEED_DRAG: f32 = 0.015;
+/// The bank: its reach (a powerslide's ×1.5, DKR's hard bank on R), its rate, and the yaw a
+/// frame at full bank (90° a second; a powerslide's 135°). The turn rate follows the bank, a
+/// coordinated turn (DKR: `steerVisualRotation -= (-bank >> 6) * handling`).
+const FLY_BANK_MAX: i32 = 0x180;
+const FLY_BANK_RATE: i32 = 32;
+const FLY_YAW_AT_FULL_BANK: f32 = 34.0;
+/// Over the ground by this much (lu) the lift fades, gone [`FLY_CEILING_SPAN`] higher (DKR's soft
+/// ceiling at `course_height - 50`).
+const FLY_CEILING: f32 = 4000.0;
+/// How far down (lu) a kart in the air looks for what is under it, for the wings and the ceiling.
+const FLY_LOOK_DOWN: f32 = 8000.0;
+const FLY_CEILING_SPAN: f32 = 1200.0;
 
 /// How deep it sits at speed, lu: a hovercraft rides up out of the water as it goes faster, at
 /// the water line plus `0.8 * min(|v|, 4)` (DKR `func_80046524`, `racer.c:2235-2245`), all of it
@@ -617,6 +694,16 @@ pub struct Kart {
     afloat: bool,
     /// The drawn kart's dip into the water and its rate, lu and lu a frame ([`SPLASH_STIFFNESS`]).
     splash: (f32, f32),
+    /// Flying ([`FLY_ENTER_HEIGHT`]): the nose's pitch and the bank (CTR angle units, + up and +
+    /// left), the speed along the nose and the sink (speed units).
+    flight: Option<Flight>,
+    /// How high over what is under it (ground or water) the kart is, lu, as far as
+    /// [`FLY_LOOK_DOWN`]; 0 on it.
+    height: f32,
+    /// Frames left to tap a hop button again in the air and open the wings.
+    air_tap: i32,
+    /// Frames left before the wings may open again after a touchdown ([`FLY_REOPEN_FRAMES`]).
+    reopen: i32,
     /// `terrainMeta2`, the terrain the speed multiplier comes from: it stays through a hop and
     /// is let go 128 lu above the ground (`COLL.c:1431-1435`).
     speed_terrain: Terrain,
@@ -769,6 +856,10 @@ impl Kart {
             water: None,
             afloat: false,
             splash: (0.0, 0.0),
+            flight: None,
+            height: 0.0,
+            air_tap: 0,
+            reopen: 0,
             speed_terrain: Terrain::ASPHALT,
             terrain_base: 0,
             on_pad: false,
@@ -1160,6 +1251,16 @@ impl Kart {
         self.afloat
     }
 
+    /// In flight, its wings open ([`FLY_ENTER_HEIGHT`]).
+    pub fn flying(&self) -> bool {
+        self.flight.is_some()
+    }
+
+    /// The nose's pitch and the bank in flight, radians (+ up, + left); none on the ground.
+    pub fn flight_attitude(&self) -> Option<(f32, f32)> {
+        self.flight.map(|f| (rad(f.pitch), rad(f.bank)))
+    }
+
     /// How deep it sits in the water now, lu: [`DRAFT`] at rest, rising to [`DRAFT_SKIMMING`] by
     /// a third of the class's top speed once afloat. Water is only floated on at least [`DRAFT`]
     /// deep, so the shallows drive their bed at any speed.
@@ -1345,6 +1446,12 @@ impl Kart {
             scale = Vec3::new(x, y, z);
         }
         offset.y += self.water_bob();
+        // In flight the nose pitches up about the kart's own +X and it banks into the turn, the
+        // inside (+X, left, for a left turn) going down.
+        if let Some(f) = self.flight {
+            basis =
+                basis * Mat3::from_rotation_x(-rad(f.pitch)) * Mat3::from_rotation_z(-rad(f.bank));
+        }
         Pose {
             position: self.pos,
             basis,
@@ -1730,22 +1837,33 @@ impl Kart {
             Some(_) => self.spin_init(),
             None => {}
         }
+        self.take_off(tapped_r1 || tapped_l1);
         self.update_stage(input, tapped_r1 || tapped_l1);
         self.phys_linear(input, mods, tapped_r1, tapped_l1);
-        match self.state {
-            _ if self.blasted => self.tumble_angular(),
-            State::Drifting => self.powerslide_angular(),
-            State::Spinning(_) => self.spin_angular(),
-            _ => self.phys_angular(),
+        let flying = self.flight.is_some();
+        if flying {
+            self.fly(input, mods);
+        } else {
+            match self.state {
+                _ if self.blasted => self.tumble_angular(),
+                State::Drifting => self.powerslide_angular(),
+                State::Spinning(_) => self.spin_angular(),
+                _ => self.phys_angular(),
+            }
+            self.apply_forces();
         }
-        self.apply_forces();
         self.n4 = self.n1;
         self.n1 = Vec3::Y;
         self.sweep(world, mods);
         self.vel -= self.nudge;
         self.collide_karts(others);
         self.ground_probe(world);
-        self.jump_and_friction(mods);
+        if self.flight.is_some() && self.grounded() {
+            self.land_flight();
+        }
+        if !flying {
+            self.jump_and_friction(mods);
+        }
         // TRANSLATE_MATRIX: the visual frame.
         let w = if self.grounded() { 6.0 } else { 7.0 };
         let target = if self.grounded() { self.n1 } else { Vec3::Y };
@@ -1966,7 +2084,14 @@ impl Kart {
                     Button::R1 => input.r1,
                     Button::L1 => input.l1,
                 };
-                if self.flags & STARTED_TOUCH_GROUND != 0
+                // In flight a tap of the drift's button while steering banks into an air drift,
+                // CTR's powerslide in the air: the same meter and the same boosts.
+                let start = if self.flight.is_some() {
+                    tapped
+                } else {
+                    self.flags & STARTED_TOUCH_GROUND != 0
+                };
+                if start
                     && self.simp_turn.abs() > self.stats.turn_rate / 2
                     && held
                     && self.flags & ACCEL_PREVENTION == 0
@@ -2529,6 +2654,160 @@ impl Kart {
     }
 
     /// APPLY_FORCES (6.4, 3.6): speed to velocity, gravity and friction in the kart's frame.
+    /// The wings open ([`FLY_ENTER_HEIGHT`]): high enough over the ground for long enough, or a hop
+    /// tapped in the air. Off a launch the flight keeps the kart's speed and its climb.
+    fn take_off(&mut self, tapped: bool) {
+        self.reopen = (self.reopen - 1).max(0);
+        if self.flight.is_some()
+            || self.reopen > 0
+            || self.grounded()
+            || self.blasted
+            || matches!(self.state, State::Crashing(_) | State::Spinning(_))
+            || self.grab.is_some()
+        {
+            return;
+        }
+        let height = self.height;
+        // Both taps in the air: the hop's own press is on the ground. Not mid-powerslide, where a
+        // tap is a boost's, nor with TNT on the head, which a mash of hops shakes off (CTR's).
+        let tapped = tapped && self.state == State::Normal && self.tnt.is_none();
+        let double_tap = tapped && self.air_tap > 0;
+        self.air_tap = if tapped {
+            FLY_DOUBLE_TAP_FRAMES
+        } else {
+            (self.air_tap - 1).max(0)
+        };
+        let opens = (height > FLY_ENTER_HEIGHT && self.airtime >= FLY_ENTER_AIRTIME_MS)
+            || (double_tap && height > FLY_DEPLOY_HEIGHT);
+        if !opens {
+            return;
+        }
+        self.air_tap = 0;
+        // The wing catches the fall: the nose along the way it was going (no steeper than a dive),
+        // all its speed along the nose, so pulling out of the dive turns the fall into the glide.
+        let flat = Vec3::new(self.vel.x, 0.0, self.vel.z).length();
+        let pitch = (wrap_signed(atan2_units(self.vel.y, flat.max(1.0))))
+            .clamp(FLY_PITCH_DOWN, FLY_PITCH_UP);
+        self.flight = Some(Flight {
+            pitch,
+            bank: 0,
+            speed: self.vel.length().min(MAX_SPEED as f32),
+            sink: 0.0,
+        });
+        self.events.push(Event::TakeOff);
+    }
+
+    /// A frame of flight: the nose and the bank from the stick, the turn from the bank, speed
+    /// along the nose (gravity's share, drag, the turbo, the air brake), the wing's lift against
+    /// the rest of gravity, and the velocity from them.
+    fn fly(&mut self, input: &Input, mods: &Modifiers) {
+        let Some(mut f) = self.flight else {
+            return;
+        };
+        let top = self.stats.speed.max(1);
+        // The nose: up with ↓, a glide on the gas, a dive off it; down whatever the stick says
+        // when too slow for the wing.
+        let lift_now = map(
+            f.speed as i32,
+            top * FLY_LIFT_FROM / 256,
+            top * FLY_LIFT_FULL / 256,
+            0,
+            256,
+        ) as f32
+            / 256.0;
+        let pitch_to = if lift_now < FLY_STALL_LIFT {
+            FLY_DIVE_PITCH
+        } else if input.down {
+            FLY_PITCH_UP
+        } else if input.gas && self.reserves > 0 {
+            FLY_BOOST_PITCH
+        } else if input.gas {
+            FLY_GLIDE_PITCH
+        } else {
+            FLY_DIVE_PITCH
+        };
+        f.pitch = approach_i(f.pitch, FLY_PITCH_RATE, pitch_to).clamp(FLY_PITCH_DOWN, FLY_PITCH_UP);
+        // The bank from the steer (+ left), harder in an air drift; the yaw follows it.
+        let drifting = self.state == State::Drifting;
+        let reach = if drifting {
+            FLY_BANK_MAX * 3 / 2
+        } else {
+            FLY_BANK_MAX
+        };
+        let steer = (self.simp_turn as f32 / self.stats.turn_rate.max(1) as f32).clamp(-1.0, 1.0);
+        let steer = if drifting && steer.abs() < 0.5 {
+            // An air drift keeps turning its way, as a powerslide does.
+            self.mult_drift.signum() as f32 * 0.5
+        } else {
+            steer
+        };
+        f.bank = approach_i(f.bank, FLY_BANK_RATE, (steer * reach as f32) as i32);
+        let yaw = FLY_YAW_AT_FULL_BANK * f.bank as f32 / FLY_BANK_MAX as f32;
+        self.angle = wrap(self.angle + yaw.round() as i32);
+        self.vel_yaw = self.angle;
+        self.turn_angle = approach_i(self.turn_angle, 16, 0);
+        // Speed along the nose.
+        let (sin_p, cos_p) = rad(f.pitch).sin_cos();
+        f.speed -= GRAVITY as f32 * FLY_NOSE_GRAVITY * sin_p;
+        f.speed -= f.speed * FLY_DRAG;
+        if f.speed as i32 > top * FLY_OVERSPEED / 256 {
+            f.speed -= f.speed * FLY_OVERSPEED_DRAG;
+        }
+        if input.brake {
+            f.speed -= f.speed * FLY_AIR_BRAKE;
+        }
+        if self.reserves > 0 {
+            let cap = (self.target_speed(mods) + self.fire_speed_cap) as f32;
+            if f.speed < cap {
+                f.speed = (f.speed + FLY_TURBO_ACCEL).min(cap);
+            }
+        }
+        f.speed = f.speed.clamp(0.0, MAX_SPEED as f32);
+        // The wing's lift: none slow, all at half the top speed; a glide without a turbo, and
+        // fading high over the ground.
+        let lift = map(
+            f.speed as i32,
+            top * FLY_LIFT_FROM / 256,
+            top * FLY_LIFT_FULL / 256,
+            0,
+            256,
+        ) as f32
+            / 256.0;
+        let held = if self.reserves > 0 {
+            1.0
+        } else {
+            FLY_GLIDE_LIFT
+        };
+        let over = self.height - FLY_CEILING;
+        let ceiling = 1.0 - (over / FLY_CEILING_SPAN).clamp(0.0, 1.0);
+        let lift = lift * held * ceiling;
+        f.sink = (f.sink + GRAVITY as f32 * (1.0 - lift)) * FLY_SINK_KEEP;
+        f.sink = f.sink.min(TERMINAL_VELOCITY as f32);
+        let (sin_y, cos_y) = rad(self.angle).sin_cos();
+        let nose = Vec3::new(cos_p * sin_y, sin_p, cos_p * cos_y);
+        self.vel = nose * f.speed - Vec3::Y * f.sink + self.nudge;
+        self.vel_pitch = atan2_units(self.vel.y, Vec3::new(self.vel.x, 0.0, self.vel.z).length());
+        self.speed = self.vel.length() as i32;
+        self.speed_approx = f.speed as i32;
+        self.jump_height = 0;
+        self.fwd_accel_impulse = 0;
+        self.moving = rot_axis_angle(Vec3::Y, self.angle);
+        self.flight = Some(f);
+    }
+
+    /// Down on the ground or the water: the wings fold and the kart drives on at the speed it
+    /// flew, its heading the flight's.
+    fn land_flight(&mut self) {
+        if let Some(f) = self.flight.take() {
+            self.reopen = FLY_REOPEN_FRAMES;
+            self.speed = f.speed as i32;
+            self.speed_approx = f.speed as i32;
+            self.vel_pitch = 0;
+            self.vel_yaw = self.angle;
+            self.events.push(Event::Touchdown);
+        }
+    }
+
     fn apply_forces(&mut self) {
         self.speed = self.speed.min(MAX_SPEED);
         let (yaw, pitch) = (rad(self.vel_yaw), rad(self.vel_pitch));
@@ -2809,6 +3088,7 @@ impl Kart {
                 });
             }
             self.coyote = COYOTE_MS;
+            self.height = 0.0;
             self.airtime = 0;
             self.fall = 0;
         } else {
@@ -2822,7 +3102,12 @@ impl Kart {
             if self.coyote == 0 {
                 self.jump_cooldown = 0;
             }
-            self.airtime += MS;
+            self.airtime = self.airtime.saturating_add(MS);
+            let ground = world
+                .ray(self.pos + Vec3::Y * 16.0, Vec3::NEG_Y, FLY_LOOK_DOWN)
+                .map_or(FLY_LOOK_DOWN, |h| h.distance - 16.0);
+            let water = self.water.map_or(f32::INFINITY, |w| self.pos.y - w);
+            self.height = ground.min(water).max(0.0);
             self.fall = self.fall.max((-self.vel.y) as i32);
             if self.jump_cooldown != 0 {
                 self.flags |= AIRBORNE;
@@ -3034,6 +3319,10 @@ impl Kart {
 
     /// `UI_JumpMeter_Update` (6.6): a long enough hop pays out on landing.
     fn hang_time(&mut self) {
+        // In flight the turbos come from the air drift: hang time would pay for flying itself.
+        if self.flight.is_some() {
+            return;
+        }
         let airborne = self.flags & AIRBORNE != 0;
         if airborne && !self.grounded() {
             self.jump_meter = self.airtime.min(HANG_TIME_METER_MAX);
