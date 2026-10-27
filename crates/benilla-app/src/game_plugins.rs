@@ -749,14 +749,18 @@ pub(crate) mod schedule_tests {
     ///   appliers (five pairs, as `track_edit_ui::draw`'s): it builds only its own nodes. The race
     ///   map (`kart::race_map_ui::draw`) moves its dots' and card's `Node`s and colours against the
     ///   glue screens' own node writers (character create, realm list, backdrop borders, outline
-    ///   copies) and the window's mode appliers (eight pairs): each touches its own entities.
+    ///   copies) and the window's mode appliers (eight pairs): each touches its own entities. The
+    ///   horn (`kart::horn::update`) reads `SoundConfig` against the dev mute chord's write
+    ///   (`sound::toggle_mute`) and queues its line in `PlayerActions` against the action bar's
+    ///   drain (two pairs), as `kart::sound::update` and `kart::weapons::update` do: a frame-old
+    ///   volume, and a line sent a frame later.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
     #[cfg(not(target_os = "macos"))]
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_185;
-    /// macOS: eight more (than the 5,185 elsewhere), all the native cursor's (`cursor::macos::drive`, eleven pairs in the
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_187;
+    /// macOS: eight more (than the 5,187 elsewhere), all the native cursor's (`cursor::macos::drive`, eleven pairs in the
     /// dump). Unlike `cursor::other::drive`, it reads `CameraControl`, `Cinematic` and the window
     /// focus to hide the arrow while the camera is dragged or a cinematic plays, against their
     /// writers (`player::controller::control`, `camera::latch_world_mouse`,
@@ -764,7 +768,7 @@ pub(crate) mod schedule_tests {
     /// `ui_logout::drain_logout`, `cinematic::{drive, start_pending, take_trigger}`): a frame-old
     /// value hides or shows the cursor a frame late, which no one sees.
     #[cfg(target_os = "macos")]
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_193;
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_195;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
