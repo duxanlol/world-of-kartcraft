@@ -10,9 +10,10 @@
 //!   `arg1`..`argN` would carry.
 //! - `BENILLA_KART_COURSE_NAMES(list)`: every course, one `key<TAB>name` a line, once per VM, for
 //!   naming the course a ready check is for.
-//! - `BENILLA_KART_TRACKS(list)`: the track browser's courses, once per VM, a line each:
-//!   `key<TAB>name<TAB>zone<TAB>map<TAB>laps<TAB>description<TAB>x,y;x,y;...` (the checkpoints, WoW x, y,
-//!   which `GetWorldLocMapPosition` puts on the world map).
+//! - `BENILLA_KART_TRACKS(list, flight, leaps)`: the track browser's courses, once per VM, a line
+//!   each: `key<TAB>name<TAB>zone<TAB>map<TAB>laps<TAB>description<TAB>x,y;x,y;...` (the checkpoints,
+//!   WoW x, y, which `GetWorldLocMapPosition` puts on the world map); the flight courses' keys, one
+//!   a line; and the flight distances as the courses, their launch the one point.
 //! - `BENILLA_KART_GARAGE(skill, classes, racers)`: the garage's Karting skill (0 before the line
 //!   is ours), its classes one `key<TAB>name<TAB>skill needed<TAB>description` a line in the order
 //!   they open, and the racers whose karts the kart data holds, one `key<TAB>name` a line; at load
@@ -152,7 +153,14 @@ pub(crate) fn feed(
             vec![ScriptValue::Str(course_names())],
         );
         script.fire_event("BENILLA_KART_COURSES", vec![ScriptValue::Str(zone_list())]);
-        script.fire_event("BENILLA_KART_TRACKS", vec![ScriptValue::Str(track_list())]);
+        script.fire_event(
+            "BENILLA_KART_TRACKS",
+            vec![
+                ScriptValue::Str(track_list()),
+                ScriptValue::Str(flight_list()),
+                ScriptValue::Str(leap_list()),
+            ],
+        );
         sent.courses = true;
     }
     // The race's track when it changes.
@@ -284,6 +292,37 @@ fn track_list() -> String {
         .join("\n")
 }
 
+/// The flight courses' keys, one a line: the track browser's Flight tab.
+fn flight_list() -> String {
+    COURSES
+        .iter()
+        .filter(|c| c.flight())
+        .map(|c| c.key.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The flight distances as the track browser lists courses, a line each, the launch its route.
+fn leap_list() -> String {
+    let clean = |s: &str| s.replace(['\t', '\n'], " ");
+    crate::kart::LEAPS
+        .iter()
+        .map(|l| {
+            format!(
+                "{}\t{}\t{}\t{}\t0\t{}\t{:.1},{:.1}",
+                l.key,
+                clean(&l.name),
+                clean(&l.zone),
+                l.map,
+                clean(&l.description()),
+                l.launch.x,
+                l.launch.y
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// A course's line in the track browser's list.
 fn track_line(c: &crate::kart::Course) -> String {
     let points: Vec<String> = c
@@ -379,5 +418,14 @@ mod tests {
             assert!(fields[4].parse::<u8>().is_ok(), "the laps: {line}");
             assert!(fields[6].split(';').count() >= 2, "a route: {line}");
         }
+        assert_eq!(flight_list(), "tb-skyway");
+        let leaps = leap_list();
+        assert_eq!(leaps.lines().count(), crate::kart::LEAPS.len());
+        for line in leaps.lines() {
+            let fields: Vec<&str> = line.split('\t').collect();
+            assert_eq!(fields.len(), 7, "{line}");
+            assert_eq!(fields[6].split(';').count(), 1, "the launch: {line}");
+        }
+        assert!(leaps.starts_with("tb-leap\tThunder Bluff Leap\tMulgore\t1\t0\t"));
     }
 }

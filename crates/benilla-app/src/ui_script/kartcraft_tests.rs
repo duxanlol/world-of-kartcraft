@@ -3871,6 +3871,90 @@ fn the_controller_picks_a_track_with_the_d_pad_and_acts_with_a_face_button() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
+/// The track browser's tabs: the courses driven on Tracks, the flight trial and the flight
+/// distance on Flight, each with its own verbs; a flight course opened at its key opens its tab.
+#[test]
+fn the_track_browser_parts_the_flight_courses_on_a_tab_of_their_own() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let list = [
+        "t1\tCrystal Lake Loop\tElwynn Forest\t0\t3\tA 3-lap circuit.\t-9000.0,-100.0;-9100.0,0.0",
+        "sky\tThe Skyway\tMulgore\t1\t0\tA flight trial.\t-1585.0,414.0;-1460.0,330.0",
+    ];
+    s.fire_event(
+        "BENILLA_KART_TRACKS",
+        vec![
+            ScriptValue::Str(list.join("\n")),
+            ScriptValue::Str("sky".into()),
+            ScriptValue::Str(
+                "leap\tThe Leap\tMulgore\t1\t0\tA flight distance.\t-1588.0,417.0".into(),
+            ),
+        ],
+    );
+    s.tick(0.0);
+    let shown = |s: &UiScript| -> String {
+        s.eval(
+            "local keys = {} for _, t in ipairs(BenillaKartTrackBrowser_Shown()) do \
+             table.insert(keys, t.key) end return table.concat(keys, ' ')",
+        )
+        .unwrap()
+    };
+    let text = |s: &UiScript, name: &str| -> String {
+        s.eval(&format!("return {name}:GetText()")).unwrap()
+    };
+    s.run("BenillaKartTrackBrowser_Open()").unwrap();
+    s.tick(0.0);
+    assert_eq!(shown(&s), "t1");
+    assert!(s
+        .eval::<bool>("return BenillaKartTracksFrameTab2:IsVisible() == 1")
+        .unwrap());
+    s.run("BenillaKartTracksFrameTab2:Click()").unwrap();
+    assert_eq!(shown(&s), "sky leap");
+    assert_eq!(text(&s, "BenillaKartTracksFrameHeaderText"), "Flight");
+
+    // The flight trial is a time trial; the flight distance flies from its launch.
+    sent(&mut s);
+    s.run("BenillaKartTrackBrowser_Select('sky') BenillaKartTracksFrameTrial:Click()")
+        .unwrap();
+    assert_eq!(sent(&mut s), ["KARTCRAFT\tR\tTB\tsky"]);
+    s.run("BenillaKartTrackBrowser_Open() BenillaKartTrackBrowser_Select('leap')")
+        .unwrap();
+    assert_eq!(text(&s, "BenillaKartTracksFrameTrial"), "Fly it");
+    assert!(!s
+        .eval::<bool>("return BenillaKartTracksFrameRate:IsEnabled() == 1")
+        .unwrap());
+    // What a button sent, but the list of closed courses the browser asks for as it opens.
+    let acted = |s: &mut UiScript| -> Vec<String> {
+        sent(s)
+            .into_iter()
+            .filter(|l| l != "KARTCRAFT\tR\tOff")
+            .collect()
+    };
+    s.run("BenillaKartTracksFrameTrial:Click()").unwrap();
+    assert_eq!(acted(&mut s), ["KARTCRAFT\tR\tLeap\tleap"]);
+    s.run("BenillaKartTrackBrowser_Open() BenillaKartTrackBrowser_Select('leap') BenillaKartTracksFrameMarshal:Click()")
+        .unwrap();
+    assert_eq!(acted(&mut s), ["KARTCRAFT\tR\tMT\tleap"]);
+
+    // Start turns the tab from the pad; a course opened at its key is on its own tab.
+    s.run("BenillaKartTrackBrowser_Open() BenillaKartTrackBrowser_Pad('PADFORWARD')")
+        .unwrap();
+    assert_eq!(shown(&s), "t1");
+    s.run("BenillaKartTrackBrowser_Open('sky')").unwrap();
+    assert_eq!(shown(&s), "sky leap");
+    s.run("BenillaKartTrackBrowser_Open('t1')").unwrap();
+    assert_eq!(shown(&s), "t1");
+    // Our own tracks' browser has no tabs.
+    s.run("BenillaKartTrackBrowser_OpenMine()").unwrap();
+    assert!(!s
+        .eval::<bool>("return BenillaKartTracksFrameTab1:IsVisible() == 1")
+        .unwrap());
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
 #[test]
 fn the_track_browser_takes_us_to_the_track_s_marshal() {
     benilla_formats::wow_data_or_skip!();

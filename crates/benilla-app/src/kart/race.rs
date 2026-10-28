@@ -123,10 +123,12 @@ impl Course {
         self.map > 1 && !BATTLEGROUND_MAPS.contains(&self.map)
     }
 
-    /// What the Race Finder offers it under: its series, else its zone (`pack.py` gives the
-    /// server the same).
+    /// What the Race Finder offers it under: its series, else its zone, and nothing for a flight
+    /// course, which it never offers (`pack.py` gives the server the same).
     pub(crate) fn finder_group(&self) -> &str {
-        if self.series.is_empty() {
+        if self.flight {
+            ""
+        } else if self.series.is_empty() {
             &self.zone
         } else {
             &self.series
@@ -167,11 +169,19 @@ impl Course {
             format!("{} ", self.series)
         };
         let mut text = match self.laps {
+            _ if self.flight => format!("A flight trial{place}, {km:.2} km from start to finish"),
             0 => format!("A {series}sprint{place}, {km:.2} km from start to finish"),
             1 => format!("A {series}one-lap circuit{place}, {km:.2} km"),
             n => format!("A {series}{n}-lap circuit{place}, {km:.2} km a lap"),
         };
-        text += &format!(" through {} checkpoints.", route.len());
+        if self.flight {
+            let rings = self.rings().iter().flatten().count();
+            text += &format!(
+                " through {rings} rings in the air: the kart flies it, flight switched on or off."
+            );
+        } else {
+            text += &format!(" through {} checkpoints.", route.len());
+        }
         if self.dungeon() {
             text += " A dungeon race: raced in a copy of the dungeon of its own.";
         }
@@ -255,6 +265,46 @@ pub(crate) static COURSES: std::sync::LazyLock<Vec<Course>> = std::sync::LazyLoc
     serde_json::from_str::<File>(include_str!("../../../../courses/courses.json"))
         .expect("courses/courses.json")
         .courses
+});
+
+/// A flight distance of `courses/courses.json` (`Kartcraft.cpp` "Flight distance"): from a high
+/// launch, as far as the kart flies.
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct Leap {
+    pub(crate) key: String,
+    pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) zone: String,
+    pub(crate) map: u32,
+    /// The launch, WoW x, y.
+    pub(crate) launch: MarshalSpot,
+}
+
+impl Leap {
+    /// The track browser's word on it.
+    pub(crate) fn description(&self) -> String {
+        let place = if self.zone.is_empty() {
+            String::new()
+        } else {
+            format!(" in {}", self.zone)
+        };
+        format!(
+            "A flight distance{place}: off a high launch, fly as far as you can. Where you first \
+             touch down is measured from the launch; your best and the record are kept."
+        )
+    }
+}
+
+/// The flight distances, in the file's order.
+pub(crate) static LEAPS: std::sync::LazyLock<Vec<Leap>> = std::sync::LazyLock::new(|| {
+    #[derive(serde::Deserialize)]
+    struct File {
+        #[serde(default)]
+        leaps: Vec<Leap>,
+    }
+    serde_json::from_str::<File>(include_str!("../../../../courses/courses.json"))
+        .expect("courses/courses.json")
+        .leaps
 });
 
 /// The Race Finder's zones, in the order the file first names them; the server keeps the same
@@ -3004,12 +3054,19 @@ mod tests {
         }
     }
 
-    /// The Thunder Bluff Skyway is a flight trial: flown through its rings, out of the finder.
+    /// The Thunder Bluff Skyway is a flight trial: flown through its rings, out of the finder,
+    /// and the Thunder Bluff Leap launches beside it.
     #[test]
     fn the_skyway_is_a_flight_trial_flown_through_rings() {
         let sky = COURSES.iter().find(|c| c.key == "tb-skyway").unwrap();
         assert!(sky.flight());
+        assert_eq!(sky.zone, "Mulgore");
         assert!(sky.finder_group().is_empty(), "never in the Race Finder");
+        assert!(sky.description().starts_with("A flight trial in Mulgore, "));
+        let leap = LEAPS.iter().find(|l| l.key == "tb-leap").unwrap();
+        assert_eq!((leap.map, leap.zone.as_str()), (1, "Mulgore"));
+        let start = sky.start();
+        assert!((leap.launch.x - start[0]).hypot(leap.launch.y - start[1]) < 10.0);
         assert!(sky.rings().iter().filter(|r| r.is_some()).count() >= 4);
         assert!(COURSES
             .iter()

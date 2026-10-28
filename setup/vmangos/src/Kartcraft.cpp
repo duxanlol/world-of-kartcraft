@@ -581,7 +581,18 @@ namespace Kartcraft
     // of the server's, the body sized all the same while they drive. Under s_mutex.
     static std::unordered_map<uint64, float> s_testLapScale;
 
-    // The courses: courses/courses.json, made into this table by setup/vmangos/pack.py.
+    // A flight distance ("Flight distance"): its launch and the Race Marshal it launches from.
+    struct Leap
+    {
+        char const* key;
+        char const* name;
+        uint32 map;
+        float x, y, o;     // the launch, and the way it faces (over the drop)
+        float marshal[2];  // the Race Marshal it launches from (a course's, courses.json's)
+    };
+
+    // The courses and the flight distances: courses/courses.json, made into these tables by
+    // setup/vmangos/pack.py.
 #include "KartcraftCourses.h"
 
     // Whether `c` is a party course: in a dungeon or a raid, not the open world, which in 1.12 is
@@ -3352,21 +3363,6 @@ namespace Kartcraft
     // kept in kartcraft_leaps, in tenths of a yard; a new record is said to everyone. The answer is
     // "R\tLeapBest\t<key>\t<tenths>\t<best>\t<record>\t<holder>".
 
-    struct Leap
-    {
-        char const* key;
-        char const* name;
-        uint32 map;
-        float x, y, o;     // the launch, and the way it faces (over the drop)
-        float marshal[2];  // the Race Marshal it launches from (a course's, courses.json's)
-    };
-
-    static Leap const LEAPS[] = {
-        // Off the bare mountain west of Thunder Bluff, over its spires and the Mulgore plains: 211 yd
-        // up, 57 yd of plateau to the edge, and the ground below it under 170 yd for 1290 yd
-        // north-east (the heightmap's; the Thunder Bluff Skyway starts beside it).
-        { "tb-leap", "Thunder Bluff Leap", 1, -1588.f, 417.f, 5.498f, { -1600.f, 435.f } },
-    };
     // A leap may take this long (ms) from the launch to the touchdown, and no less.
     constexpr uint32 LEAP_LONGEST = 180000;
     constexpr uint32 LEAP_SHORTEST = 2000;
@@ -3384,6 +3380,19 @@ namespace Kartcraft
         uint32 since; // ms
     };
     static std::unordered_map<uint32, LeapRun> s_leapRuns; // player guid low -> run; world thread
+
+    // The course whose Race Marshal the flight distance `key` launches from (pack.py checks it has
+    // one), for the track browser's "Go to marshal"; null for no leap.
+    static Course const* LeapMarshalCourse(std::string const& key)
+    {
+        for (Leap const& leap : LEAPS)
+            if (key == leap.key)
+                for (Course const& c : COURSES)
+                    if (c.map == leap.map && std::fabs(c.marshal.first - leap.marshal[0]) <= 2.f &&
+                        std::fabs(c.marshal.second - leap.marshal[1]) <= 2.f)
+                        return &c;
+        return nullptr;
+    }
 
     static void CreateLeaps()
     {
@@ -3421,18 +3430,19 @@ namespace Kartcraft
     // "Leap" onto the launch; "LeapLand" the touchdown, judged. On the world thread.
     static void HandleLeap(Player* player, std::string const& verb, std::string const& key)
     {
-        size_t index = sizeof(LEAPS) / sizeof(LEAPS[0]);
-        for (size_t i = 0; i < sizeof(LEAPS) / sizeof(LEAPS[0]); ++i)
+        size_t index = LEAPS.size();
+        for (size_t i = 0; i < LEAPS.size(); ++i)
             if (key == LEAPS[i].key)
                 index = i;
-        if (index == sizeof(LEAPS) / sizeof(LEAPS[0]))
+        if (index == LEAPS.size())
             return;
         Leap const& leap = LEAPS[index];
         uint32 const guid = player->GetGUIDLow();
         uint32 const now = WorldTimer::getMSTime();
         if (verb == "Leap")
         {
-            if (InRace(player) || player->GetMapId() != leap.map)
+            // From its marshal or the track browser, from anywhere, as a time trial is.
+            if (InRace(player) || !CanBeRacedOff(player))
                 return;
             if (!TeleportOnto(player, leap.map, leap.x, leap.y, leap.o, true))
                 return;
@@ -7133,6 +7143,9 @@ namespace Kartcraft
         {
             if (Course const* course = FindCourse(f[2]))
                 ToMarshal(player, *course, now);
+            // A flight distance's: the marshal it launches from, a course's.
+            else if (Course const* at = LeapMarshalCourse(f[2]))
+                ToMarshal(player, *at, now);
         }
         else if (verb == "DL")
             SendLine(player, "KARTCRAFT\tR\tDLs\t" + DungeonList());
@@ -7893,7 +7906,7 @@ namespace Kartcraft
             SendJobs(player);
             return;
         }
-        static std::set<std::string> const TELEPORTS = { "TB", "TR", "TA", "TG", "MT", "LJ", "Q+", "Y", "Back", "JT", "Hub", "DT", "DB" };
+        static std::set<std::string> const TELEPORTS = { "TB", "TR", "TA", "TG", "MT", "LJ", "Q+", "Y", "Back", "JT", "Hub", "DT", "DB", "Leap" };
         if (f.size() >= 2 && TELEPORTS.count(f[1]) && CarryingDelivery(player))
         {
             ChatHandler(player->GetSession()).SendSysMessage(
@@ -8499,7 +8512,7 @@ namespace Kartcraft
         float x, y, z;
         marshal->GetRespawnCoord(x, y, z);
         std::vector<size_t> out;
-        for (size_t i = 0; i < sizeof(LEAPS) / sizeof(LEAPS[0]); ++i)
+        for (size_t i = 0; i < LEAPS.size(); ++i)
             if (LEAPS[i].map == marshal->GetMapId() &&
                 std::hypot(LEAPS[i].marshal[0] - x, LEAPS[i].marshal[1] - y) <= MARSHAL_MATCH)
                 out.push_back(i);
@@ -8512,7 +8525,7 @@ namespace Kartcraft
     {
         GossipMenu& menu = player->PlayerTalkClass->GetGossipMenu();
         menu.ClearMenu();
-        if (index < sizeof(LEAPS) / sizeof(LEAPS[0]))
+        if (index < LEAPS.size())
         {
             Leap const& leap = LEAPS[index];
             std::vector<std::pair<uint32, std::pair<uint32, std::string>>> const board = LeapBoard(leap.key);

@@ -50,9 +50,10 @@ client's list are both made from it; nothing else holds course data.
   publishes (`R\tPub`'s last field, the `PT` lines' last) and runs its test laps at (`R\tSz`
   asks the server to size the body for one).
 - `flight`: optional, default false: a flight trial, a time trial the kart flies, its
-  `KartFlight` setting or not, through rings hung in the air (a checkpoint's `ring`). It has no
-  `zone`, and the server keeps it out of the queues, the challenges and hosting: it runs only
-  from its Race Marshal (`Kartcraft.cpp`, `Course::flight`).
+  `KartFlight` setting or not, through rings hung in the air (a checkpoint's `ring`). Its `zone`
+  names where it is, but the Race Finder never offers it, and the server keeps it out of the
+  queues, the challenges and hosting (`Kartcraft.cpp`, `Course::flight`): it runs from its Race
+  Marshal or the track browser's Flight tab.
 - `checkpoints`: at least two, WoW world `x`, `y` (yards); the first is the start, where a
   driver hosts or joins. Optional `z` (the server finds the ground itself). Optional `gate`:
   the gate's half-width in yards. The client passes a checkpoint through a gate this wide
@@ -81,6 +82,13 @@ client's list are both made from it; nothing else holds course data.
   first names each; a queue line names one by that place (`z3`), so keep first appearances in
   order when adding courses (the exporter appends). The Grand Prix leads the file, so it heads
   the finder.
+
+The file's `leaps` list holds the flight distances (`Kartcraft.cpp`, "Flight distance"): from a
+high launch, as far as the kart flies, the server measuring where it first touches down. Each has
+a `key` (no course's), `name`, `zone`, `map` (0 or 1), `note`, its `launch` (`x`, `y`, `z`, `o`,
+the way it faces over the drop) and the `marshal` it launches from (`x`, `y`), which must be a
+course's: that marshal offers it, and the track browser's Flight tab lists it beside the flight
+trials. `pack.py` makes them the server's `LEAPS`.
 
 ## Regenerating
 

@@ -138,8 +138,9 @@ def courses_header(data):
             fail(f'course {key}: key used twice')
         keys.add(key)
         name = cstring(c.get('name'), f'course {key}: name')
-        # The server's zone is only the Race Finder's group: a series ("Grand Prix") in its stead.
-        zone = c.get('series') or c.get('zone', '')
+        # The server's zone is only the Race Finder's group: a series ("Grand Prix") in its stead,
+        # and none for a flight course, which the finder never offers.
+        zone = '' if c.get('flight') else c.get('series') or c.get('zone', '')
         zone_c = cstring(zone, f'course {key}: zone') if zone else '""'
         cmap = c.get('map')
         laps = c.get('laps')
@@ -211,7 +212,44 @@ def courses_header(data):
             tail = f', {cfloat(sz)}' + (f', {cfloat(scale)}' if scale != 1 else '')
         out.append(f'          {{ {cfloat(mx)}, {cfloat(my)} }}, {doors_c}{tail} }},')
     out.append('    };')
+    out += leaps_table(data, courses)
     return '\n'.join(out) + '\n'
+
+
+def leaps_table(data, courses):
+    """The flight distances (Kartcraft.cpp Leap), each launched from a course's Race Marshal."""
+    leaps = data.get('leaps', [])
+    if not isinstance(leaps, list):
+        fail('"leaps" must be a list')
+    out = ['', '    static std::vector<Leap> const LEAPS = {']
+    keys = {c['key'] for c in courses}
+    for n, l in enumerate(leaps):
+        if not isinstance(l, dict):
+            fail(f'leap {n} is not an object')
+        key = l.get('key')
+        if not isinstance(key, str) or not KEY.match(key) or key in keys:
+            fail(f'leap {n}: key must be 1-32 of a-z 0-9 _ - and no course key')
+        keys.add(key)
+        name = cstring(l.get('name'), f'leap {key}: name')
+        cmap = l.get('map')
+        if cmap not in (0, 1):
+            fail(f'leap {key}: map must be 0 or 1, the open world')
+        launch, marshal = l.get('launch'), l.get('marshal')
+        if not isinstance(launch, dict) or not isinstance(marshal, dict):
+            fail(f'leap {key}: needs "launch" and "marshal"')
+        x, y, o = (num(launch.get(f), f'leap {key}: launch {f}') for f in 'xyo')
+        mx, my = (num(marshal.get(f), f'leap {key}: marshal {f}') for f in 'xy')
+        # Its marshal must be a course's, whose spawn it shares (MarshalLeaps finds it by its spot).
+        if not any(c['map'] == cmap and abs(marshal_of(c, c['key'])[0] - mx) <= 2
+                   and abs(marshal_of(c, c['key'])[1] - my) <= 2 for c in courses):
+            fail(f'leap {key}: its marshal is no course marshal')
+        note = l.get('note', '')
+        title = f'{l["name"]} ({l.get("zone", "")})' + (f': {note}' if note else '')
+        out += textwrap.wrap(title, 100, initial_indent='        // ', subsequent_indent='        // ')
+        out.append(f'        {{ "{key}", {name}, {cmap}, {cfloat(x)}, {cfloat(y)}, {cfloat(o)}, '
+                   f'{{ {cfloat(mx)}, {cfloat(my)} }} }},')
+    out.append('    };')
+    return out
 
 
 # The Race Marshal's ids, in the world database's custom ranges (docs/courses.md).

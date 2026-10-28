@@ -48,7 +48,7 @@ pub(crate) mod track_edit;
 pub(crate) mod track_edit_ui;
 mod ui;
 pub(crate) use garage::{class_list, racer_list};
-pub(crate) use race::{Course, RaceMap, COURSES, ZONES};
+pub(crate) use race::{Course, RaceMap, COURSES, LEAPS, ZONES};
 pub(crate) use seat::SEAT_ANIMS;
 pub(crate) use ui::{KartOverlay, PadView, ScoreLines};
 mod weapons;

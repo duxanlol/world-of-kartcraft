@@ -2182,14 +2182,22 @@
             25.f, 25.f },
           {},
           { -7139.7f, -1397.3f }, {} },
-        // Thunder Bluff Skyway: flight trial, laid by hand from the heightmap: off the bare
-        // mountain west of Thunder Bluff and through four rings past its spires to the Mulgore
-        // plains, 660 yd; a 1-in-6 glide clears every leg by 18 yd, each ring 6 yd under it. No
-        // zone: never in the Race Finder.
+        // Thunder Bluff Skyway (Mulgore): flight trial, laid by hand from the heightmap: off the
+        // bare mountain west of Thunder Bluff and through four rings past its spires to the Mulgore
+        // plains, 660 yd; a 1-in-6 glide clears every leg by 18 yd, each ring 6 yd under it. A
+        // flight course: never in the Race Finder.
         { "tb-skyway", "Thunder Bluff Skyway", "", 1, 0,
           { { -1585.f, 414.f }, { -1460.f, 330.f }, { -1310.f, 210.f }, { -1190.f, 240.f },
             { -1040.f, 360.f } },
           { 25.f, 16.f, 16.f, 16.f, 18.f },
           {},
           { -1600.f, 435.f }, {}, 0.f, 1.f, true },
+    };
+
+    static std::vector<Leap> const LEAPS = {
+        // Thunder Bluff Leap (Mulgore): off the bare mountain west of Thunder Bluff, over its
+        // spires and the Mulgore plains: 211 yd up, 57 yd of plateau to the edge, and the ground
+        // below it under 170 yd for 1290 yd north-east (the heightmap's); the Thunder Bluff Skyway
+        // starts beside it.
+        { "tb-leap", "Thunder Bluff Leap", 1, -1588.f, 417.f, 5.498f, { -1600.f, 435.f } },
     };

@@ -871,20 +871,33 @@
         -- Every course from BENILLA_KART_TRACKS: { key, name, zone, map, laps, text, points },
         -- searchable; "Show on map" opens the world map at the course's zone and draws its route,
         -- which GetWorldLocMapPosition puts on whatever map is displayed. The route goes when the
-        -- map closes or another course is shown.
+        -- map closes or another course is shown. Its tabs part the courses driven (1) from the
+        -- flight ones (2): the flight trials (`flight`) and the flight distances (`leap`).
         BenillaKartTracks = {}
+        BenillaKartLeaps = {}
         BENILLA_KART_TRACK_ROWS = 10
         BENILLA_KART_TRACK_ROW_HEIGHT = 18
         -- The trail's dot every this many yards along the route.
         BENILLA_KART_ROUTE_STEP = 15
-        BenillaKartTrackBrowser = { search = "" }
+        BenillaKartTrackBrowser = { search = "", tab = 1 }
         -- The course on the map (its key), and its dots.
         BenillaKartRoute = { dots = {} }
         -- The windows a route shown on the world map keeps up over it.
         BENILLA_KART_MAP_RIDERS = { "BenillaKartTracksFrame", "BenillaKartJobsFrame" }
 
-        function BenillaKartTracks_Set(list)
+        -- The courses, the flight courses' keys a line each, and the flight distances, lines as
+        -- the courses' (their launch the one point), which the Flight tab lists.
+        function BenillaKartTracks_Set(list, flight, leaps)
             BenillaKartTracks = BenillaKartTracks_Parse(list)
+            local flying = {}
+            for key in string.gfind(flight or "", "[^\n]+") do flying[key] = 1 end
+            for i = 1, table.getn(BenillaKartTracks) do
+                if flying[BenillaKartTracks[i].key] then BenillaKartTracks[i].flight = 1 end
+            end
+            BenillaKartLeaps = BenillaKartTracks_Parse(leaps)
+            for i = 1, table.getn(BenillaKartLeaps) do
+                BenillaKartLeaps[i].flight, BenillaKartLeaps[i].leap = 1, 1
+            end
             BenillaKartTrackBrowser_Refresh()
         end
 
@@ -1047,6 +1060,9 @@
             for i = 1, table.getn(BenillaKartMyTracks) do
                 if BenillaKartMyTracks[i].key == key then return BenillaKartMyTracks[i] end
             end
+            for i = 1, table.getn(BenillaKartLeaps) do
+                if BenillaKartLeaps[i].key == key then return BenillaKartLeaps[i] end
+            end
             for i = 1, table.getn(BenillaKartPubTracks) do
                 if BenillaKartPubTracks[i].key == key then return BenillaKartPubTracks[i] end
             end
@@ -1055,7 +1071,8 @@
         end
 
         -- The list: every open track (BenillaKartOff, the server's "Off") whose name or zone holds
-        -- the search, any case, then our own; only our own when opened for them.
+        -- the search, any case, of the tab's kind, then our own; only our own when opened for
+        -- them. The Flight tab lists the flight trials, then the flight distances, and none of ours.
         BenillaKartOff = {}
         function BenillaKartTrackBrowser_Shown()
             local search = string.lower(BenillaKartTrackBrowser.search or "")
@@ -1071,8 +1088,15 @@
                 for i = 1, table.getn(BenillaKartPubTracks) do add(BenillaKartPubTracks[i]) end
                 return shown
             end
+            local flying = mode == nil and BenillaKartTrackBrowser.tab == 2
             if mode ~= "mine" then
-                for i = 1, table.getn(BenillaKartTracks) do add(BenillaKartTracks[i]) end
+                for i = 1, table.getn(BenillaKartTracks) do
+                    if (BenillaKartTracks[i].flight ~= nil) == flying then add(BenillaKartTracks[i]) end
+                end
+            end
+            if flying then
+                for i = 1, table.getn(BenillaKartLeaps) do add(BenillaKartLeaps[i]) end
+                return shown
             end
             for i = 1, table.getn(BenillaKartMyTracks) do add(BenillaKartMyTracks[i]) end
             return shown
@@ -1093,6 +1117,14 @@
             BenillaKartTrackBrowser_Open()
         end
 
+        -- The course list's tab: 1 the courses driven, 2 the flight ones.
+        function BenillaKartTrackBrowser_SetTab(id)
+            BenillaKartTrackBrowser.tab = id
+            local bar = getglobal("BenillaKartTracksFrameScrollScrollBar")
+            if bar then bar:SetValue(0) end
+            BenillaKartTrackBrowser_Refresh()
+        end
+
         function BenillaKartTrackBrowser_Search(text)
             BenillaKartTrackBrowser.search = text or ""
             local bar = getglobal("BenillaKartTracksFrameScrollScrollBar")
@@ -1107,6 +1139,9 @@
                 BenillaKartTrackBrowser.mode = nil
                 BenillaKartTrackBrowser.search = ""
                 BenillaKartTracksFrameSearch:SetText("")
+                -- On the course's own tab.
+                local track = BenillaKartTrack(key)
+                BenillaKartTrackBrowser.tab = (track and track.flight) and 2 or 1
             end
             BenillaKartTrackBrowser.selected = key or BenillaKartTrackBrowser.selected
             BenillaKart_Open(BenillaKartTracksFrame)
@@ -1185,8 +1220,17 @@
                 end
             end
             local track = selected and BenillaKartTrack(selected)
+            -- The tabs with the course list alone, not our own tracks' or the players'.
+            local tabbed = BenillaKartTrackBrowser.mode == nil
+            for i = 1, 2 do
+                local tab = getglobal("BenillaKartTracksFrameTab" .. i)
+                if tab and tabbed then tab:Show() elseif tab then tab:Hide() end
+            end
+            if tabbed and PanelTemplates_SetTab then PanelTemplates_SetTab(frame, BenillaKartTrackBrowser.tab) end
             BenillaKartTracksFrameEdit:Hide()
-            BenillaKartTracksFrameHeaderText:SetText(BENILLA_KART_BROWSER_TITLES[BenillaKartTrackBrowser.mode or ""] or "Tracks")
+            local title = BENILLA_KART_BROWSER_TITLES[BenillaKartTrackBrowser.mode or ""]
+            if not title and BenillaKartTrackBrowser.tab == 2 then title = "Flight" end
+            BenillaKartTracksFrameHeaderText:SetText(title or "Tracks")
             BenillaKartTracksFrameTrial:SetText("Time trial")
             BenillaKartTracksFrameMarshal:SetText("Go to marshal")
             BenillaKartTracksFrameRate:SetText("Rate track")
@@ -1215,6 +1259,15 @@
                     end
                     BenillaKartTracksFrameRate:Disable()
                 end
+            elseif track and track.leap then
+                -- A flight distance: flown from its launch, from anywhere; nothing to rate.
+                BenillaKartTracksFrameTitle:SetText(track.name)
+                BenillaKartTracksFrameText:SetText(track.text)
+                BenillaKartTracksFrameShow:Enable()
+                BenillaKartTracksFrameTrial:SetText("Fly it")
+                BenillaKartTracksFrameTrial:Enable()
+                BenillaKartTracksFrameMarshal:Enable()
+                BenillaKartTracksFrameRate:Disable()
             elseif track then
                 BenillaKartTracksFrameTitle:SetText(track.name)
                 BenillaKartTracksFrameText:SetText(track.text)
@@ -1273,6 +1326,12 @@
                 return
             end
             if not track then return end
+            -- A flight distance: onto its launch in the kart (Kartcraft.cpp "Flight distance").
+            if track.leap then
+                BenillaKart_Send("Leap\t" .. track.key)
+                BenillaKartTracksFrame:Hide()
+                return
+            end
             BenillaKart_Send("TB\t" .. track.key)
             BenillaKartTracksFrame:Hide()
         end
@@ -1309,7 +1368,7 @@
         -- The controller in the track browser: the D-pad picks the track itself (L1 and R1 a page
         -- at a time), the list following it, and each action is a face button, so none is a walk
         -- down the list away: Cross the time trial, Square the marshal, Triangle the map, Select
-        -- the rating, Circle closes.
+        -- the rating, Start the other tab, Circle closes.
         BENILLA_KART_TRACK_PAD_STEPS = { PADDUP = -1, PADDDOWN = 1,
             PADLSHOULDER = -BENILLA_KART_TRACK_ROWS, PADRSHOULDER = BENILLA_KART_TRACK_ROWS }
         function BenillaKartTrackBrowser_Pad(key)
@@ -1342,6 +1401,10 @@
                 if BenillaKartTracksFrameShow:IsEnabled() == 1 then BenillaKartTracksFrameShow:Click() end
             elseif key == "PADBACK" then
                 if BenillaKartTracksFrameRate:IsEnabled() == 1 then BenillaKartTracksFrameRate:Click() end
+            elseif key == "PADFORWARD" then
+                if BenillaKartTrackBrowser.mode == nil then
+                    BenillaKartTrackBrowser_SetTab(3 - BenillaKartTrackBrowser.tab)
+                end
             elseif key == "PAD2" then
                 BenillaKartTracksFrame:Hide()
             end
@@ -2016,8 +2079,8 @@
         -- `legend` is what the window's controller guide says under it (BenillaPadLegend_Update);
         -- without one, the guide says how the D-pad, Cross and Circle drive it.
         BENILLA_PAD_WINDOWS = {
-            { name = "BenillaKartTracksFrame", buttons = "BenillaKartTrackBrowser_Pad",
-              legend = "D-pad: pick a track    L1 / R1: page\nCross / A: time trial    Square / X: marshal\nTriangle / Y: map    Select: rate    Circle / B: close" },
+            { name = "BenillaKartTracksFrame", buttons = "BenillaKartTrackBrowser_Pad", below = 26,
+              legend = "D-pad: pick a track    L1 / R1: page    Start: Tracks / Flight\nCross / A: time trial    Square / X: marshal\nTriangle / Y: map    Select: rate    Circle / B: close" },
             { name = "BenillaKartJobsFrame", buttons = "BenillaKartJobs_Pad",
               legend = "D-pad: pick a job    Cross / A: take it    Triangle / Y: route\nSquare / X: cancel the job under way    Circle / B: close" },
             -- `below`: how far under the window its legend hangs, past its tabs.
@@ -3392,7 +3455,7 @@
             elseif event == "BENILLA_KART_TRACKMAP" then
                 BenillaKartMap_SetTrack(arg1)
             elseif event == "BENILLA_KART_TRACKS" then
-                BenillaKartTracks_Set(arg1)
+                BenillaKartTracks_Set(arg1, arg2, arg3)
             elseif event == "BENILLA_KART_COURSES" then
                 BenillaKartCourses_Set(arg1)
             elseif event == "BENILLA_KART_COURSE_NAMES" then
@@ -6620,9 +6683,23 @@
                     if track and track.mine then BenillaKartEditor_Edit(track) end
                 </OnClick></Scripts>
             </Button>
+            <!-- The tabs under the frame, as a stock panel's: the courses driven, and the flight
+                 trials and distances (BenillaKartTrackBrowser_SetTab). -->
+            <Button name="$parentTab1" inherits="CharacterFrameTabButtonTemplate" id="1" text="Tracks">
+                <Anchors><Anchor point="TOPLEFT" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="14" y="8"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartTrackBrowser_SetTab(1)</OnClick></Scripts>
+            </Button>
+            <Button name="$parentTab2" inherits="CharacterFrameTabButtonTemplate" id="2" text="Flight">
+                <Anchors><Anchor point="LEFT" relativeTo="$parentTab1" relativePoint="RIGHT"><Offset><AbsDimension x="-16" y="0"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartTrackBrowser_SetTab(2)</OnClick></Scripts>
+            </Button>
         </Frames>
         <Scripts>
             <OnLoad>
+                if PanelTemplates_SetNumTabs then
+                    PanelTemplates_SetNumTabs(this, 2)
+                    PanelTemplates_SetTab(this, 1)
+                end
                 if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end
                 BenillaKart_Movable(this)
                 this:EnableMouseWheel(1)

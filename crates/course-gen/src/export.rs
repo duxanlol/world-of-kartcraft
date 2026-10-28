@@ -433,7 +433,9 @@ const ORDER: &[&str] = &[
     "series",
     "map",
     "laps",
+    "flight",
     "note",
+    "launch",
     "marshal",
     "checkpoints",
     "crates",
@@ -454,15 +456,35 @@ fn inline(v: &Value) -> String {
     }
 }
 
-/// The file as written: a course's fields in [`ORDER`], one checkpoint or crate per line.
+/// The file as written: its courses first, then its other lists (the flight distances,
+/// `leaps`) in name order, each entry's fields in [`ORDER`], one checkpoint or crate per line.
 pub fn format(file: &Value) -> String {
-    let mut s = String::from("{\n  \"courses\": [\n");
-    let courses = file["courses"].as_array().cloned().unwrap_or_default();
-    for (i, c) in courses.iter().enumerate() {
-        s.push_str("    {\n");
-        let Some(o) = c.as_object() else {
-            continue;
-        };
+    let mut names = vec!["courses"];
+    if let Some(o) = file.as_object() {
+        names.extend(o.keys().map(String::as_str).filter(|k| *k != "courses"));
+    }
+    let mut s = String::from("{\n");
+    for (n, name) in names.iter().enumerate() {
+        let entries = file[*name].as_array().cloned().unwrap_or_default();
+        s.push_str(&format!("  {}: [\n", Value::from(*name)));
+        for (i, c) in entries.iter().enumerate() {
+            entry(&mut s, c);
+            s.push_str(if i + 1 < entries.len() { ",\n" } else { "\n" });
+        }
+        s.push_str(if n + 1 < names.len() {
+            "  ],\n"
+        } else {
+            "  ]\n"
+        });
+    }
+    s.push_str("}\n");
+    s
+}
+
+/// One course (or flight distance) of the file, without its comma.
+fn entry(s: &mut String, c: &Value) {
+    s.push_str("    {\n");
+    if let Some(o) = c.as_object() {
         let mut keys: Vec<&String> = o.keys().collect();
         keys.sort_by_key(|k| {
             (
@@ -486,14 +508,8 @@ pub fn format(file: &Value) -> String {
             }
             s.push_str(if j + 1 < keys.len() { ",\n" } else { "\n" });
         }
-        s.push_str(if i + 1 < courses.len() {
-            "    },\n"
-        } else {
-            "    }\n"
-        });
     }
-    s.push_str("  ]\n}\n");
-    s
+    s.push_str("    }");
 }
 
 /// The checks `setup/vmangos/pack.py` makes, but the course count (the table is not capped
@@ -687,6 +703,19 @@ mod tests {
         assert_eq!(file["courses"][1]["key"], "sprint-2");
         file["courses"][0]["name"] = "a \"quoted\" name".into();
         assert!(validate(&file).is_err());
+    }
+
+    /// The courses file is as `format` writes it, its flight distances too: a tool's rewrite
+    /// changes only what it means to.
+    #[test]
+    fn the_courses_file_is_written_as_format_writes_it() {
+        let text = include_str!("../../../courses/courses.json").replace("\r\n", "\n");
+        let file: Value = serde_json::from_str(&text).unwrap();
+        assert!(file["leaps"].as_array().is_some_and(|l| !l.is_empty()));
+        assert!(
+            format(&file) == text,
+            "courses/courses.json is not as format writes it"
+        );
     }
 
     #[test]
