@@ -12360,6 +12360,22 @@ index 4cd811a..93c4e3f 100644
  
      for (const auto& guid : guid_set)
      {
+diff --git a/src/game/Objects/GameObject.cpp b/src/game/Objects/GameObject.cpp
+index 5f4fc4d..30b042a 100644
+--- a/src/game/Objects/GameObject.cpp
++++ b/src/game/Objects/GameObject.cpp
+@@ -2254,6 +2254,11 @@ void GameObject::SetLootState(LootState state)
+ 
+ void GameObject::SetGoState(GOState state)
+ {
++    // World of Kartcraft: every door stands open, in the open world and in every instance, its
++    // scripts' closes and its own auto-close kept open too: a karting world has no gates. The
++    // template, not the type field, which Create sets after the first state.
++    if (m_goInfo && m_goInfo->type == GAMEOBJECT_TYPE_DOOR)
++        state = GO_STATE_ACTIVE;
+     //SetByteValue(GAMEOBJECT_BYTES_1, 0, state); // 3.3.5
+     SetUInt32Value(GAMEOBJECT_STATE, state);
+     UpdateCollisionState();
 diff --git a/src/game/Objects/Player.cpp b/src/game/Objects/Player.cpp
 index c45726e..f1a7ec9 100644
 --- a/src/game/Objects/Player.cpp
