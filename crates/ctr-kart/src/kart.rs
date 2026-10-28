@@ -421,11 +421,14 @@ const FLY_OVERSPEED_DRAG: f32 = 0.015;
 const FLY_BANK_MAX: i32 = 0x180;
 const FLY_BANK_RATE: i32 = 32;
 const FLY_YAW_AT_FULL_BANK: f32 = 34.0;
-/// Over the ground by this much (lu) the lift fades, gone [`FLY_CEILING_SPAN`] higher (DKR's soft
-/// ceiling at `course_height - 50`).
-const FLY_CEILING: f32 = 4000.0;
+/// Over the ground by this much (lu, 410 yd at scale 1) the lift fades, gone [`FLY_CEILING_SPAN`]
+/// higher. DKR's soft ceiling sits at `course_height - 50`; ours is the owner's call, World of
+/// Kartcraft: so high that no glide off any cliff in the world meets it, only a turbo's climb,
+/// which it keeps inside the world the session gathers round the kart (`kartcraft`'s
+/// `GATHER_HALF`, 500 yd up and down), where nothing under the kart would freeze it.
+const FLY_CEILING: f32 = 15000.0;
 /// How far down (lu) a kart in the air looks for what is under it, for the wings and the ceiling.
-const FLY_LOOK_DOWN: f32 = 8000.0;
+const FLY_LOOK_DOWN: f32 = 17000.0;
 const FLY_CEILING_SPAN: f32 = 1200.0;
 
 /// How deep it sits at speed, lu: a hovercraft rides up out of the water as it goes faster, at

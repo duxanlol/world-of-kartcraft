@@ -10,10 +10,10 @@ use ctr_kart::{Class, Collision, Event, Ground, Input, Kart, Modifiers, Pose, St
 
 use crate::{from_lu, heading_of, lu_per_yard, to_lu, yaw_of};
 
-/// Half extents (yards) of the collision box gathered around the kart: as tall as a flight goes
-/// over the ground (`ctr_kart`'s lift is gone by 142 yd over it at scale 1), so a flier has the
+/// Half extents (yards) of the collision box gathered around the kart: taller than a flight goes
+/// over the ground (`ctr_kart`'s lift is gone by 443 yd over it at scale 1), so a flier has the
 /// ground under it in the box and is never taken for a kart at the loaded world's edge.
-const GATHER_HALF: Vec3 = Vec3::new(120.0, 200.0, 120.0);
+const GATHER_HALF: Vec3 = Vec3::new(120.0, 500.0, 120.0);
 /// How far (yards) the kart drives from the box centre before it is rebuilt around it.
 const RECENTRE: f32 = 50.0;
 /// Seconds between rebuilds while driving, so terrain streamed in since becomes solid.
