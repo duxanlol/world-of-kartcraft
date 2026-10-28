@@ -22,6 +22,7 @@ pub(crate) mod goods_preview;
 pub(crate) mod gps;
 mod ground;
 mod horn;
+mod leap;
 pub(crate) mod marshals;
 pub(crate) mod menu_ui;
 pub(crate) mod objects;
@@ -233,6 +234,7 @@ fn update(
         mut replays,
         mut horn,
         mut splashes,
+        mut leap,
     ): (
         Res<remote::RemoteKarts>,
         ResMut<kartcraft::hud::HudExtras>,
@@ -246,6 +248,7 @@ fn update(
         ResMut<replay::Replays>,
         ResMut<horn::Horn>,
         ResMut<splash::Splashes>,
+        ResMut<leap::LeapRun>,
     ),
 ) {
     let now = time.elapsed_secs();
@@ -562,6 +565,11 @@ fn update(
             } => splashes.0.push((None, splash::size(*fall))),
             _ => {}
         }
+        // A flight distance's touchdown, told for the server to measure.
+        if let Some(line) = leap.observe(event, now) {
+            info!("kart leap: down at {:?}", drive.pos);
+            profession.send(line);
+        }
         audio.observe(event);
         rumble.observe(event);
         // A showcase run earns no chain: it is a recording, not driving.
@@ -763,6 +771,8 @@ pub(crate) fn plugin(app: &mut App) {
         .net_handler(benilla_protocol::SessionEventKind::Chat, weapons::on_chat)
         .init_resource::<horn::Horn>()
         .init_resource::<splash::Splashes>()
+        .init_resource::<leap::LeapRun>()
+        .net_handler(benilla_protocol::SessionEventKind::Chat, leap::on_chat)
         .net_handler(benilla_protocol::SessionEventKind::Chat, horn::on_chat)
         .net_handler(benilla_protocol::SessionEventKind::Chat, showcase::on_chat)
         .net_handler(benilla_protocol::SessionEventKind::Chat, props::on_chat)

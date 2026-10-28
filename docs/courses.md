@@ -49,6 +49,10 @@ client's list are both made from it; nothing else holds course data.
   course round them. The track editor's Size buttons set a player track's, which it saves,
   publishes (`R\tPub`'s last field, the `PT` lines' last) and runs its test laps at (`R\tSz`
   asks the server to size the body for one).
+- `flight`: optional, default false: a flight trial, a time trial the kart flies, its
+  `KartFlight` setting or not, through rings hung in the air (a checkpoint's `ring`). It has no
+  `zone`, and the server keeps it out of the queues, the challenges and hosting: it runs only
+  from its Race Marshal (`Kartcraft.cpp`, `Course::flight`).
 - `checkpoints`: at least two, WoW world `x`, `y` (yards); the first is the start, where a
   driver hosts or joins. Optional `z` (the server finds the ground itself). Optional `gate`:
   the gate's half-width in yards. The client passes a checkpoint through a gate this wide

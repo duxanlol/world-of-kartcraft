@@ -200,8 +200,14 @@ def courses_header(data):
         sz = 0
         if cmap > 1:
             sz = num(points[0]['z'], f'course {key}: checkpoint 0 z') if 'z' in points[0] else mz
+        # A flight trial's course (Course::flight): flown, never hosted, queued for or a challenge.
+        flight = c.get('flight', False)
+        if not isinstance(flight, bool):
+            fail(f'course {key}: flight must be true or false')
         tail = ''
-        if cmap > 1 or scale != 1:
+        if flight:
+            tail = f', {cfloat(sz)}, {cfloat(scale)}, true'
+        elif cmap > 1 or scale != 1:
             tail = f', {cfloat(sz)}' + (f', {cfloat(scale)}' if scale != 1 else '')
         out.append(f'          {{ {cfloat(mx)}, {cfloat(my)} }}, {doors_c}{tail} }},')
     out.append('    };')

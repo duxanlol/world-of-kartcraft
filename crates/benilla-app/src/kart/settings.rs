@@ -144,8 +144,12 @@ pub(crate) struct KartSettings {
 impl KartSettings {
     /// Whether the kart may hover on deep water and fly: by the settings in the open world, and
     /// never in a race, a time trial or a test lap (`racing`) or a Skyhop run (`hopping`), whose
-    /// courses are CTR's to drive.
-    pub(crate) fn modes(&self, racing: bool, hopping: bool) -> (bool, bool) {
+    /// courses are CTR's to drive; but a flight trial or a flight distance (`flying`) flies
+    /// whatever the settings say, and hovers not at all.
+    pub(crate) fn modes(&self, racing: bool, hopping: bool, flying: bool) -> (bool, bool) {
+        if flying {
+            return (false, true);
+        }
         let open = !racing && !hopping;
         (self.hover && open, self.flight && open)
     }
@@ -343,11 +347,13 @@ mod tests {
     #[test]
     fn a_race_has_neither_mode() {
         let mut s = KartSettings::default();
-        assert_eq!(s.modes(false, false), (true, true));
-        assert_eq!(s.modes(true, false), (false, false));
-        assert_eq!(s.modes(false, true), (false, false));
+        assert_eq!(s.modes(false, false, false), (true, true));
+        assert_eq!(s.modes(true, false, false), (false, false));
+        assert_eq!(s.modes(false, true, false), (false, false));
         s.flight = false;
-        assert_eq!(s.modes(false, false), (true, false));
+        assert_eq!(s.modes(false, false, false), (true, false));
+        // A flight trial flies with flight switched off, and does not hover.
+        assert_eq!(s.modes(true, false, true), (false, true));
     }
     use crate::cvars::{CvarChanged, REGISTERED};
 

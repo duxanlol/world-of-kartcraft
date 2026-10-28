@@ -74,6 +74,7 @@ pub(super) fn sample(
     footsteps: Option<Res<Footsteps>>,
     player: Res<crate::player::Player>,
     skyhop: Res<super::skyhop::Run>,
+    leap: Res<super::leap::LeapRun>,
     mut host: ResMut<super::Host>,
 ) {
     let physics = drives_on_ground(races.ground_types(), settings.terrain);
@@ -82,7 +83,11 @@ pub(super) fn sample(
     // Every kart hovers on deep water out of a race, as `KartHover` allows ([`KartSettings::modes`]);
     // out of the kart, the water under the body, for the kart to start on (a swimmer's lake bed
     // may be out of its reach). In a race the water drives its bed, as CTR's does.
-    let (hover, flight) = settings.modes(races.race.is_some(), skyhop.running());
+    let (hover, flight) = settings.modes(
+        races.race.is_some(),
+        skyhop.running(),
+        races.flight_trial() || leap.running(),
+    );
     host.session.set_flight(flight);
     let at = if view.active {
         view.transform.translation

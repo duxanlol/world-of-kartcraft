@@ -1623,6 +1623,18 @@
                 SetCVar("KartPaint", look.worn.P)
                 SetCVar("KartTrail", look.worn.T)
                 if BenillaKartGarageFrame:IsVisible() then BenillaKartGarage_Refresh() end
+            elseif verb == "Leap" then
+                -- On a flight distance's launch (Kartcraft.cpp "Flight distance").
+                UIErrorsFrame:AddMessage("Flight distance: drive off the edge, double-tap hop to open your wings, and fly as far as you can!", 1, 0.82, 0, 1, 8)
+            elseif verb == "LeapBest" then
+                -- A flight distance measured: this flight, our best, the record, all in tenths of a yard.
+                local function yards(t) return format("%.1f yd", (tonumber(t) or 0) / 10) end
+                local text = "You flew " .. yards(line[4]) .. "! Your best: " .. yards(line[5]) ..
+                    ". Record: " .. yards(line[6]) .. " by " .. (line[7] or "?") .. "."
+                if line[4] == line[6] and line[7] == UnitName("player") then text = "New record! " .. text end
+                UIErrorsFrame:AddMessage(text, 1, 0.82, 0, 1, 8)
+                BenillaKart_Say(text)
+                PlaySound("LEVELUPSOUND")
             elseif verb == "HopBest" then
                 -- A Skyhop finish kept (Kartcraft.cpp "Skyhop"): the time, our best, the record.
                 local function clock(ms) return format("%.2f s", (tonumber(ms) or 0) / 1000) end

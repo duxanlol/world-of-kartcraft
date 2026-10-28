@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..f8dd81a
+index 0000000..31668fe
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,8681 @@
+@@ -0,0 +1,8929 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -678,6 +678,9 @@ index 0000000..f8dd81a
 +        // bigger round them (Stormwind's streets as a kart's city). The client sizes the kart and
 +        // its physics; the server sizes each racer's body for the race (TickRaceScales).
 +        float scale = 1.f;
++        // A flight trial's course: flown, its rings in the air (the client lets the kart fly on it
++        // alone of every race). Only ever a time trial: never hosted, queued for or a challenge.
++        bool flight = false;
 +    };
 +
 +    // A course's scale's bounds, as the client's (kartcraft MIN_RACE_SCALE, MAX_RACE_SCALE).
@@ -1410,12 +1413,12 @@ index 0000000..f8dd81a
 +        if (chosen)
 +        {
 +            Course const* c = FindCourse(chosen->Fetch()[0].GetCppString());
-+            if (c && !PartyCourse(*c) && !CourseOff(*c))
++            if (c && !PartyCourse(*c) && !CourseOff(*c) && !c->flight)
 +                return c->key;
 +        }
 +        std::vector<Course const*> open;
 +        for (Course const& c : COURSES)
-+            if (!PartyCourse(c) && !CourseOff(c))
++            if (!PartyCourse(c) && !CourseOff(c) && !c.flight)
 +                open.push_back(&c);
 +        return open.empty() ? std::string() : open[Fnv1a(period) % open.size()]->key;
 +    }
@@ -3451,6 +3454,156 @@ index 0000000..f8dd81a
 +            std::to_string(best) + "\t" + std::to_string(rec) + "\t" + holder);
 +    }
 +
++    // ── Flight distance ────────────────────────────────────────────────────────────────────────
++    //
++    // A flight trial of its own: from a high launch, fly as far as can be. The Race Marshal there
++    // teleports the racer onto the launch in the kart ("R\tLeap\t<key>", answered so to the
++    // client, which arms its run); the client tells the touchdown after a flight
++    // ("R\tLeapLand\t<key>"), and the distance is the server's, across the ground from the launch
++    // to where it sees the racer, taken only if the racer is in the kart, out of any race, on the
++    // ground or the water, and got there no faster than a kart flies (LEAP_TOP_SPEED). The best is
++    // kept in kartcraft_leaps, in tenths of a yard; a new record is said to everyone. The answer is
++    // "R\tLeapBest\t<key>\t<tenths>\t<best>\t<record>\t<holder>".
++
++    struct Leap
++    {
++        char const* key;
++        char const* name;
++        uint32 map;
++        float x, y, o;     // the launch, and the way it faces (over the drop)
++        float marshal[2];  // the Race Marshal it launches from (a course's, courses.json's)
++    };
++
++    static Leap const LEAPS[] = {
++        // Off the bare mountain west of Thunder Bluff, over its spires and the Mulgore plains: 211 yd
++        // up, 57 yd of plateau to the edge, and the ground below it under 170 yd for 1290 yd
++        // north-east (the heightmap's; the Thunder Bluff Skyway starts beside it).
++        { "tb-leap", "Thunder Bluff Leap", 1, -1588.f, 417.f, 5.498f, { -1600.f, 435.f } },
++    };
++    // A leap may take this long (ms) from the launch to the touchdown, and no less.
++    constexpr uint32 LEAP_LONGEST = 180000;
++    constexpr uint32 LEAP_SHORTEST = 2000;
++    // No kart flies faster (yd/s, a turbo's dive and then some): a touchdown farther than this
++    // times the flight's seconds is not one.
++    constexpr float LEAP_TOP_SPEED = 70.f;
++    // How near the ground under it (yards) a touchdown is told from.
++    constexpr float LEAP_GROUND = 8.f;
++    // The shortest flight (yards) that counts: anything less is a hop off the launch.
++    constexpr float LEAP_SHORTEST_YARDS = 20.f;
++
++    struct LeapRun
++    {
++        size_t leap;
++        uint32 since; // ms
++    };
++    static std::unordered_map<uint32, LeapRun> s_leapRuns; // player guid low -> run; world thread
++
++    static void CreateLeaps()
++    {
++        CharacterDatabase.DirectExecute(
++            "CREATE TABLE IF NOT EXISTS `kartcraft_leaps` ("
++            "`guid` INT UNSIGNED NOT NULL COMMENT 'character low guid', "
++            "`course` VARCHAR(16) NOT NULL COMMENT 'LEAPS key', "
++            "`tenths` INT UNSIGNED NOT NULL COMMENT 'the distance, tenths of a yard', "
++            "`at` INT UNSIGNED NOT NULL COMMENT 'unix time', "
++            "PRIMARY KEY (`guid`, `course`)"
++            ") ENGINE=InnoDB DEFAULT CHARSET=utf8");
++    }
++
++    static std::string LeapYards(uint32 tenths)
++    {
++        return std::to_string(tenths / 10) + "." + std::to_string(tenths % 10) + " yd";
++    }
++
++    // A leap's flights, longest first, a tie going to whoever flew it first: (guid, (tenths, name)).
++    static std::vector<std::pair<uint32, std::pair<uint32, std::string>>> LeapBoard(char const* key)
++    {
++        std::vector<std::pair<uint32, std::pair<uint32, std::string>>> out;
++        std::unique_ptr<QueryResult> result = CharacterDatabase.PQuery(
++            "SELECT l.`guid`, l.`tenths`, c.`name` FROM `kartcraft_leaps` l JOIN `characters` c ON c.`guid` = l.`guid` "
++            "WHERE l.`course` = '%s' ORDER BY l.`tenths` DESC, l.`at`", key);
++        if (result)
++            do
++            {
++                Field* f = result->Fetch();
++                out.push_back({ f[0].GetUInt32(), { f[1].GetUInt32(), f[2].GetCppString() } });
++            } while (result->NextRow());
++        return out;
++    }
++
++    // "Leap" onto the launch; "LeapLand" the touchdown, judged. On the world thread.
++    static void HandleLeap(Player* player, std::string const& verb, std::string const& key)
++    {
++        size_t index = sizeof(LEAPS) / sizeof(LEAPS[0]);
++        for (size_t i = 0; i < sizeof(LEAPS) / sizeof(LEAPS[0]); ++i)
++            if (key == LEAPS[i].key)
++                index = i;
++        if (index == sizeof(LEAPS) / sizeof(LEAPS[0]))
++            return;
++        Leap const& leap = LEAPS[index];
++        uint32 const guid = player->GetGUIDLow();
++        uint32 const now = WorldTimer::getMSTime();
++        if (verb == "Leap")
++        {
++            if (InRace(player) || player->GetMapId() != leap.map)
++                return;
++            if (!TeleportOnto(player, leap.map, leap.x, leap.y, leap.o, true))
++                return;
++            s_leapRuns[guid] = { index, now };
++            SendLine(player, "KARTCRAFT\tR\tLeap\t" + std::string(leap.key));
++            return;
++        }
++        auto run = s_leapRuns.find(guid);
++        if (run == s_leapRuns.end() || run->second.leap != index)
++            return;
++        uint32 const took = WorldTimer::getMSTimeDiff(run->second.since, now);
++        s_leapRuns.erase(run);
++        if (took < LEAP_SHORTEST || took > LEAP_LONGEST || InRace(player) || !player->HasAura(SPELL_SUMMON_KART) ||
++            player->GetMapId() != leap.map)
++            return;
++        float const px = player->GetPositionX(), py = player->GetPositionY(), pz = player->GetPositionZ();
++        TerrainInfo const* terrain = sTerrainMgr.LoadTerrain(leap.map);
++        float const ground = terrain->GetHeightStatic(px, py, pz + 5.f);
++        float const water = terrain->GetWaterLevel(px, py, pz);
++        bool const down = std::fabs(pz - ground) <= LEAP_GROUND ||
++            (water > INVALID_HEIGHT && std::fabs(pz - water) <= LEAP_GROUND);
++        float const yards = std::hypot(px - leap.x, py - leap.y);
++        if (!down || yards > LEAP_TOP_SPEED * float(took) / 1000.f)
++        {
++            ChatHandler(player->GetSession()).SendSysMessage("That flight was not seen to land: no distance.");
++            return;
++        }
++        if (yards < LEAP_SHORTEST_YARDS)
++        {
++            ChatHandler(player->GetSession()).SendSysMessage("That was a hop, not a flight: no distance.");
++            return;
++        }
++        uint32 const tenths = uint32(yards * 10.f);
++        std::vector<std::pair<uint32, std::pair<uint32, std::string>>> const board = LeapBoard(leap.key);
++        uint32 best = 0;
++        for (auto const& e : board)
++            if (e.first == guid)
++                best = e.second.first;
++        if (tenths > best)
++        {
++            CharacterDatabase.DirectPExecute("REPLACE INTO `kartcraft_leaps` (`guid`, `course`, `tenths`, `at`) "
++                "VALUES (%u, '%s', %u, %u)", guid, leap.key, tenths, uint32(std::time(nullptr)));
++            best = tenths;
++        }
++        uint32 rec = board.empty() ? 0 : board.front().second.first;
++        std::string holder = board.empty() ? std::string() : board.front().second.second;
++        if (tenths > rec)
++        {
++            if (rec)
++                sWorld.SendGlobalText((std::string(player->GetName()) + " set a new " + leap.name + " record: " +
++                    LeapYards(tenths) + " (was " + LeapYards(rec) + " by " + holder + ")!").c_str(), nullptr);
++            rec = tenths;
++            holder = player->GetName();
++        }
++        SendLine(player, "KARTCRAFT\tR\tLeapBest\t" + std::string(leap.key) + "\t" + std::to_string(tenths) + "\t" +
++            std::to_string(best) + "\t" + std::to_string(rec) + "\t" + holder);
++    }
++
 +    // ── Mystery Crates ─────────────────────────────────────────────────────────────────────────
 +    //
 +    // A crate for CRATE_PRICE Kartcraft Tokens, at most CRATE_DAILY a day, holds one of the goods
@@ -5015,7 +5168,8 @@ index 0000000..f8dd81a
 +                    zone = &zones[index];
 +            }
 +            for (size_t i = 0; i < COURSES.size(); ++i)
-+                if (token == "any" || token == COURSES[i].key || (zone && *zone == COURSES[i].zone))
++                if (!COURSES[i].flight &&
++                    (token == "any" || token == COURSES[i].key || (zone && *zone == COURSES[i].zone)))
 +                    mask[i] = true;
 +            // A player track only by its own key.
 +            for (UserTrack const& t : s_userTracks)
@@ -7885,6 +8039,17 @@ index 0000000..f8dd81a
 +            });
 +            return;
 +        }
++        if (f.size() >= 3 && (f[1] == "Leap" || f[1] == "LeapLand"))
++        {
++            ObjectGuid const guid = player->GetObjectGuid();
++            std::string const verb = f[1], key = f[2];
++            sWorld.GetMessager().AddMessage([guid, verb, key](World*)
++            {
++                if (Player* p = ObjectAccessor::FindPlayer(guid))
++                    HandleLeap(p, verb, key);
++            });
++            return;
++        }
 +        if (f.size() >= 4 && f[1] == "Hop")
 +        {
 +            ObjectGuid const guid = player->GetObjectGuid();
@@ -7981,6 +8146,11 @@ index 0000000..f8dd81a
 +            Course const* course = FindCourse(f[2]);
 +            if (!course || player->GetMapId() != course->map || (!marshal && DistanceTo(player, course->points[0]) > START_RADIUS))
 +                return;
++            if (course->flight)
++            {
++                ChatHandler(player->GetSession()).SendSysMessage("That course is a flight trial: run it at its Race Marshal.");
++                return;
++            }
 +            if (RefuseOff(player, *course))
 +                return;
 +            // A party course is hosted inside its dungeon, by the party's leader.
@@ -8432,7 +8602,55 @@ index 0000000..f8dd81a
 +        MARSHAL_TRIALS, // action: the course's index in COURSES, or COURSES.size() for the list
 +        MARSHAL_HOST_PLAIN,  // action: the course's index in COURSES; ground types off
 +        MARSHAL_HOST_GROUND, // action: the course's index in COURSES; ground types on
++        MARSHAL_LEAP,        // action: the leap's index in LEAPS
++        MARSHAL_LEAPS,       // action: the leap's index in LEAPS, its leaderboard
 +    };
++
++    // The flight distances that launch at this marshal: those placed with it (Leap::marshal).
++    static std::vector<size_t> MarshalLeaps(Creature* marshal)
++    {
++        float x, y, z;
++        marshal->GetRespawnCoord(x, y, z);
++        std::vector<size_t> out;
++        for (size_t i = 0; i < sizeof(LEAPS) / sizeof(LEAPS[0]); ++i)
++            if (LEAPS[i].map == marshal->GetMapId() &&
++                std::hypot(LEAPS[i].marshal[0] - x, LEAPS[i].marshal[1] - y) <= MARSHAL_MATCH)
++                out.push_back(i);
++        return out;
++    }
++
++    // A flight distance's leaderboard: its TRIAL_BOARD_TOP longest flights with their pilots, and
++    // the player's own best and rank.
++    static void MarshalLeapBoard(Player* player, Creature* marshal, uint32 index)
++    {
++        GossipMenu& menu = player->PlayerTalkClass->GetGossipMenu();
++        menu.ClearMenu();
++        if (index < sizeof(LEAPS) / sizeof(LEAPS[0]))
++        {
++            Leap const& leap = LEAPS[index];
++            std::vector<std::pair<uint32, std::pair<uint32, std::string>>> const board = LeapBoard(leap.key);
++            if (board.empty())
++                menu.AddMenuItem(GOSSIP_ICON_DOT, std::string(leap.name) + ": no flights yet", MARSHAL_LEAPS, index, "",
++                    false);
++            uint32 const guid = player->GetGUIDLow();
++            size_t mine = board.size();
++            for (size_t i = 0; i < board.size(); ++i)
++            {
++                if (board[i].first == guid)
++                    mine = i;
++                if (i < TRIAL_BOARD_TOP && i + 3 < GOSSIP_MAX_MENU_ITEMS)
++                    menu.AddMenuItem(GOSSIP_ICON_DOT, std::to_string(i + 1) + ". " + LeapYards(board[i].second.first) +
++                        "  " + board[i].second.second, MARSHAL_LEAPS, index, "", false);
++            }
++            menu.AddMenuItem(GOSSIP_ICON_CHAT, mine == board.size()
++                ? std::string("You have no flight at ") + leap.name + " yet"
++                : "Your best: " + LeapYards(board[mine].second.first) + " (rank " + std::to_string(mine + 1) + " of " +
++                    std::to_string(board.size()) + ")",
++                MARSHAL_LEAPS, index, "", false);
++        }
++        menu.AddMenuItem(GOSSIP_ICON_CHAT, "Back", MARSHAL_BACK, 0, "", false);
++        player->PlayerTalkClass->SendGossipMenu(MARSHAL_TRIALS_TEXT, marshal->GetObjectGuid());
++    }
 +
 +    // The courses that start at this marshal: those placed with it, else (a marshal spawned
 +    // anywhere else) those whose start is within START_RADIUS of it.
@@ -8522,6 +8740,13 @@ index 0000000..f8dd81a
 +                    break;
 +                std::string const kind = c.laps ? std::to_string(c.laps) + (c.laps == 1 ? " lap)" : " laps)")
 +                                                : std::string("sprint)");
++                if (c.flight)
++                {
++                    menu.AddMenuItem(GOSSIP_ICON_BATTLE, "Flight trial: " + std::string(c.name) + " (" + kind,
++                        MARSHAL_TRIAL, uint32(i), "", false);
++                    --room;
++                    continue;
++                }
 +                if (std::find(waiting.begin(), waiting.end(), &c) == waiting.end())
 +                {
 +                    menu.AddMenuItem(GOSSIP_ICON_BATTLE, "Host a race: " + std::string(c.name) + " (" + kind,
@@ -8534,6 +8759,15 @@ index 0000000..f8dd81a
 +                --room;
 +            }
 +        }
++        // The flight distances that launch here.
++        std::vector<size_t> const leaps = MarshalLeaps(marshal);
++        for (size_t i : leaps)
++            if (room)
++            {
++                menu.AddMenuItem(GOSSIP_ICON_BATTLE, "Flight distance: " + std::string(LEAPS[i].name), MARSHAL_LEAP,
++                    uint32(i), "", false);
++                --room;
++            }
 +        if (busy)
 +            menu.AddMenuItem(GOSSIP_ICON_CHAT, "Leave the race", MARSHAL_LEAVE, 0, "", false);
 +        menu.AddMenuItem(GOSSIP_ICON_DOT, "Open the Race Finder", MARSHAL_FINDER, 0, "", false);
@@ -8547,6 +8781,9 @@ index 0000000..f8dd81a
 +            menu.AddMenuItem(GOSSIP_ICON_CHAT, "Time trial leaderboard", MARSHAL_TRIALS,
 +                here.size() == 1 ? uint32(here.front()) : uint32(COURSES.size()), "", false);
 +        }
++        if (!leaps.empty())
++            menu.AddMenuItem(GOSSIP_ICON_CHAT, "Flight distance leaderboard", MARSHAL_LEAPS, uint32(leaps.front()), "",
++                false);
 +        menu.AddMenuItem(GOSSIP_ICON_CHAT, "How do races work?", MARSHAL_HELP, 0, "", false);
 +        talk->SendGossipMenu(MARSHAL_TEXT, marshal->GetObjectGuid());
 +        return true;
@@ -8655,6 +8892,16 @@ index 0000000..f8dd81a
 +            case MARSHAL_TRIALS:
 +                MarshalTrials(player, marshal, action);
 +                return true;
++            case MARSHAL_LEAP:
++            {
++                std::vector<size_t> const leaps = MarshalLeaps(marshal);
++                if (std::find(leaps.begin(), leaps.end(), size_t(action)) != leaps.end())
++                    line = std::string("R\tLeap\t") + LEAPS[action].key;
++                break;
++            }
++            case MARSHAL_LEAPS:
++                MarshalLeapBoard(player, marshal, action);
++                return true;
 +            case MARSHAL_JOIN:
 +            case MARSHAL_START:
 +            {
@@ -8702,7 +8949,7 @@ index 0000000..f8dd81a
 +            // Hosting, joining or a time trial on foot: into the kart first, as a Race Finder pop
 +            // does; in a dungeon too, where a marshal has only party courses.
 +            bool const enters = line.compare(0, 4, "R\tH\t") == 0 || line.compare(0, 4, "R\tJ\t") == 0 ||
-+                line.compare(0, 4, "R\tT\t") == 0;
++                line.compare(0, 4, "R\tT\t") == 0 || line.compare(0, 7, "R\tLeap\t") == 0;
 +            if (enters && (CanBeRacedOff(p) || (p->GetMap()->IsDungeon() && Settled(p))))
 +                SummonKart(p);
 +            HandleLine(p, line, true);
@@ -8731,6 +8978,7 @@ index 0000000..f8dd81a
 +        cache->RegisterSelf(true);
 +        CreateCacheClaims();
 +        CreateHops();
++        CreateLeaps();
 +        CreateCrates();
 +        CreateReplays();
 +        CreateResults();
@@ -9673,10 +9921,10 @@ index 0000000..c72d18e
 +    };
 diff --git a/src/game/KartcraftCourses.h b/src/game/KartcraftCourses.h
 new file mode 100644
-index 0000000..22dbc76
+index 0000000..fd69a35
 --- /dev/null
 +++ b/src/game/KartcraftCourses.h
-@@ -0,0 +1,2185 @@
+@@ -0,0 +1,2195 @@
 +// Generated by setup/vmangos/pack.py from courses/courses.json (docs/courses.md): edit
 +// that file and rerun pack.py. Included by Kartcraft.cpp inside namespace Kartcraft,
 +// after Course and CrateSpot.
@@ -11861,6 +12109,16 @@ index 0000000..22dbc76
 +            25.f, 25.f },
 +          {},
 +          { -7139.7f, -1397.3f }, {} },
++        // Thunder Bluff Skyway: flight trial, laid by hand from the heightmap: off the bare
++        // mountain west of Thunder Bluff and through four rings past its spires to the Mulgore
++        // plains, 660 yd; a 1-in-6 glide clears every leg by 18 yd, each ring 6 yd under it. No
++        // zone: never in the Race Finder.
++        { "tb-skyway", "Thunder Bluff Skyway", "", 1, 0,
++          { { -1585.f, 414.f }, { -1460.f, 330.f }, { -1310.f, 210.f }, { -1190.f, 240.f },
++            { -1040.f, 360.f } },
++          { 25.f, 16.f, 16.f, 16.f, 18.f },
++          {},
++          { -1600.f, 435.f }, {}, 0.f, 1.f, true },
 +    };
 diff --git a/src/game/Maps/GridNotifiers.cpp b/src/game/Maps/GridNotifiers.cpp
 index 5529860..f4af29d 100644

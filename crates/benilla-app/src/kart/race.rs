@@ -67,6 +67,10 @@ pub(crate) struct Course {
     /// The karts' and racers' size on it, 1 their own (`docs/courses.md`, `scale`).
     #[serde(default = "own_size")]
     scale: f32,
+    /// A flight trial's course: flown through its rings, the one race the kart flies in
+    /// (`docs/courses.md`, `flight`); never in the Race Finder.
+    #[serde(default)]
+    flight: bool,
 }
 
 /// A course's scale where it names none: the kart's own size.
@@ -203,6 +207,11 @@ impl Course {
     /// The karts' and racers' size on it, 1 their own.
     pub(crate) fn scale(&self) -> f32 {
         self.scale
+    }
+
+    /// A flight trial's course ([`Course::flight`]).
+    pub(crate) fn flight(&self) -> bool {
+        self.flight
     }
 
     /// Each checkpoint's height, where known.
@@ -403,6 +412,8 @@ pub(crate) struct Active {
     heights: Vec<Option<f32>>,
     /// Which checkpoints are rings, and each one's pitch and roll ([`Active::ring`]).
     rings: Vec<Option<[f32; 2]>>,
+    /// A flight trial: the kart flies in it ([`Course::flight`]).
+    flight: bool,
     /// The track editor's objects on its track: a test lap's, or a player track's from its `PT`
     /// line ([`super::objects`]).
     objects: Vec<super::objects::Placed>,
@@ -1132,6 +1143,11 @@ impl Races {
         self.race.as_ref().is_some_and(|r| r.time_trial)
     }
 
+    /// In a flight trial, the one race the kart flies in.
+    pub(crate) fn flight_trial(&self) -> bool {
+        self.race.as_ref().is_some_and(|r| r.flight)
+    }
+
     /// The race's track for the race map: once its course line has come.
     pub(crate) fn map(&self) -> Option<RaceMap> {
         let race = self.race.as_ref()?;
@@ -1316,6 +1332,9 @@ impl Races {
                     race.gates = ours.map_or_else(Vec::new, Course::gates);
                     race.facings = ours.map_or_else(Vec::new, Course::facings);
                     race.heights = ours.map_or_else(Vec::new, Course::heights);
+                    // Its rings, hung at their heights; a flight trial's, flown.
+                    race.rings = ours.map_or_else(Vec::new, Course::rings);
+                    race.flight = ours.is_some_and(Course::flight);
                     // A player track's from its `PT` line, which comes first.
                     let track = self.track_spots.get(&f[2]);
                     let track = track.and_then(|t| super::track_edit::parse_spots(t));
@@ -1335,10 +1354,12 @@ impl Races {
                         .or_else(|| self.track_scales.get(&f[2]).copied())
                         .unwrap_or(1.0);
                     info!(
-                        "kart race: course {} — {} checkpoints, {} laps",
+                        "kart race: course {} — {} checkpoints, {} rings, {} laps, flight {}",
                         f[2],
                         race.points.len(),
-                        race.laps
+                        race.rings.iter().flatten().count(),
+                        race.laps,
+                        race.flight
                     );
                 }
             }
@@ -2981,6 +3002,19 @@ mod tests {
                 .description()
                 .starts_with("A Grand Prix 3-lap circuit in "));
         }
+    }
+
+    /// The Thunder Bluff Skyway is a flight trial: flown through its rings, out of the finder.
+    #[test]
+    fn the_skyway_is_a_flight_trial_flown_through_rings() {
+        let sky = COURSES.iter().find(|c| c.key == "tb-skyway").unwrap();
+        assert!(sky.flight());
+        assert!(sky.finder_group().is_empty(), "never in the Race Finder");
+        assert!(sky.rings().iter().filter(|r| r.is_some()).count() >= 4);
+        assert!(COURSES
+            .iter()
+            .filter(|c| c.flight())
+            .all(|c| c.key == "tb-skyway"));
     }
 
     #[test]
