@@ -72,11 +72,13 @@ mod icon {
     pub(super) const RING: &str = "Interface\\Icons\\INV_Jewelry_Ring_03";
     pub(super) const SIZE: &str = "Interface\\Icons\\INV_Misc_Spyglass_02";
     pub(super) const SNAP: &str = "Interface\\Icons\\INV_Gizmo_02";
+    /// Slow Fall's feather: a flying track.
+    pub(super) const FLIGHT: &str = "Interface\\Icons\\Spell_Magic_FeatherFall";
 
     #[cfg(test)]
-    pub(super) const ALL: [&str; 19] = [
+    pub(super) const ALL: [&str; 20] = [
         EXIT, SAVE, TEST, MOVE, UNDO, REDO, PLACE, NUMBER, GRID, ERASE, SPRINT, LAPS, BACK,
-        RESTART, OK, OBJECTS, RING, SIZE, SNAP,
+        RESTART, OK, OBJECTS, RING, SIZE, SNAP, FLIGHT,
     ];
 }
 
@@ -933,6 +935,10 @@ fn spawn(
                                 label(b, font, &n.to_string(), TITLE, Color::WHITE, corner, s);
                             });
                         }
+                        // Flown, not driven: rings in the air, out of the Race Finder.
+                        let flight = Act::Cmd(&["flight"]);
+                        let name = "Flying track";
+                        icon_button(r, icons, font, s, icon::FLIGHT, name, flight, view.flight);
                     });
                     // The karts' size on the track: a small one makes the world drive bigger.
                     row(b, s, Node::default(), |r| {
@@ -1459,6 +1465,7 @@ mod tests {
             grid: false,
             laps: 3,
             scale: 1.0,
+            flight: false,
             notes: 0,
             tool,
             picked,
@@ -1581,6 +1588,7 @@ mod tests {
             "Size x0.75",
             "Size x0.5",
             "Size x0.35",
+            "Flying track",
         ];
         let mut tips = t.tips.clone();
         tips.sort();

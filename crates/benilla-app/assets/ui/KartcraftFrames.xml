@@ -183,10 +183,20 @@
 
         -- The courses ticked, or on the Player tracks tab the track picked; `courses` the courses
         -- whatever the tab (the Kartcraft menu's Find a race, where no tab is in sight).
+        -- Whether the player track picked is a flying one: raced alone against the clock, never
+        -- queued for (Kartcraft.cpp, `Course::flight`).
+        function BenillaKartFinder_PickedFlies()
+            local id = BenillaKartFinder.track
+            for i = 1, table.getn(BenillaKartPubTracks) do
+                if BenillaKartPubTracks[i].id == id then return BenillaKartPubTracks[i].flight ~= nil end
+            end
+            return false
+        end
+
         function BenillaKartFinder_Queue(courses)
             local f = BenillaKartFinder
             if f.mode == "player" and not courses then
-                if not f.track then return end
+                if not f.track or BenillaKartFinder_PickedFlies() then return end
                 f.queued = "pt-" .. f.track
             else
                 f.queued = BenillaKartFinder_Keys()
@@ -302,7 +312,7 @@
                 BenillaKartFinderFramePlayer:Hide()
                 BenillaKartFinder_UpdateList()
             end
-            if player and not f.track and not f.queued then
+            if player and (not f.track or BenillaKartFinder_PickedFlies()) and not f.queued then
                 BenillaKartFinderFrameQueue:Disable()
             else
                 BenillaKartFinderFrameQueue:Enable()
@@ -534,7 +544,7 @@
                     row.id = track.id
                     getglobal(row:GetName() .. "Name"):SetText(track.name .. "  |cff40ff40+" .. track.good
                         .. "|r |cffff5050-" .. track.bad .. "|r")
-                    getglobal(row:GetName() .. "Zone"):SetText("by " .. track.author)
+                    getglobal(row:GetName() .. "Zone"):SetText((track.flight and "flying, by " or "by ") .. track.author)
                     if track.id == f.track then row:LockHighlight() else row:UnlockHighlight() end
                     row:Show()
                 else
@@ -905,7 +915,7 @@
         -- "my:<key>", each with its file's key: a test lap of one runs on this client alone.
         BenillaKartMyTracks = {}
         function BenillaKartMyTracks_Set(list)
-            BenillaKartMyTracks = BenillaKartTracks_Parse(list, 12)
+            BenillaKartMyTracks = BenillaKartTracks_Parse(list, 13)
             for i = 1, table.getn(BenillaKartMyTracks) do
                 local t = BenillaKartMyTracks[i]
                 t.mine, t.file, t.key = 1, t.key, "my:" .. t.key
@@ -913,9 +923,9 @@
             BenillaKartTrackBrowser_Refresh()
         end
 
-        -- Course lines, as BENILLA_KART_TRACKS sends them, as tracks; `fields` a line (7, or 11
-        -- with a saved track's grid, gates, floor (its height, for a dungeon's trips) and its
-        -- placed objects).
+        -- Course lines, as BENILLA_KART_TRACKS sends them, as tracks; `fields` a line (7, or 13
+        -- with a saved track's grid, gates, floor (its height, for a dungeon's trips), placed
+        -- objects, scale and `1` for a flying track).
         function BenillaKartTracks_Parse(list, fields)
             fields = fields or 7
             local tracks = {}
@@ -934,7 +944,8 @@
                     zone = lines[i + 2], map = tonumber(lines[i + 3]) or 0,
                     laps = tonumber(lines[i + 4]) or 0, text = lines[i + 5], points = points,
                     grid = lines[i + 7], gates = lines[i + 8], z = lines[i + 9],
-                    objects = lines[i + 10], scale = lines[i + 11] })
+                    objects = lines[i + 10], scale = lines[i + 11],
+                    flight = fields >= 13 and lines[i + 12] == "1" or nil })
             end
             return tracks
         end
@@ -971,10 +982,12 @@
                     zone = line[8] or "", grid = line[9] or "", gates = line[10] or "", pub = 1,
                     good = tonumber(line[11]) or 0, bad = tonumber(line[12]) or 0, z = line[13] or "",
                     objects = line[14] or "", scale = line[15] or "",
+                    flight = line[16] == "1" or nil,
                     order = table.getn(BenillaKartPubIncoming) + 1 }
                 t.points = BenillaKartTracks_Points(t.gates)
                 local kind = "A sprint"
                 if laps == 1 then kind = "A one-lap circuit" elseif laps > 1 then kind = "A " .. laps .. "-lap circuit" end
+                if t.flight then kind = string.gsub(kind, "^A ", "A flying ") end
                 if t.zone ~= "" then kind = kind .. " in " .. t.zone end
                 t.text = kind .. " through " .. table.getn(t.points) .. " checkpoints, by " .. t.author .. "."
                 table.insert(BenillaKartPubIncoming, t)
@@ -1035,6 +1048,7 @@
             local line = "Pub\t" .. track.name .. "\t" .. track.map .. "\t" .. track.laps .. "\t"
                 .. (track.zone or "") .. "\t" .. (track.grid or "") .. "\t" .. (track.gates or "")
                 .. "\t" .. (track.z or "") .. "\t" .. (track.objects or "") .. "\t" .. (track.scale or "")
+                .. "\t" .. (track.flight and "1" or "")
             local size = BENILLA_KART_PUB_PIECE
             local n = math.ceil(string.len(line) / size)
             if n <= 1 then return BenillaKart_Send(line) end
@@ -1096,9 +1110,11 @@
             end
             if flying then
                 for i = 1, table.getn(BenillaKartLeaps) do add(BenillaKartLeaps[i]) end
-                return shown
             end
-            for i = 1, table.getn(BenillaKartMyTracks) do add(BenillaKartMyTracks[i]) end
+            for i = 1, table.getn(BenillaKartMyTracks) do
+                local t = BenillaKartMyTracks[i]
+                if mode == "mine" or (t.flight ~= nil) == flying then add(t) end
+            end
             return shown
         end
 
@@ -1207,7 +1223,7 @@
                         getglobal(row:GetName() .. "Zone"):SetText("by " .. track.author)
                     elseif track.mine then
                         getglobal(row:GetName() .. "Name"):SetText("|cff80ff80" .. track.name .. "|r")
-                        getglobal(row:GetName() .. "Zone"):SetText("My track")
+                        getglobal(row:GetName() .. "Zone"):SetText(track.flight and "My flying track" or "My track")
                     else
                         getglobal(row:GetName() .. "Name"):SetText(track.name)
                         getglobal(row:GetName() .. "Zone"):SetText(track.zone)
@@ -1321,7 +1337,8 @@
             if track and track.pub then
                 BenillaKartEditor_Send("runspots", track.name, track.laps .. "\t" .. track.map .. "\t"
                     .. track.grid .. "\t" .. track.gates .. "\t" .. (track.z or "") .. "\t"
-                    .. (track.objects or "") .. "\t" .. (track.scale or ""))
+                    .. (track.objects or "") .. "\t" .. (track.scale or "") .. "\t"
+                    .. (track.flight and "1" or ""))
                 BenillaKartTracksFrame:Hide()
                 return
             end

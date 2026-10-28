@@ -53,7 +53,13 @@ client's list are both made from it; nothing else holds course data.
   `KartFlight` setting or not, through rings hung in the air (a checkpoint's `ring`). Its `zone`
   names where it is, but the Race Finder never offers it, and the server keeps it out of the
   queues, the challenges and hosting (`Kartcraft.cpp`, `Course::flight`): it runs from its Race
-  Marshal or the track browser's Flight tab.
+  Marshal or the track browser's Flight tab. Its rings are laid by the flight bot,
+  `course-gen fly --course <key> --lay 8`, each 8 yards under the best line it flies (the wing's
+  lift fades from 109 yards over the ground, so a ring high over a drop is out of reach), and a
+  test flies every flight course through every ring. The track editor's Race type bar sets it for
+  a player track (Flying track): saved as `flight`, published as `R\tPub`'s last field and the
+  `PT` lines' last (`1`), listed on the Flight tab, test-lapped flying, time-trialled and never
+  queued for.
 - `checkpoints`: at least two, WoW world `x`, `y` (yards); the first is the start, where a
   driver hosts or joins. Optional `z` (the server finds the ground itself). Optional `gate`:
   the gate's half-width in yards. The client passes a checkpoint through a gate this wide

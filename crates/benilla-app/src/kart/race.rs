@@ -593,6 +593,12 @@ impl Active {
         self
     }
 
+    /// Whether its course is flown ([`Active::flight`]).
+    pub(crate) fn with_flight(mut self, flight: bool) -> Self {
+        self.flight = flight;
+        self
+    }
+
     /// The karts' size on its course, 1 their own.
     pub(crate) fn scale(&self) -> f32 {
         if self.scale > 0.0 {
@@ -678,6 +684,7 @@ impl Active {
             rings: std::mem::take(&mut self.rings),
             floor: self.floor,
             scale: self.scale,
+            flight: self.flight,
             objects: std::mem::take(&mut self.objects),
             ..Active::practice(
                 &self.course,
@@ -1159,8 +1166,10 @@ pub(crate) struct Races {
     track_spots: HashMap<String, String>,
     /// And their objects, from the `PT` line's objects field.
     track_objects: HashMap<String, Vec<super::objects::Placed>>,
-    /// And their scale, from its last (empty: their own size).
+    /// And their scale (empty: their own size).
     track_scales: HashMap<String, f32>,
+    /// And whether each is a flying track, from its last (`1`).
+    track_flights: HashMap<String, bool>,
 }
 
 impl Races {
@@ -1305,6 +1314,8 @@ impl Races {
                 self.track_objects.insert(key.clone(), objects);
                 let scale = f.get(13).and_then(|v| v.trim().parse::<f32>().ok());
                 self.track_scales.insert(key.clone(), scale.unwrap_or(1.0));
+                let flight = f.get(14).is_some_and(|v| v.trim() == "1");
+                self.track_flights.insert(key.clone(), flight);
                 self.track_names.insert(key, f[2].clone());
             }
             // Out of everything (`/leaverace`): the server has let us go, so whatever we
@@ -1398,6 +1409,8 @@ impl Races {
                         }
                     }
                     race.objects = self.track_objects.get(&f[2]).cloned().unwrap_or_default();
+                    // A flying player track flies too.
+                    race.flight |= self.track_flights.get(&f[2]).copied().unwrap_or(false);
                     // Its size: a course's own, a player track's from its line.
                     race.scale = ours
                         .map(Course::scale)
@@ -4336,6 +4349,19 @@ mod tests {
         let objects = races.race.as_ref().unwrap().objects();
         assert_eq!(objects.len(), 1);
         assert_eq!((objects[0].model.as_str(), objects[0].yaw), ("plank", 0.5));
+        assert!(!races.flight_trial(), "a driving track");
+        // A flying one, `1` last: its race flies.
+        races.hear(
+            &line("PT\t9\tSky Run\tSomeone\t1\t0\tDurotar\t\t1,2;3,4\t\t\t\t\t\t1"),
+            0.0,
+        );
+        races.hear(&line("C\t3\tpt-9\t0\t1:2;3:4"), 0.0);
+        assert!(races.flight_trial());
+        // And a test lap kept flying through a restart.
+        let mut lap = Active::practice("Sky", 0, vec![[0.0, 0.0], [100.0, 0.0]], None, "Me")
+            .with_flight(true);
+        lap.restart_practice();
+        assert!(lap.flight);
     }
 
     #[test]

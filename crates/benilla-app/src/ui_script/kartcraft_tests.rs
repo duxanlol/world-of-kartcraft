@@ -4547,7 +4547,7 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
     s.fire_event(
         "BENILLA_KART_MYTRACKS",
         vec![ScriptValue::Str(
-            "goldshire-ring\tGoldshire Ring\tElwynn Forest\t0\t3\tA circuit.\t1,2;3,4;5,6\t0.0,1.0,0.500\t1.0,2.0;3.0,4.0,1.500;5.0,6.0\t35.5\texcavation-plank,1.0,2.0,3.0,0.500,0.000,0.000\t0.50"
+            "goldshire-ring\tGoldshire Ring\tElwynn Forest\t0\t3\tA circuit.\t1,2;3,4;5,6\t0.0,1.0,0.500\t1.0,2.0;3.0,4.0,1.500;5.0,6.0\t35.5\texcavation-plank,1.0,2.0,3.0,0.500,0.000,0.000\t0.50\t"
                 .into(),
         )],
     );
@@ -4614,7 +4614,7 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
     s.run("BenillaKartTracksFrameMarshal:Click()").unwrap();
     assert_eq!(
         sent(&mut s),
-        ["KARTCRAFT\tR\tPub\tGoldshire Ring\t0\t3\tElwynn Forest\t0.0,1.0,0.500\t1.0,2.0;3.0,4.0,1.500;5.0,6.0\t35.5\texcavation-plank,1.0,2.0,3.0,0.500,0.000,0.000\t0.50"]
+        ["KARTCRAFT\tR\tPub\tGoldshire Ring\t0\t3\tElwynn Forest\t0.0,1.0,0.500\t1.0,2.0;3.0,4.0,1.500;5.0,6.0\t35.5\texcavation-plank,1.0,2.0,3.0,0.500,0.000,0.000\t0.50\t"]
     );
     // Delete: asked first, then its published copy taken down by name and the file deleted.
     s.run("BenillaKartTracksFrameRate:Click()").unwrap();
@@ -4663,7 +4663,7 @@ fn saved_tracks_list_in_the_track_browser_and_run_a_test_lap() {
     let cmd = s.cvar("KartTrackCmd").unwrap_or_default();
     assert!(
         cmd.ends_with(
-            "\trunspots\tCliff Loop\t3\t1\t\t1.0,1.0;2.0,2.0;3.0,3.0\t12.5\tplank,1.0,2.0,3.0,0.000,0.000,0.000\t0.75"
+            "\trunspots\tCliff Loop\t3\t1\t\t1.0,1.0;2.0,2.0;3.0,3.0\t12.5\tplank,1.0,2.0,3.0,0.000,0.000,0.000\t0.75\t"
         ),
         "{cmd}"
     );
@@ -4880,6 +4880,68 @@ fn an_engine_menu_takes_the_controller_from_the_layer() {
 
 /// A publish too long for one addon message (2047 bytes, the client's cut) goes in pieces, each
 /// within it, that put back together are the line one message would carry; a short one is one.
+/// A flying track of ours lists on the Flight tab and publishes as one; a published flying track
+/// test-laps flying and is time-trialled, never queued for, in the Race Finder.
+#[test]
+fn a_flying_player_track_lists_on_the_flight_tab_and_is_never_queued_for() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    s.fire_event(
+        "BENILLA_KART_MYTRACKS",
+        vec![ScriptValue::Str(
+            [
+                "drive\tDrive Loop\tElwynn Forest\t0\t3\tA circuit.\t1,2;3,4\t\t1.0,2.0;3.0,4.0\t\t\t\t",
+                "fly\tSky Loop\tElwynn Forest\t0\t0\tA flight trial.\t1,2;3,4\t\t1.0,2.0;3.0,4.0\t\t\t\t1",
+            ]
+            .join("\n"),
+        )],
+    );
+    s.tick(0.0);
+    let shown = |s: &UiScript| -> String {
+        s.eval(
+            "local keys = {} for _, t in ipairs(BenillaKartTrackBrowser_Shown()) do \
+             if t.mine then table.insert(keys, t.key) end end return table.concat(keys, ' ')",
+        )
+        .unwrap()
+    };
+    s.run("BenillaKartTrackBrowser_Toggle()").unwrap();
+    assert_eq!(shown(&s), "my:drive");
+    s.run("BenillaKartTrackBrowser_SetTab(2)").unwrap();
+    assert_eq!(shown(&s), "my:fly");
+    s.run("BenillaKartTrackBrowser_OpenMine()").unwrap();
+    assert_eq!(shown(&s), "my:drive my:fly");
+    sent(&mut s);
+    s.run("BenillaKartPub_Publish(BenillaKartTrack('my:fly'))")
+        .unwrap();
+    let publish = sent(&mut s);
+    assert!(publish[0].ends_with("\t\t1"), "{publish:?}");
+
+    // Published: flagged on its line, its test lap told it flies, no queue in the finder.
+    from_server(&mut s, "R\tPTB");
+    from_server(
+        &mut s,
+        "R\tPT\t9\tSky Loop\tSomeone\t0\t0\tElwynn Forest\t\t1.0,2.0;3.0,4.0\t0\t0\t\t\t\t1",
+    );
+    from_server(&mut s, "R\tPTE");
+    assert!(s
+        .eval::<bool>("return BenillaKartTrack('pub:9').flight == true")
+        .unwrap());
+    s.run("BenillaKartTracksFrame:Hide() BenillaKartFinderFrame:Show()")
+        .unwrap();
+    s.run("BenillaKartFinder_SetTab(2) BenillaKartFinder_PickTrack('9')")
+        .unwrap();
+    assert!(!s
+        .eval::<bool>("return BenillaKartFinderFrameQueue:IsEnabled() == 1")
+        .unwrap());
+    sent(&mut s);
+    s.run("BenillaKartFinder_Queue()").unwrap();
+    assert!(sent(&mut s).iter().all(|l| !l.contains("Q+")));
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
 #[test]
 fn a_long_publish_goes_in_pieces_the_server_puts_together() {
     benilla_formats::wow_data_or_skip!();
@@ -4914,7 +4976,7 @@ fn a_long_publish_goes_in_pieces_the_server_puts_together() {
     assert!(line.starts_with("Pub\tLong Way\t0\t3\tElwynn Forest\t"));
     assert_eq!(line.matches("excavation-plank-2c,").count(), 250);
     assert!(
-        line.ends_with("100.5,10.0,1.5\t"),
+        line.ends_with("100.5,10.0,1.5\t\t"),
         "{:.40}",
         &line[line.len() - 40..]
     );

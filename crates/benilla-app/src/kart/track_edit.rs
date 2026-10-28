@@ -214,6 +214,8 @@ pub(crate) struct TrackEdit {
     laps: u8,
     /// The karts' and racers' size on the track, 1 their own (`docs/courses.md`, `scale`).
     scale: f32,
+    /// A flying track: raced in flight, out of the Race Finder (`docs/courses.md`, `flight`).
+    flight: bool,
     /// The map the draft is on, from where the editor opened.
     map: u32,
     /// The tool picked; [`TrackEdit::tool`] is the one a click uses.
@@ -282,6 +284,7 @@ impl Default for TrackEdit {
             grid: None,
             laps: 3,
             scale: 1.0,
+            flight: false,
             map: 0,
             tool: Place::Move,
             held: None,
@@ -321,6 +324,8 @@ pub(crate) struct EditView {
     pub(crate) laps: u8,
     /// The karts' size on the track.
     pub(crate) scale: f32,
+    /// A flying track ([`TrackEdit::flight`]).
+    pub(crate) flight: bool,
     pub(crate) notes: u32,
     /// What a click does: `move`, `number` (picks a checkpoint), or places a `checkpoint` (the
     /// start when there is none) or the `grid`.
@@ -393,6 +398,7 @@ impl TrackEdit {
             grid: self.grid.is_some(),
             laps: self.laps,
             scale: self.scale,
+            flight: self.flight,
             notes: self.notes,
             tool: match self.tool {
                 Place::Move => "move",
@@ -697,6 +703,7 @@ impl TrackEdit {
     /// A new draft: no gates, no grid.
     fn clear(&mut self) {
         self.scale = 1.0;
+        self.flight = false;
         self.points.clear();
         self.facings.clear();
         self.heights.clear();
@@ -857,6 +864,7 @@ impl TrackEdit {
         let objects = s.objects.clone();
         let heights = c.heights();
         let scale = c.scale();
+        let flight = c.flight();
         let rings = c.rings();
         let name = c.name.clone();
         self.clear();
@@ -865,6 +873,7 @@ impl TrackEdit {
         self.rings = rings;
         (self.grid, self.laps) = (grid, laps);
         self.scale = scale;
+        self.flight = flight;
         self.objects = objects;
         self.named = Some(name.clone());
         Ok(name)
@@ -968,6 +977,9 @@ impl TrackEdit {
         }
         if self.scale != 1.0 {
             course["scale"] = serde_json::json!((f64::from(self.scale) * 100.0).round() / 100.0);
+        }
+        if self.flight {
+            course["flight"] = serde_json::json!(true);
         }
         let json = serde_json::to_string_pretty(&course).map_err(|e| e.to_string())?;
         Ok((key, json + "\n"))
@@ -1300,6 +1312,15 @@ pub(crate) fn on_cmd(
             }
         }
         ["laps", n, ..] if editing => edit.laps = n.parse().unwrap_or(0).min(9),
+        // A flying track or a driving one (the bar's Flying track).
+        ["flight", ..] if editing => {
+            edit.flight = !edit.flight;
+            let on = edit.flight;
+            edit.say(match on {
+                true => "A flying track: raced in flight, its rings in the air, never in the Race Finder.",
+                false => "A driving track.",
+            });
+        }
         // The karts' size on the track (the bar's Size), within the race scale's bounds.
         ["scale", n, ..] if editing => {
             let n: f32 = n.parse().unwrap_or(1.0);
@@ -1318,7 +1339,8 @@ pub(crate) fn on_cmd(
                     .with_heights(edit.heights.clone())
                     .with_rings(edit.rings.clone())
                     .with_objects(edit.objects.clone())
-                    .with_scale(edit.scale);
+                    .with_scale(edit.scale)
+                    .with_flight(edit.flight);
                 races.race = Some(race.with_gates(edit.widths.clone()));
                 free.set(FreeMode::Off);
             }
@@ -1351,6 +1373,7 @@ pub(crate) fn on_cmd(
                     .with_rings(c.rings())
                     .with_objects(s.objects.clone())
                     .with_scale(c.scale())
+                    .with_flight(c.flight())
             });
             if let Some(why) = why {
                 edit.fail(why);
@@ -1364,13 +1387,14 @@ pub(crate) fn on_cmd(
         ["delete", key, ..] => edit.delete(key),
         // A player track's test lap, from the track browser's player tracks: its line's
         // name, laps, map, grid (`x,y,o` or empty), gates and floor (`z`, or empty or
-        // absent where the server sent none).
+        // absent where the server sent none), objects, scale and flight (`1` a flying track).
         ["runspots", name, laps, track_map, grid, gates, rest @ ..] => {
             let floor = rest.first().and_then(|z| z.trim().parse::<f32>().ok());
             let objects = rest
                 .get(1)
                 .map_or_else(Vec::new, |o| super::objects::parse_wire(o));
             let scale = rest.get(2).and_then(|v| v.trim().parse::<f32>().ok());
+            let flight = rest.get(3).is_some_and(|v| v.trim() == "1");
             let route = parse_spots(gates).filter(|g| g.points.len() >= 2);
             let grid = parse_spots(grid)
                 .and_then(|g| Some([g.points.first()?[0], g.points[0][1], g.facings[0]?]));
@@ -1396,7 +1420,8 @@ pub(crate) fn on_cmd(
             let race = race.with_facings(g.facings).with_floor(floor);
             let race = race.with_heights(g.heights).with_rings(g.rings);
             let race = race.with_gates(g.widths).with_objects(objects);
-            races.race = Some(race.with_scale(scale.unwrap_or(1.0)));
+            let race = race.with_scale(scale.unwrap_or(1.0)).with_flight(flight);
+            races.race = Some(race);
             free.set(FreeMode::Off);
         }
         ["restart", ..] => {
@@ -2099,6 +2124,15 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         let grid: Grid = serde_json::from_value(value["grid"].clone()).unwrap();
         assert_eq!(grid.o, 2.5);
+        assert!(
+            !course.flight() && value.get("flight").is_none(),
+            "a driving track"
+        );
+        // A flying track says so, and reads back flying.
+        edit.flight = true;
+        let (_, json) = edit.course("Goldshire Ring", "Elwynn Forest").unwrap();
+        let course: Course = serde_json::from_str(&json).unwrap();
+        assert!(course.flight());
     }
 
     #[test]

@@ -855,6 +855,7 @@ namespace Kartcraft
         uint32 laps = 0;
         float z = 0.f;   // the track's floor height (Course::z), 0 for none
         float scale = 1.f; // the karts' and racers' size on it (Course::scale)
+        bool flight = false; // a flying track (Course::flight): time-trialled, never queued for
         size_t slot = 0; // its course in s_userCourses
     };
     struct UserCourse
@@ -927,7 +928,7 @@ namespace Kartcraft
         char z[16];
         std::snprintf(z, sizeof(z), "%.1f", t.z);
         return UserTrackLine(t) + "\t\t\t" + (t.z != 0.f ? z : "") + "\t" + t.objects + "\t" +
-            ScaleField(t.scale);
+            ScaleField(t.scale) + "\t" + (t.flight ? "1" : "");
     }
 
     // `t`'s course in s_userCourses, new or in the slot `reuse` names: its gates from its spots,
@@ -959,6 +960,7 @@ namespace Kartcraft
         c.marshal = c.points.empty() ? std::make_pair(0.f, 0.f) : c.points[0];
         c.z = t.z;
         c.scale = t.scale;
+        c.flight = t.flight;
         t.slot = reuse ? *reuse : s_userCourses.size() - 1;
     }
 
@@ -5068,9 +5070,9 @@ namespace Kartcraft
                 if (!COURSES[i].flight &&
                     (token == "any" || token == COURSES[i].key || (zone && *zone == COURSES[i].zone)))
                     mask[i] = true;
-            // A player track only by its own key.
+            // A player track only by its own key, and never a flying one.
             for (UserTrack const& t : s_userTracks)
-                if (token == s_userCourses[t.slot].course.key)
+                if (!t.flight && token == s_userCourses[t.slot].course.key)
                     mask[COURSES.size() + t.slot] = true;
         }
         return mask;
@@ -7402,11 +7404,12 @@ namespace Kartcraft
     // on them. "R\tPub\t<name>\t<map>\t<laps>\t<zone>\t<grid>\t<points>[\t<z>]" publishes one
     // (grid "x,y,o" or empty; points "x,y[,o[,w]];...", the start first, a turned gate's facing and
     // a gate's half-width; `z` its floor height; then optionally its objects,
-    // "key,x,y,z,yaw,pitch,roll[,l,w,h];..." the editor's placed objects, and its scale, 0.2 to 3), in
+    // "key,x,y,z,yaw,pitch,roll[,l,w,h];..." the editor's placed objects, its scale, 0.2 to 3, and
+    // "1" for a flying track, which is time-trialled and never queued for or hosted), in
     // the open world or a dungeon, our own of that name replaced: "R\tPubOk\t<id>\t<name>" or
     // "R\tPubNo\t<why>". "R\tPubL" lists them, newest first: "R\tPTB", a "R\tPT\t<id>\t<name>\t<author>
-    // \t<map>\t<laps>\t<zone>\t<grid>\t<points>\t<good>\t<bad>\t<z>\t<objects>\t<scale>" each (its
-    // votes, its height, objects and scale or empty), then "R\tPTE"; a race on one sends its line
+    // \t<map>\t<laps>\t<zone>\t<grid>\t<points>\t<good>\t<bad>\t<z>\t<objects>\t<scale>\t<flight>" each
+    // (its votes, its height, objects, scale and flight or empty), then "R\tPTE"; a race on one sends its line
     // so, the votes empty. "R\tPubD\t<id>" takes one of ours down (a GM's, anyone's): "R\tPubGone\t<id>";
     // "R\tPubDN\t<name>" ours of that name, if any. A publish longer than one addon message (the
     // client cuts one at 2047 bytes) comes in pieces, "R\tPubP\t<i>\t<n>\t<text>", its line after
@@ -7489,6 +7492,9 @@ namespace Kartcraft
         // Its scale (Course::scale), added to a table made before it.
         CharacterDatabase.DirectExecute("ALTER TABLE `kartcraft_user_tracks` ADD COLUMN IF NOT EXISTS "
             "`scale` FLOAT NOT NULL DEFAULT 1 COMMENT 'the karts'' and racers'' size, 1 their own'");
+        // Whether it is a flying track (Course::flight), added to a table made before it.
+        CharacterDatabase.DirectExecute("ALTER TABLE `kartcraft_user_tracks` ADD COLUMN IF NOT EXISTS "
+            "`flight` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '1 a flying track'");
         // A track's id is never given again, a deleted one's too: its votes, results, records
         // and replays stay under "pt-<id>" (UnpublishTrack takes only its row), and a new track
         // with its id would inherit them. The next id is past every one those tables know.
@@ -7501,7 +7507,8 @@ namespace Kartcraft
                 "SELECT `course` FROM `kartcraft_tt_records` WHERE `course` LIKE 'pt-%') `pt`"))
             s_userTrackNext = std::max(s_userTrackNext, used->Fetch()[0].GetUInt32() + 1);
         std::unique_ptr<QueryResult> result = CharacterDatabase.Query(
-            "SELECT `id`, `guid`, `author`, `name`, `map`, `laps`, `zone`, `grid`, `points`, `z`, `objects`, `scale` "
+            "SELECT `id`, `guid`, `author`, `name`, `map`, `laps`, `zone`, `grid`, `points`, `z`, `objects`, `scale`, "
+            "`flight` "
             "FROM `kartcraft_user_tracks` ORDER BY `at`, `id`");
         if (!result)
             return;
@@ -7521,6 +7528,7 @@ namespace Kartcraft
             t.z = f[9].GetFloat();
             t.objects = f[10].GetCppString();
             t.scale = f[11].GetFloat();
+            t.flight = f[12].GetUInt8() != 0;
             s_userTrackNext = std::max(s_userTrackNext, t.id + 1);
             MakeUserCourse(t);
             s_userTracks.push_back(t);
@@ -7706,6 +7714,8 @@ namespace Kartcraft
         if (f.size() > 10 && !f[10].empty() &&
             (!ParseFloat(f[10], t.scale) || t.scale < MIN_RACE_SCALE || t.scale > MAX_RACE_SCALE))
             return no("The track's scale is not right: 0.2 to 3.");
+        // A flying track, an optional twelfth field: "1".
+        t.flight = f.size() > 11 && f[11] == "1";
         auto same = std::find_if(s_userTracks.begin(), s_userTracks.end(),
             [&t](UserTrack const& u) { return u.guid == t.guid && SameTrackName(u.name, t.name); });
         // Published again: its old course's slot is reused when no race or Race Finder pop is on
@@ -7743,10 +7753,10 @@ namespace Kartcraft
         CharacterDatabase.escape_string(name);
         CharacterDatabase.escape_string(zone);
         CharacterDatabase.PExecute("REPLACE INTO `kartcraft_user_tracks` (`id`, `guid`, `author`, `name`, "
-            "`map`, `laps`, `zone`, `grid`, `points`, `z`, `objects`, `scale`, `at`) VALUES (%u, %u, '%s', '%s', "
-            "%u, %u, '%s', '%s', '%s', %.1f, '%s', %.2f, %u)",
+            "`map`, `laps`, `zone`, `grid`, `points`, `z`, `objects`, `scale`, `flight`, `at`) VALUES (%u, %u, "
+            "'%s', '%s', %u, %u, '%s', '%s', '%s', %.1f, '%s', %.2f, %u, %u)",
             t.id, t.guid, author.c_str(), name.c_str(), t.map, t.laps, zone.c_str(), t.grid.c_str(),
-            t.points.c_str(), t.z, t.objects.c_str(), t.scale, uint32(std::time(nullptr)));
+            t.points.c_str(), t.z, t.objects.c_str(), t.scale, uint32(t.flight), uint32(std::time(nullptr)));
         SendLine(player, "KARTCRAFT\tR\tPubOk\t" + std::to_string(t.id) + "\t" + t.name);
         ListUserTracks(player, now, true);
     }
@@ -7784,7 +7794,7 @@ namespace Kartcraft
             std::snprintf(z, sizeof(z), "%.1f", t->z);
             SendLine(player, UserTrackLine(*t) + "\t" + std::to_string(vote.first) + "\t" +
                 std::to_string(vote.second) + "\t" + (t->z != 0.f ? z : "") + "\t" + t->objects + "\t" +
-                ScaleField(t->scale));
+                ScaleField(t->scale) + "\t" + (t->flight ? "1" : ""));
         }
         SendLine(player, "KARTCRAFT\tR\tPTE");
     }

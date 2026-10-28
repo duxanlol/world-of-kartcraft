@@ -27,9 +27,9 @@
 //!   interface hidden), `test` (a test lap of the draft), `run` (of a saved track) or empty when
 //!   closed; the last word for the player and how many so far, a new one for the chat.
 //! - `BENILLA_KART_MYTRACKS(list)`: the track editor's saved tracks, as `BENILLA_KART_TRACKS`
-//!   lists courses with four fields more, the grid (`x,y,o` or empty), the gates with their
-//!   facings (`x,y[,o];...`), the floor and the placed objects (`key,x,y,z,yaw,pitch,roll;...`),
-//!   at load and after each save or delete.
+//!   lists courses with six fields more, the grid (`x,y,o` or empty), the gates with their
+//!   facings (`x,y[,o];...`), the floor, the placed objects (`key,x,y,z,yaw,pitch,roll;...`),
+//!   the scale (empty for 1) and `1` for a flying track, at load and after each save or delete.
 //! - `BENILLA_KART_SEATED(seated)`: 1 when we climb into the kart, 0 when we climb out.
 //! - `BENILLA_KART_LEAVE(percent)`: leaving the kart in a race, held for, how far; no arguments
 //!   when let go or done.
@@ -127,16 +127,17 @@ pub(crate) fn feed(
     }
     let (mine, saves) = edit.saved();
     if sent.my_tracks != Some(saves) {
-        // A course's line, then its grid, its gates with their facings, its floor, its objects and
-        // its scale (empty for its own size), for a publish.
+        // A course's line, then its grid, its gates with their facings, its floor, its objects,
+        // its scale (empty for its own size) and `1` for a flying track, for a publish.
         let list: Vec<String> = mine
             .map(|(c, grid, gates, z, objects)| {
                 let scale = match c.scale() {
                     s if s != 1.0 => format!("{s:.2}"),
                     _ => String::new(),
                 };
+                let flight = if c.flight() { "1" } else { "" };
                 format!(
-                    "{}\t{grid}\t{gates}\t{z}\t{objects}\t{scale}",
+                    "{}\t{grid}\t{gates}\t{z}\t{objects}\t{scale}\t{flight}",
                     track_line(c)
                 )
             })
