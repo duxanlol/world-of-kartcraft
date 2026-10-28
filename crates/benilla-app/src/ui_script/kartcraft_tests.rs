@@ -3943,6 +3943,10 @@ fn the_track_browser_parts_the_flight_courses_on_a_tab_of_their_own() {
     s.run("BenillaKartTrackBrowser_Open() BenillaKartTrackBrowser_Pad('PADFORWARD')")
         .unwrap();
     assert_eq!(shown(&s), "t1");
+    s.run("BenillaKartTrackBrowser_Pad('PADDRIGHT')").unwrap();
+    assert_eq!(shown(&s), "sky leap");
+    s.run("BenillaKartTrackBrowser_Pad('PADDLEFT')").unwrap();
+    assert_eq!(shown(&s), "t1");
     s.run("BenillaKartTrackBrowser_Open('sky')").unwrap();
     assert_eq!(shown(&s), "sky leap");
     s.run("BenillaKartTrackBrowser_Open('t1')").unwrap();

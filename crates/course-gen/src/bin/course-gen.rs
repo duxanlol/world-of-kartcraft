@@ -152,6 +152,30 @@ enum Cmd {
         #[arg(long)]
         remove: Vec<String>,
     },
+    /// Fly the flight bot (`course_gen::flight`) over the real world: a flight course's rings
+    /// (`--course`), a flight distance as far as it goes (`--leap`), or a course's rings laid at
+    /// heights it reaches (`--course` with `--lay`).
+    Fly {
+        /// A flight course's key.
+        #[arg(long)]
+        course: Option<String>,
+        /// A flight distance's key.
+        #[arg(long)]
+        leap: Option<String>,
+        /// Lay the course's rings this many yards under the bot's best line.
+        #[arg(long)]
+        lay: Option<f32>,
+        /// With --lay: the least clearance, yards, between a ring's bottom and the ground.
+        #[arg(long, default_value_t = 6.0)]
+        clear: f32,
+        /// With --lay: write the heights into the course file (the rings it could not lay
+        /// dropped from the course's end).
+        #[arg(long)]
+        write: bool,
+        /// The course file.
+        #[arg(long, default_value = "courses/courses.json")]
+        courses: PathBuf,
+    },
     /// Place a Race Marshal beside every distinct course start, at the ground's height, and
     /// write each course's `"marshal"` into the course file.
     Marshals {
@@ -487,6 +511,54 @@ fn main() -> Result<()> {
                 );
             }
             println!("exported {} into {}", done.len(), courses.display());
+        }
+        Cmd::Fly {
+            course,
+            leap,
+            lay,
+            clear,
+            write,
+            courses,
+        } => {
+            let text = std::fs::read_to_string(&courses)
+                .with_context(|| format!("reading {}", courses.display()))?;
+            let mut file: serde_json::Value = serde_json::from_str(&text)?;
+            let mut chain = open_install()?;
+            if let Some(key) = leap {
+                let (yards, r) = course_gen::flight::fly_leap(&mut chain, &file, &key)?;
+                println!("{key}: {yards:.1} yd in {:.1} s", r.ticks as f32 / 30.0);
+            }
+            if let Some(key) = course {
+                if let Some(margin) = lay {
+                    let laid = course_gen::flight::lay(&mut chain, &file, &key, margin, clear)?;
+                    for (n, z) in laid.iter().enumerate() {
+                        println!("ring {}: z {z:.1}", n + 1);
+                    }
+                    if write {
+                        course_gen::flight::write_heights(&mut file, &key, &laid)?;
+                        std::fs::write(&courses, course_gen::export::format(&file))?;
+                        println!("{} rings written into {}", laid.len(), courses.display());
+                    }
+                } else {
+                    let (lines, r) = course_gen::flight::fly_course(&mut chain, &file, &key)?;
+                    for l in &lines {
+                        let under = l.under.map_or("?".into(), |g| format!("{g:.0}"));
+                        println!(
+                            "ring {}: {} at z {:.1} (ring {:.1}), {:.1} yd off centre, ground {under}",
+                            l.ring,
+                            if l.passed { "passed" } else { "MISSED" },
+                            l.z,
+                            l.ring_z,
+                            l.off
+                        );
+                    }
+                    println!(
+                        "{} of the rings in {:.1} s",
+                        r.passes.len(),
+                        r.ticks as f32 / 30.0
+                    );
+                }
+            }
         }
         Cmd::Marshals { courses } => {
             let n = course_gen::marshal::run(&courses, open_install()?)?;

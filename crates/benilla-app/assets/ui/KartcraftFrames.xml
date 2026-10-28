@@ -1368,7 +1368,7 @@
         -- The controller in the track browser: the D-pad picks the track itself (L1 and R1 a page
         -- at a time), the list following it, and each action is a face button, so none is a walk
         -- down the list away: Cross the time trial, Square the marshal, Triangle the map, Select
-        -- the rating, Start the other tab, Circle closes.
+        -- the rating, Start or the D-pad's left and right the other tab, Circle closes.
         BENILLA_KART_TRACK_PAD_STEPS = { PADDUP = -1, PADDDOWN = 1,
             PADLSHOULDER = -BENILLA_KART_TRACK_ROWS, PADRSHOULDER = BENILLA_KART_TRACK_ROWS }
         function BenillaKartTrackBrowser_Pad(key)
@@ -1401,7 +1401,7 @@
                 if BenillaKartTracksFrameShow:IsEnabled() == 1 then BenillaKartTracksFrameShow:Click() end
             elseif key == "PADBACK" then
                 if BenillaKartTracksFrameRate:IsEnabled() == 1 then BenillaKartTracksFrameRate:Click() end
-            elseif key == "PADFORWARD" then
+            elseif key == "PADFORWARD" or key == "PADDLEFT" or key == "PADDRIGHT" then
                 if BenillaKartTrackBrowser.mode == nil then
                     BenillaKartTrackBrowser_SetTab(3 - BenillaKartTrackBrowser.tab)
                 end
@@ -2080,7 +2080,7 @@
         -- without one, the guide says how the D-pad, Cross and Circle drive it.
         BENILLA_PAD_WINDOWS = {
             { name = "BenillaKartTracksFrame", buttons = "BenillaKartTrackBrowser_Pad", below = 26,
-              legend = "D-pad: pick a track    L1 / R1: page    Start: Tracks / Flight\nCross / A: time trial    Square / X: marshal\nTriangle / Y: map    Select: rate    Circle / B: close" },
+              legend = "D-pad: pick a track    L1 / R1: page    Left / right or Start: Tracks / Flight\nCross / A: time trial    Square / X: marshal\nTriangle / Y: map    Select: rate    Circle / B: close" },
             { name = "BenillaKartJobsFrame", buttons = "BenillaKartJobs_Pad",
               legend = "D-pad: pick a job    Cross / A: take it    Triangle / Y: route\nSquare / X: cancel the job under way    Circle / B: close" },
             -- `below`: how far under the window its legend hangs, past its tabs.

@@ -6,6 +6,7 @@
 
 mod course;
 mod driver;
+pub mod fly;
 mod route;
 pub mod showcase;
 

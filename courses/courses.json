@@ -5558,14 +5558,14 @@
       "map": 1,
       "laps": 0,
       "flight": true,
-      "note": "flight trial, laid by hand from the heightmap: off the bare mountain west of Thunder Bluff and through four rings past its spires to the Mulgore plains, 660 yd; a 1-in-6 glide clears every leg by 18 yd, each ring 6 yd under it. A flight course: never in the Race Finder.",
+      "note": "flight trial off the bare mountain west of Thunder Bluff, through four rings past its spires to the Mulgore plains, 600 yd: the rings laid by the flight bot (course-gen fly --lay 8), each 8 yd under its best line, which flies them in 15 s. A flight course: never in the Race Finder.",
       "marshal": {"o":5.498,"x":-1600,"y":435,"z":211.6},
       "checkpoints": [
         { "gate": 25, "x": -1585, "y": 414, "z": 211.6 },
-        { "gate": 16, "ring": [0,0], "x": -1460, "y": 330, "z": 183 },
-        { "gate": 16, "ring": [0,0], "x": -1310, "y": 210, "z": 151 },
-        { "gate": 16, "ring": [0,0], "x": -1190, "y": 240, "z": 130 },
-        { "gate": 18, "ring": [0,0], "x": -1040, "y": 360, "z": 98 }
+        { "gate": 16, "ring": [0,0], "x": -1460, "y": 330, "z": 190.0 },
+        { "gate": 16, "ring": [0,0], "x": -1310, "y": 210, "z": 110.9 },
+        { "gate": 16, "ring": [0,0], "x": -1190, "y": 240, "z": 76.8 },
+        { "gate": 18, "ring": [0,0], "x": -1117, "y": 348, "z": 52.7 }
       ]
     }
   ],

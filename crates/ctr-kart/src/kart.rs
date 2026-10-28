@@ -706,6 +706,8 @@ pub struct Pose {
     pub offset: Vec3,
 }
 
+/// Clone: a search tries a state's futures from copies of it (`kart-driver`'s flight bot).
+#[derive(Clone)]
 pub struct Kart {
     stats: Stats,
     pub state: State,

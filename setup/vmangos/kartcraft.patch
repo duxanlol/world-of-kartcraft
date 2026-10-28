@@ -9934,7 +9934,7 @@ index 0000000..c72d18e
 +    };
 diff --git a/src/game/KartcraftCourses.h b/src/game/KartcraftCourses.h
 new file mode 100644
-index 0000000..43579fe
+index 0000000..45ea459
 --- /dev/null
 +++ b/src/game/KartcraftCourses.h
 @@ -0,0 +1,2203 @@
@@ -12122,13 +12122,13 @@ index 0000000..43579fe
 +            25.f, 25.f },
 +          {},
 +          { -7139.7f, -1397.3f }, {} },
-+        // Thunder Bluff Skyway (Mulgore): flight trial, laid by hand from the heightmap: off the
-+        // bare mountain west of Thunder Bluff and through four rings past its spires to the Mulgore
-+        // plains, 660 yd; a 1-in-6 glide clears every leg by 18 yd, each ring 6 yd under it. A
-+        // flight course: never in the Race Finder.
++        // Thunder Bluff Skyway (Mulgore): flight trial off the bare mountain west of Thunder Bluff,
++        // through four rings past its spires to the Mulgore plains, 600 yd: the rings laid by the
++        // flight bot (course-gen fly --lay 8), each 8 yd under its best line, which flies them in
++        // 15 s. A flight course: never in the Race Finder.
 +        { "tb-skyway", "Thunder Bluff Skyway", "", 1, 0,
 +          { { -1585.f, 414.f }, { -1460.f, 330.f }, { -1310.f, 210.f }, { -1190.f, 240.f },
-+            { -1040.f, 360.f } },
++            { -1117.f, 348.f } },
 +          { 25.f, 16.f, 16.f, 16.f, 18.f },
 +          {},
 +          { -1600.f, 435.f }, {}, 0.f, 1.f, true },
