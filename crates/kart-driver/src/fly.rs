@@ -94,25 +94,41 @@ struct Flight {
     moves: Vec<Move>,
 }
 
+/// The water's faces (lu), for the kart to float on and land on, as the session's host gives it
+/// the surface under it ([`Kart::water`]); none, a dry world.
+#[derive(Clone, Copy, Default)]
+pub struct Sea<'a>(pub Option<&'a Collision>);
+
+impl Sea<'_> {
+    /// The water's surface under or over `p` (lu height), if any.
+    pub fn level(&self, p: Vec3) -> Option<f32> {
+        let top = Vec3::new(p.x, p.y + 20000.0, p.z);
+        self.0?
+            .ray(top, Vec3::NEG_Y, 1.0e6)
+            .map(|h| top.y - h.distance)
+    }
+}
+
 /// Flies `kart` (on its start, facing the first ring) through `rings` in order, the best it can.
-pub fn fly_rings(world: &Collision, kart: Kart, rings: &[Ring]) -> FlyReport {
-    search(world, kart, rings, None, false)
+pub fn fly_rings(world: &Collision, sea: Sea, kart: Kart, rings: &[Ring]) -> FlyReport {
+    search(world, sea, kart, rings, None, false)
 }
 
 /// As [`fly_rings`], but the last ring is only its plane, crossed as high as the bot can: how high
 /// a ring there can hang for a flight through the rings before it.
-pub fn fly_reach(world: &Collision, kart: Kart, rings: &[Ring]) -> FlyReport {
-    search(world, kart, rings, None, true)
+pub fn fly_reach(world: &Collision, sea: Sea, kart: Kart, rings: &[Ring]) -> FlyReport {
+    search(world, sea, kart, rings, None, true)
 }
 
 /// Flies `kart` off its launch along `heading` (4096ths of a turn) as far as it can: the best
 /// flight's touchdown is the farthest across the ground from `kart`'s start.
-pub fn fly_far(world: &Collision, kart: Kart, heading: i32) -> FlyReport {
-    search(world, kart, &[], Some(heading), false)
+pub fn fly_far(world: &Collision, sea: Sea, kart: Kart, heading: i32) -> FlyReport {
+    search(world, sea, kart, &[], Some(heading), false)
 }
 
 fn search(
     world: &Collision,
+    sea: Sea,
     kart: Kart,
     rings: &[Ring],
     far: Option<i32>,
@@ -140,11 +156,11 @@ fn search(
     while !beam.is_empty() {
         let mut next = Vec::with_capacity(beam.len() * MOVES.len());
         for f in &beam {
-            // On the ground there is nothing to choose: the gas, toward the first ring.
-            let moves: &[Move] = if f.flew { &MOVES } else { &MOVES[..1] };
+            // Out of flight there is nothing to choose: the gas, toward the next ring.
+            let moves: &[Move] = if f.kart.flying() { &MOVES } else { &MOVES[..1] };
             for &m in moves {
                 let mut g = f.clone();
-                step(world, &mut g, m, rings, far, reach, &mods);
+                step(world, sea, &mut g, m, rings, far, reach, &mods);
                 if g.lost {
                     if let Some(m) = g.missed {
                         let better = nearest.as_ref().is_none_or(|n| {
@@ -157,7 +173,13 @@ fn search(
                     }
                     continue;
                 }
-                let over = g.down.is_some() || g.passed == rings.len() && !rings.is_empty();
+                // Off a launch a flight ends at its touchdown; through rings the kart lands, drives
+                // on and flies off the next edge, ending at the last ring.
+                let over = if rings.is_empty() {
+                    g.down.is_some()
+                } else {
+                    g.passed == rings.len()
+                };
                 if over || g.tick >= MAX_TICKS {
                     done.push(g);
                 } else {
@@ -208,8 +230,10 @@ fn search(
 
 /// A move held for a chunk: pursuit to the next ring (or straight on), the double tap once off
 /// the ground, each ring checked as the kart crosses it.
+#[allow(clippy::too_many_arguments)]
 fn step(
     world: &Collision,
+    sea: Sea,
     f: &mut Flight,
     m: Move,
     rings: &[Ring],
@@ -236,15 +260,12 @@ fn step(
             ..Input::default()
         };
         // The double tap: two presses in the air, a tick apart, to open the wings at once once
-        // over a drop (a hop's own air is not one).
-        if !f.kart.grounded()
-            && !f.kart.flying()
-            && !f.flew
-            && over_ground(world, before) > TAP_OVER
-        {
+        // over a drop (a hop's own air is not one), off every edge.
+        if !f.kart.grounded() && !f.kart.flying() && over_ground(world, before) > TAP_OVER {
             input.r1 = f.taps.is_multiple_of(2);
             f.taps = f.taps.wrapping_add(1);
         }
+        f.kart.water = sea.level(before);
         f.kart.tick(world, &input, mods);
         f.tick += 1;
         let here = f.kart.pose().position;
@@ -286,7 +307,8 @@ fn step(
                 f.passed += 1;
             }
         }
-        if f.down.is_some() || (!rings.is_empty() && f.passed == rings.len()) {
+        let landed = rings.is_empty() && f.down.is_some();
+        if landed || (!rings.is_empty() && f.passed == rings.len()) {
             break;
         }
     }
@@ -399,7 +421,7 @@ mod tests {
                 through: Vec3::new(side * 3000.0, 0.0, 9000.0).normalize(),
                 radius: 16.0 * 36.6,
             };
-            let r = fly_rings(&w, launch(&w, 3000.0), &[ring]);
+            let r = fly_rings(&w, Sea::default(), launch(&w, 3000.0), &[ring]);
             assert_eq!(r.passes.len(), 1, "side {side}: missed {:?}", r.missed);
             assert!(r.passes[0].miss <= ring.radius + RING_REACH);
         }
@@ -431,7 +453,7 @@ mod tests {
             }
         }
         let held_far = down.expect("the held gas lands").z;
-        let best = fly_far(&w, launch(&w, 6000.0), 0)
+        let best = fly_far(&w, Sea::default(), launch(&w, 6000.0), 0)
             .touchdown
             .expect("the bot lands");
         assert!(best.z > held_far, "{} against {held_far}", best.z);
@@ -445,7 +467,7 @@ mod tests {
         let yd = crate::LU_PER_YARD;
         for h in [40.0f32, 80.0, 110.0, 140.0, 170.0, 210.0] {
             let w = cliff(h * yd);
-            let r = fly_far(&w, launch(&w, h * yd), 0);
+            let r = fly_far(&w, Sea::default(), launch(&w, h * yd), 0);
             let d = r.touchdown.map_or(0.0, |d| (d.z + 4000.0) / yd);
             let profile: Vec<String> = r
                 .path

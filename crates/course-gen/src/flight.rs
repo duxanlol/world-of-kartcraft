@@ -6,7 +6,7 @@
 use anyhow::{anyhow, Context, Result};
 use benilla_formats::Chain;
 use glam::Vec3;
-use kart_driver::fly::{self, FlyReport, Ring};
+use kart_driver::fly::{self, FlyReport, Ring, Sea};
 use kart_driver::{Class, Collision, CELL, LU_PER_YARD};
 use serde_json::Value;
 
@@ -19,10 +19,31 @@ const DEPTH: f32 = 320.0;
 /// A flight in the real world: the terrain round it and the origin its lu count from (WoW).
 pub struct Sky {
     pub world: Collision,
+    /// The water's faces, lu, if there is any.
+    pub water: Option<Collision>,
     pub origin: [f32; 3],
 }
 
 impl Sky {
+    /// The world `half` yards round WoW `centre` (x, y) on `map`, from the ground at about
+    /// `z` to [`DEPTH`] over and under it, its lu from there.
+    pub fn gather_area(
+        chain: &mut Chain,
+        map: u32,
+        centre: [f32; 2],
+        half: f32,
+        z: f32,
+    ) -> Result<Self> {
+        let origin = [centre[0], centre[1], z];
+        let mid = wow_to_bevy(origin);
+        let region = Region {
+            min: mid - Vec3::new(half, DEPTH, half),
+            max: mid + Vec3::new(half, DEPTH, half),
+        };
+        let faces = soup::gather_world(chain, map, region)?;
+        Ok(Self::of(faces, mid, origin))
+    }
+
     /// The world round `points` (WoW x, y, z) on `map`, its lu from `points[0]`.
     pub fn gather(chain: &mut Chain, map: u32, points: &[[f32; 3]]) -> Result<Self> {
         let origin = *points.first().ok_or_else(|| anyhow!("no points"))?;
@@ -39,8 +60,23 @@ impl Sky {
             max: Vec3::new(mid.x + half.x, mid.y + DEPTH, mid.z + half.z),
         };
         let faces = soup::gather_world(chain, map, region)?;
-        let world = Collision::new(soup::to_lu(&faces.solid, wow_to_bevy(origin)), CELL);
-        Ok(Self { world, origin })
+        Ok(Self::of(faces, wow_to_bevy(origin), origin))
+    }
+
+    fn of(faces: soup::Faces, mid: Vec3, origin: [f32; 3]) -> Self {
+        let world = Collision::new(soup::to_lu(&faces.solid, mid), CELL);
+        let wet = soup::to_lu(&faces.liquid, mid);
+        let water = (!wet.is_empty()).then(|| Collision::new(wet, CELL));
+        Self {
+            world,
+            water,
+            origin,
+        }
+    }
+
+    /// The water for the bot.
+    pub fn sea(&self) -> Sea<'_> {
+        Sea(self.water.as_ref())
     }
 
     /// A WoW point in the flight's lu.
@@ -59,6 +95,19 @@ impl Sky {
         let d = fly::over_ground(&self.world, top);
         d.is_finite()
             .then(|| self.origin[2] + DEPTH - d / LU_PER_YARD)
+    }
+
+    /// What a kart comes down on under a WoW point (WoW z): the ground, or the water over it.
+    pub fn floor(&self, x: f32, y: f32) -> Option<f32> {
+        let top = self.lu([x, y, self.origin[2] + DEPTH]);
+        let sea = self
+            .sea()
+            .level(top)
+            .map(|l| l / LU_PER_YARD + self.origin[2]);
+        match (self.ground(x, y), sea) {
+            (Some(g), Some(s)) => Some(g.max(s)),
+            (g, s) => g.or(s),
+        }
     }
 
     /// A kart on the ground under WoW `at`, facing WoW `toward`.
@@ -173,10 +222,16 @@ pub fn fly_course(
 ) -> Result<(Vec<RingLine>, FlyReport)> {
     let c = FlightCourse::read(file, key)?;
     let sky = Sky::gather(chain, c.map, &c.points)?;
-    let rings = c.rings(&sky);
+    fly_in(&sky, &c)
+}
+
+/// Flies `c` in `sky`, gathered round it: each ring as the best flight crossed it, the first
+/// missed last.
+pub fn fly_in(sky: &Sky, c: &FlightCourse) -> Result<(Vec<RingLine>, FlyReport)> {
+    let rings = c.rings(sky);
     let first = c.rings.first().map_or(c.points[1], |&i| c.points[i]);
     let kart = sky.kart(c.points[0], first)?;
-    let r = fly::fly_rings(&sky.world, kart, &rings);
+    let r = fly::fly_rings(&sky.world, sky.sea(), kart, &rings);
     let mut lines = Vec::new();
     let crossed = r
         .passes
@@ -215,7 +270,7 @@ pub fn lay(
     for n in 0..c.rings.len() {
         let rings = c.rings(&sky)[..=n].to_vec();
         let kart = sky.kart(c.points[0], first)?;
-        let r = fly::fly_reach(&sky.world, kart, &rings);
+        let r = fly::fly_reach(&sky.world, sky.sea(), kart, &rings);
         let Some(best) = r.passes.get(n).map(|p| sky.wow(p.at)[2]) else {
             break;
         };
@@ -253,7 +308,7 @@ pub fn fly_leap(chain: &mut Chain, file: &Value, key: &str) -> Result<(f32, FlyR
     let sky = Sky::gather(chain, map, &[launch, out])?;
     let kart = sky.kart(launch, out)?;
     let heading = fly::yaw_to(sky.lu(launch), sky.lu(out));
-    let r = fly::fly_far(&sky.world, kart, heading);
+    let r = fly::fly_far(&sky.world, sky.sea(), kart, heading);
     let yards = r.touchdown.map_or(0.0, |d| {
         let w = sky.wow(d);
         (w[0] - launch[0]).hypot(w[1] - launch[1])

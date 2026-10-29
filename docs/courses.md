@@ -56,7 +56,11 @@ client's list are both made from it; nothing else holds course data.
   Marshal or the track browser's Flight tab. Its rings are laid by the flight bot,
   `course-gen fly --course <key> --lay 8`, each 8 yards under the best line it flies (a glide
   comes down about a yard in six, from any height under the lift's lid 410 yards over the
-  ground), and a test flies every flight course through every ring. The track editor's Race type bar sets it for
+  ground), and a test flies every flight course through every ring. `course-gen scout --map M
+  --at x,y` finds them: tops (roofs, mesas, ledges) chained down a glide at a time, a ring standing
+  on each to skim or drive through, or with `--runs` long glide paths low over the ground and
+  between higher ground, a ring every 90 yards; each flown by the bot, kept to the rings it
+  passes, and drawn as a map beside the entries `--out` writes. The track editor's Race type bar sets it for
   a player track (Flying track): saved as `flight`, published as `R\tPub`'s last field and the
   `PT` lines' last (`1`), listed on the Flight tab, test-lapped flying, time-trialled and never
   queued for.

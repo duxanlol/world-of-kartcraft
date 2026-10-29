@@ -419,7 +419,12 @@ mod tests {
             assert!(fields[4].parse::<u8>().is_ok(), "the laps: {line}");
             assert!(fields[6].split(';').count() >= 2, "a route: {line}");
         }
-        assert_eq!(flight_list(), "tb-skyway");
+        let list = flight_list();
+        let flights: Vec<&str> = list.lines().collect();
+        assert!(
+            flights.contains(&"tb-skyway")
+                && flights.len() == COURSES.iter().filter(|c| c.flight()).count()
+        );
         let leaps = leap_list();
         assert_eq!(leaps.lines().count(), crate::kart::LEAPS.len());
         for line in leaps.lines() {

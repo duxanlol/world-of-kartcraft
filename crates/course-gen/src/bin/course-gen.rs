@@ -152,6 +152,55 @@ enum Cmd {
         #[arg(long)]
         remove: Vec<String>,
     },
+    /// Scout flight courses (`course_gen::scout`): tops chained down a glide at a time round a
+    /// spot, flown by the flight bot; the ones it flies, as course entries.
+    Scout {
+        /// The map: 0 the Eastern Kingdoms, 1 Kalimdor.
+        #[arg(long)]
+        map: u32,
+        /// The area's centre, WoW `x,y`.
+        #[arg(long, allow_hyphen_values = true)]
+        at: String,
+        /// Its half-width, yards.
+        #[arg(long, default_value_t = 300.0)]
+        half: f32,
+        /// About the ground's height there (WoW z).
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        z: f32,
+        /// The courses kept.
+        #[arg(long, default_value_t = 6)]
+        keep: usize,
+        /// How far over what is round it a top stands, yards.
+        #[arg(long, default_value_t = 10.0)]
+        prominence: f32,
+        /// Yards across per yard down a hop asks of a glide.
+        #[arg(long, default_value_t = 5.0)]
+        glide: f32,
+        /// The longest hop, yards.
+        #[arg(long, default_value_t = 220.0)]
+        hop: f32,
+        /// The sampling step, yards.
+        #[arg(long, default_value_t = 3.0)]
+        step: f32,
+        /// The fewest samples a top holds.
+        #[arg(long, default_value_t = 6)]
+        cells: usize,
+        /// The most a walkable spot rises to its neighbour, yards.
+        #[arg(long, default_value_t = 1.6)]
+        flat: f32,
+        /// Glide runs (`course_gen::scout::scout_runs`): long paths down off the highest tops, low
+        /// and between higher ground, rings along them, in place of the hops between tops.
+        #[arg(long)]
+        runs: bool,
+        /// With --runs: yards across per yard down the path keeps.
+        #[arg(long, default_value_t = 5.5)]
+        run_glide: f32,
+        /// Write the courses found here, as course entries keyed `<prefix>-<n>`.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        #[arg(long, default_value = "scout")]
+        prefix: String,
+    },
     /// Fly the flight bot (`course_gen::flight`) over the real world: a flight course's rings
     /// (`--course`), a flight distance as far as it goes (`--leap`), or a course's rings laid at
     /// heights it reaches (`--course` with `--lay`).
@@ -511,6 +560,92 @@ fn main() -> Result<()> {
                 );
             }
             println!("exported {} into {}", done.len(), courses.display());
+        }
+        Cmd::Scout {
+            map,
+            at,
+            half,
+            z,
+            keep,
+            prominence,
+            glide,
+            hop,
+            step,
+            cells,
+            flat,
+            runs,
+            run_glide,
+            out,
+            prefix,
+        } => {
+            let v: Vec<f32> = at
+                .split(',')
+                .map(|p| p.trim().parse())
+                .collect::<Result<_, _>>()
+                .context("--at is x,y")?;
+            anyhow::ensure!(v.len() == 2, "--at is x,y");
+            let opts = course_gen::scout::ScoutOpts {
+                prominence,
+                glide,
+                hop: (25.0, hop),
+                step,
+                min_cells: cells,
+                flat,
+                ..Default::default()
+            };
+            let found = if runs {
+                let r = course_gen::scout::RunOpts {
+                    glide: run_glide,
+                    ..Default::default()
+                };
+                course_gen::scout::scout_runs(
+                    &mut open_install()?,
+                    map,
+                    [v[0], v[1]],
+                    half,
+                    z,
+                    &opts,
+                    &r,
+                    keep,
+                )?
+            } else {
+                course_gen::scout::scout(
+                    &mut open_install()?,
+                    map,
+                    [v[0], v[1]],
+                    half,
+                    z,
+                    &opts,
+                    keep,
+                )?
+            };
+            let mut entries = Vec::new();
+            for (n, f) in found.iter().enumerate() {
+                let p = f.points[0];
+                println!(
+                    "{prefix}-{}: {} rings, {:.0} yd, {:.1} s, from {:.0},{:.0},{:.0}, heights {}",
+                    n + 1,
+                    f.passed,
+                    f.yards,
+                    f.seconds,
+                    p[0],
+                    p[1],
+                    p[2],
+                    f.points[1..]
+                        .iter()
+                        .map(|q| format!("{:.0}", q[2]))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                );
+                let key = format!("{prefix}-{}", n + 1);
+                if let (Some(out), Some(pic)) = (&out, &f.picture) {
+                    pic.save(out.with_file_name(format!("{key}.png")))?;
+                }
+                entries.push(course_gen::scout::course_entry(f, &key, &key, "", map));
+            }
+            if let Some(out) = out {
+                std::fs::write(&out, serde_json::to_string_pretty(&entries)?)?;
+            }
         }
         Cmd::Fly {
             course,

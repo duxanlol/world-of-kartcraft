@@ -20,6 +20,7 @@ pub mod pads;
 pub mod preview;
 pub mod render;
 pub mod roads;
+pub mod scout;
 pub mod select;
 pub mod showcase;
 pub mod soup;

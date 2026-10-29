@@ -3081,10 +3081,12 @@ mod tests {
         let start = sky.start();
         assert!((leap.launch.x - start[0]).hypot(leap.launch.y - start[1]) < 10.0);
         assert!(sky.rings().iter().filter(|r| r.is_some()).count() >= 4);
-        assert!(COURSES
-            .iter()
-            .filter(|c| c.flight())
-            .all(|c| c.key == "tb-skyway"));
+        // Every flight course is flown through rings, a sprint, out of the finder.
+        for c in COURSES.iter().filter(|c| c.flight()) {
+            assert!(c.rings().iter().flatten().count() >= 3, "{}", c.key);
+            assert_eq!(c.laps, 0, "{}", c.key);
+            assert!(c.finder_group().is_empty(), "{}", c.key);
+        }
     }
 
     #[test]
