@@ -1020,3 +1020,15 @@ fn picture(field: &Field, points: &[[f32; 3]], flown: &[[f32; 3]]) -> image::Rgb
     }
     img
 }
+
+/// A course's map, as the scout draws a found one ([`picture`]): the surface round its points
+/// and its flight sampled from `sky`, two yards a sample.
+pub fn course_picture(sky: &Sky, points: &[[f32; 3]], flown: &[[f32; 3]]) -> image::RgbImage {
+    let (mut x0, mut x1, mut y0, mut y1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+    for p in points.iter().chain(flown) {
+        (x0, x1, y0, y1) = (x0.min(p[0]), x1.max(p[0]), y0.min(p[1]), y1.max(p[1]));
+    }
+    let half = (x1 - x0).max(y1 - y0) * 0.5 + 70.0;
+    let field = Field::sample(sky, [(x0 + x1) * 0.5, (y0 + y1) * 0.5], half, 2.0);
+    picture(&field, points, flown)
+}

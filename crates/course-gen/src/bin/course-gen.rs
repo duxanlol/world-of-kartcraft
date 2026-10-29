@@ -237,6 +237,9 @@ enum Cmd {
         /// lay against a live run of it.
         #[arg(long)]
         simple: bool,
+        /// Draw the course's map with the bot's flight into this PNG.
+        #[arg(long)]
+        picture: Option<PathBuf>,
         /// The course file.
         #[arg(long, default_value = "courses/courses.json")]
         courses: PathBuf,
@@ -677,6 +680,7 @@ fn main() -> Result<()> {
             clear,
             write,
             simple,
+            picture,
             courses,
         } => {
             let text = std::fs::read_to_string(&courses)
@@ -699,8 +703,13 @@ fn main() -> Result<()> {
                         println!("{} rings written into {}", laid.len(), courses.display());
                     }
                 } else {
-                    let (lines, r) =
-                        course_gen::flight::fly_course_as(&mut chain, &file, &key, simple)?;
+                    let c = course_gen::flight::FlightCourse::read(&file, &key)?;
+                    let sky = course_gen::flight::Sky::gather(&mut chain, c.map, &c.points)?;
+                    let (lines, r) = course_gen::flight::fly_in_as(&sky, &c, simple)?;
+                    if let Some(png) = &picture {
+                        let flown: Vec<[f32; 3]> = r.path.iter().map(|&p| sky.wow(p)).collect();
+                        course_gen::scout::course_picture(&sky, &c.points, &flown).save(png)?;
+                    }
                     let c = course_gen::flight::FlightCourse::read(&file, &key)?;
                     let zone = |chain: &mut benilla_formats::Chain, p: [f32; 3]| {
                         course_gen::flight::zone_at(chain, c.map, p[0], p[1]).unwrap_or_default()
