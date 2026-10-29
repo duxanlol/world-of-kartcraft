@@ -712,15 +712,22 @@ fn main() -> Result<()> {
                     let sky = course_gen::flight::Sky::gather(&mut chain, c.map, &c.points)?;
                     let s = c.points[0];
                     let steep = course_gen::flight::slope(&sky, s[0], s[1], 3.0);
+                    let grid = course_gen::flight::grid_ok(&sky, s, c.points[1]);
+                    let slot = course_gen::flight::grid_slot(s, c.points[1]);
                     println!(
-                        "start slope {steep:.2}{}",
+                        "start slope {steep:.2}{}, grid slot floor {}{}",
                         if steep > course_gen::flight::FLAT {
                             " (too steep)"
                         } else {
                             ""
-                        }
+                        },
+                        sky.floor(slot[0], slot[1])
+                            .map_or("?".into(), |z| format!("{:+.1} yd", z - s[2])),
+                        if grid { "" } else { " (no grid)" }
                     );
-                    if flat_start && steep > course_gen::flight::FLAT {
+                    let bare = course_gen::flight::grid_on_terrain(&sky, s, c.points[1]);
+                    println!("grid on bare terrain: {bare}");
+                    if flat_start && (steep > course_gen::flight::FLAT || !grid || !bare) {
                         // The nearest flat spot the bot flies every ring from.
                         let all = c.rings.len();
                         let mut moved = None;
@@ -737,7 +744,7 @@ fn main() -> Result<()> {
                             }
                         }
                         let p = moved.ok_or_else(|| {
-                            anyhow::anyhow!("{key}: no flat start within 60 yd the bot flies from")
+                            anyhow::anyhow!("{key}: no flat start within 100 yd the bot flies from")
                         })?;
                         println!("start moved to {:.1},{:.1},{:.1}", p[0], p[1], p[2]);
                         c.points[0] = p;

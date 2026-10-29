@@ -23,6 +23,10 @@ pub struct Sky {
     pub water: Option<Collision>,
     /// The open world's trees, lu, if there are any.
     pub props: Option<Collision>,
+    /// All its placed models, lu, if there are any.
+    pub doodads: Option<Collision>,
+    /// Its bare terrain, lu.
+    pub terrain: Option<Collision>,
     pub origin: [f32; 3],
 }
 
@@ -71,10 +75,16 @@ impl Sky {
         let water = (!wet.is_empty()).then(|| Collision::new(wet, CELL));
         let placed = soup::to_lu(&faces.props, mid);
         let props = (!placed.is_empty()).then(|| Collision::new(placed, CELL));
+        let models = soup::to_lu(&faces.doodads, mid);
+        let doodads = (!models.is_empty()).then(|| Collision::new(models, CELL));
+        let land = soup::to_lu(&faces.terrain, mid);
+        let terrain = (!land.is_empty()).then(|| Collision::new(land, CELL));
         Self {
             world,
             water,
             props,
+            doodads,
+            terrain,
             origin,
         }
     }
@@ -117,6 +127,34 @@ impl Sky {
             fly::over_ground(props, top),
         );
         prop.is_finite() && prop <= all + 0.3 * LU_PER_YARD
+    }
+
+    /// Whether what a kart comes down on at a WoW point is a placed model (a rock, a crate, a
+    /// tree): the server's floor has none, so a teleport there lands under it.
+    pub fn on_doodad(&self, x: f32, y: f32) -> bool {
+        let Some(models) = &self.doodads else {
+            return false;
+        };
+        let top = self.lu([x, y, self.origin[2] + DEPTH]);
+        let (all, model) = (
+            fly::over_ground(&self.world, top),
+            fly::over_ground(models, top),
+        );
+        model.is_finite() && model <= all + 0.3 * LU_PER_YARD
+    }
+
+    /// Whether what a kart comes down on at a WoW point is the bare terrain: the floor every
+    /// server knows, where a building's or a model's may be missing from its height data.
+    pub fn on_terrain(&self, x: f32, y: f32) -> bool {
+        let Some(land) = &self.terrain else {
+            return false;
+        };
+        let top = self.lu([x, y, self.origin[2] + DEPTH]);
+        let (all, bare) = (
+            fly::over_ground(&self.world, top),
+            fly::over_ground(land, top),
+        );
+        bare.is_finite() && bare <= all + 0.3 * LU_PER_YARD
     }
 
     /// What a kart comes down on under a WoW point (WoW z): the ground, or the water over it.
@@ -452,6 +490,43 @@ pub fn slope(sky: &Sky, x: f32, y: f32, reach: f32) -> f32 {
 /// climb into the kart, so a time trial's countdown never comes (about 17 degrees).
 pub const FLAT: f32 = 0.3;
 
+/// The first grid slot of a course starting at `start` and running to `next` (WoW x, y), as
+/// the server puts a time trial's racer (`Kartcraft.cpp` `GridSpot`: 4 yd back, 2 yd aside).
+pub fn grid_slot(start: [f32; 3], next: [f32; 3]) -> [f32; 2] {
+    let (dx, dy) = (next[0] - start[0], next[1] - start[1]);
+    let l = dx.hypot(dy).max(1.0);
+    let (dx, dy) = (dx / l, dy / l);
+    [
+        start[0] - dx * 4.0 + dy * 2.0,
+        start[1] - dy * 4.0 - dx * 2.0,
+    ]
+}
+
+/// The steepest a grid slot may be: the kart is put on it and held, so it need not stand.
+pub const GRID_FLAT: f32 = 0.5;
+
+/// Whether a time trial's teleport lands its racer on the grid of a course starting at `start`
+/// toward `next`: the start and the slot on the land or a building the server knows (no placed
+/// model: its floor has none, and a teleport lands under one), the slot no steeper than
+/// [`GRID_FLAT`] and its floor within 2 yd of the start's (the teleport looks for it from 12 yd
+/// over the start, `DUNGEON_LOOK_UP`).
+pub fn grid_ok(sky: &Sky, start: [f32; 3], next: [f32; 3]) -> bool {
+    let [x, y] = grid_slot(start, next);
+    let Some(z) = sky.floor(x, y) else {
+        return false;
+    };
+    slope(sky, x, y, 3.0) <= GRID_FLAT
+        && (z - start[2]).abs() <= 2.0
+        && !sky.on_doodad(x, y)
+        && !sky.on_doodad(start[0], start[1])
+}
+
+/// As [`grid_ok`], and the start and the slot on the bare terrain, the floor every server has.
+pub fn grid_on_terrain(sky: &Sky, start: [f32; 3], next: [f32; 3]) -> bool {
+    let [x, y] = grid_slot(start, next);
+    grid_ok(sky, start, next) && sky.on_terrain(x, y) && sky.on_terrain(start[0], start[1])
+}
+
 /// Flat starts for `c` near its own, the nearest first: spots within 60 yards whose floor is no
 /// steeper than [`FLAT`] for three yards round it, on land, from which its first ring lies no
 /// further than from the start now, by more than 15 yards; at most one a step of 2 yards out.
@@ -463,22 +538,27 @@ pub fn flat_starts(sky: &Sky, c: &FlightCourse) -> Vec<[f32; 3]> {
     let far = (ring[0] - s[0]).hypot(ring[1] - s[1]);
     let mut out = Vec::new();
     let mut r = 0.0;
-    while r <= 60.0 {
+    while r <= 100.0 {
         let n = if r == 0.0 { 1 } else { (r * 1.5) as usize };
         for k in 0..n {
             let a = k as f32 * std::f32::consts::TAU / n as f32;
             let (x, y) = (s[0] + a.cos() * r, s[1] + a.sin() * r);
-            if (ring[0] - x).hypot(ring[1] - y) > far + 15.0 || slope(sky, x, y, 3.0) > FLAT {
+            if (ring[0] - x).hypot(ring[1] - y) > far + 40.0 || slope(sky, x, y, 3.0) > FLAT {
                 continue;
             }
             let Some(z) = sky.floor(x, y) else { continue };
             if sky.on_prop(x, y) || sky.ground(x, y).is_none_or(|g| z > g + 0.5) {
                 continue;
             }
+            if !grid_ok(sky, [x, y, z], ring) {
+                continue;
+            }
             out.push([x, y, z]);
         }
         r += 2.0;
     }
+    // The bare terrain's first, nearest first among each: every server has its floor.
+    out.sort_by_key(|p| !grid_on_terrain(sky, *p, ring));
     out
 }
 

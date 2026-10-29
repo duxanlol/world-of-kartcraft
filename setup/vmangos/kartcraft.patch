@@ -9948,7 +9948,7 @@ index 0000000..c72d18e
 +    };
 diff --git a/src/game/KartcraftCourses.h b/src/game/KartcraftCourses.h
 new file mode 100644
-index 0000000..bbb8bd5
+index 0000000..cfe2dbc
 --- /dev/null
 +++ b/src/game/KartcraftCourses.h
 @@ -0,0 +1,2417 @@
@@ -12199,34 +12199,6 @@ index 0000000..bbb8bd5
 +            12.f, 12.f },
 +          {},
 +          { -7481.7f, -1237.6f }, {}, 0.f, 1.f, true },
-+        // Azshara Ridge Run (Azshara): flight course found by the flight scout (course-gen scout
-+        // --runs): a glide run of 17 rings low over the ground and between higher ground, 1438 yd,
-+        // the bot's 33.1 s.
-+        { "azs-ridge", "Azshara Ridge Run", "", 1, 0,
-+          { { 4108.8f, -4901.f }, { 4061.9f, -4878.2f }, { 4059.4f, -4790.8f }, { 3997.f, -4734.7f },
-+            { 3955.4f, -4668.4f }, { 3915.9f, -4594.4f }, { 3836.2f, -4620.4f }, { 3848.9f, -4706.9f },
-+            { 3895.4f, -4782.5f }, { 3945.5f, -4853.5f }, { 3982.8f, -4933.4f }, { 4004.8f, -5015.6f },
-+            { 3930.3f, -5022.1f }, { 3937.7f, -4937.4f }, { 3894.8f, -4876.1f }, { 3807.4f, -4873.6f },
-+            { 3737.7f, -4824.8f }, { 3653.4f, -4796.8f } },
-+          { 25.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f,
-+            12.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f,
-+            12.f, 12.f },
-+          {},
-+          { 4104.4f, -4910.f }, {}, 0.f, 1.f, true },
-+        // Feralas Glide (Feralas): flight course found by the flight scout (course-gen scout
-+        // --runs): a glide run of 16 rings low over the ground and between higher ground, 1365 yd,
-+        // the bot's 33.6 s.
-+        { "fer-glide", "Feralas Glide", "", 1, 0,
-+          { { -3897.f, -266.5f }, { -3869.4f, -182.8f }, { -3828.8f, -109.9f }, { -3800.1f, -27.3f },
-+            { -3767.1f, 52.5f }, { -3801.6f, 118.9f }, { -3884.1f, 103.5f }, { -3903.3f, 16.9f },
-+            { -3917.4f, -70.7f }, { -3989.3f, -119.7f }, { -4052.f, -180.6f }, { -4119.5f, -232.4f },
-+            { -4160.1f, -305.3f }, { -4099.4f, -367.5f }, { -4070.4f, -442.6f }, { -4150.2f, -478.3f },
-+            { -4232.3f, -449.6f } },
-+          { 25.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f,
-+            12.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f,
-+            12.f },
-+          {},
-+          { -3906.5f, -263.4f }, {}, 0.f, 1.f, true },
 +        // Stonetalon Peak Glide (Stonetalon Mountains): flight course found by the flight scout
 +        // (course-gen scout --runs): a glide run of 17 rings low over the ground and between higher
 +        // ground, 1469 yd, the bot's 34.2 s.
@@ -12273,7 +12245,7 @@ index 0000000..bbb8bd5
 +        // gen scout --runs): a glide run of 16 rings low over the ground and between higher ground,
 +        // 1382 yd, the bot's 31.5 s.
 +        { "rr-ridge", "Redridge Ridge Run", "", 0, 0,
-+          { { -8734.9f, -2057.1f }, { -8800.2f, -1999.f }, { -8869.9f, -1950.2f }, { -8957.3f, -1947.7f },
++          { { -8735.9f, -2055.4f }, { -8800.2f, -1999.f }, { -8869.9f, -1950.2f }, { -8957.3f, -1947.7f },
 +            { -9045.2f, -1960.6f }, { -9127.3f, -1938.6f }, { -9208.6f, -1906.4f }, { -9282.6f, -1860.6f },
 +            { -9370.f, -1858.1f }, { -9456.5f, -1845.4f }, { -9533.4f, -1803.8f }, { -9555.4f, -1721.7f },
 +            { -9583.4f, -1637.4f }, { -9655.7f, -1618.f }, { -9738.7f, -1645.6f }, { -9819.f, -1683.f },
@@ -12282,7 +12254,7 @@ index 0000000..bbb8bd5
 +            12.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f,
 +            12.f },
 +          {},
-+          { -8741.5f, -2064.6f }, {}, 0.f, 1.f, true },
++          { -8742.5f, -2062.9f }, {}, 0.f, 1.f, true },
 +        // Stonetalon Steps (Stonetalon Mountains): flight course found by the flight scout (course-
 +        // gen scout): 8 rings low over the tops it hops, 925 yd, the bot's 32.3 s.
 +        { "st-steps", "Stonetalon Steps", "", 1, 0,
@@ -12291,30 +12263,14 @@ index 0000000..bbb8bd5
 +          { 25.f, 10.f, 10.f, 10.f, 10.f, 10.f, 10.f, 10.f },
 +          {},
 +          { 1228.6f, 1109.6f }, {}, 0.f, 1.f, true },
-+        // Badlands Mesa Hop (Badlands): flight course found by the flight scout (course-gen scout):
-+        // 7 rings low over the tops it hops, 785 yd, the bot's 18.8 s.
-+        { "bad-mesas", "Badlands Mesa Hop", "", 0, 0,
-+          { { -6066.5f, -2302.4f }, { -6234.8f, -2414.6f }, { -6375.3f, -2344.6f }, { -6476.f, -2362.f },
-+            { -6514.f, -2482.f }, { -6578.3f, -2525.5f }, { -6617.7f, -2598.8f }, { -6642.5f, -2621.5f } },
-+          { 25.f, 10.f, 10.f, 10.f, 10.f, 10.f, 10.f, 10.f },
-+          {},
-+          { -6061.f, -2310.7f }, {}, 0.f, 1.f, true },
 +        // Searing Gorge Hop (Searing Gorge): flight course found by the flight scout (course-gen
 +        // scout): 7 rings low over the tops it hops, 803 yd, the bot's 19.3 s.
 +        { "sg-hop", "Searing Gorge Hop", "", 0, 0,
-+          { { -6305.8f, -1623.9f }, { -6416.4f, -1755.4f }, { -6539.1f, -1742.f }, { -6577.1f, -1661.8f },
++          { { -6343.8f, -1636.3f }, { -6416.4f, -1755.4f }, { -6539.1f, -1742.f }, { -6577.1f, -1661.8f },
 +            { -6622.3f, -1551.7f }, { -6695.4f, -1510.6f }, { -6862.f, -1500.5f }, { -6905.f, -1492.5f } },
 +          { 25.f, 10.f, 10.f, 10.f, 10.f, 10.f, 10.f, 10.f },
 +          {},
-+          { -6298.1f, -1630.3f }, {}, 0.f, 1.f, true },
-+        // Dun Morogh Ledges (Dun Morogh): flight course found by the flight scout (course-gen
-+        // scout): 7 rings low over the tops it hops, 569 yd, the bot's 15.5 s.
-+        { "dm-ledges", "Dun Morogh Ledges", "", 0, 0,
-+          { { -4947.4f, -756.5f }, { -5028.f, -865.4f }, { -5087.5f, -843.4f }, { -5138.4f, -874.8f },
-+            { -5129.9f, -919.6f }, { -5127.3f, -949.9f }, { -5162.8f, -1020.4f }, { -5201.3f, -1130.9f } },
-+          { 25.f, 10.f, 10.f, 10.f, 10.f, 10.f, 10.f, 10.f },
-+          {},
-+          { -4939.4f, -762.4f }, {}, 0.f, 1.f, true },
++          { -6335.3f, -1641.5f }, {}, 0.f, 1.f, true },
 +        // Winterspring Steps (Winterspring): flight course found by the flight scout (course-gen
 +        // scout): 6 rings low over the tops it hops, 643 yd, the bot's 15.1 s.
 +        { "ws-steps", "Winterspring Steps", "", 1, 0,
@@ -12336,19 +12292,19 @@ index 0000000..bbb8bd5
 +        // Booty Bay Boardwalk (Stranglethorn Vale): flight course found by the flight scout
 +        // (course-gen scout): 6 rings low over the tops it hops, 280 yd, the bot's 11.9 s.
 +        { "bb-boardwalk", "Booty Bay Boardwalk", "", 0, 0,
-+          { { -14275.2f, 441.3f }, { -14336.2f, 422.3f }, { -14362.2f, 369.9f }, { -14380.7f, 367.9f },
++          { { -14320.f, 451.7f }, { -14336.2f, 422.3f }, { -14362.2f, 369.9f }, { -14380.7f, 367.9f },
 +            { -14438.5f, 429.2f }, { -14468.1f, 445.6f }, { -14478.5f, 453.3f } },
 +          { 25.f, 10.f, 10.f, 10.f, 10.f, 10.f, 10.f },
 +          {},
-+          { -14272.2f, 431.8f }, {}, 0.f, 1.f, true },
++          { -14311.2f, 446.9f }, {}, 0.f, 1.f, true },
 +        // Darnassus Terraces (Darnassus): flight course found by the flight scout (course-gen
 +        // scout): 4 rings low over the tops it hops, 305 yd, the bot's 8.3 s.
 +        { "darn-terraces", "Darnassus Terraces", "", 1, 0,
-+          { { 10249.9f, 2214.f }, { 10177.8f, 2253.6f }, { 10089.5f, 2251.8f }, { 10016.f, 2230.f },
++          { { 10210.6f, 2186.5f }, { 10177.8f, 2253.6f }, { 10089.5f, 2251.8f }, { 10016.f, 2230.f },
 +            { 9961.4f, 2249.9f } },
 +          { 25.f, 10.f, 10.f, 10.f, 10.f },
 +          {},
-+          { 10245.1f, 2205.2f }, {}, 0.f, 1.f, true },
++          { 10201.6f, 2182.1f }, {}, 0.f, 1.f, true },
 +        // Ironforge Gate Hop (Dun Morogh): flight course found by the flight scout (course-gen
 +        // scout): 5 rings low over the tops it hops, 228 yd, the bot's 6.4 s.
 +        { "if-gates", "Ironforge Gate Hop", "", 0, 0,
@@ -12357,6 +12313,50 @@ index 0000000..bbb8bd5
 +          { 25.f, 10.f, 10.f, 10.f, 10.f, 10.f },
 +          {},
 +          { -5176.2f, -866.9f }, {}, 0.f, 1.f, true },
++        // Azshara Ridge Run (Azshara): flight course found by the flight scout (course-gen scout
++        // --runs): a glide run of 17 rings low over the ground and between higher ground, 1461 yd,
++        // the bot's 33.8 s.
++        { "azs-ridge", "Azshara Ridge Run", "", 1, 0,
++          { { 3976.6f, -4567.2f }, { 4006.8f, -4650.1f }, { 4027.3f, -4736.5f }, { 4062.f, -4816.7f },
++            { 4039.3f, -4893.9f }, { 3957.6f, -4874.9f }, { 3952.5f, -4787.6f }, { 3937.1f, -4700.3f },
++            { 3889.4f, -4635.6f }, { 3816.4f, -4683.6f }, { 3803.4f, -4757.3f }, { 3871.3f, -4814.3f },
++            { 3923.5f, -4884.4f }, { 3972.3f, -4958.6f }, { 4032.3f, -5022.2f }, { 4102.f, -5074.2f },
++            { 4127.1f, -5158.f }, { 4097.5f, -5239.2f } },
++          { 25.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f,
++            12.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f,
++            12.f, 12.f },
++          {},
++          { 3986.f, -4563.8f }, {}, 0.f, 1.f, true },
++        // Feralas Glide (Feralas): flight course found by the flight scout (course-gen scout
++        // --runs): a glide run of 16 rings low over the ground and between higher ground, 1368 yd,
++        // the bot's 33.8 s.
++        { "fer-glide", "Feralas Glide", "", 1, 0,
++          { { -3767.9f, -80.1f }, { -3816.7f, -10.4f }, { -3900.5f, -7.6f }, { -3907.9f, -92.4f },
++            { -3905.5f, -179.8f }, { -3951.3f, -254.2f }, { -3987.3f, -331.3f }, { -4076.f, -333.8f },
++            { -4153.f, -292.3f }, { -4225.6f, -247.8f }, { -4299.6f, -202.f }, { -4365.9f, -160.4f },
++            { -4381.7f, -239.3f }, { -4316.4f, -297.4f }, { -4258.3f, -362.7f }, { -4204.4f, -431.1f },
++            { -4134.8f, -479.8f } },
++          { 25.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f,
++            12.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f, 12.f,
++            12.f },
++          {},
++          { -3776.1f, -85.8f }, {}, 0.f, 1.f, true },
++        // Badlands Mesa Hop (Badlands): flight course found by the flight scout (course-gen scout):
++        // 5 rings low over the tops it hops, 421 yd, the bot's 9.9 s.
++        { "bad-mesas", "Badlands Mesa Hop", "", 0, 0,
++          { { -6377.3f, -2341.1f }, { -6476.f, -2362.f }, { -6514.f, -2482.f }, { -6578.3f, -2525.5f },
++            { -6617.7f, -2598.8f }, { -6642.5f, -2621.5f } },
++          { 25.f, 10.f, 10.f, 10.f, 10.f, 10.f },
++          {},
++          { -6375.2f, -2350.9f }, {}, 0.f, 1.f, true },
++        // Dun Morogh Ledges (Dun Morogh): flight course found by the flight scout (course-gen
++        // scout): 4 rings low over the tops it hops, 454 yd, the bot's 10.7 s.
++        { "dm-ledges", "Dun Morogh Ledges", "", 0, 0,
++          { { -5191.1f, -1224.f }, { -5162.8f, -1020.4f }, { -5249.5f, -889.8f }, { -5252.5f, -848.2f },
++            { -5248.6f, -798.6f } },
++          { 25.f, 10.f, 10.f, 10.f, 10.f },
++          {},
++          { -5201.f, -1222.6f }, {}, 0.f, 1.f, true },
 +    };
 +
 +    static std::vector<Leap> const LEAPS = {

@@ -104,6 +104,11 @@ pub struct Faces {
     /// The open world's trees among `solid` (a model named for one: tree, palm, bush, canopy):
     /// solid, but no ground a course is laid on.
     pub props: Vec<[Vec3; 3]>,
+    /// Every placed model of the open world among `solid` (trees, rocks, crates): surfaces the
+    /// server's own floor (its maps and buildings) knows nothing of.
+    pub doodads: Vec<[Vec3; 3]>,
+    /// The bare terrain among `solid`: the one floor every server has.
+    pub terrain: Vec<[Vec3; 3]>,
 }
 
 /// The faces in `region` on `map`.
@@ -136,11 +141,15 @@ pub fn gather_world(chain: &mut Chain, map: u32, region: Region) -> Result<Faces
     };
 
     // Terrain and the impassable fences.
+    let mut terrain: Vec<[Vec3; 3]> = Vec::new();
     for (_, tile) in &tiles {
         for chunk in &tile.chunks {
             for c in chunk.indices.as_chunks::<3>().0 {
                 let v = |i: u32| chunk.positions.get(i as usize).copied().map(wow_to_bevy);
                 if let (Some(a), Some(b), Some(d)) = (v(c[0]), v(c[1]), v(c[2])) {
+                    if region.overlaps(&[a, b, d]) {
+                        terrain.push([a, b, d]);
+                    }
                     keep([a, b, d]);
                 }
             }
@@ -192,6 +201,7 @@ pub fn gather_world(chain: &mut Chain, map: u32, region: Region) -> Result<Faces
         }
     };
     let mut props: Vec<[Vec3; 3]> = Vec::new();
+    let mut doodads: Vec<[Vec3; 3]> = Vec::new();
     let mut seen = HashSet::new();
     for (_, tile) in &tiles {
         for d in &tile.doodads {
@@ -211,8 +221,11 @@ pub fn gather_world(chain: &mut Chain, map: u32, region: Region) -> Result<Faces
                 let model = d.model.to_ascii_lowercase();
                 let tree = TREES.iter().any(|w| model.contains(w));
                 place(&mesh, at, &mut |t| {
-                    if tree && region.overlaps(&t) {
-                        props.push(t);
+                    if region.overlaps(&t) {
+                        if tree {
+                            props.push(t);
+                        }
+                        doodads.push(t);
                     }
                     keep(t);
                 });
@@ -304,6 +317,8 @@ pub fn gather_world(chain: &mut Chain, map: u32, region: Region) -> Result<Faces
         solid: out,
         liquid,
         props,
+        doodads,
+        terrain,
     })
 }
 

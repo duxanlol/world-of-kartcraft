@@ -497,6 +497,10 @@ pub fn scout(
         } else {
             start
         };
+        // Its grid on the bare terrain, the floor every server has.
+        if !crate::flight::grid_on_terrain(&sky, start, ring_over(&tops[c[1]], o)) {
+            continue;
+        }
         let mut points = vec![start];
         points.extend(c[1..].iter().map(|&i| ring_over(&tops[i], o)));
         // A pad on each top a hop leaves past the first, at its middle, pointing on.
@@ -804,7 +808,11 @@ pub fn scout_runs(
     tops.sort_by(|a, b| b.z.total_cmp(&a.z));
     eprintln!("{} tops", tops.len());
     let mut found: Vec<Found> = Vec::new();
-    for t in tops.iter().take(keep * 3) {
+    for t in tops.iter().take(keep * 8) {
+        // A start a time trial lands on: flat, with its grid slot on the server's floor.
+        if crate::flight::slope(&sky, t.x, t.y, 3.0) > crate::flight::FLAT {
+            continue;
+        }
         if found
             .iter()
             .any(|f| (f.points[0][0] - t.x).hypot(f.points[0][1] - t.y) < 60.0)
@@ -818,6 +826,11 @@ pub fn scout_runs(
         // Rings along the path past the run-up, every `every` yards, the last at its end.
         let per = (r.every / r.step).round().max(1.0) as usize;
         let first = (r.runup / r.step).ceil() as usize + per / 2;
+        if best.pts.len() <= first
+            || !crate::flight::grid_on_terrain(&sky, [t.x, t.y, t.z], best.pts[first])
+        {
+            continue;
+        }
         let mut points = vec![[t.x, t.y, t.z]];
         let mut k = first;
         while k < best.pts.len() {
