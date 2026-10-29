@@ -2444,4 +2444,7 @@
         // below it under 170 yd for 1290 yd north-east (the heightmap's); the Thunder Bluff Skyway
         // starts beside it.
         { "tb-leap", "Thunder Bluff Leap", 1, -1588.f, 417.f, 5.498f, { -1600.f, 435.f } },
+        // Winterspring Leap (Winterspring): off the summit the Winterspring Downhill starts from,
+        // the way its first ring lies.
+        { "ws-leap", "Winterspring Leap", 1, 6203.3f, -5251.1f, 0.233f, { 6201.f, -5241.4f } },
     };

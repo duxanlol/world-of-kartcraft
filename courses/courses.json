@@ -6127,6 +6127,15 @@
       "note": "off the bare mountain west of Thunder Bluff, over its spires and the Mulgore plains: 211 yd up, 57 yd of plateau to the edge, and the ground below it under 170 yd for 1290 yd north-east (the heightmap's); the Thunder Bluff Skyway starts beside it.",
       "launch": {"o":5.498,"x":-1588,"y":417,"z":211.6},
       "marshal": {"x":-1600,"y":435}
+    },
+    {
+      "key": "ws-leap",
+      "name": "Winterspring Leap",
+      "zone": "Winterspring",
+      "map": 1,
+      "note": "off the summit the Winterspring Downhill starts from, the way its first ring lies.",
+      "launch": {"o":0.233,"x":6203.3,"y":-5251.1,"z":974.7},
+      "marshal": {"x":6201,"y":-5241.4}
     }
   ]
 }
