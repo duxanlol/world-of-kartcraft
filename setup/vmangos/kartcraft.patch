@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..89abfdf
+index 0000000..6933035
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,8952 @@
+@@ -0,0 +1,8956 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -7201,6 +7201,9 @@ index 0000000..89abfdf
 +                return true;
 +            Origin from = { player->GetMapId(), player->GetPositionX(), player->GetPositionY(),
 +                player->GetPositionZ(), player->GetOrientation(), now };
++            // On foot: into the kart first, as a Race Marshal's time trial puts them (the
++            // countdown waits for the kart on the grid, and would wait for ever).
++            SummonKart(player);
 +            uint32 raceId = OpenTimeTrial(player, *course, instance, now);
 +            if (TeleportToGrid(player, *course, 0, instance))
 +                s_origins[player->GetGUIDLow()] = from;
@@ -7247,6 +7250,7 @@ index 0000000..89abfdf
 +            uint32 const instance = TrialCopy(player, *course);
 +            if (PartyCourse(*course) && !instance)
 +                return true;
++            SummonKart(player);
 +            uint32 raceId = OpenTimeTrial(player, *course, instance, now);
 +            TeleportToGrid(player, *course, 0, instance);
 +            // The countdown waits for them on the grid, however long the teleport takes.

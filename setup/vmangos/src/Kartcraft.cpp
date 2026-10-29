@@ -7088,6 +7088,9 @@ namespace Kartcraft
                 return true;
             Origin from = { player->GetMapId(), player->GetPositionX(), player->GetPositionY(),
                 player->GetPositionZ(), player->GetOrientation(), now };
+            // On foot: into the kart first, as a Race Marshal's time trial puts them (the
+            // countdown waits for the kart on the grid, and would wait for ever).
+            SummonKart(player);
             uint32 raceId = OpenTimeTrial(player, *course, instance, now);
             if (TeleportToGrid(player, *course, 0, instance))
                 s_origins[player->GetGUIDLow()] = from;
@@ -7134,6 +7137,7 @@ namespace Kartcraft
             uint32 const instance = TrialCopy(player, *course);
             if (PartyCourse(*course) && !instance)
                 return true;
+            SummonKart(player);
             uint32 raceId = OpenTimeTrial(player, *course, instance, now);
             TeleportToGrid(player, *course, 0, instance);
             // The countdown waits for them on the grid, however long the teleport takes.
