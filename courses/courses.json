@@ -5569,28 +5569,6 @@
       ]
     },
     {
-      "key": "sw-spires",
-      "name": "Stormwind Spires",
-      "zone": "Stormwind City",
-      "map": 0,
-      "laps": 0,
-      "flight": true,
-      "note": "flight course found by the flight scout (course-gen scout --runs): a glide run of 9 rings low over the ground and between higher ground, 749 yd, the bot's 17.4 s.",
-      "marshal": {"o":2.255,"x":-8866.8,"y":306.4,"z":229.4},
-      "checkpoints": [
-        { "gate": 25, "x": -8873.1, "y": 314.2, "z": 233.1 },
-        { "gate": 12.0, "ring": [0,0], "x": -8942.3, "y": 257.8, "z": 206.8 },
-        { "gate": 12.0, "ring": [0,0], "x": -9008.6, "y": 292.3, "z": 190.4 },
-        { "gate": 12.0, "ring": [0,0], "x": -8949.9, "y": 352.3, "z": 174.0 },
-        { "gate": 12.0, "ring": [0,0], "x": -8900.9, "y": 424.1, "z": 157.7 },
-        { "gate": 12.0, "ring": [0,0], "x": -8918.2, "y": 505.2, "z": 141.3 },
-        { "gate": 12.0, "ring": [0,0], "x": -8902.7, "y": 584.1, "z": 125.0 },
-        { "gate": 12.0, "ring": [0,0], "x": -8905.9, "y": 658.8, "z": 108.6 },
-        { "gate": 12.0, "ring": [0,0], "x": -8984.6, "y": 699.8, "z": 92.2 },
-        { "gate": 12.0, "ring": [0,0], "x": -9050.7, "y": 757.0, "z": 75.9 }
-      ]
-    },
-    {
       "key": "if-summit",
       "name": "Ironforge Summit Run",
       "zone": "Dun Morogh",
@@ -5598,9 +5576,9 @@
       "laps": 0,
       "flight": true,
       "note": "flight course found by the flight scout (course-gen scout --runs): a glide run of 17 rings low over the ground and between higher ground, 1469 yd, the bot's 33.3 s.",
-      "marshal": {"o":4.538,"x":-4777.3,"y":-849.2,"z":803.6},
+      "marshal": {"o":4.47,"x":-4775.6,"y":-843.4,"z":800.9},
       "checkpoints": [
-        { "gate": 25, "x": -4779.0, "y": -859.0, "z": 800.5 },
+        { "gate": 25, "x": -4778.0, "y": -853.1, "z": 804.3 },
         { "gate": 12.0, "ring": [0,0], "x": -4691.8, "y": -874.4, "z": 774.1 },
         { "gate": 12.0, "ring": [0,0], "x": -4637.1, "y": -939.6, "z": 757.7 },
         { "gate": 12.0, "ring": [0,0], "x": -4611.7, "y": -1024.7, "z": 741.4 },
@@ -5621,35 +5599,6 @@
       ]
     },
     {
-      "key": "org-canyons",
-      "name": "Orgrimmar Canyons",
-      "zone": "Orgrimmar",
-      "map": 1,
-      "laps": 0,
-      "flight": true,
-      "note": "flight course found by the flight scout (course-gen scout --runs): a glide run of 16 rings low over the ground and between higher ground, 1304 yd, the bot's 33.6 s.",
-      "marshal": {"o":4.649,"x":1781.4,"y":-4810.5,"z":313.6},
-      "checkpoints": [
-        { "gate": 25, "x": 1780.8, "y": -4820.5, "z": 315.0 },
-        { "gate": 12.0, "ring": [0,0], "x": 1861.1, "y": -4825.6, "z": 288.7 },
-        { "gate": 12.0, "ring": [0,0], "x": 1835.5, "y": -4755.3, "z": 272.3 },
-        { "gate": 12.0, "ring": [0,0], "x": 1750.8, "y": -4775.2, "z": 255.9 },
-        { "gate": 12.0, "ring": [0,0], "x": 1680.2, "y": -4816.0, "z": 239.6 },
-        { "gate": 12.0, "ring": [0,0], "x": 1606.5, "y": -4803.0, "z": 223.2 },
-        { "gate": 12.0, "ring": [0,0], "x": 1596.4, "y": -4716.1, "z": 206.8 },
-        { "gate": 12.0, "ring": [0,0], "x": 1548.3, "y": -4643.1, "z": 190.5 },
-        { "gate": 12.0, "ring": [0,0], "x": 1539.5, "y": -4563.2, "z": 174.1 },
-        { "gate": 12.0, "ring": [0,0], "x": 1623.2, "y": -4558.6, "z": 157.8 },
-        { "gate": 12.0, "ring": [0,0], "x": 1694.3, "y": -4605.7, "z": 141.4 },
-        { "gate": 12.0, "ring": [0,0], "x": 1768.0, "y": -4573.4, "z": 125.0 },
-        { "gate": 12.0, "ring": [0,0], "x": 1719.9, "y": -4516.1, "z": 108.7 },
-        { "gate": 12.0, "ring": [0,0], "x": 1633.5, "y": -4516.1, "z": 92.3 },
-        { "gate": 12.0, "ring": [0,0], "x": 1585.4, "y": -4458.8, "z": 75.9 },
-        { "gate": 12.0, "ring": [0,0], "x": 1643.6, "y": -4403.3, "z": 59.6 },
-        { "gate": 12.0, "ring": [0,0], "x": 1720.8, "y": -4370.4, "z": 43.2 }
-      ]
-    },
-    {
       "key": "tn-slalom",
       "name": "Needles Slalom",
       "zone": "Thousand Needles",
@@ -5657,9 +5606,9 @@
       "laps": 0,
       "flight": true,
       "note": "flight course found by the flight scout (course-gen scout --runs): a glide run of 11 rings low over the ground and between higher ground, 923 yd, the bot's 22.7 s.",
-      "marshal": {"o":0.85,"x":-4935.3,"y":-2406.5,"z":140.6},
+      "marshal": {"o":0.896,"x":-4928.9,"y":-2406.8,"z":138.1},
       "checkpoints": [
-        { "gate": 25, "x": -4928.7, "y": -2399.0, "z": 140.6 },
+        { "gate": 25, "x": -4922.7, "y": -2399.0, "z": 141.8 },
         { "gate": 12.0, "ring": [0,0], "x": -4989.1, "y": -2345.9, "z": 114.2 },
         { "gate": 12.0, "ring": [0,0], "x": -4925.2, "y": -2289.4, "z": 97.9 },
         { "gate": 12.0, "ring": [0,0], "x": -4944.6, "y": -2217.1, "z": 81.5 },
@@ -5741,9 +5690,9 @@
       "laps": 0,
       "flight": true,
       "note": "flight course found by the flight scout (course-gen scout --runs): a glide run of 17 rings low over the ground and between higher ground, 1438 yd, the bot's 33.1 s.",
-      "marshal": {"o":0.96,"x":4128.8,"y":-4937.2,"z":416.9},
+      "marshal": {"o":1.118,"x":4104.4,"y":-4910,"z":420.3},
       "checkpoints": [
-        { "gate": 25, "x": 4134.5, "y": -4929.0, "z": 416.9 },
+        { "gate": 25, "x": 4108.8, "y": -4901.0, "z": 420.3 },
         { "gate": 12.0, "ring": [0,0], "x": 4061.9, "y": -4878.2, "z": 390.5 },
         { "gate": 12.0, "ring": [0,0], "x": 4059.4, "y": -4790.8, "z": 374.1 },
         { "gate": 12.0, "ring": [0,0], "x": 3997.0, "y": -4734.7, "z": 357.8 },
@@ -5771,9 +5720,9 @@
       "laps": 0,
       "flight": true,
       "note": "flight course found by the flight scout (course-gen scout --runs): a glide run of 16 rings low over the ground and between higher ground, 1365 yd, the bot's 33.6 s.",
-      "marshal": {"o":6.008,"x":-3902.6,"y":-263.8,"z":309.4},
+      "marshal": {"o":5.965,"x":-3906.5,"y":-263.4,"z":313.1},
       "checkpoints": [
-        { "gate": 25, "x": -3893.0, "y": -266.5, "z": 312.5 },
+        { "gate": 25, "x": -3897.0, "y": -266.5, "z": 313.1 },
         { "gate": 12.0, "ring": [0,0], "x": -3869.4, "y": -182.8, "z": 286.1 },
         { "gate": 12.0, "ring": [0,0], "x": -3828.8, "y": -109.9, "z": 269.8 },
         { "gate": 12.0, "ring": [0,0], "x": -3800.1, "y": -27.3, "z": 253.4 },
@@ -5800,9 +5749,9 @@
       "laps": 0,
       "flight": true,
       "note": "flight course found by the flight scout (course-gen scout --runs): a glide run of 17 rings low over the ground and between higher ground, 1469 yd, the bot's 34.2 s.",
-      "marshal": {"o":2.546,"x":2286.7,"y":1768.5,"z":479},
+      "marshal": {"o":2.542,"x":2284.7,"y":1765,"z":479.4},
       "checkpoints": [
-        { "gate": 25, "x": 2278.4, "y": 1774.1, "z": 479.0 },
+        { "gate": 25, "x": 2276.4, "y": 1770.6, "z": 479.4 },
         { "gate": 12.0, "ring": [0,0], "x": 2231.6, "y": 1705.1, "z": 452.7 },
         { "gate": 12.0, "ring": [0,0], "x": 2200.8, "y": 1623.7, "z": 436.3 },
         { "gate": 12.0, "ring": [0,0], "x": 2156.0, "y": 1548.7, "z": 419.9 },
@@ -5860,9 +5809,9 @@
       "laps": 0,
       "flight": true,
       "note": "flight course found by the flight scout (course-gen scout --runs): a glide run of 17 rings low over the ground and between higher ground, 1467 yd, the bot's 33.3 s.",
-      "marshal": {"o":5.614,"x":-4008.1,"y":-3506.8,"z":451.7},
+      "marshal": {"o":5.682,"x":-4003.9,"y":-3511.2,"z":452.6},
       "checkpoints": [
-        { "gate": 25, "x": -4000.3, "y": -3513.0, "z": 453.9 },
+        { "gate": 25, "x": -3995.7, "y": -3516.9, "z": 455.9 },
         { "gate": 12.0, "ring": [0,0], "x": -3945.2, "y": -3443.3, "z": 427.5 },
         { "gate": 12.0, "ring": [0,0], "x": -3879.8, "y": -3385.2, "z": 408.2 },
         { "gate": 12.0, "ring": [0,0], "x": -3795.1, "y": -3392.7, "z": 394.8 },
@@ -5919,9 +5868,9 @@
       "laps": 0,
       "flight": true,
       "note": "flight course found by the flight scout (course-gen scout): 8 rings low over the tops it hops, 925 yd, the bot's 32.3 s.",
-      "marshal": {"o":5.076,"x":1222.9,"y":1109.7,"z":329.8},
+      "marshal": {"o":5.108,"x":1228.6,"y":1109.6,"z":329},
       "checkpoints": [
-        { "gate": 25, "x": 1226.5, "y": 1100.4, "z": 329.8 },
+        { "gate": 25, "x": 1232.5, "y": 1100.4, "z": 330.6 },
         { "gate": 10.0, "ring": [0,0], "x": 1293.6, "y": 1125.9, "z": 310.8 },
         { "gate": 10.0, "ring": [0,0], "x": 1477.4, "y": 1167.0, "z": 269.8 },
         { "gate": 10.0, "ring": [0,0], "x": 1586.0, "y": 1304.5, "z": 225.5 },
@@ -5939,9 +5888,9 @@
       "laps": 0,
       "flight": true,
       "note": "flight course found by the flight scout (course-gen scout): 7 rings low over the tops it hops, 785 yd, the bot's 18.8 s.",
-      "marshal": {"o":2.148,"x":-6057,"y":-2310.8,"z":529.4},
+      "marshal": {"o":2.159,"x":-6061,"y":-2310.7,"z":530.8},
       "checkpoints": [
-        { "gate": 25, "x": -6062.5, "y": -2302.4, "z": 531.0 },
+        { "gate": 25, "x": -6066.5, "y": -2302.4, "z": 532.0 },
         { "gate": 10.0, "ring": [0,0], "x": -6234.8, "y": -2414.6, "z": 449.3 },
         { "gate": 10.0, "ring": [0,0], "x": -6375.3, "y": -2344.6, "z": 411.8 },
         { "gate": 10.0, "ring": [0,0], "x": -6476.0, "y": -2362.0, "z": 368.7 },
@@ -5959,9 +5908,9 @@
       "laps": 0,
       "flight": true,
       "note": "flight course found by the flight scout (course-gen scout): 7 rings low over the tops it hops, 803 yd, the bot's 19.3 s.",
-      "marshal": {"o":2.426,"x":-6292.7,"y":-1628.4,"z":435.7},
+      "marshal": {"o":2.442,"x":-6298.1,"y":-1630.3,"z":437.6},
       "checkpoints": [
-        { "gate": 25, "x": -6300.2, "y": -1621.8, "z": 437.8 },
+        { "gate": 25, "x": -6305.8, "y": -1623.9, "z": 439.3 },
         { "gate": 10.0, "ring": [0,0], "x": -6416.4, "y": -1755.4, "z": 387.1 },
         { "gate": 10.0, "ring": [0,0], "x": -6539.1, "y": -1742.0, "z": 342 },
         { "gate": 10.0, "ring": [0,0], "x": -6577.1, "y": -1661.8, "z": 298.7 },
@@ -5979,9 +5928,9 @@
       "laps": 0,
       "flight": true,
       "note": "flight course found by the flight scout (course-gen scout): 7 rings low over the tops it hops, 569 yd, the bot's 15.5 s.",
-      "marshal": {"o":2.435,"x":-4907.4,"y":-739.5,"z":682.9},
+      "marshal": {"o":2.504,"x":-4939.4,"y":-762.4,"z":649.2},
       "checkpoints": [
-        { "gate": 25, "x": -4915.0, "y": -733.0, "z": 682.9 },
+        { "gate": 25, "x": -4947.4, "y": -756.5, "z": 649.2 },
         { "gate": 10.0, "ring": [0,0], "x": -5028.0, "y": -865.4, "z": 621.2 },
         { "gate": 10.0, "ring": [0,0], "x": -5087.5, "y": -843.4, "z": 594.3 },
         { "gate": 10.0, "ring": [0,0], "x": -5138.4, "y": -874.8, "z": 569.9 },
@@ -5999,9 +5948,9 @@
       "laps": 0,
       "flight": true,
       "note": "flight course found by the flight scout (course-gen scout): 6 rings low over the tops it hops, 643 yd, the bot's 15.1 s.",
-      "marshal": {"o":5.466,"x":6000.8,"y":-5184.2,"z":885.9},
+      "marshal": {"o":5.469,"x":6005.3,"y":-5180.3,"z":884.7},
       "checkpoints": [
-        { "gate": 25, "x": 6007.6, "y": -5191.5, "z": 889.5 },
+        { "gate": 25, "x": 6012.2, "y": -5187.6, "z": 889.1 },
         { "gate": 10.0, "ring": [0,0], "x": 6084.5, "y": -5119.4, "z": 856.6 },
         { "gate": 10.0, "ring": [0,0], "x": 6172.5, "y": -5142.1, "z": 834.7 },
         { "gate": 10.0, "ring": [0,0], "x": 6308.4, "y": -5101.2, "z": 798.4 },
@@ -6017,9 +5966,9 @@
       "laps": 0,
       "flight": true,
       "note": "flight course found by the flight scout (course-gen scout): 10 rings low over the tops it hops, 557 yd, the bot's 14.7 s.",
-      "marshal": {"o":0.776,"x":1501,"y":-4582.2,"z":146},
+      "marshal": {"o":0.821,"x":1503.3,"y":-4579,"z":147.5},
       "checkpoints": [
-        { "gate": 25, "x": 1508.1, "y": -4575.2, "z": 146.0 },
+        { "gate": 25, "x": 1510.1, "y": -4571.7, "z": 147.5 },
         { "gate": 10, "ring": [0,0], "x": 1447.5, "y": -4513.4, "z": 122.6 },
         { "gate": 10, "ring": [0,0], "x": 1393.9, "y": -4535.1, "z": 93.6 },
         { "gate": 10, "ring": [0,0], "x": 1386.0, "y": -4553.1, "z": 98.3 },
@@ -6039,9 +5988,9 @@
       "laps": 0,
       "flight": true,
       "note": "flight course found by the flight scout (course-gen scout): 6 rings low over the tops it hops, 280 yd, the bot's 11.9 s.",
-      "marshal": {"o":1.968,"x":-14266.3,"y":440.8,"z":57.3},
+      "marshal": {"o":1.873,"x":-14272.2,"y":431.8,"z":60.6},
       "checkpoints": [
-        { "gate": 25, "x": -14270.2, "y": 450.0, "z": 56.2 },
+        { "gate": 25, "x": -14275.2, "y": 441.3, "z": 60.6 },
         { "gate": 10, "ring": [0,0], "x": -14336.2, "y": 422.3, "z": 33.4 },
         { "gate": 10, "ring": [0,0], "x": -14362.2, "y": 369.9, "z": 37.6 },
         { "gate": 10, "ring": [0,0], "x": -14380.7, "y": 367.9, "z": 43.7 },
@@ -6055,32 +6004,6 @@
         { "o": 2.326, "x": -14380.7, "y": 367.9, "z": 35.2 },
         { "o": 2.638, "x": -14438.5, "y": 429.2, "z": 27.0 },
         { "o": 2.5, "x": -14468.1, "y": 445.6, "z": 30.5 }
-      ]
-    },
-    {
-      "key": "if-gates",
-      "name": "Ironforge Gate Hop",
-      "zone": "Dun Morogh",
-      "map": 0,
-      "laps": 0,
-      "flight": true,
-      "note": "flight course found by the flight scout (course-gen scout): 6 rings low over the tops it hops, 267 yd, the bot's 11.0 s.",
-      "marshal": {"o":1.863,"x":-5045,"y":-686.3,"z":478.4},
-      "checkpoints": [
-        { "gate": 25, "x": -5047.9, "y": -676.7, "z": 473.8 },
-        { "gate": 10, "ring": [0,0], "x": -5115.1, "y": -696.9, "z": 453 },
-        { "gate": 10, "ring": [0,0], "x": -5146.5, "y": -697.5, "z": 462.1 },
-        { "gate": 10, "ring": [0,0], "x": -5184.0, "y": -757.0, "z": 463.2 },
-        { "gate": 10, "ring": [0,0], "x": -5172.3, "y": -808.9, "z": 462.9 },
-        { "gate": 10, "ring": [0,0], "x": -5185.7, "y": -832.3, "z": 470.9 },
-        { "gate": 10, "ring": [0,0], "x": -5176.8, "y": -844.4, "z": 477.8 }
-      ],
-      "pads": [
-        { "o": -3.121, "x": -5115.1, "y": -696.9, "z": 444.5 },
-        { "o": -2.133, "x": -5146.5, "y": -697.5, "z": 453.6 },
-        { "o": -1.348, "x": -5184.0, "y": -757.0, "z": 454.7 },
-        { "o": -2.092, "x": -5172.3, "y": -808.9, "z": 454.4 },
-        { "o": -0.934, "x": -5185.7, "y": -832.3, "z": 462.4 }
       ]
     },
     {
@@ -6101,20 +6024,27 @@
       ]
     },
     {
-      "key": "sw-rooftops",
-      "name": "Stormwind Rooftops",
-      "zone": "Stormwind City",
+      "key": "if-gates",
+      "name": "Ironforge Gate Hop",
+      "zone": "Dun Morogh",
       "map": 0,
       "laps": 0,
       "flight": true,
-      "note": "flight course found by the flight scout (course-gen scout): 4 rings low over the tops it hops, 266 yd, the bot's 8.6 s.",
-      "marshal": {"o":1.452,"x":-8440.7,"y":321,"z":176.1},
+      "note": "flight course found by the flight scout (course-gen scout): 5 rings low over the tops it hops, 228 yd, the bot's 6.4 s.",
+      "marshal": {"o":0.178,"x":-5176.2,"y":-866.9,"z":506.9},
       "checkpoints": [
-        { "gate": 25, "x": -8439.5, "y": 330.9, "z": 176.1 },
-        { "gate": 10, "ring": [0,0], "x": -8505.0, "y": 338.7, "z": 149.7 },
-        { "gate": 10, "ring": [0,0], "x": -8547.0, "y": 391.0, "z": 136.5 },
-        { "gate": 10, "ring": [0,0], "x": -8614.7, "y": 390.3, "z": 130.9 },
-        { "gate": 10, "ring": [0,0], "x": -8666.0, "y": 430.6, "z": 115.7 }
+        { "gate": 25, "x": -5166.4, "y": -865.1, "z": 506.9 },
+        { "gate": 10, "ring": [0,0], "x": -5183.3, "y": -771.3, "z": 455.4 },
+        { "gate": 10, "ring": [0,0], "x": -5184.0, "y": -757.0, "z": 466.2 },
+        { "gate": 10, "ring": [0,0], "x": -5146.5, "y": -697.5, "z": 465.1 },
+        { "gate": 10, "ring": [0,0], "x": -5115.1, "y": -696.9, "z": 456 },
+        { "gate": 10, "ring": [0,0], "x": -5106.9, "y": -711.8, "z": 464.7 }
+      ],
+      "pads": [
+        { "o": 1.617, "x": -5183.3, "y": -771.3, "z": 443.9 },
+        { "o": 1.008, "x": -5184.0, "y": -757.0, "z": 454.7 },
+        { "o": 0.02, "x": -5146.5, "y": -697.5, "z": 453.6 },
+        { "o": -1.065, "x": -5115.1, "y": -696.9, "z": 444.5 }
       ]
     }
   ],

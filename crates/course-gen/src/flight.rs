@@ -394,6 +394,19 @@ pub fn fly_leap(chain: &mut Chain, file: &Value, key: &str) -> Result<(f32, FlyR
     Ok((yards, r))
 }
 
+/// Puts `key`'s start (its first checkpoint) at WoW `p`, to a tenth of a yard.
+pub fn write_start(file: &mut Value, key: &str, p: [f32; 3]) -> Result<()> {
+    let c = file["courses"]
+        .as_array_mut()
+        .and_then(|cs| cs.iter_mut().find(|c| c["key"] == key))
+        .ok_or_else(|| anyhow!("no course {key}"))?;
+    let first = c["checkpoints"].get_mut(0).context("no start")?;
+    for (k, v) in ["x", "y", "z"].iter().zip(p) {
+        first[*k] = Value::from((f64::from(v) * 10.0).round() / 10.0);
+    }
+    Ok(())
+}
+
 /// Hangs `key`'s rings at `heights` (WoW z, the rings in order), rounded to a tenth of a yard;
 /// its rings past them are dropped, so it finishes at the last ring laid.
 pub fn write_heights(file: &mut Value, key: &str, heights: &[f32]) -> Result<()> {
@@ -416,6 +429,57 @@ pub fn write_heights(file: &mut Value, key: &str, heights: &[f32]) -> Result<()>
     });
     anyhow::ensure!(cps.len() >= 2, "{key}: fewer than two checkpoints left");
     Ok(())
+}
+
+/// How steep the floor is round a WoW point: the most it rises or falls (yards) over `reach`
+/// yards in any of eight ways, against that reach.
+pub fn slope(sky: &Sky, x: f32, y: f32, reach: f32) -> f32 {
+    let Some(z) = sky.floor(x, y) else {
+        return f32::INFINITY;
+    };
+    let mut worst = 0.0f32;
+    for k in 0..8 {
+        let a = k as f32 * std::f32::consts::TAU / 8.0;
+        match sky.floor(x + a.cos() * reach, y + a.sin() * reach) {
+            Some(w) => worst = worst.max((w - z).abs() / reach),
+            None => return f32::INFINITY,
+        }
+    }
+    worst
+}
+
+/// The steepest floor a start may stand on: a character on steeper slides, falls and may not
+/// climb into the kart, so a time trial's countdown never comes (about 17 degrees).
+pub const FLAT: f32 = 0.3;
+
+/// Flat starts for `c` near its own, the nearest first: spots within 60 yards whose floor is no
+/// steeper than [`FLAT`] for three yards round it, on land, from which its first ring lies no
+/// further than from the start now, by more than 15 yards; at most one a step of 2 yards out.
+pub fn flat_starts(sky: &Sky, c: &FlightCourse) -> Vec<[f32; 3]> {
+    let s = c.points[0];
+    let Some(ring) = c.points.get(1).copied() else {
+        return Vec::new();
+    };
+    let far = (ring[0] - s[0]).hypot(ring[1] - s[1]);
+    let mut out = Vec::new();
+    let mut r = 0.0;
+    while r <= 60.0 {
+        let n = if r == 0.0 { 1 } else { (r * 1.5) as usize };
+        for k in 0..n {
+            let a = k as f32 * std::f32::consts::TAU / n as f32;
+            let (x, y) = (s[0] + a.cos() * r, s[1] + a.sin() * r);
+            if (ring[0] - x).hypot(ring[1] - y) > far + 15.0 || slope(sky, x, y, 3.0) > FLAT {
+                continue;
+            }
+            let Some(z) = sky.floor(x, y) else { continue };
+            if sky.on_prop(x, y) || sky.ground(x, y).is_none_or(|g| z > g + 0.5) {
+                continue;
+            }
+            out.push([x, y, z]);
+        }
+        r += 2.0;
+    }
+    out
 }
 
 /// The top-level zone (`AreaTable`'s, as the world map names it) a WoW point on `map` lies in:

@@ -481,6 +481,22 @@ pub fn scout(
         if !start[2].is_finite() {
             continue;
         }
+        // On flat ground: a character on a slope slides and never climbs into the kart.
+        let start = if crate::flight::slope(&sky, start[0], start[1], 3.0) > crate::flight::FLAT {
+            let probe = FlightCourse {
+                map,
+                points: vec![start, ring_over(&tops[c[1]], o)],
+                rings: vec![1],
+                radii: vec![25.0, o.ring],
+                pads: Vec::new(),
+            };
+            match crate::flight::flat_starts(&sky, &probe).into_iter().next() {
+                Some(p) => p,
+                None => continue,
+            }
+        } else {
+            start
+        };
         let mut points = vec![start];
         points.extend(c[1..].iter().map(|&i| ring_over(&tops[i], o)));
         // A pad on each top a hop leaves past the first, at its middle, pointing on.

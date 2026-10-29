@@ -240,6 +240,10 @@ enum Cmd {
         /// Draw the course's map with the bot's flight into this PNG.
         #[arg(long)]
         picture: Option<PathBuf>,
+        /// Move a start on a slope (steeper than a character stands on) to the nearest flat
+        /// spot, written into the course file.
+        #[arg(long)]
+        flat_start: bool,
         /// The course file.
         #[arg(long, default_value = "courses/courses.json")]
         courses: PathBuf,
@@ -681,6 +685,7 @@ fn main() -> Result<()> {
             write,
             simple,
             picture,
+            flat_start,
             courses,
         } => {
             let text = std::fs::read_to_string(&courses)
@@ -703,8 +708,42 @@ fn main() -> Result<()> {
                         println!("{} rings written into {}", laid.len(), courses.display());
                     }
                 } else {
-                    let c = course_gen::flight::FlightCourse::read(&file, &key)?;
+                    let mut c = course_gen::flight::FlightCourse::read(&file, &key)?;
                     let sky = course_gen::flight::Sky::gather(&mut chain, c.map, &c.points)?;
+                    let s = c.points[0];
+                    let steep = course_gen::flight::slope(&sky, s[0], s[1], 3.0);
+                    println!(
+                        "start slope {steep:.2}{}",
+                        if steep > course_gen::flight::FLAT {
+                            " (too steep)"
+                        } else {
+                            ""
+                        }
+                    );
+                    if flat_start && steep > course_gen::flight::FLAT {
+                        // The nearest flat spot the bot flies every ring from.
+                        let all = c.rings.len();
+                        let mut moved = None;
+                        for p in course_gen::flight::flat_starts(&sky, &c)
+                            .into_iter()
+                            .take(40)
+                        {
+                            let mut t = course_gen::flight::FlightCourse::read(&file, &key)?;
+                            t.points[0] = p;
+                            let (l, _) = course_gen::flight::fly_in_as(&sky, &t, false)?;
+                            if l.len() == all && l.iter().all(|l| l.passed) {
+                                moved = Some(p);
+                                break;
+                            }
+                        }
+                        let p = moved.ok_or_else(|| {
+                            anyhow::anyhow!("{key}: no flat start within 60 yd the bot flies from")
+                        })?;
+                        println!("start moved to {:.1},{:.1},{:.1}", p[0], p[1], p[2]);
+                        c.points[0] = p;
+                        course_gen::flight::write_start(&mut file, &key, p)?;
+                        std::fs::write(&courses, course_gen::export::format(&file))?;
+                    }
                     let (lines, r) = course_gen::flight::fly_in_as(&sky, &c, simple)?;
                     if let Some(png) = &picture {
                         let flown: Vec<[f32; 3]> = r.path.iter().map(|&p| sky.wow(p)).collect();
