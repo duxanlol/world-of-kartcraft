@@ -76,7 +76,10 @@ impl Sky {
 
     /// The water for the bot.
     pub fn sea(&self) -> Sea<'_> {
-        Sea(self.water.as_ref())
+        Sea {
+            water: self.water.as_ref(),
+            pads: &[],
+        }
     }
 
     /// A WoW point in the flight's lu.
@@ -162,6 +165,8 @@ pub struct FlightCourse {
     pub points: Vec<[f32; 3]>,
     pub rings: Vec<usize>,
     pub radii: Vec<f32>,
+    /// Its turbo pads, WoW x, y, z and facing (`docs/courses.md`, `pads`).
+    pub pads: Vec<[f32; 4]>,
 }
 
 impl FlightCourse {
@@ -178,11 +183,20 @@ impl FlightCourse {
                 rings.push(i);
             }
         }
+        let mut pads = Vec::new();
+        for p in c["pads"].as_array().into_iter().flatten() {
+            let n = |k: &str| p[k].as_f64().map(|v| v as f32);
+            let (Some(x), Some(y), Some(o)) = (n("x"), n("y"), n("o")) else {
+                continue;
+            };
+            pads.push([x, y, n("z").unwrap_or(f32::NAN), o]);
+        }
         Ok(Self {
             map,
             points,
             rings,
             radii,
+            pads,
         })
     }
 
@@ -228,10 +242,30 @@ pub fn fly_course(
 /// Flies `c` in `sky`, gathered round it: each ring as the best flight crossed it, the first
 /// missed last.
 pub fn fly_in(sky: &Sky, c: &FlightCourse) -> Result<(Vec<RingLine>, FlyReport)> {
+    // Its pads on the floor under them where they name no height, as the client lays them.
+    let pads: Vec<fly::Pad> = c
+        .pads
+        .iter()
+        .map(|p| {
+            let z = if p[2].is_finite() {
+                p[2]
+            } else {
+                sky.floor(p[0], p[1]).unwrap_or(0.0)
+            };
+            let centre = sky.lu([p[0], p[1], z]);
+            let ahead = sky.lu([p[0] + p[3].cos(), p[1] + p[3].sin(), z]);
+            fly::Pad {
+                centre,
+                forward: (ahead - centre).normalize(),
+            }
+        })
+        .collect();
+    let pads = pads.as_slice();
     let rings = c.rings(sky);
     let first = c.rings.first().map_or(c.points[1], |&i| c.points[i]);
     let kart = sky.kart(c.points[0], first)?;
-    let r = fly::fly_rings(&sky.world, sky.sea(), kart, &rings);
+    let sea = Sea { pads, ..sky.sea() };
+    let r = fly::fly_rings(&sky.world, sea, kart, &rings);
     let mut lines = Vec::new();
     let crossed = r
         .passes

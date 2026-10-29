@@ -94,16 +94,43 @@ struct Flight {
     moves: Vec<Move>,
 }
 
-/// The water's faces (lu), for the kart to float on and land on, as the session's host gives it
-/// the surface under it ([`Kart::water`]); none, a dry world.
+/// What the course lays over the world for the kart: the water's faces (lu), to float on and
+/// land on, as the session's host gives it the surface under it ([`Kart::water`]), and its turbo
+/// pads, fired as the session fires them ([`Kart::turbo_pad`]); none, a dry world bare.
 #[derive(Clone, Copy, Default)]
-pub struct Sea<'a>(pub Option<&'a Collision>);
+pub struct Sea<'a> {
+    pub water: Option<&'a Collision>,
+    pub pads: &'a [Pad],
+}
+
+/// A turbo pad (`kartcraft::pads::Pad`), lu: its centre on the ground and its forward.
+#[derive(Clone, Copy, Debug)]
+pub struct Pad {
+    pub centre: Vec3,
+    pub forward: Vec3,
+}
+
+/// A pad's side, lu: CTR's 384 (`kartcraft::pads`), and how far over or under it (lu) the kart
+/// counts as on it, its 1.5 yd.
+const PAD_LU: f32 = 384.0;
+const PAD_REACH_LU: f32 = 55.0;
+
+impl Pad {
+    /// Whether a kart whose origin is at `p` is on the pad.
+    pub fn contains(&self, p: Vec3) -> bool {
+        let d = p - self.centre;
+        let right = Vec3::new(self.forward.z, 0.0, -self.forward.x);
+        d.dot(self.forward).abs() <= PAD_LU * 0.5
+            && d.dot(right).abs() <= PAD_LU * 0.5
+            && d.y.abs() <= PAD_REACH_LU
+    }
+}
 
 impl Sea<'_> {
     /// The water's surface under or over `p` (lu height), if any.
     pub fn level(&self, p: Vec3) -> Option<f32> {
         let top = Vec3::new(p.x, p.y + 20000.0, p.z);
-        self.0?
+        self.water?
             .ray(top, Vec3::NEG_Y, 1.0e6)
             .map(|h| top.y - h.distance)
     }
@@ -266,6 +293,9 @@ fn step(
             f.taps = f.taps.wrapping_add(1);
         }
         f.kart.water = sea.level(before);
+        if sea.pads.iter().any(|p| p.contains(before)) {
+            f.kart.turbo_pad();
+        }
         f.kart.tick(world, &input, mods);
         f.tick += 1;
         let here = f.kart.pose().position;
@@ -480,6 +510,75 @@ mod tests {
                 r.ticks / 30,
                 profile.join(" ")
             );
+        }
+    }
+
+    /// Two roofs `up` lu over the ground, the second `gap` lu past the first's edge, a ring on
+    /// it; and a pad at the first's edge, or none.
+    fn roofs(up: f32, gap: f32, rise: f32) -> Collision {
+        let mut tris = Vec::new();
+        let tile = 1000.0;
+        let mut quad = |x0: f32, z0: f32, y: f32, w: f32| {
+            let (x1, z1) = (x0 + w, z0 + w);
+            tris.push([[x0, y, z0], [x0, y, z1], [x1, y, z1]]);
+            tris.push([[x0, y, z0], [x1, y, z1], [x1, y, z0]]);
+        };
+        for i in -2..2 {
+            for j in -4..0 {
+                quad(i as f32 * tile, j as f32 * tile, up, tile);
+            }
+            for j in 0..4 {
+                quad(i as f32 * tile, gap + j as f32 * tile, up + rise, tile);
+            }
+        }
+        for i in -20..20 {
+            for j in -10..40 {
+                quad(i as f32 * tile, j as f32 * tile, 0.0, tile);
+            }
+        }
+        Collision::new(tris, CELL)
+    }
+
+    /// The instrument: the widest gap between equal roofs the bot clears, with a pad at the
+    /// edge and without (`cargo test -p kart-driver pad_table -- --ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn pad_table() {
+        let yd = crate::LU_PER_YARD;
+        for (up, rise) in [
+            (20.0f32, 0.0f32),
+            (40.0, 0.0),
+            (40.0, 4.0),
+            (40.0, 8.0),
+            (40.0, 12.0),
+        ] {
+            for padded in [false, true] {
+                let mut widest = 0.0;
+                for gap in [
+                    5.0f32, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 60.0, 80.0, 100.0, 130.0,
+                ] {
+                    let w = roofs(up * yd, gap * yd, rise * yd);
+                    let ring = Ring {
+                        centre: Vec3::new(0.0, (up + rise) * yd + 9.0 * yd, gap * yd + 600.0),
+                        through: Vec3::Z,
+                        radius: 10.0 * yd,
+                    };
+                    let pads = [Pad {
+                        centre: Vec3::new(0.0, up * yd, -250.0),
+                        forward: Vec3::Z,
+                    }];
+                    let sea = Sea {
+                        water: None,
+                        pads: if padded { &pads } else { &[] },
+                    };
+                    let kart =
+                        kart_at(&w, Class::Balanced, Vec3::new(0.0, up * yd, -3000.0), 0).unwrap();
+                    if fly_rings(&w, sea, kart, &[ring]).passes.len() == 1 {
+                        widest = gap;
+                    }
+                }
+                eprintln!("roofs {up} yd up, the next {rise} yd higher, pad {padded}: widest gap {widest} yd");
+            }
         }
     }
 }

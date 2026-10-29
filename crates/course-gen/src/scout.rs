@@ -39,7 +39,18 @@ pub struct ScoutOpts {
     pub clear: f32,
     /// The fewest rings a course keeps.
     pub min_rings: usize,
+    /// Level hops: roof to roof as high, or higher, on the speed the kart drives off a top
+    /// with (`kart_driver`'s pad_table: 80 yd level, 60 yd to a top 8 yd up, 40 yd to one 12
+    /// up), not only down a glide: a hop may rise [`LEVEL_RISE`] less a fifth of its length.
+    pub level: bool,
+    /// A turbo pad on each top a hop leaves, pointing at the next: the boost that carries a
+    /// level hop on (`kart_driver`'s pad_table: 130 yd, to a top 12 yd up).
+    pub pads: bool,
 }
+
+/// How much higher (yards) a level hop's next top may stand at no length: the bot's reach less
+/// a margin of 4 yd.
+const LEVEL_RISE: f32 = 16.0;
 
 impl Default for ScoutOpts {
     fn default() -> Self {
@@ -57,6 +68,8 @@ impl Default for ScoutOpts {
             over: 2.0,
             clear: 5.0,
             min_rings: 3,
+            level: false,
+            pads: false,
         }
     }
 }
@@ -87,6 +100,8 @@ pub struct Found {
     /// Its rings' radius, yards, and what it is: tops hopped, or a glide run.
     pub ring: f32,
     pub run: bool,
+    /// Its turbo pads, WoW x, y, z and facing: one on each top a level hop leaves.
+    pub pads: Vec<[f32; 4]>,
 }
 
 /// The surface's height on a grid: `h[j * n + i]` at WoW x = x0 + i step, y = y0 + j step.
@@ -259,9 +274,88 @@ fn ring_over(t: &Top, o: &ScoutOpts) -> [f32; 3] {
     [t.x, t.y, t.z + o.over + o.ring]
 }
 
+/// Level hops' chains ([`ScoutOpts::level`]), longest first: each hop within the rise its
+/// length allows and no steeper down than a dive, the air between the tops clear, turning no
+/// sharper than `turn`, no top twice.
+fn level_chains(tops: &[Top], field: &Field, o: &ScoutOpts) -> Vec<Vec<usize>> {
+    let n = tops.len();
+    let mut next: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for i in 0..n {
+        for j in 0..n {
+            let (a, b) = (&tops[i], &tops[j]);
+            if i == j || a.wet || b.wet {
+                continue;
+            }
+            let d = (b.x - a.x).hypot(b.y - a.y);
+            let rise = b.z - a.z;
+            if d < o.hop.0 || d > o.hop.1 || rise > LEVEL_RISE - 0.2 * d || -rise > d * o.dive + 4.0
+            {
+                continue;
+            }
+            // Nothing in the way: the line between them, as high as the higher, clears it.
+            let top = a.z.max(b.z) + 1.0;
+            if field.clear([a.x, a.y, top], [b.x, b.y, top], 1.0) {
+                next[i].push(j);
+            }
+        }
+    }
+    eprintln!("{} level hops", next.iter().map(Vec::len).sum::<usize>());
+    let turn_ok = |a: usize, b: usize, c: usize| {
+        let (u, v) = (
+            (tops[b].x - tops[a].x, tops[b].y - tops[a].y),
+            (tops[c].x - tops[b].x, tops[c].y - tops[b].y),
+        );
+        let cos = (u.0 * v.0 + u.1 * v.1) / (u.0.hypot(u.1) * v.0.hypot(v.1)).max(1e-3);
+        cos >= o.turn.to_radians().cos()
+    };
+    let mut beam: Vec<Vec<usize>> = (0..n)
+        .filter(|&i| !next[i].is_empty())
+        .map(|i| vec![i])
+        .collect();
+    let mut all: Vec<Vec<usize>> = Vec::new();
+    for _ in 0..14 {
+        let mut grown = Vec::new();
+        for p in &beam {
+            let last = *p.last().unwrap();
+            for &k in &next[last] {
+                if p.contains(&k) || (p.len() >= 2 && !turn_ok(p[p.len() - 2], last, k)) {
+                    continue;
+                }
+                let mut q = p.clone();
+                q.push(k);
+                grown.push(q);
+            }
+        }
+        if grown.is_empty() {
+            break;
+        }
+        // The longest by the way they cover, a few per start.
+        let length = |p: &Vec<usize>| -> f32 {
+            p.windows(2)
+                .map(|w| (tops[w[1]].x - tops[w[0]].x).hypot(tops[w[1]].y - tops[w[0]].y))
+                .sum()
+        };
+        grown.sort_by(|a, b| length(b).total_cmp(&length(a)));
+        let mut per: std::collections::HashMap<usize, usize> = Default::default();
+        grown.retain(|p| {
+            let c = per.entry(p[0]).or_default();
+            *c += 1;
+            *c <= 3
+        });
+        grown.truncate(3000);
+        all.extend(grown.iter().cloned());
+        beam = grown;
+    }
+    all.sort_by_key(|c| std::cmp::Reverse(c.len()));
+    all
+}
+
 /// The chains of tops, longest first: each hop down more than a glide, its air clear, turning no
 /// sharper than `turn`.
 fn chains(tops: &[Top], field: &Field, o: &ScoutOpts) -> Vec<Vec<usize>> {
+    if o.level {
+        return level_chains(tops, field, o);
+    }
     let n = tops.len();
     let land: Vec<bool> = tops.iter().map(|t| !t.wet).collect();
     // The hops: i to j, j lower by more than the glide asks.
@@ -375,6 +469,8 @@ pub fn scout(
             continue;
         }
         let (a, b) = (&tops[c[0]], &tops[c[1]]);
+        // The first hop takes off from a standstill: down a glide and the fall before the wings,
+        // level hops too, which go on with the speed it gives.
         if a.z - b.z < (b.x - a.x).hypot(b.y - a.y) / o.glide + TAKE_OFF {
             continue;
         }
@@ -385,6 +481,19 @@ pub fn scout(
         }
         let mut points = vec![start];
         points.extend(c[1..].iter().map(|&i| ring_over(&tops[i], o)));
+        // A pad on each top a hop leaves past the first, at its middle, pointing on.
+        let pads: Vec<[f32; 4]> = if o.pads {
+            c[1..c.len() - 1]
+                .iter()
+                .zip(&c[2..])
+                .map(|(&a, &b)| {
+                    let (t, u) = (&tops[a], &tops[b]);
+                    [t.x, t.y, t.z, (u.y - t.y).atan2(u.x - t.x)]
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let course = FlightCourse {
             map,
             rings: (1..points.len()).collect(),
@@ -393,6 +502,7 @@ pub fn scout(
                 .take(points.len())
                 .collect(),
             points: points.clone(),
+            pads: pads.clone(),
         };
         let Ok((lines, r)) = fly_in(&sky, &course) else {
             continue;
@@ -412,10 +522,13 @@ pub fn scout(
                     l.ring, l.z, l.ring_z, l.off
                 ))
         );
+        starts.push(c[0]);
         if passed < o.min_rings {
             continue;
         }
         let points: Vec<[f32; 3]> = points[..=passed].to_vec();
+        // The pads on the tops the course still leaves: ring k's top's pad is the k-th.
+        let pads: Vec<[f32; 4]> = pads.into_iter().take(passed.saturating_sub(1)).collect();
         let yards = points
             .windows(2)
             .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
@@ -424,7 +537,6 @@ pub fn scout(
             .passes
             .get(passed - 1)
             .map_or(0.0, |p| p.tick as f32 / 30.0);
-        starts.push(c[0]);
         let flown: Vec<[f32; 3]> = r.path.iter().map(|&p| sky.wow(p)).collect();
         let picture = Some(picture(&field, &points, &flown));
         found.push(Found {
@@ -436,6 +548,7 @@ pub fn scout(
             picture,
             ring: o.ring,
             run: false,
+            pads,
         });
     }
     found.sort_by(|a, b| b.passed.cmp(&a.passed).then(b.yards.total_cmp(&a.yards)));
@@ -456,7 +569,15 @@ pub fn course_entry(f: &Found, key: &str, name: &str, zone: &str, map: u32) -> V
             "z": tenth(p[2]) }),
         );
     }
-    json!({
+    let pads: Vec<Value> = f
+        .pads
+        .iter()
+        .map(|p| {
+            json!({ "x": tenth(p[0]), "y": tenth(p[1]), "z": tenth(p[2]),
+            "o": (f64::from(p[3]) * 1000.0).round() / 1000.0 })
+        })
+        .collect();
+    let mut e = json!({
         "key": key,
         "name": name,
         "zone": zone,
@@ -469,7 +590,11 @@ pub fn course_entry(f: &Found, key: &str, name: &str, zone: &str, map: u32) -> V
             format!("flight course found by the flight scout (course-gen scout): {} rings low over the tops it hops, {:.0} yd, the bot's {:.1} s.", f.passed, f.yards, f.seconds)
         },
         "checkpoints": cps,
-    })
+    });
+    if !pads.is_empty() {
+        e["pads"] = Value::from(pads);
+    }
+    e
 }
 
 /// A glide run's options ([`glide_runs`]).
@@ -692,6 +817,7 @@ pub fn scout_runs(
                 .take(points.len())
                 .collect(),
             points: points.clone(),
+            pads: Vec::new(),
         };
         let Ok((lines, rep)) = fly_in(&sky, &course) else {
             continue;
@@ -736,6 +862,7 @@ pub fn scout_runs(
             picture,
             ring: r.ring,
             run: true,
+            pads: Vec::new(),
         });
         if found.len() >= keep {
             break;

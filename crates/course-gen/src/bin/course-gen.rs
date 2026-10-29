@@ -192,6 +192,18 @@ enum Cmd {
         /// and between higher ground, rings along them, in place of the hops between tops.
         #[arg(long)]
         runs: bool,
+        /// Level hops: roof to roof as high or higher, on the speed off each top.
+        #[arg(long)]
+        level: bool,
+        /// The rings' radius, yards.
+        #[arg(long, default_value_t = 10.0)]
+        ring: f32,
+        /// A turbo pad on each top a hop leaves, pointing at the next.
+        #[arg(long)]
+        pads: bool,
+        /// The shortest hop, yards.
+        #[arg(long, default_value_t = 25.0)]
+        hop_min: f32,
         /// With --runs: yards across per yard down the path keeps.
         #[arg(long, default_value_t = 5.5)]
         run_glide: f32,
@@ -574,6 +586,10 @@ fn main() -> Result<()> {
             cells,
             flat,
             runs,
+            level,
+            ring,
+            pads,
+            hop_min,
             run_glide,
             out,
             prefix,
@@ -587,7 +603,10 @@ fn main() -> Result<()> {
             let opts = course_gen::scout::ScoutOpts {
                 prominence,
                 glide,
-                hop: (25.0, hop),
+                hop: (hop_min, hop),
+                level,
+                ring,
+                pads,
                 step,
                 min_cells: cells,
                 flat,

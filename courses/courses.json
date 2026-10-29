@@ -5864,7 +5864,7 @@
       "checkpoints": [
         { "gate": 25, "x": -4000.3, "y": -3513.0, "z": 453.9 },
         { "gate": 12.0, "ring": [0,0], "x": -3945.2, "y": -3443.3, "z": 427.5 },
-        { "gate": 12.0, "ring": [0,0], "x": -3879.8, "y": -3385.2, "z": 411.2 },
+        { "gate": 12.0, "ring": [0,0], "x": -3879.8, "y": -3385.2, "z": 408.2 },
         { "gate": 12.0, "ring": [0,0], "x": -3795.1, "y": -3392.7, "z": 394.8 },
         { "gate": 12.0, "ring": [0,0], "x": -3750.7, "y": -3463.9, "z": 378.5 },
         { "gate": 12.0, "ring": [0,0], "x": -3684.7, "y": -3515.6, "z": 362.1 },
@@ -6025,6 +6025,132 @@
         { "gate": 10.0, "ring": [0,0], "x": -14136.6, "y": 325.2, "z": 54.1 },
         { "gate": 10.0, "ring": [0,0], "x": -14126.5, "y": 300.0, "z": 43.7 },
         { "gate": 10.0, "ring": [0,0], "x": -14065.4, "y": 240.4, "z": 23.9 }
+      ]
+    },
+    {
+      "key": "org-rooftops",
+      "name": "Orgrimmar Rooftops",
+      "zone": "Orgrimmar",
+      "map": 1,
+      "laps": 0,
+      "flight": true,
+      "note": "flight course found by the flight scout (course-gen scout): 10 rings low over the tops it hops, 557 yd, the bot's 14.7 s.",
+      "marshal": {"o":0.776,"x":1501,"y":-4582.2,"z":146},
+      "checkpoints": [
+        { "gate": 25, "x": 1508.1, "y": -4575.2, "z": 146.0 },
+        { "gate": 10, "ring": [0,0], "x": 1447.5, "y": -4513.4, "z": 122.6 },
+        { "gate": 10, "ring": [0,0], "x": 1393.9, "y": -4535.1, "z": 93.6 },
+        { "gate": 10, "ring": [0,0], "x": 1386.0, "y": -4553.1, "z": 98.3 },
+        { "gate": 10, "ring": [0,0], "x": 1415.4, "y": -4604.2, "z": 81.4 },
+        { "gate": 10, "ring": [0,0], "x": 1431.3, "y": -4631.7, "z": 83.6 },
+        { "gate": 10, "ring": [0,0], "x": 1487.9, "y": -4696.4, "z": 72 },
+        { "gate": 10, "ring": [0,0], "x": 1468.6, "y": -4739.0, "z": 49.6 },
+        { "gate": 14, "ring": [0,0], "x": 1453.0, "y": -4742.0, "z": 61.5 },
+        { "gate": 10, "ring": [0,0], "x": 1386.0, "y": -4699.8, "z": 38.2 },
+        { "gate": 10, "ring": [0,0], "x": 1322.8, "y": -4739.0, "z": 33.8 }
+      ]
+    },
+    {
+      "key": "bb-boardwalk",
+      "name": "Booty Bay Boardwalk",
+      "zone": "Stranglethorn Vale",
+      "map": 0,
+      "laps": 0,
+      "flight": true,
+      "note": "flight course found by the flight scout (course-gen scout): 6 rings low over the tops it hops, 280 yd, the bot's 11.9 s.",
+      "marshal": {"o":1.968,"x":-14266.3,"y":440.8,"z":57.3},
+      "checkpoints": [
+        { "gate": 25, "x": -14270.2, "y": 450.0, "z": 56.2 },
+        { "gate": 10, "ring": [0,0], "x": -14336.2, "y": 422.3, "z": 33.4 },
+        { "gate": 10, "ring": [0,0], "x": -14362.2, "y": 369.9, "z": 37.6 },
+        { "gate": 10, "ring": [0,0], "x": -14380.7, "y": 367.9, "z": 43.7 },
+        { "gate": 10, "ring": [0,0], "x": -14438.5, "y": 429.2, "z": 35.5 },
+        { "gate": 10, "ring": [0,0], "x": -14468.1, "y": 445.6, "z": 39 },
+        { "gate": 10, "ring": [0,0], "x": -14478.5, "y": 453.3, "z": 45.4 }
+      ],
+      "pads": [
+        { "o": -2.032, "x": -14336.2, "y": 422.3, "z": 24.9 },
+        { "o": -3.033, "x": -14362.2, "y": 369.9, "z": 29.1 },
+        { "o": 2.326, "x": -14380.7, "y": 367.9, "z": 35.2 },
+        { "o": 2.638, "x": -14438.5, "y": 429.2, "z": 27.0 },
+        { "o": 2.5, "x": -14468.1, "y": 445.6, "z": 30.5 }
+      ]
+    },
+    {
+      "key": "if-gates",
+      "name": "Ironforge Gate Hop",
+      "zone": "Dun Morogh",
+      "map": 0,
+      "laps": 0,
+      "flight": true,
+      "note": "flight course found by the flight scout (course-gen scout): 6 rings low over the tops it hops, 267 yd, the bot's 11.0 s.",
+      "marshal": {"o":1.863,"x":-5045,"y":-686.3,"z":478.4},
+      "checkpoints": [
+        { "gate": 25, "x": -5047.9, "y": -676.7, "z": 473.8 },
+        { "gate": 10, "ring": [0,0], "x": -5115.1, "y": -696.9, "z": 453 },
+        { "gate": 10, "ring": [0,0], "x": -5146.5, "y": -697.5, "z": 462.1 },
+        { "gate": 10, "ring": [0,0], "x": -5184.0, "y": -757.0, "z": 463.2 },
+        { "gate": 10, "ring": [0,0], "x": -5172.3, "y": -808.9, "z": 462.9 },
+        { "gate": 10, "ring": [0,0], "x": -5185.7, "y": -832.3, "z": 470.9 },
+        { "gate": 10, "ring": [0,0], "x": -5176.8, "y": -844.4, "z": 477.8 }
+      ],
+      "pads": [
+        { "o": -3.121, "x": -5115.1, "y": -696.9, "z": 444.5 },
+        { "o": -2.133, "x": -5146.5, "y": -697.5, "z": 453.6 },
+        { "o": -1.348, "x": -5184.0, "y": -757.0, "z": 454.7 },
+        { "o": -2.092, "x": -5172.3, "y": -808.9, "z": 454.4 },
+        { "o": -0.934, "x": -5185.7, "y": -832.3, "z": 462.4 }
+      ]
+    },
+    {
+      "key": "darn-terraces",
+      "name": "Darnassus Terraces",
+      "zone": "Darnassus",
+      "map": 1,
+      "laps": 0,
+      "flight": true,
+      "note": "flight course found by the flight scout (course-gen scout): 4 rings low over the tops it hops, 305 yd, the bot's 8.3 s.",
+      "marshal": {"o":1.069,"x":10245.1,"y":2205.2,"z":1394.9},
+      "checkpoints": [
+        { "gate": 25, "x": 10249.9, "y": 2214.0, "z": 1392.8 },
+        { "gate": 10, "ring": [0,0], "x": 10177.8, "y": 2253.6, "z": 1369 },
+        { "gate": 10, "ring": [0,0], "x": 10089.5, "y": 2251.8, "z": 1364.1 },
+        { "gate": 10, "ring": [0,0], "x": 10016.0, "y": 2230.0, "z": 1362.1 },
+        { "gate": 10, "ring": [0,0], "x": 9961.4, "y": 2249.9, "z": 1342.4 }
+      ]
+    },
+    {
+      "key": "dusk-rooftops",
+      "name": "Darkshire Rooftops",
+      "zone": "Duskwood",
+      "map": 0,
+      "laps": 0,
+      "flight": true,
+      "note": "flight course found by the flight scout (course-gen scout): 4 rings low over the tops it hops, 222 yd, the bot's 6.8 s.",
+      "marshal": {"o":4.039,"x":-10659.8,"y":-1032.1,"z":83},
+      "checkpoints": [
+        { "gate": 25, "x": -10666.0, "y": -1039.9, "z": 83.0 },
+        { "gate": 10, "ring": [0,0], "x": -10610.3, "y": -1084.3, "z": 67.1 },
+        { "gate": 10, "ring": [0,0], "x": -10549.4, "y": -1122.4, "z": 50.4 },
+        { "gate": 10, "ring": [0,0], "x": -10505.4, "y": -1117.9, "z": 39.8 },
+        { "gate": 10, "ring": [0,0], "x": -10472.9, "y": -1130.1, "z": 46.2 }
+      ]
+    },
+    {
+      "key": "sw-rooftops",
+      "name": "Stormwind Rooftops",
+      "zone": "Stormwind City",
+      "map": 0,
+      "laps": 0,
+      "flight": true,
+      "note": "flight course found by the flight scout (course-gen scout): 4 rings low over the tops it hops, 266 yd, the bot's 8.6 s.",
+      "marshal": {"o":1.452,"x":-8440.7,"y":321,"z":176.1},
+      "checkpoints": [
+        { "gate": 25, "x": -8439.5, "y": 330.9, "z": 176.1 },
+        { "gate": 10, "ring": [0,0], "x": -8505.0, "y": 338.7, "z": 149.7 },
+        { "gate": 10, "ring": [0,0], "x": -8547.0, "y": 391.0, "z": 136.5 },
+        { "gate": 10, "ring": [0,0], "x": -8614.7, "y": 390.3, "z": 130.9 },
+        { "gate": 10, "ring": [0,0], "x": -8666.0, "y": 430.6, "z": 115.7 }
       ]
     }
   ],
