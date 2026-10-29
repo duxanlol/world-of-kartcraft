@@ -2394,22 +2394,14 @@
           { 25.f, 10.f, 10.f, 10.f, 10.f, 10.f },
           {},
           { 6000.8f, -5184.2f }, {}, 0.f, 1.f, true },
-        // Booty Bay Hills Hop (Stranglethorn Vale): flight course found by the flight scout
-        // (course-gen scout): 5 rings low over the tops it hops, 392 yd, the bot's 12.4 s.
-        { "bb-hills", "Booty Bay Hills Hop", "", 0, 0,
-          { { -14398.5f, 314.1f }, { -14335.f, 322.5f }, { -14152.9f, 351.1f }, { -14136.6f, 325.2f },
-            { -14126.5f, 300.f }, { -14065.4f, 240.4f } },
-          { 25.f, 10.f, 10.f, 10.f, 10.f, 10.f },
-          {},
-          { -14399.8f, 324.f }, {}, 0.f, 1.f, true },
         // Orgrimmar Rooftops (Orgrimmar): flight course found by the flight scout (course-gen
         // scout): 10 rings low over the tops it hops, 557 yd, the bot's 14.7 s.
         { "org-rooftops", "Orgrimmar Rooftops", "", 1, 0,
           { { 1508.1f, -4575.2f }, { 1447.5f, -4513.4f }, { 1393.9f, -4535.1f }, { 1386.f, -4553.1f },
-            { 1415.4f, -4604.2f }, { 1431.3f, -4631.7f }, { 1487.9f, -4696.4f }, { 1468.6f, -4739.f },
-            { 1453.f, -4742.f }, { 1386.f, -4699.8f }, { 1322.8f, -4739.f } },
-          { 25.f, 10.f, 10.f, 10.f, 10.f, 10.f, 10.f, 10.f,
-            14.f, 10.f, 10.f },
+            { 1415.4f, -4604.2f }, { 1487.9f, -4696.4f }, { 1468.6f, -4739.f }, { 1453.f, -4742.f },
+            { 1386.f, -4699.8f }, { 1322.8f, -4739.f } },
+          { 25.f, 10.f, 10.f, 10.f, 10.f, 10.f, 10.f, 14.f,
+            10.f, 10.f },
           {},
           { 1501.f, -4582.2f }, {}, 0.f, 1.f, true },
         // Booty Bay Boardwalk (Stranglethorn Vale): flight course found by the flight scout
@@ -2436,14 +2428,6 @@
           { 25.f, 10.f, 10.f, 10.f, 10.f },
           {},
           { 10245.1f, 2205.2f }, {}, 0.f, 1.f, true },
-        // Darkshire Rooftops (Duskwood): flight course found by the flight scout (course-gen
-        // scout): 4 rings low over the tops it hops, 222 yd, the bot's 6.8 s.
-        { "dusk-rooftops", "Darkshire Rooftops", "", 0, 0,
-          { { -10666.f, -1039.9f }, { -10610.3f, -1084.3f }, { -10549.4f, -1122.4f }, { -10505.4f, -1117.9f },
-            { -10472.9f, -1130.1f } },
-          { 25.f, 10.f, 10.f, 10.f, 10.f },
-          {},
-          { -10659.8f, -1032.1f }, {}, 0.f, 1.f, true },
         // Stormwind Rooftops (Stormwind City): flight course found by the flight scout (course-gen
         // scout): 4 rings low over the tops it hops, 266 yd, the bot's 8.6 s.
         { "sw-rooftops", "Stormwind Rooftops", "", 0, 0,

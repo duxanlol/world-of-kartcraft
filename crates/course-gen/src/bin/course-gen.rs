@@ -695,15 +695,26 @@ fn main() -> Result<()> {
                     }
                 } else {
                     let (lines, r) = course_gen::flight::fly_course(&mut chain, &file, &key)?;
+                    let c = course_gen::flight::FlightCourse::read(&file, &key)?;
+                    let zone = |chain: &mut benilla_formats::Chain, p: [f32; 3]| {
+                        course_gen::flight::zone_at(chain, c.map, p[0], p[1]).unwrap_or_default()
+                    };
+                    let (from, to) = (c.points[0], *c.points.last().unwrap_or(&c.points[0]));
+                    println!(
+                        "zones: {} to {}",
+                        zone(&mut chain, from),
+                        zone(&mut chain, to)
+                    );
                     for l in &lines {
                         let under = l.under.map_or("?".into(), |g| format!("{g:.0}"));
                         println!(
-                            "ring {}: {} at z {:.1} (ring {:.1}), {:.1} yd off centre, ground {under}",
+                            "ring {}: {} at z {:.1} (ring {:.1}), {:.1} yd off centre, ground {under}{}",
                             l.ring,
                             if l.passed { "passed" } else { "MISSED" },
                             l.z,
                             l.ring_z,
-                            l.off
+                            l.off,
+                            if l.on_prop { " (on a prop)" } else { "" }
                         );
                     }
                     println!(

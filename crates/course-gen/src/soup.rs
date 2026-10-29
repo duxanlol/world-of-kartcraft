@@ -101,6 +101,9 @@ impl Region {
 pub struct Faces {
     pub solid: Vec<[Vec3; 3]>,
     pub liquid: Vec<[Vec3; 3]>,
+    /// The open world's trees among `solid` (a model named for one: tree, palm, bush, canopy):
+    /// solid, but no ground a course is laid on.
+    pub props: Vec<[Vec3; 3]>,
 }
 
 /// The faces in `region` on `map`.
@@ -188,6 +191,7 @@ pub fn gather_world(chain: &mut Chain, map: u32, region: Region) -> Result<Faces
             }
         }
     };
+    let mut props: Vec<[Vec3; 3]> = Vec::new();
     let mut seen = HashSet::new();
     for (_, tile) in &tiles {
         for d in &tile.doodads {
@@ -204,7 +208,14 @@ pub fn gather_world(chain: &mut Chain, map: u32, region: Region) -> Result<Faces
                     placement_rotation(d.rotation),
                     wow_to_bevy(d.position),
                 );
-                place(&mesh, at, &mut keep);
+                let model = d.model.to_ascii_lowercase();
+                let tree = TREES.iter().any(|w| model.contains(w));
+                place(&mesh, at, &mut |t| {
+                    if tree && region.overlaps(&t) {
+                        props.push(t);
+                    }
+                    keep(t);
+                });
             }
         }
     }
@@ -289,8 +300,15 @@ pub fn gather_world(chain: &mut Chain, map: u32, region: Region) -> Result<Faces
             }
         }
     }
-    Ok(Faces { solid: out, liquid })
+    Ok(Faces {
+        solid: out,
+        liquid,
+        props,
+    })
 }
+
+/// What a tree's model path holds, any case ([`Faces::props`]).
+const TREES: [&str; 6] = ["tree", "palm", "bush", "canopy", "shrub", "jungle"];
 
 fn near(region: &Region, p: Vec3, margin: f32) -> bool {
     p.cmpge(region.min - Vec3::splat(margin)).all()

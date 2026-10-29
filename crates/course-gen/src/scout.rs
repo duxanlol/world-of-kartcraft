@@ -81,7 +81,7 @@ pub struct Top {
     pub y: f32,
     pub z: f32,
     pub cells: usize,
-    /// Water's surface, not land.
+    /// Water's surface, or a placed model's (a tree's crown, a rock): no land for a ring.
     pub wet: bool,
 }
 
@@ -126,7 +126,9 @@ impl Field {
                 let (x, y) = (x0 + i as f32 * step, y0 + j as f32 * step);
                 let floor = sky.floor(x, y).unwrap_or(f32::NAN);
                 h[j * n + i] = floor;
-                wet[j * n + i] = sky.ground(x, y).is_none_or(|g| floor > g + 0.5);
+                // Water, or a tree's crown or a rock: no top for a ring, though in the way.
+                wet[j * n + i] =
+                    sky.ground(x, y).is_none_or(|g| floor > g + 0.5) || sky.on_prop(x, y);
             }
         }
         Self {

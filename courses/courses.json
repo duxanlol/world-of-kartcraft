@@ -6010,24 +6010,6 @@
       ]
     },
     {
-      "key": "bb-hills",
-      "name": "Booty Bay Hills Hop",
-      "zone": "Stranglethorn Vale",
-      "map": 0,
-      "laps": 0,
-      "flight": true,
-      "note": "flight course found by the flight scout (course-gen scout): 5 rings low over the tops it hops, 392 yd, the bot's 12.4 s.",
-      "marshal": {"o":4.844,"x":-14399.8,"y":324,"z":117.3},
-      "checkpoints": [
-        { "gate": 25, "x": -14398.5, "y": 314.1, "z": 117.3 },
-        { "gate": 10.0, "ring": [0,0], "x": -14335.0, "y": 322.5, "z": 103.5 },
-        { "gate": 10.0, "ring": [0,0], "x": -14152.9, "y": 351.1, "z": 63.7 },
-        { "gate": 10.0, "ring": [0,0], "x": -14136.6, "y": 325.2, "z": 54.1 },
-        { "gate": 10.0, "ring": [0,0], "x": -14126.5, "y": 300.0, "z": 43.7 },
-        { "gate": 10.0, "ring": [0,0], "x": -14065.4, "y": 240.4, "z": 23.9 }
-      ]
-    },
-    {
       "key": "org-rooftops",
       "name": "Orgrimmar Rooftops",
       "zone": "Orgrimmar",
@@ -6042,7 +6024,6 @@
         { "gate": 10, "ring": [0,0], "x": 1393.9, "y": -4535.1, "z": 93.6 },
         { "gate": 10, "ring": [0,0], "x": 1386.0, "y": -4553.1, "z": 98.3 },
         { "gate": 10, "ring": [0,0], "x": 1415.4, "y": -4604.2, "z": 81.4 },
-        { "gate": 10, "ring": [0,0], "x": 1431.3, "y": -4631.7, "z": 83.6 },
         { "gate": 10, "ring": [0,0], "x": 1487.9, "y": -4696.4, "z": 72 },
         { "gate": 10, "ring": [0,0], "x": 1468.6, "y": -4739.0, "z": 49.6 },
         { "gate": 14, "ring": [0,0], "x": 1453.0, "y": -4742.0, "z": 61.5 },
@@ -6117,23 +6098,6 @@
         { "gate": 10, "ring": [0,0], "x": 10089.5, "y": 2251.8, "z": 1364.1 },
         { "gate": 10, "ring": [0,0], "x": 10016.0, "y": 2230.0, "z": 1362.1 },
         { "gate": 10, "ring": [0,0], "x": 9961.4, "y": 2249.9, "z": 1342.4 }
-      ]
-    },
-    {
-      "key": "dusk-rooftops",
-      "name": "Darkshire Rooftops",
-      "zone": "Duskwood",
-      "map": 0,
-      "laps": 0,
-      "flight": true,
-      "note": "flight course found by the flight scout (course-gen scout): 4 rings low over the tops it hops, 222 yd, the bot's 6.8 s.",
-      "marshal": {"o":4.039,"x":-10659.8,"y":-1032.1,"z":83},
-      "checkpoints": [
-        { "gate": 25, "x": -10666.0, "y": -1039.9, "z": 83.0 },
-        { "gate": 10, "ring": [0,0], "x": -10610.3, "y": -1084.3, "z": 67.1 },
-        { "gate": 10, "ring": [0,0], "x": -10549.4, "y": -1122.4, "z": 50.4 },
-        { "gate": 10, "ring": [0,0], "x": -10505.4, "y": -1117.9, "z": 39.8 },
-        { "gate": 10, "ring": [0,0], "x": -10472.9, "y": -1130.1, "z": 46.2 }
       ]
     },
     {

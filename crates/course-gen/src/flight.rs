@@ -21,6 +21,8 @@ pub struct Sky {
     pub world: Collision,
     /// The water's faces, lu, if there is any.
     pub water: Option<Collision>,
+    /// The open world's trees, lu, if there are any.
+    pub props: Option<Collision>,
     pub origin: [f32; 3],
 }
 
@@ -67,9 +69,12 @@ impl Sky {
         let world = Collision::new(soup::to_lu(&faces.solid, mid), CELL);
         let wet = soup::to_lu(&faces.liquid, mid);
         let water = (!wet.is_empty()).then(|| Collision::new(wet, CELL));
+        let placed = soup::to_lu(&faces.props, mid);
+        let props = (!placed.is_empty()).then(|| Collision::new(placed, CELL));
         Self {
             world,
             water,
+            props,
             origin,
         }
     }
@@ -98,6 +103,20 @@ impl Sky {
         let d = fly::over_ground(&self.world, top);
         d.is_finite()
             .then(|| self.origin[2] + DEPTH - d / LU_PER_YARD)
+    }
+
+    /// Whether what a kart comes down on at a WoW point is a tree's crown, not the land or a
+    /// building.
+    pub fn on_prop(&self, x: f32, y: f32) -> bool {
+        let Some(props) = &self.props else {
+            return false;
+        };
+        let top = self.lu([x, y, self.origin[2] + DEPTH]);
+        let (all, prop) = (
+            fly::over_ground(&self.world, top),
+            fly::over_ground(props, top),
+        );
+        prop.is_finite() && prop <= all + 0.3 * LU_PER_YARD
     }
 
     /// What a kart comes down on under a WoW point (WoW z): the ground, or the water over it.
@@ -226,6 +245,8 @@ pub struct RingLine {
     pub ring_z: f32,
     pub off: f32,
     pub under: Option<f32>,
+    /// Whether what is under it is a placed model (a tree's crown, a rock).
+    pub on_prop: bool,
 }
 
 /// Flies `key`'s rings: each ring as the best flight crossed it, the first missed last.
@@ -282,6 +303,7 @@ pub fn fly_in(sky: &Sky, c: &FlightCourse) -> Result<(Vec<RingLine>, FlyReport)>
             ring_z: c.points[i][2],
             off: p.miss / LU_PER_YARD,
             under: sky.ground(c.points[i][0], c.points[i][1]),
+            on_prop: sky.on_prop(c.points[i][0], c.points[i][1]),
         });
     }
     Ok((lines, r))
@@ -372,6 +394,20 @@ pub fn write_heights(file: &mut Value, key: &str, heights: &[f32]) -> Result<()>
     });
     anyhow::ensure!(cps.len() >= 2, "{key}: fewer than two checkpoints left");
     Ok(())
+}
+
+/// The top-level zone (`AreaTable`'s, as the world map names it) a WoW point on `map` lies in:
+/// its map chunk's area, walked up to its zone.
+pub fn zone_at(chain: &mut Chain, map: u32, x: f32, y: f32) -> Option<String> {
+    let areas = benilla_formats::load_area_table_catalog(chain).ok()?;
+    let tiles =
+        benilla_formats::load_tiles_around(chain, soup::map_dir(map).ok()?, x, y, 0).ok()?;
+    let area = tiles
+        .iter()
+        .flat_map(|(_, t)| &t.chunks)
+        .find_map(|c| c.area_at([x, y, 0.0]))?;
+    let zone = areas.top_zone(area)?;
+    areas.name(zone).map(str::to_string)
 }
 
 #[cfg(test)]
