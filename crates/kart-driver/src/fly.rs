@@ -147,6 +147,67 @@ pub fn fly_reach(world: &Collision, sea: Sea, kart: Kart, rings: &[Ring]) -> Fly
     search(world, sea, kart, rings, None, true)
 }
 
+/// Flies `kart` through `rings` as the client's race autopilot does (`WOW_KART_AUTOPILOT`): full
+/// gas, steering for the next ring by `(-off * 2.5)` of the angle off it, and in the air the
+/// hop held two ticks in four, a double tap (`WOW_KART_AUTOPILOT=fly`): the instrument a live
+/// run of the autopilot is laid against, ring for ring.
+pub fn fly_simple(world: &Collision, sea: Sea, mut kart: Kart, rings: &[Ring]) -> FlyReport {
+    let mods = Modifiers::default();
+    let mut report = FlyReport::default();
+    let mut passed = 0;
+    for tick in 1..=MAX_TICKS {
+        let before = kart.pose().position;
+        let Some(r) = rings.get(passed) else {
+            break;
+        };
+        let want = yaw_to(before, r.centre);
+        let off = wrap_signed(want - kart.pose().heading) as f32 * TAU / 4096.0;
+        let input = Input {
+            steer: (-off * 2.5).clamp(-1.0, 1.0),
+            gas: true,
+            r1: !kart.grounded() && tick % 4 < 2,
+            ..Input::default()
+        };
+        kart.water = sea.level(before);
+        if sea.pads.iter().any(|p| p.contains(before)) {
+            kart.turbo_pad();
+        }
+        kart.tick(world, &input, &mods);
+        kart.events.clear();
+        let here = kart.pose().position;
+        if tick % CHUNK == 0 {
+            report.path.push(here);
+        }
+        report.ticks = tick;
+        let (da, db) = (
+            (before - r.centre).dot(r.through),
+            (here - r.centre).dot(r.through),
+        );
+        if da < 0.0 && db >= 0.0 {
+            let hit = before + (here - before) * (da / (da - db));
+            let pass = Pass {
+                tick,
+                miss: hit.distance(r.centre),
+                over_ground: over_ground(world, hit),
+                at: hit,
+            };
+            if pass.miss > r.radius + RING_REACH {
+                report.missed = Some(pass);
+                break;
+            }
+            report.passes.push(pass);
+            passed += 1;
+        }
+        if world
+            .ray(here + Vec3::Y * 200.0, Vec3::NEG_Y, 1.0e6)
+            .is_none()
+        {
+            break;
+        }
+    }
+    report
+}
+
 /// Flies `kart` off its launch along `heading` (4096ths of a turn) as far as it can: the best
 /// flight's touchdown is the farthest across the ground from `kart`'s start.
 pub fn fly_far(world: &Collision, sea: Sea, kart: Kart, heading: i32) -> FlyReport {

@@ -424,9 +424,14 @@ fn update(
                         ..Default::default()
                     }
                 } else {
+                    // The flying autopilot taps the hop in the air, a double tap, so the
+                    // wings open at once off an edge (`kart_driver::fly::fly_simple`'s pilot).
+                    let tap =
+                        input::autopilot_flies() && !view.grounded && (now * 30.0) as i32 % 4 < 2;
                     input::Controls {
                         accelerate: true,
                         steer: (-off * 2.5).clamp(-1.0, 1.0),
+                        hop: tap,
                         ..Default::default()
                     }
                 }

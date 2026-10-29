@@ -247,6 +247,8 @@ pub struct RingLine {
     pub under: Option<f32>,
     /// Whether what is under it is a placed model (a tree's crown, a rock).
     pub on_prop: bool,
+    /// When it crossed, seconds from the start.
+    pub secs: f32,
 }
 
 /// Flies `key`'s rings: each ring as the best flight crossed it, the first missed last.
@@ -255,14 +257,29 @@ pub fn fly_course(
     file: &Value,
     key: &str,
 ) -> Result<(Vec<RingLine>, FlyReport)> {
+    fly_course_as(chain, file, key, false)
+}
+
+/// As [`fly_course`], or with the race autopilot's pilot when `simple`.
+pub fn fly_course_as(
+    chain: &mut Chain,
+    file: &Value,
+    key: &str,
+    simple: bool,
+) -> Result<(Vec<RingLine>, FlyReport)> {
     let c = FlightCourse::read(file, key)?;
     let sky = Sky::gather(chain, c.map, &c.points)?;
-    fly_in(&sky, &c)
+    fly_in_as(&sky, &c, simple)
 }
 
 /// Flies `c` in `sky`, gathered round it: each ring as the best flight crossed it, the first
 /// missed last.
 pub fn fly_in(sky: &Sky, c: &FlightCourse) -> Result<(Vec<RingLine>, FlyReport)> {
+    fly_in_as(sky, c, false)
+}
+
+/// As [`fly_in`], or with the race autopilot's pilot ([`fly::fly_simple`]) when `simple`.
+pub fn fly_in_as(sky: &Sky, c: &FlightCourse, simple: bool) -> Result<(Vec<RingLine>, FlyReport)> {
     // Its pads on the floor under them where they name no height, as the client lays them.
     let pads: Vec<fly::Pad> = c
         .pads
@@ -286,7 +303,11 @@ pub fn fly_in(sky: &Sky, c: &FlightCourse) -> Result<(Vec<RingLine>, FlyReport)>
     let first = c.rings.first().map_or(c.points[1], |&i| c.points[i]);
     let kart = sky.kart(c.points[0], first)?;
     let sea = Sea { pads, ..sky.sea() };
-    let r = fly::fly_rings(&sky.world, sea, kart, &rings);
+    let r = if simple {
+        fly::fly_simple(&sky.world, sea, kart, &rings)
+    } else {
+        fly::fly_rings(&sky.world, sea, kart, &rings)
+    };
     let mut lines = Vec::new();
     let crossed = r
         .passes
@@ -304,6 +325,7 @@ pub fn fly_in(sky: &Sky, c: &FlightCourse) -> Result<(Vec<RingLine>, FlyReport)>
             off: p.miss / LU_PER_YARD,
             under: sky.ground(c.points[i][0], c.points[i][1]),
             on_prop: sky.on_prop(c.points[i][0], c.points[i][1]),
+            secs: p.tick as f32 / 30.0,
         });
     }
     Ok((lines, r))

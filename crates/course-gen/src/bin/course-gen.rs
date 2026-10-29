@@ -233,6 +233,10 @@ enum Cmd {
         /// dropped from the course's end).
         #[arg(long)]
         write: bool,
+        /// Fly as the client's race autopilot does (full gas, steering for the next ring), to
+        /// lay against a live run of it.
+        #[arg(long)]
+        simple: bool,
         /// The course file.
         #[arg(long, default_value = "courses/courses.json")]
         courses: PathBuf,
@@ -672,6 +676,7 @@ fn main() -> Result<()> {
             lay,
             clear,
             write,
+            simple,
             courses,
         } => {
             let text = std::fs::read_to_string(&courses)
@@ -694,7 +699,8 @@ fn main() -> Result<()> {
                         println!("{} rings written into {}", laid.len(), courses.display());
                     }
                 } else {
-                    let (lines, r) = course_gen::flight::fly_course(&mut chain, &file, &key)?;
+                    let (lines, r) =
+                        course_gen::flight::fly_course_as(&mut chain, &file, &key, simple)?;
                     let c = course_gen::flight::FlightCourse::read(&file, &key)?;
                     let zone = |chain: &mut benilla_formats::Chain, p: [f32; 3]| {
                         course_gen::flight::zone_at(chain, c.map, p[0], p[1]).unwrap_or_default()
@@ -708,9 +714,10 @@ fn main() -> Result<()> {
                     for l in &lines {
                         let under = l.under.map_or("?".into(), |g| format!("{g:.0}"));
                         println!(
-                            "ring {}: {} at z {:.1} (ring {:.1}), {:.1} yd off centre, ground {under}{}",
+                            "ring {}: {} at {:.2} s, z {:.1} (ring {:.1}), {:.1} yd off centre, ground {under}{}",
                             l.ring,
                             if l.passed { "passed" } else { "MISSED" },
+                            l.secs,
                             l.z,
                             l.ring_z,
                             l.off,
