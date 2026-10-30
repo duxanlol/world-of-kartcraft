@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..6933035
+index 0000000..3b47808
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,8956 @@
+@@ -0,0 +1,9171 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -694,6 +694,22 @@ index 0000000..6933035
 +    // of the server's, the body sized all the same while they drive. Under s_mutex.
 +    static std::unordered_map<uint64, float> s_testLapScale;
 +
++    // A gauntlet's hazard ("Gauntlet"): what it is (M a missile battery, B a bomb mortar, T a TNT,
++    // N a Nitro, K a red beaker dropped on the road, C a clock, S a slowing storm, I an icy one),
++    // where it stands and faces, how near a racer sets it off (yards) and how often (ms).
++    struct Hazard
++    {
++        char kind;
++        float x, y, z, o;
++        float reach;
++        uint32 every;
++    };
++    struct CourseHazards
++    {
++        char const* key;
++        std::vector<Hazard> hazards;
++    };
++
 +    // A flight distance ("Flight distance"): its launch and the Race Marshal it launches from.
 +    struct Leap
 +    {
@@ -707,6 +723,15 @@ index 0000000..6933035
 +    // The courses and the flight distances: courses/courses.json, made into these tables by
 +    // setup/vmangos/pack.py.
 +#include "KartcraftCourses.h"
++
++    // A gauntlet's hazards ("Gauntlet"), null for a course that is no gauntlet.
++    static std::vector<Hazard> const* HazardsOf(Course const& c)
++    {
++        for (CourseHazards const& h : HAZARDS)
++            if (std::strcmp(c.key, h.key) == 0)
++                return &h.hazards;
++        return nullptr;
++    }
 +
 +    // Whether `c` is a party course: in a dungeon or a raid, not the open world, which in 1.12 is
 +    // its two continents (MapEntry::IsContinent) and here the battlegrounds' open copies too, one a
@@ -798,6 +823,14 @@ index 0000000..6933035
 +        uint32 cloudUntil = 0;
 +        uint8 cloudEffect = 0;
 +        bool cloudLocked = false;
++        // A gauntlet's hits taken ("Gauntlet"): GAUNTLET_HITS and they are out; until when the
++        // hazards hold their fire after one (ms, 0 none); and where the hazards last saw them
++        // (x, y, when) and how fast they went (yards a second), for a launcher's lead.
++        uint8 hits = 0;
++        uint32 graceUntil = 0;
++        float seenX = 0.f, seenY = 0.f;
++        uint32 seenAt = 0;
++        float vx = 0.f, vy = 0.f;
 +    };
 +
 +    // A weapon crate ('Q'), a fruit crate ('F') or a single Wumpa fruit ('W') on a race's course.
@@ -862,6 +895,15 @@ index 0000000..6933035
 +        std::vector<Crate> crates;
 +        std::unordered_map<uint64, Shot> shots;
 +        uint16 rng = 0;
++        // A gauntlet's hazards ("Gauntlet"), null on any other course: its own shot counter, and
++        // when each last went off, by hazard index << 32 | racer low guid (0 for one that fires
++        // for the whole race: a mine on the road).
++        std::vector<Hazard> const* hazards = nullptr;
++        uint16 hazardShot = 0;
++        std::unordered_map<uint64, uint32> hazardAt;
++        // A launcher's shots at a racer this pass, by the same key: HAZARD_PASS_SHOTS, then none
++        // until the racer has left its reach.
++        std::unordered_map<uint64, uint8> hazardPass;
 +    };
 +
 +    static std::unordered_map<uint32, Race> s_races;
@@ -1426,12 +1468,12 @@ index 0000000..6933035
 +        if (chosen)
 +        {
 +            Course const* c = FindCourse(chosen->Fetch()[0].GetCppString());
-+            if (c && !PartyCourse(*c) && !CourseOff(*c) && !c->flight)
++            if (c && !PartyCourse(*c) && !CourseOff(*c) && !c->flight && !HazardsOf(*c))
 +                return c->key;
 +        }
 +        std::vector<Course const*> open;
 +        for (Course const& c : COURSES)
-+            if (!PartyCourse(c) && !CourseOff(c) && !c.flight)
++            if (!PartyCourse(c) && !CourseOff(c) && !c.flight && !HazardsOf(c))
 +                open.push_back(&c);
 +        return open.empty() ? std::string() : open[Fnv1a(period) % open.size()]->key;
 +    }
@@ -4383,7 +4425,7 @@ index 0000000..6933035
 +    }
 +
 +    // At the start: the crates go up and every racer is told where they are.
-+    static void StartWeapons(Race& race, uint32 now)
++    static void StartWeapons(Race& race, uint32 now, bool crates)
 +    {
 +        race.crates.clear();
 +        race.shots.clear();
@@ -4392,7 +4434,7 @@ index 0000000..6933035
 +        TerrainInfo const* terrain = sTerrainMgr.LoadTerrain(race.course->map);
 +        auto const& start = race.course->points[0];
 +        float startZ = GroundZ(terrain, start.first, start.second, 0.f);
-+        for (CrateSpot const& s : Layout(*race.course, terrain, startZ))
++        for (CrateSpot const& s : crates ? Layout(*race.course, terrain, startZ) : std::vector<CrateSpot>())
 +        {
 +            Crate c;
 +            c.kind = s.kind;
@@ -4458,8 +4500,11 @@ index 0000000..6933035
 +    static void TickShields(uint32 now)
 +    {
 +        std::map<ObjectGuid, uint32> want;
++        // A track browser trial's racer is shielded from its teleport on: they land on foot on its
++        // grid, perhaps in a hostile camp (a gauntlet's), and a mob's attack there would keep them
++        // in combat, out of the kart, and the countdown waiting.
 +        for (auto const& entry : s_races)
-+            if (entry.second.start)
++            if (entry.second.start || entry.second.awaiting)
 +                for (Racer const& r : entry.second.racers)
 +                    if (!r.finished)
 +                        want[r.guid] |= RACE_SHIELD_FLAGS;
@@ -4617,11 +4662,174 @@ index 0000000..6933035
 +    // Crates due back come up; old shots are forgotten; rain clouds go, rolling the roulettes
 +    // they held. Run on every Kartcraft line: a racer's kart sends its state ten times a second,
 +    // so a respawn is late by at most about 100 ms.
++    // ── Gauntlet ──────────────────────────────────────────────────────────────────────────────
++    //
++    // A gauntlet is a course with hazards (courses.json's "hazards", KartcraftCourses.h HAZARDS):
++    // the server fires CTR's weapons at its racers from them, as a racer's shots are fired, so
++    // every client simulates them and the victim's reports its hit ("W\tH", HandleWeapon). A
++    // missile battery and a bomb mortar fire at a racer within their reach, from where they stand;
++    // a TNT, a Nitro or a red beaker is dropped on the road, once a racer comes near, for the whole
++    // race; a clock spins out a racer within its reach (sent to that racer alone); a storm puts
++    // CTR's rain cloud on one, slowing (S) or icy (I). Its shooter is HAZARD_GUID plus the
++    // hazard's index. GAUNTLET_HITS hits and a racer is out, as out of time: "R\tDNF". Each hit is
++    // told to all, "R\tGH\t<id>\t<name>\t<hits>". A time trial on one has hazards and no crates; a
++    // hosted race both. Never a challenge, nor queued for (the Race Finder's mask).
++    constexpr uint32 HAZARD_GUID = 0x7F000000;
++    constexpr uint8 GAUNTLET_HITS = 3;
++    // How far above or below a hazard (yards) a racer still sets it off: a road over a road, not.
++    constexpr float HAZARD_HEIGHT = 25.f;
++    // The live shots a gauntlet's hazards leave room for in the race's pool, for its racers'.
++    constexpr size_t HAZARD_SHOTS = MAX_LIVE_SHOTS - 4;
++    // A launcher's shots at one racer as they pass, and the hazards' hold on a racer after a hit
++    // (ms), the kart's spin and its getting going again.
++    constexpr uint8 HAZARD_PASS_SHOTS = 2;
++    constexpr uint32 GAUNTLET_GRACE = 3000;
++    // A missile's and a bomb's speed, yards a second (ctr-weapons' 80 and 96 lu a frame, at 30
++    // frames and 36.6 lu a yard), for a launcher's lead: it fires where its racer will be.
++    constexpr float MISSILE_YPS = 65.6f;
++    constexpr float BOMB_YPS = 78.7f;
++    enum StormEffect : uint8 { CLOUD_ICE = 2 };
++
++    // A hit taken in a gauntlet: told to all, and the third puts the racer out; the hazards hold
++    // their fire on them a while.
++    static void GauntletHit(Race& race, Racer& me, uint32 now)
++    {
++        me.graceUntil = (now + GAUNTLET_GRACE) | 1;
++        me.hits = uint8(std::min<int>(me.hits + 1, 255));
++        std::string const id = std::to_string(race.id);
++        SendRace(race, "KARTCRAFT\tR\tGH\t" + id + "\t" + me.name + "\t" + std::to_string(me.hits));
++        if (me.hits < GAUNTLET_HITS)
++            return;
++        me.finished = true;
++        me.place = 0;
++        RecordResult(race, me, 0, 0);
++        SendRace(race, "KARTCRAFT\tR\tDNF\t" + id + "\t" + me.name);
++    }
++
++    // Hazard `index` of `race` goes off at `at` (a racer's player), in its own way.
++    static void FireHazard(Race& race, size_t index, Racer& at, Player* player, uint32 now)
++    {
++        Hazard const& h = (*race.hazards)[index];
++        if (h.kind == 'S' || h.kind == 'I')
++        {
++            at.cloudEffect = h.kind == 'I' ? CLOUD_ICE : CLOUD_SLOW;
++            at.cloudLocked = false;
++            at.cloudUntil = (now + CLOUD_TIME) | 1;
++            SendRace(race, "KARTCRAFT\tW\tR\t" + std::to_string(at.guid.GetCounter()) + "\t" +
++                std::to_string(at.cloudEffect) + "\t0");
++            return;
++        }
++        uint8 item = ITEM_MISSILE;
++        bool juiced = false, dropped = false;
++        switch (h.kind)
++        {
++            case 'B': item = ITEM_BOMB; break;
++            case 'T': item = ITEM_TNT; dropped = true; break;
++            case 'N': item = ITEM_TNT; juiced = true; dropped = true; break;
++            case 'K': item = ITEM_BEAKER; juiced = true; dropped = true; break;
++            case 'C': item = ITEM_CLOCK; break;
++            default: break;
++        }
++        if (++race.hazardShot == 0)
++            race.hazardShot = 1;
++        uint32 const shooter = HAZARD_GUID + uint32(index);
++        uint16 const shot = race.hazardShot;
++        Shot& record = race.shots[(uint64(shooter) << 16) | shot];
++        record = Shot();
++        record.item = item;
++        record.at = now;
++        record.dropped = dropped;
++        record.juiced = juiced;
++        record.x = h.x;
++        record.y = h.y;
++        // A launcher fires unguided from a little over its emplacement, where its racer will be if
++        // they keep on as they go (a turn or the brake, and it misses); a mine lies on the road.
++        float yaw = h.o;
++        if (!dropped)
++        {
++            float const px = player->GetPositionX(), py = player->GetPositionY();
++            float const lead = std::hypot(px - h.x, py - h.y) / (item == ITEM_BOMB ? BOMB_YPS : MISSILE_YPS);
++            yaw = std::atan2(py + at.vy * lead - h.y, px + at.vx * lead - h.x);
++        }
++        float const z = dropped ? h.z : h.z + 1.5f;
++        std::string const target = "0";
++        std::string const line = "KARTCRAFT\tW\tS\t" + std::to_string(shooter) + "\t" + std::to_string(item) + "\t" +
++            (juiced ? "1" : "0") + "\t" + std::to_string(shot) + "\t" + Fixed(h.x, 2) + "," + Fixed(h.y, 2) + "," +
++            Fixed(z, 2) + "," + Fixed(yaw, 3) + "\t" + target + "\t" + (dropped ? "d" : "");
++        // A clock spins every kart but its shooter's: this one is for its racer alone.
++        if (item == ITEM_CLOCK)
++            SendLine(player, line);
++        else
++            SendRace(race, line);
++    }
++
++    // A gauntlet's hazards, with the race's housekeeping: each racer still in, near one ready.
++    static void TickHazards(Race& race, uint32 now)
++    {
++        if (!race.hazards || !race.start || int32(now - race.start) < 0)
++            return;
++        size_t live = 0;
++        for (auto const& s : race.shots)
++            if (LiveShot(s.second, now))
++                ++live;
++        for (Racer& r : race.racers)
++        {
++            if (r.finished)
++                continue;
++            Player* player = ObjectAccessor::FindPlayer(r.guid);
++            if (!player || player->GetMapId() != race.course->map)
++                continue;
++            // How fast they go, from where the hazards last saw them (a lead of a launcher's).
++            float const px = player->GetPositionX(), py = player->GetPositionY();
++            uint32 const since = r.seenAt ? WorldTimer::getMSTimeDiff(r.seenAt, now) : 0;
++            if (!r.seenAt || since >= 100)
++            {
++                if (r.seenAt && since <= 1000)
++                {
++                    float const s = 1000.f / float(since);
++                    r.vx = 0.5f * r.vx + 0.5f * (px - r.seenX) * s;
++                    r.vy = 0.5f * r.vy + 0.5f * (py - r.seenY) * s;
++                }
++                r.seenX = px;
++                r.seenY = py;
++                r.seenAt = now | 1;
++            }
++            bool const grace = r.graceUntil && int32(now - r.graceUntil) < 0;
++            for (size_t i = 0; i < race.hazards->size(); ++i)
++            {
++                Hazard const& h = (*race.hazards)[i];
++                bool const mine = h.kind == 'T' || h.kind == 'N' || h.kind == 'K';
++                uint64 const key = (uint64(i) << 32) | (mine ? 0 : r.guid.GetCounter());
++                if (DistanceTo(player, { h.x, h.y }) > h.reach || std::fabs(player->GetPositionZ() - h.z) > HAZARD_HEIGHT)
++                {
++                    race.hazardPass.erase(key);
++                    continue;
++                }
++                bool const launcher = h.kind == 'M' || h.kind == 'B';
++                if ((grace && !mine) || (launcher && race.hazardPass[key] >= HAZARD_PASS_SHOTS))
++                    continue;
++                auto last = race.hazardAt.find(key);
++                if (last != race.hazardAt.end() && WorldTimer::getMSTimeDiff(last->second, now) < h.every)
++                    continue;
++                if (launcher)
++                    ++race.hazardPass[key];
++                bool const shot = h.kind != 'S' && h.kind != 'I';
++                if (shot && live >= HAZARD_SHOTS)
++                    continue;
++                race.hazardAt[key] = now;
++                FireHazard(race, i, r, player, now);
++                if (shot)
++                    ++live;
++            }
++        }
++    }
++
 +    static void TickWeapons(uint32 now)
 +    {
 +        for (auto& entry : s_races)
 +        {
 +            Race& race = entry.second;
++            TickHazards(race, now);
 +            for (Racer& r : race.racers)
 +                if (r.cloudUntil && int32(now - r.cloudUntil) >= 0)
 +                {
@@ -4700,7 +4908,8 @@ index 0000000..6933035
 +        for (auto& entry : s_races)
 +        {
 +            Race& r = entry.second;
-+            if (!r.start || int32(now - r.start) < 0 || r.crates.empty() || r.timeTrial)
++            if (!r.start || int32(now - r.start) < 0 || (r.crates.empty() && !r.hazards) ||
++                (r.timeTrial && !r.hazards))
 +                continue;
 +            if (Racer* x = FindRacer(r, player->GetGUIDLow()))
 +                if (!me || (me->finished && !x->finished))
@@ -4919,6 +5128,9 @@ index 0000000..6933035
 +                "\t" + std::string(1, kind) + "\t" + std::to_string(me->wumpa));
 +            if (red)
 +                Rain(*race, *me, now);
++            // A TNT landing on the head is no hit yet: its blast, if it is not shaken off, is.
++            if (race->hazards && kind != 'T' && !me->finished)
++                GauntletHit(*race, *me, now);
 +        }
 +        else if (verb == "B" && f.size() >= 4)
 +        {
@@ -5069,8 +5281,11 @@ index 0000000..6933035
 +            std::to_string(r.course->laps) + "\t" + points);
 +        SendRace(r, "KARTCRAFT\tR\tG\t" + std::to_string(id) + "\t" + std::to_string(countdown) + "\t" + Roster(r));
 +        SendRecords(id, r);
-+        if (!r.timeTrial)
-+            StartWeapons(r, now);
++        r.hazards = HazardsOf(*r.course);
++        r.hazardAt.clear();
++        r.hazardShot = 0;
++        if (!r.timeTrial || r.hazards)
++            StartWeapons(r, now, !r.timeTrial);
 +    }
 +
 +    // ── Race Finder ────────────────────────────────────────────────────────────────────────────
@@ -5180,7 +5395,7 @@ index 0000000..6933035
 +                    zone = &zones[index];
 +            }
 +            for (size_t i = 0; i < COURSES.size(); ++i)
-+                if (!COURSES[i].flight &&
++                if (!COURSES[i].flight && !HazardsOf(COURSES[i]) &&
 +                    (token == "any" || token == COURSES[i].key || (zone && *zone == COURSES[i].zone)))
 +                    mask[i] = true;
 +            // A player track only by its own key, and never a flying one.
@@ -9948,10 +10163,10 @@ index 0000000..c72d18e
 +    };
 diff --git a/src/game/KartcraftCourses.h b/src/game/KartcraftCourses.h
 new file mode 100644
-index 0000000..cfe2dbc
+index 0000000..ac7bcb9
 --- /dev/null
 +++ b/src/game/KartcraftCourses.h
-@@ -0,0 +1,2417 @@
+@@ -0,0 +1,2577 @@
 +// Generated by setup/vmangos/pack.py from courses/courses.json (docs/courses.md): edit
 +// that file and rerun pack.py. Included by Kartcraft.cpp inside namespace Kartcraft,
 +// after Course and CrateSpot.
@@ -12357,6 +12572,61 @@ index 0000000..cfe2dbc
 +          { 25.f, 10.f, 10.f, 10.f, 10.f },
 +          {},
 +          { -5201.f, -1222.6f }, {}, 0.f, 1.f, true },
++        // Venture Co. Gauntlet (Stranglethorn Vale): gauntlet made from stv-venture by course-gen
++        // gauntlet: 17 hazards along one run of its route, 1762 yd.
++        { "gx-venture", "Venture Co. Gauntlet", "", 0, 1,
++          { { -12327.f, -692.6f }, { -12237.3f, -773.1f }, { -12146.2f, -748.5f }, { -12052.8f, -768.f },
++            { -11999.7f, -743.7f }, { -11906.7f, -871.f }, { -11799.9f, -785.3f }, { -11762.2f, -651.4f },
++            { -11808.8f, -523.f }, { -11927.1f, -588.7f }, { -12097.5f, -576.8f }, { -12150.4f, -478.6f },
++            { -12260.5f, -564.3f }, { -12401.3f, -596.2f } },
++          { 25.f, 25.f, 22.f, 15.f, 25.f, 25.f, 25.f, 15.f,
++            15.f, 15.8f, 15.f, 15.f, 25.f, 15.f },
++          {},
++          { -12320.3f, -685.2f }, {} },
++        // Badlands Bombardment (Badlands): gauntlet made from badlands-dustbowl-mirage by course-
++        // gen gauntlet: 18 hazards along one run of its route, 1884 yd.
++        { "gx-badlands", "Badlands Bombardment", "", 0, 1,
++          { { -6894.3f, -2696.9f }, { -6980.8f, -2764.9f }, { -7092.f, -2778.8f }, { -7097.9f, -2919.7f },
++            { -7023.8f, -3044.1f }, { -6911.2f, -3036.2f }, { -6799.6f, -3055.4f }, { -6712.9f, -2956.2f },
++            { -6690.7f, -2817.6f }, { -6705.6f, -2679.8f }, { -6696.8f, -2541.2f }, { -6827.9f, -2493.5f },
++            { -6935.3f, -2404.9f }, { -6911.6f, -2500.f }, { -6850.6f, -2591.4f } },
++          { 25.f, 25.f, 25.f, 15.8f, 25.f, 25.f, 25.f, 24.f,
++            17.f, 25.f, 25.f, 20.f, 15.f, 24.2f, 17.7f },
++          {},
++          { -6888.1f, -2704.8f }, {} },
++        // Gaping Chasm Gauntlet (Tanaris): gauntlet made from tanaris-gaping by course-gen
++        // gauntlet: 20 hazards along one run of its route, 2047 yd.
++        { "gx-tanaris", "Gaping Chasm Gauntlet", "", 1, 1,
++          { { -8481.4f, -4035.9f }, { -8375.4f, -4141.9f }, { -8268.7f, -4251.4f }, { -8218.1f, -4386.f },
++            { -8330.3f, -4303.1f }, { -8427.4f, -4189.7f }, { -8508.7f, -4068.2f }, { -8621.3f, -4157.3f },
++            { -8737.5f, -4238.6f }, { -8810.2f, -4159.4f }, { -8896.7f, -4090.7f }, { -8966.9f, -4011.9f },
++            { -8875.8f, -3943.3f }, { -8756.3f, -3936.6f }, { -8637.7f, -3910.6f }, { -8553.5f, -3963.8f } },
++          { 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f, 25.f,
++            15.f, 25.f, 25.f, 25.f, 25.f, 25.f, 15.f, 25.f },
++          {},
++          { -8474.3f, -4028.8f }, {} },
++        // Elwynn Gauntlet (Elwynn Forest): gauntlet made from elwynn-brackwell-wilds-sprint by
++        // course-gen gauntlet: 16 hazards along one run of its route, 1650 yd.
++        { "gx-elwynn", "Elwynn Gauntlet", "", 0, 0,
++          { { -9802.f, -875.3f }, { -9712.7f, -799.8f }, { -9722.3f, -655.2f }, { -9678.9f, -514.5f },
++            { -9570.5f, -419.1f }, { -9557.1f, -272.1f }, { -9593.7f, -127.3f }, { -9563.9f, 15.4f },
++            { -9446.1f, 70.2f }, { -9328.4f, 129.9f }, { -9218.3f, 203.6f }, { -9175.9f, 324.5f },
++            { -9082.f, 416.7f } },
++          { 25.f, 15.f, 25.f, 25.f, 15.f, 15.f, 25.f, 25.f,
++            15.f, 17.4f, 15.f, 15.f, 25.f },
++          {},
++          { -9808.5f, -867.7f }, {} },
++        // Durotar Gauntlet (Durotar): gauntlet made from durotar-scuttle-wilds-sprint by course-gen
++        // gauntlet: 21 hazards along one run of its route, 2071 yd.
++        { "gx-durotar", "Durotar Gauntlet", "", 1, 0,
++          { { 74.f, -5127.3f }, { 141.4f, -5013.f }, { 264.3f, -4950.2f }, { 392.1f, -4900.8f },
++            { 529.9f, -4895.6f }, { 662.5f, -4877.8f }, { 794.4f, -4874.1f }, { 839.1f, -4978.3f },
++            { 965.7f, -4956.2f }, { 1086.6f, -4892.f }, { 1180.4f, -4794.3f }, { 1227.1f, -4666.4f },
++            { 1169.8f, -4533.8f }, { 1202.3f, -4385.6f }, { 1202.f, -4229.6f }, { 1230.f, -4075.3f } },
++          { 25.f, 25.f, 25.f, 17.4f, 18.4f, 25.f, 15.f, 15.f,
++            15.f, 20.f, 20.f, 15.f, 15.f, 17.4f, 25.f, 25.f },
++          {},
++          { 65.4f, -5122.2f }, {} },
 +    };
 +
 +    static std::vector<Leap> const LEAPS = {
@@ -12368,6 +12638,111 @@ index 0000000..cfe2dbc
 +        // Winterspring Leap (Winterspring): off the summit the Winterspring Downhill starts from,
 +        // the way its first ring lies.
 +        { "ws-leap", "Winterspring Leap", 1, 6203.3f, -5251.1f, 0.233f, { 6201.f, -5241.4f } },
++    };
++
++    static std::vector<CourseHazards> const HAZARDS = {
++        { "gx-venture", {
++            { 'M', -12233.9f, -749.4f, 13.6f, 4.976f, 75.f, 4000 },
++            { 'T', -12136.3f, -750.6f, 14.5f, 6.077f, 70.f, 12000 },
++            { 'B', -12036.5f, -780.3f, 15.9f, 2.f, 55.f, 5000 },
++            { 'S', -11972.4f, -781.1f, 16.3f, 5.343f, 18.f, 12000 },
++            { 'M', -11934.1f, -870.8f, 32.4f, 0.631f, 75.f, 4000 },
++            { 'N', -11845.4f, -821.8f, 31.7f, 0.676f, 70.f, 12000 },
++            { 'B', -11807.3f, -745.1f, 40.4f, 6.009f, 55.f, 5000 },
++            { 'K', -11764.2f, -658.5f, 37.f, 1.296f, 70.f, 12000 },
++            { 'C', -11792.1f, -569.f, 17.1f, 1.919f, 14.f, 15000 },
++            { 'I', -11849.f, -545.3f, 13.4f, 3.649f, 18.f, 12000 },
++            { 'M', -11934.3f, -610.2f, 15.8f, 1.501f, 75.f, 4000 },
++            { 'T', -12027.6f, -581.7f, 14.6f, 3.072f, 70.f, 12000 },
++            { 'B', -12089.9f, -544.5f, 15.8f, 3.636f, 55.f, 5000 },
++            { 'S', -12157.f, -483.7f, 28.9f, 3.803f, 18.f, 12000 },
++            { 'M', -12245.5f, -524.7f, 32.4f, 5.374f, 75.f, 4000 },
++            { 'N', -12317.9f, -577.3f, 26.5f, 3.364f, 70.f, 12000 },
++            { 'B', -12378.1f, -590.3f, 15.9f, 3.798f, 55.f, 5000 },
++        } },
++        { "gx-badlands", {
++            { 'M', -6997.9f, -2789.2f, 241.9f, 1.695f, 75.f, 4000 },
++            { 'T', -7092.1f, -2781.7f, 242.6f, 4.671f, 70.f, 12000 },
++            { 'B', -7118.1f, -2875.7f, 241.8f, 6.241f, 55.f, 5000 },
++            { 'S', -7071.3f, -2964.3f, 242.7f, 5.25f, 18.f, 12000 },
++            { 'M', -7020.2f, -3065.9f, 241.7f, 1.641f, 75.f, 4000 },
++            { 'N', -6927.f, -3037.3f, 241.7f, 0.07f, 70.f, 12000 },
++            { 'B', -6829.4f, -3027.9f, 241.7f, 4.542f, 55.f, 5000 },
++            { 'K', -6759.5f, -3009.5f, 241.7f, 0.853f, 70.f, 12000 },
++            { 'C', -6709.1f, -2932.3f, 241.8f, 1.412f, 14.f, 15000 },
++            { 'I', -6694.f, -2838.5f, 242.9f, 1.412f, 18.f, 12000 },
++            { 'M', -6720.5f, -2746.5f, 242.5f, 0.108f, 75.f, 4000 },
++            { 'T', -6703.7f, -2649.6f, 241.7f, 1.507f, 70.f, 12000 },
++            { 'B', -6675.7f, -2556.2f, 241.6f, 3.078f, 55.f, 5000 },
++            { 'S', -6773.3f, -2513.4f, 242.9f, 2.793f, 18.f, 12000 },
++            { 'M', -6842.3f, -2453.1f, 243.4f, 4.023f, 75.f, 4000 },
++            { 'N', -6929.6f, -2409.6f, 244.8f, 2.452f, 70.f, 12000 },
++            { 'K', -6864.6f, -2570.4f, 242.5f, 5.301f, 70.f, 12000 },
++            { 'C', -6877.3f, -2655.8f, 242.f, 4.32f, 14.f, 15000 },
++        } },
++        { "gx-tanaris", {
++            { 'M', -8373.9f, -4112.3f, 11.4f, 3.927f, 75.f, 4000 },
++            { 'T', -8323.f, -4195.7f, 12.1f, 5.485f, 70.f, 12000 },
++            { 'B', -8283.2f, -4275.2f, 8.6f, 0.36f, 55.f, 5000 },
++            { 'S', -8229.2f, -4356.4f, 9.8f, 5.072f, 18.f, 12000 },
++            { 'M', -8256.f, -4330.6f, 9.7f, 4.076f, 75.f, 4000 },
++            { 'N', -8342.6f, -4288.7f, 9.1f, 2.279f, 70.f, 12000 },
++            { 'B', -8421.1f, -4230.9f, 14.9f, 0.708f, 55.f, 5000 },
++            { 'K', -8460.6f, -4140.2f, 9.2f, 2.161f, 70.f, 12000 },
++            { 'C', -8515.3f, -4073.4f, 16.6f, 3.811f, 14.f, 15000 },
++            { 'I', -8589.8f, -4132.4f, 18.4f, 3.811f, 18.f, 12000 },
++            { 'M', -8653.6f, -4206.8f, 19.1f, 2.181f, 75.f, 4000 },
++            { 'T', -8742.9f, -4232.7f, 14.4f, 2.313f, 70.f, 12000 },
++            { 'B', -8791.f, -4147.8f, 10.8f, 3.884f, 55.f, 5000 },
++            { 'S', -8881.1f, -4103.1f, 10.4f, 2.47f, 18.f, 12000 },
++            { 'M', -8930.2f, -4020.f, 11.4f, 3.869f, 75.f, 4000 },
++            { 'N', -8915.4f, -3973.1f, 10.2f, 0.645f, 70.f, 12000 },
++            { 'B', -8831.6f, -3918.8f, 11.2f, 4.768f, 55.f, 5000 },
++            { 'K', -8736.f, -3932.1f, 10.3f, 0.216f, 70.f, 12000 },
++            { 'C', -8643.2f, -3911.8f, 24.6f, 0.216f, 14.f, 15000 },
++            { 'I', -8562.2f, -3958.3f, 42.2f, 5.72f, 18.f, 12000 },
++        } },
++        { "gx-elwynn", {
++            { 'M', -9735.5f, -788.2f, 41.4f, 0.066f, 75.f, 4000 },
++            { 'T', -9719.9f, -692.f, 45.1f, 1.637f, 70.f, 12000 },
++            { 'B', -9684.1f, -606.1f, 49.3f, 2.842f, 55.f, 5000 },
++            { 'S', -9674.5f, -510.6f, 50.5f, 0.722f, 18.f, 12000 },
++            { 'M', -9588.6f, -464.4f, 57.9f, 2.292f, 75.f, 4000 },
++            { 'N', -9565.8f, -367.8f, 62.4f, 1.48f, 70.f, 12000 },
++            { 'B', -9579.1f, -271.2f, 62.7f, 6.192f, 55.f, 5000 },
++            { 'K', -9580.1f, -181.1f, 57.6f, 1.818f, 70.f, 12000 },
++            { 'C', -9585.6f, -88.6f, 61.4f, 1.365f, 14.f, 15000 },
++            { 'I', -9566.2f, 4.4f, 60.5f, 1.365f, 18.f, 12000 },
++            { 'M', -9497.2f, 70.7f, 56.4f, 5.148f, 75.f, 4000 },
++            { 'T', -9402.5f, 92.3f, 58.3f, 0.469f, 70.f, 12000 },
++            { 'B', -9306.3f, 118.2f, 66.2f, 2.161f, 55.f, 5000 },
++            { 'S', -9239.6f, 189.3f, 68.f, 0.59f, 18.f, 12000 },
++            { 'M', -9174.6f, 261.8f, 75.f, 2.804f, 75.f, 4000 },
++            { 'N', -9150.f, 349.9f, 89.2f, 0.776f, 70.f, 12000 },
++        } },
++        { "gx-durotar", {
++            { 'M', 121.1f, -5004.1f, 9.7f, 5.75f, 75.f, 4000 },
++            { 'T', 223.6f, -4971.f, 14.6f, 0.472f, 70.f, 12000 },
++            { 'B', 318.2f, -4952.9f, 19.3f, 1.94f, 55.f, 5000 },
++            { 'S', 399.4f, -4900.5f, 22.5f, 0.038f, 18.f, 12000 },
++            { 'M', 495.1f, -4918.9f, 23.2f, 1.609f, 75.f, 4000 },
++            { 'N', 588.8f, -4887.7f, 24.7f, 0.133f, 70.f, 12000 },
++            { 'B', 682.5f, -4855.2f, 26.4f, 4.74f, 55.f, 5000 },
++            { 'K', 778.f, -4874.6f, 42.2f, 0.028f, 70.f, 12000 },
++            { 'C', 825.4f, -4946.4f, 16.6f, 5.118f, 14.f, 15000 },
++            { 'I', 898.5f, -4967.9f, 8.6f, 0.173f, 18.f, 12000 },
++            { 'M', 979.f, -4924.2f, 14.7f, 5.201f, 75.f, 4000 },
++            { 'T', 1073.2f, -4899.1f, 14.9f, 0.488f, 70.f, 12000 },
++            { 'B', 1157.8f, -4849.6f, 21.9f, 2.377f, 55.f, 5000 },
++            { 'S', 1193.9f, -4757.3f, 18.1f, 1.221f, 18.f, 12000 },
++            { 'M', 1243.4f, -4674.2f, 15.9f, 2.791f, 75.f, 4000 },
++            { 'N', 1190.1f, -4580.8f, 19.f, 1.979f, 70.f, 12000 },
++            { 'B', 1157.7f, -4486.3f, 20.8f, 6.067f, 55.f, 5000 },
++            { 'K', 1199.5f, -4398.2f, 23.4f, 1.355f, 70.f, 12000 },
++            { 'C', 1202.1f, -4303.5f, 22.1f, 1.573f, 14.f, 15000 },
++            { 'I', 1205.8f, -4208.9f, 25.7f, 1.391f, 18.f, 12000 },
++            { 'M', 1201.1f, -4111.5f, 21.8f, 6.104f, 75.f, 4000 },
++        } },
 +    };
 diff --git a/src/game/Maps/GridNotifiers.cpp b/src/game/Maps/GridNotifiers.cpp
 index 5529860..f4af29d 100644

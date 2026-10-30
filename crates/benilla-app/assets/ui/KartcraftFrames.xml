@@ -897,12 +897,14 @@
 
         -- The courses, the flight courses' keys a line each, and the flight distances, lines as
         -- the courses' (their launch the one point), which the Flight tab lists.
-        function BenillaKartTracks_Set(list, flight, leaps)
+        function BenillaKartTracks_Set(list, flight, leaps, gauntlet)
             BenillaKartTracks = BenillaKartTracks_Parse(list)
-            local flying = {}
+            local flying, gauntlets = {}, {}
             for key in string.gfind(flight or "", "[^\n]+") do flying[key] = 1 end
+            for key in string.gfind(gauntlet or "", "[^\n]+") do gauntlets[key] = 1 end
             for i = 1, table.getn(BenillaKartTracks) do
                 if flying[BenillaKartTracks[i].key] then BenillaKartTracks[i].flight = 1 end
+                if gauntlets[BenillaKartTracks[i].key] then BenillaKartTracks[i].gauntlet = 1 end
             end
             BenillaKartLeaps = BenillaKartTracks_Parse(leaps)
             for i = 1, table.getn(BenillaKartLeaps) do
@@ -1102,18 +1104,25 @@
                 for i = 1, table.getn(BenillaKartPubTracks) do add(BenillaKartPubTracks[i]) end
                 return shown
             end
-            local flying = mode == nil and BenillaKartTrackBrowser.tab == 2
+            -- Each track's tab: 1 driven, 2 flown, 3 a gauntlet.
+            local tab = mode == nil and BenillaKartTrackBrowser.tab or 1
+            local function tab_of(t)
+                if t.gauntlet then return 3 elseif t.flight then return 2 end
+                return 1
+            end
             if mode ~= "mine" then
                 for i = 1, table.getn(BenillaKartTracks) do
-                    if (BenillaKartTracks[i].flight ~= nil) == flying then add(BenillaKartTracks[i]) end
+                    if tab_of(BenillaKartTracks[i]) == tab then add(BenillaKartTracks[i]) end
                 end
             end
-            if flying then
+            if tab == 2 then
                 for i = 1, table.getn(BenillaKartLeaps) do add(BenillaKartLeaps[i]) end
             end
-            for i = 1, table.getn(BenillaKartMyTracks) do
-                local t = BenillaKartMyTracks[i]
-                if mode == "mine" or (t.flight ~= nil) == flying then add(t) end
+            if tab ~= 3 then
+                for i = 1, table.getn(BenillaKartMyTracks) do
+                    local t = BenillaKartMyTracks[i]
+                    if mode == "mine" or tab_of(t) == tab then add(t) end
+                end
             end
             return shown
         end
@@ -1157,7 +1166,7 @@
                 BenillaKartTracksFrameSearch:SetText("")
                 -- On the course's own tab.
                 local track = BenillaKartTrack(key)
-                BenillaKartTrackBrowser.tab = (track and track.flight) and 2 or 1
+                BenillaKartTrackBrowser.tab = (track and track.gauntlet) and 3 or (track and track.flight) and 2 or 1
             end
             BenillaKartTrackBrowser.selected = key or BenillaKartTrackBrowser.selected
             BenillaKart_Open(BenillaKartTracksFrame)
@@ -1238,7 +1247,7 @@
             local track = selected and BenillaKartTrack(selected)
             -- The tabs with the course list alone, not our own tracks' or the players'.
             local tabbed = BenillaKartTrackBrowser.mode == nil
-            for i = 1, 2 do
+            for i = 1, 3 do
                 local tab = getglobal("BenillaKartTracksFrameTab" .. i)
                 if tab and tabbed then tab:Show() elseif tab then tab:Hide() end
             end
@@ -1246,6 +1255,7 @@
             BenillaKartTracksFrameEdit:Hide()
             local title = BENILLA_KART_BROWSER_TITLES[BenillaKartTrackBrowser.mode or ""]
             if not title and BenillaKartTrackBrowser.tab == 2 then title = "Flight" end
+            if not title and BenillaKartTrackBrowser.tab == 3 then title = "Gauntlet" end
             BenillaKartTracksFrameHeaderText:SetText(title or "Tracks")
             BenillaKartTracksFrameTrial:SetText("Time trial")
             BenillaKartTracksFrameMarshal:SetText("Go to marshal")
@@ -1420,7 +1430,8 @@
                 if BenillaKartTracksFrameRate:IsEnabled() == 1 then BenillaKartTracksFrameRate:Click() end
             elseif key == "PADFORWARD" or key == "PADDLEFT" or key == "PADDRIGHT" then
                 if BenillaKartTrackBrowser.mode == nil then
-                    BenillaKartTrackBrowser_SetTab(3 - BenillaKartTrackBrowser.tab)
+                    local back = key == "PADDLEFT"
+                    BenillaKartTrackBrowser_SetTab(math.mod(BenillaKartTrackBrowser.tab + (back and 1 or 0), 3) + 1)
                 end
             elseif key == "PAD2" then
                 BenillaKartTracksFrame:Hide()
@@ -1706,6 +1717,17 @@
             elseif verb == "Leap" then
                 -- On a flight distance's launch (Kartcraft.cpp "Flight distance").
                 UIErrorsFrame:AddMessage("Flight distance: drive off the edge, double-tap hop to open your wings, and fly as far as you can!", 1, 0.82, 0, 1, 8)
+            elseif verb == "GH" then
+                -- A gauntlet's hit on a racer ("Kartcraft.cpp" "Gauntlet"): ours told, the third out.
+                if line[4] == UnitName("player") then
+                    local hits = tonumber(line[5]) or 0
+                    if hits >= 3 then
+                        UIErrorsFrame:AddMessage("Three hits: you're out of the gauntlet!", 1, 0.2, 0.2, 1, 6)
+                        PlaySound("igQuestFailed")
+                    else
+                        UIErrorsFrame:AddMessage("Hit! " .. hits .. " of 3", 1, 0.5, 0.1, 1, 3)
+                    end
+                end
             elseif verb == "LeapBest" then
                 -- A flight distance measured: this flight, our best, the record, all in tenths of a yard.
                 local function yards(t) return format("%.1f yd", (tonumber(t) or 0) / 10) end
@@ -3472,7 +3494,7 @@
             elseif event == "BENILLA_KART_TRACKMAP" then
                 BenillaKartMap_SetTrack(arg1)
             elseif event == "BENILLA_KART_TRACKS" then
-                BenillaKartTracks_Set(arg1, arg2, arg3)
+                BenillaKartTracks_Set(arg1, arg2, arg3, arg4)
             elseif event == "BENILLA_KART_COURSES" then
                 BenillaKartCourses_Set(arg1)
             elseif event == "BENILLA_KART_COURSE_NAMES" then
@@ -6710,11 +6732,15 @@
                 <Anchors><Anchor point="LEFT" relativeTo="$parentTab1" relativePoint="RIGHT"><Offset><AbsDimension x="-16" y="0"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartTrackBrowser_SetTab(2)</OnClick></Scripts>
             </Button>
+            <Button name="$parentTab3" inherits="CharacterFrameTabButtonTemplate" id="3" text="Gauntlet">
+                <Anchors><Anchor point="LEFT" relativeTo="$parentTab2" relativePoint="RIGHT"><Offset><AbsDimension x="-16" y="0"/></Offset></Anchor></Anchors>
+                <Scripts><OnClick>BenillaKartTrackBrowser_SetTab(3)</OnClick></Scripts>
+            </Button>
         </Frames>
         <Scripts>
             <OnLoad>
                 if PanelTemplates_SetNumTabs then
-                    PanelTemplates_SetNumTabs(this, 2)
+                    PanelTemplates_SetNumTabs(this, 3)
                     PanelTemplates_SetTab(this, 1)
                 end
                 if UISpecialFrames then table.insert(UISpecialFrames, this:GetName()) end

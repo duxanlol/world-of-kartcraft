@@ -3883,6 +3883,7 @@ fn the_track_browser_parts_the_flight_courses_on_a_tab_of_their_own() {
     let list = [
         "t1\tCrystal Lake Loop\tElwynn Forest\t0\t3\tA 3-lap circuit.\t-9000.0,-100.0;-9100.0,0.0",
         "sky\tThe Skyway\tMulgore\t1\t0\tA flight trial.\t-1585.0,414.0;-1460.0,330.0",
+        "gx\tThe Gauntlet\tTanaris\t1\t1\tA gauntlet.\t-7000.0,-3000.0;-7100.0,-3100.0",
     ];
     s.fire_event(
         "BENILLA_KART_TRACKS",
@@ -3892,6 +3893,7 @@ fn the_track_browser_parts_the_flight_courses_on_a_tab_of_their_own() {
             ScriptValue::Str(
                 "leap\tThe Leap\tMulgore\t1\t0\tA flight distance.\t-1588.0,417.0".into(),
             ),
+            ScriptValue::Str("gx".into()),
         ],
     );
     s.tick(0.0);
@@ -3939,14 +3941,19 @@ fn the_track_browser_parts_the_flight_courses_on_a_tab_of_their_own() {
         .unwrap();
     assert_eq!(acted(&mut s), ["KARTCRAFT\tR\tMT\tleap"]);
 
-    // Start turns the tab from the pad; a course opened at its key is on its own tab.
+    // Start turns the tab from the pad, round the three; a course opened at its key is on its own.
     s.run("BenillaKartTrackBrowser_Open() BenillaKartTrackBrowser_Pad('PADFORWARD')")
         .unwrap();
-    assert_eq!(shown(&s), "t1");
+    assert_eq!(shown(&s), "gx");
+    assert_eq!(text(&s, "BenillaKartTracksFrameHeaderText"), "Gauntlet");
     s.run("BenillaKartTrackBrowser_Pad('PADDRIGHT')").unwrap();
-    assert_eq!(shown(&s), "sky leap");
-    s.run("BenillaKartTrackBrowser_Pad('PADDLEFT')").unwrap();
     assert_eq!(shown(&s), "t1");
+    s.run("BenillaKartTrackBrowser_Pad('PADDLEFT')").unwrap();
+    assert_eq!(shown(&s), "gx");
+    s.run("BenillaKartTrackBrowser_Pad('PADDLEFT')").unwrap();
+    assert_eq!(shown(&s), "sky leap");
+    s.run("BenillaKartTrackBrowser_Open('gx')").unwrap();
+    assert_eq!(shown(&s), "gx");
     s.run("BenillaKartTrackBrowser_Open('sky')").unwrap();
     assert_eq!(shown(&s), "sky leap");
     s.run("BenillaKartTrackBrowser_Open('t1')").unwrap();

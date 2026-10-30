@@ -178,6 +178,21 @@ Every client shows the reaction on the victim's kart. A shield ram takes the att
 The attacker's own side is its own client's, from the same touch: its shield pops, and a turbo ram
 makes it high-jump (`FORCED_JUMP_HIGH`, three times the hop's force).
 
+### Server → racers: hazards
+
+A gauntlet (`docs/courses.md`, `gauntlet`) has hazards the server fires as racers fire items: the
+`S` relay as above, from shooter guid `2130706432` (`0x7F000000`) plus the hazard's index, which
+no player has. Every client simulates the shot as any other, and the victim reports its hit with
+`H`, which the server checks against the shot as any other. A missile battery or a bomb mortar
+fires unguided (`target` 0) from over its emplacement, aimed where its racer will be at the
+racer's speed, at most twice a pass and never in the 3 s after a hit; a TNT, Nitro or red beaker
+is dropped (`d`) on the road; a clock's `S` goes to the racer near it alone (a clock spins every
+kart but its shooter's). A storm is a rain cloud's `R`, effect `0` slow or `2` ice, with no shot.
+A time trial on a gauntlet takes these lines too (it has hazards and no crates).
+
+Each hit in a gauntlet but a TNT landing on the head (its blast is one) is told to every racer,
+`R\tGH\t<race>\t<name>\t<hits>`; the third puts the racer out, `R\tDNF\t<race>\t<name>`.
+
 ### Limits
 
 At most 30 `W` lines a second from one sender, half again the 20 the client paces itself to; the

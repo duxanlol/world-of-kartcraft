@@ -71,6 +71,10 @@ pub(crate) struct Course {
     /// (`docs/courses.md`, `flight`); never in the Race Finder.
     #[serde(default)]
     flight: bool,
+    /// A gauntlet: hazards the server fires at its racers (`docs/courses.md`, `gauntlet`), its
+    /// time trial with weapons on; never in the Race Finder.
+    #[serde(default)]
+    gauntlet: bool,
 }
 
 /// A course's scale where it names none: the kart's own size.
@@ -124,9 +128,9 @@ impl Course {
     }
 
     /// What the Race Finder offers it under: its series, else its zone, and nothing for a flight
-    /// course, which it never offers (`pack.py` gives the server the same).
+    /// course or a gauntlet, which it never offers (`pack.py` gives the server the same).
     pub(crate) fn finder_group(&self) -> &str {
-        if self.flight {
+        if self.flight || self.gauntlet {
             ""
         } else if self.series.is_empty() {
             &self.zone
@@ -222,6 +226,11 @@ impl Course {
     /// A flight trial's course ([`Course::flight`]).
     pub(crate) fn flight(&self) -> bool {
         self.flight
+    }
+
+    /// A gauntlet ([`Course::gauntlet`]).
+    pub(crate) fn gauntlet(&self) -> bool {
+        self.gauntlet
     }
 
     /// Each checkpoint's height, where known.
@@ -464,6 +473,8 @@ pub(crate) struct Active {
     rings: Vec<Option<[f32; 2]>>,
     /// A flight trial: the kart flies in it ([`Course::flight`]).
     flight: bool,
+    /// A gauntlet: its time trial has weapons, the server's hazards' ([`Course::gauntlet`]).
+    gauntlet: bool,
     /// The track editor's objects on its track: a test lap's, or a player track's from its `PT`
     /// line ([`super::objects`]).
     objects: Vec<super::objects::Placed>,
@@ -1193,7 +1204,7 @@ impl Races {
     pub(crate) fn weapons_race(&self) -> Option<u32> {
         self.race
             .as_ref()
-            .filter(|r| !r.done && !r.time_trial)
+            .filter(|r| !r.done && (!r.time_trial || r.gauntlet))
             .map(|r| r.id)
     }
 
@@ -1396,6 +1407,7 @@ impl Races {
                     // Its rings, hung at their heights; a flight trial's, flown.
                     race.rings = ours.map_or_else(Vec::new, Course::rings);
                     race.flight = ours.is_some_and(Course::flight);
+                    race.gauntlet = ours.is_some_and(Course::gauntlet);
                     // A player track's from its `PT` line, which comes first.
                     let track = self.track_spots.get(&f[2]);
                     let track = track.and_then(|t| super::track_edit::parse_spots(t));

@@ -13,7 +13,8 @@
 //! - `BENILLA_KART_TRACKS(list, flight, leaps)`: the track browser's courses, once per VM, a line
 //!   each: `key<TAB>name<TAB>zone<TAB>map<TAB>laps<TAB>description<TAB>x,y;x,y;...` (the checkpoints,
 //!   WoW x, y, which `GetWorldLocMapPosition` puts on the world map); the flight courses' keys, one
-//!   a line; and the flight distances as the courses, their launch the one point.
+//!   a line; the flight distances as the courses, their launch the one point; and the gauntlets'
+//!   keys, one a line.
 //! - `BENILLA_KART_GARAGE(skill, classes, racers)`: the garage's Karting skill (0 before the line
 //!   is ours), its classes one `key<TAB>name<TAB>skill needed<TAB>description` a line in the order
 //!   they open, and the racers whose karts the kart data holds, one `key<TAB>name` a line; at load
@@ -160,6 +161,7 @@ pub(crate) fn feed(
                 ScriptValue::Str(track_list()),
                 ScriptValue::Str(flight_list()),
                 ScriptValue::Str(leap_list()),
+                ScriptValue::Str(gauntlet_list()),
             ],
         );
         sent.courses = true;
@@ -298,6 +300,16 @@ fn flight_list() -> String {
     COURSES
         .iter()
         .filter(|c| c.flight())
+        .map(|c| c.key.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The gauntlets' keys, one a line: the track browser's Gauntlet tab.
+fn gauntlet_list() -> String {
+    COURSES
+        .iter()
+        .filter(|c| c.gauntlet())
         .map(|c| c.key.as_str())
         .collect::<Vec<_>>()
         .join("\n")

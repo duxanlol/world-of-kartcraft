@@ -152,6 +152,21 @@ enum Cmd {
         #[arg(long)]
         remove: Vec<String>,
     },
+    /// Make a gauntlet of a course (`course_gen::gauntlet`): its copy, one lap, hazards along
+    /// its route, written into the course file (replacing one of the same key).
+    Gauntlet {
+        /// The course it is made from.
+        #[arg(long)]
+        from: String,
+        /// The gauntlet's key and name.
+        #[arg(long)]
+        key: String,
+        #[arg(long)]
+        name: String,
+        /// The course file.
+        #[arg(long, default_value = "courses/courses.json")]
+        courses: PathBuf,
+    },
     /// Scout flight courses (`course_gen::scout`): tops chained down a glide at a time round a
     /// spot, flown by the flight bot; the ones it flies, as course entries.
     Scout {
@@ -583,6 +598,24 @@ fn main() -> Result<()> {
                 );
             }
             println!("exported {} into {}", done.len(), courses.display());
+        }
+        Cmd::Gauntlet {
+            from,
+            key,
+            name,
+            courses,
+        } => {
+            let text = std::fs::read_to_string(&courses)
+                .with_context(|| format!("reading {}", courses.display()))?;
+            let mut file: serde_json::Value = serde_json::from_str(&text)?;
+            let entry =
+                course_gen::gauntlet::make(&mut open_install()?, &file, &from, &key, &name)?;
+            let hazards = entry["hazards"].as_array().map_or(0, Vec::len);
+            let list = file["courses"].as_array_mut().context("courses")?;
+            list.retain(|c| c["key"] != key.as_str());
+            list.push(entry);
+            std::fs::write(&courses, course_gen::export::format(&file))?;
+            println!("{key}: {name}, {hazards} hazards, from {from}");
         }
         Cmd::Scout {
             map,

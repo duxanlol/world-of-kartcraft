@@ -434,12 +434,14 @@ const ORDER: &[&str] = &[
     "map",
     "laps",
     "flight",
+    "gauntlet",
     "note",
     "launch",
     "marshal",
     "checkpoints",
     "crates",
     "pads",
+    "hazards",
     "doors",
 ];
 

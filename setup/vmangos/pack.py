@@ -140,7 +140,7 @@ def courses_header(data):
         name = cstring(c.get('name'), f'course {key}: name')
         # The server's zone is only the Race Finder's group: a series ("Grand Prix") in its stead,
         # and none for a flight course, which the finder never offers.
-        zone = '' if c.get('flight') else c.get('series') or c.get('zone', '')
+        zone = '' if c.get('flight') or c.get('gauntlet') else c.get('series') or c.get('zone', '')
         zone_c = cstring(zone, f'course {key}: zone') if zone else '""'
         cmap = c.get('map')
         laps = c.get('laps')
@@ -213,7 +213,61 @@ def courses_header(data):
         out.append(f'          {{ {cfloat(mx)}, {cfloat(my)} }}, {doors_c}{tail} }},')
     out.append('    };')
     out += leaps_table(data, courses)
+    out += hazards_table(courses)
     return '\n'.join(out) + '\n'
+
+
+# A gauntlet's hazards (Kartcraft.cpp "Gauntlet"), by their courses.json kind: the server's
+# letter for each, and whether an emplacement stands at it (its creature entry).
+HAZARD_KINDS = {
+    'missile': ('M', 190013), 'bomb': ('B', 190014), 'tnt': ('T', None), 'nitro': ('N', None),
+    'beaker': ('K', None), 'clock': ('C', None), 'storm': ('S', None), 'ice': ('I', None),
+}
+
+
+def hazards_of(c):
+    """A gauntlet course's hazards, checked: (letter, x, y, z, o, reach, every) each."""
+    key = c['key']
+    gauntlet = c.get('gauntlet', False)
+    if not isinstance(gauntlet, bool):
+        fail(f'course {key}: gauntlet must be true or false')
+    hazards = c.get('hazards', [])
+    if not gauntlet:
+        if hazards:
+            fail(f'course {key}: hazards on a course that is no gauntlet')
+        return []
+    if not isinstance(hazards, list) or not hazards:
+        fail(f'course {key}: a gauntlet needs its "hazards"')
+    if c.get('flight'):
+        fail(f'course {key}: a gauntlet is driven, not flown')
+    out = []
+    for n, h in enumerate(hazards):
+        what = f'course {key}: hazard {n}'
+        if not isinstance(h, dict) or h.get('kind') not in HAZARD_KINDS:
+            fail(f'{what}: kind must be one of {", ".join(HAZARD_KINDS)}')
+        x, y, z = (num(h.get(f), f'{what}: {f}') for f in 'xyz')
+        o = num(h.get('o', 0), f'{what}: o')
+        reach = num(h.get('reach'), f'{what}: reach')
+        every = num(h.get('every'), f'{what}: every')
+        if not 5 <= reach <= 200 or not 500 <= every <= 60000:
+            fail(f'{what}: reach 5 to 200 yd, every 500 to 60000 ms')
+        out.append((HAZARD_KINDS[h['kind']][0], x, y, z, o, reach, int(every)))
+    return out
+
+
+def hazards_table(courses):
+    """The gauntlets' hazards (Kartcraft.cpp Hazard), by course key."""
+    out = ['', '    static std::vector<CourseHazards> const HAZARDS = {']
+    for c in courses:
+        hz = hazards_of(c)
+        if not hz:
+            continue
+        out.append(f'        {{ "{c["key"]}", {{')
+        for k, x, y, z, o, reach, every in hz:
+            out.append(f"            {{ '{k}', {cfloat(x)}, {cfloat(y)}, {cfloat(z)}, {cfloat(o)}, {cfloat(reach)}, {every} }},")
+        out.append('        } },')
+    out.append('    };')
+    return out
 
 
 def leaps_table(data, courses):
@@ -304,6 +358,48 @@ def sql_num(v):
     return str(int(v)) if v == int(v) else repr(v)
 
 
+# The gauntlets' emplacements: a Southsea cannon (display 3146) for a missile battery and a mortar
+# (display 15435) for a bomb mortar, friendly to all, no gossip, beside the road they fire on.
+EMPLACEMENT_GUIDS = (402000, 402999)
+EMPLACEMENTS = {190013: ('Goblin Rocket Battery', 3146), 190014: ('Goblin Bomb Mortar', 15435)}
+
+
+def emplacements_sql(data):
+    """The gauntlets' emplacements: their templates and a spawn at each one."""
+    lo, hi = EMPLACEMENT_GUIDS
+    entries = ', '.join(str(e) for e in EMPLACEMENTS)
+    out = [
+        '',
+        '-- The gauntlets\' emplacements (Kartcraft.cpp "Gauntlet"): where a hazard fires from.',
+        f'DELETE FROM `creature` WHERE `guid` BETWEEN {lo} AND {hi} OR `id` IN ({entries});',
+        f'DELETE FROM `creature_template` WHERE `entry` IN ({entries});',
+        'INSERT INTO `creature_template` (`entry`, `patch`, `name`, `subname`, `level_min`, `level_max`,',
+        '  `faction`, `npc_flags`, `display_id1`, `display_scale1`, `display_probability1`,',
+        '  `display_total_probability`, `type`, `unit_class`, `inhabit_type`, `civilian`,',
+        '  `static_flags1`, `flags_extra`) VALUES',
+    ]
+    rows = [f"({e}, 0, '{name}', 'World of Kartcraft', 60, 60, 35, 0, {display}, 1, 100, 100, 9, 1, 1, 1,"
+            f' {MARSHAL_STATIC_FLAGS}, 2)' for e, (name, display) in EMPLACEMENTS.items()]
+    out.append(',\n'.join(rows) + ';')
+    spawns = []
+    for c in data['courses']:
+        for h in c.get('hazards', []) if c.get('gauntlet') else []:
+            entry = HAZARD_KINDS[h['kind']][1]
+            if entry:
+                spawns.append((entry, c['map'], h['x'], h['y'], h['z'], h.get('o', 0)))
+    if len(spawns) > hi - lo + 1:
+        fail(f'{len(spawns)} emplacements, more than the {hi - lo + 1} spawn guids reserved')
+    if spawns:
+        out += [
+            'INSERT INTO `creature` (`guid`, `id`, `map`, `position_x`, `position_y`, `position_z`,',
+            '  `orientation`, `spawntimesecsmin`, `spawntimesecsmax`, `wander_distance`, `movement_type`) VALUES',
+        ]
+        rows = [f'({lo + i}, {e}, {m}, {sql_num(x)}, {sql_num(y)}, {sql_num(z)}, {sql_num(o)}, 300, 300, 0, 0)'
+                for i, (e, m, x, y, z, o) in enumerate(spawns)]
+        out.append(',\n'.join(rows) + ';')
+    return out
+
+
 def marshal_sql(data):
     """sql/kartcraft.sql: the Race Marshal, its texts and one spawn per distinct marshal spot."""
     spots = []
@@ -358,6 +454,7 @@ def marshal_sql(data):
     rows = [f'({lo + i}, {MARSHAL_ENTRY}, {m}, {sql_num(x)}, {sql_num(y)}, {sql_num(z)}, {sql_num(o)}, 300, 300, 0, 0)'
             for i, (m, x, y, z, o) in enumerate(spots)]
     out.append(',\n'.join(rows) + ';')
+    out += emplacements_sql(data)
     m, x, y, z, o = HUB_SPOT
     out += [
         '',

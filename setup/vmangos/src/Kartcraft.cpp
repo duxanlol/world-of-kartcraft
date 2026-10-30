@@ -581,6 +581,22 @@ namespace Kartcraft
     // of the server's, the body sized all the same while they drive. Under s_mutex.
     static std::unordered_map<uint64, float> s_testLapScale;
 
+    // A gauntlet's hazard ("Gauntlet"): what it is (M a missile battery, B a bomb mortar, T a TNT,
+    // N a Nitro, K a red beaker dropped on the road, C a clock, S a slowing storm, I an icy one),
+    // where it stands and faces, how near a racer sets it off (yards) and how often (ms).
+    struct Hazard
+    {
+        char kind;
+        float x, y, z, o;
+        float reach;
+        uint32 every;
+    };
+    struct CourseHazards
+    {
+        char const* key;
+        std::vector<Hazard> hazards;
+    };
+
     // A flight distance ("Flight distance"): its launch and the Race Marshal it launches from.
     struct Leap
     {
@@ -594,6 +610,15 @@ namespace Kartcraft
     // The courses and the flight distances: courses/courses.json, made into these tables by
     // setup/vmangos/pack.py.
 #include "KartcraftCourses.h"
+
+    // A gauntlet's hazards ("Gauntlet"), null for a course that is no gauntlet.
+    static std::vector<Hazard> const* HazardsOf(Course const& c)
+    {
+        for (CourseHazards const& h : HAZARDS)
+            if (std::strcmp(c.key, h.key) == 0)
+                return &h.hazards;
+        return nullptr;
+    }
 
     // Whether `c` is a party course: in a dungeon or a raid, not the open world, which in 1.12 is
     // its two continents (MapEntry::IsContinent) and here the battlegrounds' open copies too, one a
@@ -685,6 +710,14 @@ namespace Kartcraft
         uint32 cloudUntil = 0;
         uint8 cloudEffect = 0;
         bool cloudLocked = false;
+        // A gauntlet's hits taken ("Gauntlet"): GAUNTLET_HITS and they are out; until when the
+        // hazards hold their fire after one (ms, 0 none); and where the hazards last saw them
+        // (x, y, when) and how fast they went (yards a second), for a launcher's lead.
+        uint8 hits = 0;
+        uint32 graceUntil = 0;
+        float seenX = 0.f, seenY = 0.f;
+        uint32 seenAt = 0;
+        float vx = 0.f, vy = 0.f;
     };
 
     // A weapon crate ('Q'), a fruit crate ('F') or a single Wumpa fruit ('W') on a race's course.
@@ -749,6 +782,15 @@ namespace Kartcraft
         std::vector<Crate> crates;
         std::unordered_map<uint64, Shot> shots;
         uint16 rng = 0;
+        // A gauntlet's hazards ("Gauntlet"), null on any other course: its own shot counter, and
+        // when each last went off, by hazard index << 32 | racer low guid (0 for one that fires
+        // for the whole race: a mine on the road).
+        std::vector<Hazard> const* hazards = nullptr;
+        uint16 hazardShot = 0;
+        std::unordered_map<uint64, uint32> hazardAt;
+        // A launcher's shots at a racer this pass, by the same key: HAZARD_PASS_SHOTS, then none
+        // until the racer has left its reach.
+        std::unordered_map<uint64, uint8> hazardPass;
     };
 
     static std::unordered_map<uint32, Race> s_races;
@@ -1313,12 +1355,12 @@ namespace Kartcraft
         if (chosen)
         {
             Course const* c = FindCourse(chosen->Fetch()[0].GetCppString());
-            if (c && !PartyCourse(*c) && !CourseOff(*c) && !c->flight)
+            if (c && !PartyCourse(*c) && !CourseOff(*c) && !c->flight && !HazardsOf(*c))
                 return c->key;
         }
         std::vector<Course const*> open;
         for (Course const& c : COURSES)
-            if (!PartyCourse(c) && !CourseOff(c) && !c.flight)
+            if (!PartyCourse(c) && !CourseOff(c) && !c.flight && !HazardsOf(c))
                 open.push_back(&c);
         return open.empty() ? std::string() : open[Fnv1a(period) % open.size()]->key;
     }
@@ -4270,7 +4312,7 @@ namespace Kartcraft
     }
 
     // At the start: the crates go up and every racer is told where they are.
-    static void StartWeapons(Race& race, uint32 now)
+    static void StartWeapons(Race& race, uint32 now, bool crates)
     {
         race.crates.clear();
         race.shots.clear();
@@ -4279,7 +4321,7 @@ namespace Kartcraft
         TerrainInfo const* terrain = sTerrainMgr.LoadTerrain(race.course->map);
         auto const& start = race.course->points[0];
         float startZ = GroundZ(terrain, start.first, start.second, 0.f);
-        for (CrateSpot const& s : Layout(*race.course, terrain, startZ))
+        for (CrateSpot const& s : crates ? Layout(*race.course, terrain, startZ) : std::vector<CrateSpot>())
         {
             Crate c;
             c.kind = s.kind;
@@ -4345,8 +4387,11 @@ namespace Kartcraft
     static void TickShields(uint32 now)
     {
         std::map<ObjectGuid, uint32> want;
+        // A track browser trial's racer is shielded from its teleport on: they land on foot on its
+        // grid, perhaps in a hostile camp (a gauntlet's), and a mob's attack there would keep them
+        // in combat, out of the kart, and the countdown waiting.
         for (auto const& entry : s_races)
-            if (entry.second.start)
+            if (entry.second.start || entry.second.awaiting)
                 for (Racer const& r : entry.second.racers)
                     if (!r.finished)
                         want[r.guid] |= RACE_SHIELD_FLAGS;
@@ -4504,11 +4549,174 @@ namespace Kartcraft
     // Crates due back come up; old shots are forgotten; rain clouds go, rolling the roulettes
     // they held. Run on every Kartcraft line: a racer's kart sends its state ten times a second,
     // so a respawn is late by at most about 100 ms.
+    // ── Gauntlet ──────────────────────────────────────────────────────────────────────────────
+    //
+    // A gauntlet is a course with hazards (courses.json's "hazards", KartcraftCourses.h HAZARDS):
+    // the server fires CTR's weapons at its racers from them, as a racer's shots are fired, so
+    // every client simulates them and the victim's reports its hit ("W\tH", HandleWeapon). A
+    // missile battery and a bomb mortar fire at a racer within their reach, from where they stand;
+    // a TNT, a Nitro or a red beaker is dropped on the road, once a racer comes near, for the whole
+    // race; a clock spins out a racer within its reach (sent to that racer alone); a storm puts
+    // CTR's rain cloud on one, slowing (S) or icy (I). Its shooter is HAZARD_GUID plus the
+    // hazard's index. GAUNTLET_HITS hits and a racer is out, as out of time: "R\tDNF". Each hit is
+    // told to all, "R\tGH\t<id>\t<name>\t<hits>". A time trial on one has hazards and no crates; a
+    // hosted race both. Never a challenge, nor queued for (the Race Finder's mask).
+    constexpr uint32 HAZARD_GUID = 0x7F000000;
+    constexpr uint8 GAUNTLET_HITS = 3;
+    // How far above or below a hazard (yards) a racer still sets it off: a road over a road, not.
+    constexpr float HAZARD_HEIGHT = 25.f;
+    // The live shots a gauntlet's hazards leave room for in the race's pool, for its racers'.
+    constexpr size_t HAZARD_SHOTS = MAX_LIVE_SHOTS - 4;
+    // A launcher's shots at one racer as they pass, and the hazards' hold on a racer after a hit
+    // (ms), the kart's spin and its getting going again.
+    constexpr uint8 HAZARD_PASS_SHOTS = 2;
+    constexpr uint32 GAUNTLET_GRACE = 3000;
+    // A missile's and a bomb's speed, yards a second (ctr-weapons' 80 and 96 lu a frame, at 30
+    // frames and 36.6 lu a yard), for a launcher's lead: it fires where its racer will be.
+    constexpr float MISSILE_YPS = 65.6f;
+    constexpr float BOMB_YPS = 78.7f;
+    enum StormEffect : uint8 { CLOUD_ICE = 2 };
+
+    // A hit taken in a gauntlet: told to all, and the third puts the racer out; the hazards hold
+    // their fire on them a while.
+    static void GauntletHit(Race& race, Racer& me, uint32 now)
+    {
+        me.graceUntil = (now + GAUNTLET_GRACE) | 1;
+        me.hits = uint8(std::min<int>(me.hits + 1, 255));
+        std::string const id = std::to_string(race.id);
+        SendRace(race, "KARTCRAFT\tR\tGH\t" + id + "\t" + me.name + "\t" + std::to_string(me.hits));
+        if (me.hits < GAUNTLET_HITS)
+            return;
+        me.finished = true;
+        me.place = 0;
+        RecordResult(race, me, 0, 0);
+        SendRace(race, "KARTCRAFT\tR\tDNF\t" + id + "\t" + me.name);
+    }
+
+    // Hazard `index` of `race` goes off at `at` (a racer's player), in its own way.
+    static void FireHazard(Race& race, size_t index, Racer& at, Player* player, uint32 now)
+    {
+        Hazard const& h = (*race.hazards)[index];
+        if (h.kind == 'S' || h.kind == 'I')
+        {
+            at.cloudEffect = h.kind == 'I' ? CLOUD_ICE : CLOUD_SLOW;
+            at.cloudLocked = false;
+            at.cloudUntil = (now + CLOUD_TIME) | 1;
+            SendRace(race, "KARTCRAFT\tW\tR\t" + std::to_string(at.guid.GetCounter()) + "\t" +
+                std::to_string(at.cloudEffect) + "\t0");
+            return;
+        }
+        uint8 item = ITEM_MISSILE;
+        bool juiced = false, dropped = false;
+        switch (h.kind)
+        {
+            case 'B': item = ITEM_BOMB; break;
+            case 'T': item = ITEM_TNT; dropped = true; break;
+            case 'N': item = ITEM_TNT; juiced = true; dropped = true; break;
+            case 'K': item = ITEM_BEAKER; juiced = true; dropped = true; break;
+            case 'C': item = ITEM_CLOCK; break;
+            default: break;
+        }
+        if (++race.hazardShot == 0)
+            race.hazardShot = 1;
+        uint32 const shooter = HAZARD_GUID + uint32(index);
+        uint16 const shot = race.hazardShot;
+        Shot& record = race.shots[(uint64(shooter) << 16) | shot];
+        record = Shot();
+        record.item = item;
+        record.at = now;
+        record.dropped = dropped;
+        record.juiced = juiced;
+        record.x = h.x;
+        record.y = h.y;
+        // A launcher fires unguided from a little over its emplacement, where its racer will be if
+        // they keep on as they go (a turn or the brake, and it misses); a mine lies on the road.
+        float yaw = h.o;
+        if (!dropped)
+        {
+            float const px = player->GetPositionX(), py = player->GetPositionY();
+            float const lead = std::hypot(px - h.x, py - h.y) / (item == ITEM_BOMB ? BOMB_YPS : MISSILE_YPS);
+            yaw = std::atan2(py + at.vy * lead - h.y, px + at.vx * lead - h.x);
+        }
+        float const z = dropped ? h.z : h.z + 1.5f;
+        std::string const target = "0";
+        std::string const line = "KARTCRAFT\tW\tS\t" + std::to_string(shooter) + "\t" + std::to_string(item) + "\t" +
+            (juiced ? "1" : "0") + "\t" + std::to_string(shot) + "\t" + Fixed(h.x, 2) + "," + Fixed(h.y, 2) + "," +
+            Fixed(z, 2) + "," + Fixed(yaw, 3) + "\t" + target + "\t" + (dropped ? "d" : "");
+        // A clock spins every kart but its shooter's: this one is for its racer alone.
+        if (item == ITEM_CLOCK)
+            SendLine(player, line);
+        else
+            SendRace(race, line);
+    }
+
+    // A gauntlet's hazards, with the race's housekeeping: each racer still in, near one ready.
+    static void TickHazards(Race& race, uint32 now)
+    {
+        if (!race.hazards || !race.start || int32(now - race.start) < 0)
+            return;
+        size_t live = 0;
+        for (auto const& s : race.shots)
+            if (LiveShot(s.second, now))
+                ++live;
+        for (Racer& r : race.racers)
+        {
+            if (r.finished)
+                continue;
+            Player* player = ObjectAccessor::FindPlayer(r.guid);
+            if (!player || player->GetMapId() != race.course->map)
+                continue;
+            // How fast they go, from where the hazards last saw them (a lead of a launcher's).
+            float const px = player->GetPositionX(), py = player->GetPositionY();
+            uint32 const since = r.seenAt ? WorldTimer::getMSTimeDiff(r.seenAt, now) : 0;
+            if (!r.seenAt || since >= 100)
+            {
+                if (r.seenAt && since <= 1000)
+                {
+                    float const s = 1000.f / float(since);
+                    r.vx = 0.5f * r.vx + 0.5f * (px - r.seenX) * s;
+                    r.vy = 0.5f * r.vy + 0.5f * (py - r.seenY) * s;
+                }
+                r.seenX = px;
+                r.seenY = py;
+                r.seenAt = now | 1;
+            }
+            bool const grace = r.graceUntil && int32(now - r.graceUntil) < 0;
+            for (size_t i = 0; i < race.hazards->size(); ++i)
+            {
+                Hazard const& h = (*race.hazards)[i];
+                bool const mine = h.kind == 'T' || h.kind == 'N' || h.kind == 'K';
+                uint64 const key = (uint64(i) << 32) | (mine ? 0 : r.guid.GetCounter());
+                if (DistanceTo(player, { h.x, h.y }) > h.reach || std::fabs(player->GetPositionZ() - h.z) > HAZARD_HEIGHT)
+                {
+                    race.hazardPass.erase(key);
+                    continue;
+                }
+                bool const launcher = h.kind == 'M' || h.kind == 'B';
+                if ((grace && !mine) || (launcher && race.hazardPass[key] >= HAZARD_PASS_SHOTS))
+                    continue;
+                auto last = race.hazardAt.find(key);
+                if (last != race.hazardAt.end() && WorldTimer::getMSTimeDiff(last->second, now) < h.every)
+                    continue;
+                if (launcher)
+                    ++race.hazardPass[key];
+                bool const shot = h.kind != 'S' && h.kind != 'I';
+                if (shot && live >= HAZARD_SHOTS)
+                    continue;
+                race.hazardAt[key] = now;
+                FireHazard(race, i, r, player, now);
+                if (shot)
+                    ++live;
+            }
+        }
+    }
+
     static void TickWeapons(uint32 now)
     {
         for (auto& entry : s_races)
         {
             Race& race = entry.second;
+            TickHazards(race, now);
             for (Racer& r : race.racers)
                 if (r.cloudUntil && int32(now - r.cloudUntil) >= 0)
                 {
@@ -4587,7 +4795,8 @@ namespace Kartcraft
         for (auto& entry : s_races)
         {
             Race& r = entry.second;
-            if (!r.start || int32(now - r.start) < 0 || r.crates.empty() || r.timeTrial)
+            if (!r.start || int32(now - r.start) < 0 || (r.crates.empty() && !r.hazards) ||
+                (r.timeTrial && !r.hazards))
                 continue;
             if (Racer* x = FindRacer(r, player->GetGUIDLow()))
                 if (!me || (me->finished && !x->finished))
@@ -4806,6 +5015,9 @@ namespace Kartcraft
                 "\t" + std::string(1, kind) + "\t" + std::to_string(me->wumpa));
             if (red)
                 Rain(*race, *me, now);
+            // A TNT landing on the head is no hit yet: its blast, if it is not shaken off, is.
+            if (race->hazards && kind != 'T' && !me->finished)
+                GauntletHit(*race, *me, now);
         }
         else if (verb == "B" && f.size() >= 4)
         {
@@ -4956,8 +5168,11 @@ namespace Kartcraft
             std::to_string(r.course->laps) + "\t" + points);
         SendRace(r, "KARTCRAFT\tR\tG\t" + std::to_string(id) + "\t" + std::to_string(countdown) + "\t" + Roster(r));
         SendRecords(id, r);
-        if (!r.timeTrial)
-            StartWeapons(r, now);
+        r.hazards = HazardsOf(*r.course);
+        r.hazardAt.clear();
+        r.hazardShot = 0;
+        if (!r.timeTrial || r.hazards)
+            StartWeapons(r, now, !r.timeTrial);
     }
 
     // ── Race Finder ────────────────────────────────────────────────────────────────────────────
@@ -5067,7 +5282,7 @@ namespace Kartcraft
                     zone = &zones[index];
             }
             for (size_t i = 0; i < COURSES.size(); ++i)
-                if (!COURSES[i].flight &&
+                if (!COURSES[i].flight && !HazardsOf(COURSES[i]) &&
                     (token == "any" || token == COURSES[i].key || (zone && *zone == COURSES[i].zone)))
                     mask[i] = true;
             // A player track only by its own key, and never a flying one.

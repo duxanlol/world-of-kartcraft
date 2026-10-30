@@ -10,6 +10,7 @@ pub mod cost;
 pub mod drivetest;
 pub mod export;
 pub mod flight;
+pub mod gauntlet;
 pub mod generate;
 pub mod geom;
 pub mod gps;

@@ -64,6 +64,17 @@ client's list are both made from it; nothing else holds course data.
   a player track (Flying track): saved as `flight`, published as `R\tPub`'s last field and the
   `PT` lines' last (`1`), listed on the Flight tab, test-lapped flying, time-trialled and never
   queued for.
+- `gauntlet`: optional, default false: a gauntlet, with `hazards` the server fires CTR's weapons
+  from at its racers (`Kartcraft.cpp`, "Gauntlet"; `docs/kartcraft-weapons-protocol.md`,
+  "Hazards"). Each hazard is a `kind`, where it stands (`x`, `y`, `z`, facing `o`), how near a
+  racer sets it off (`reach`, yards) and how often it goes off (`every`, ms): `missile` and `bomb`
+  fire from an emplacement beside the road (a goblin rocket battery, a bomb mortar, spawned by
+  `pack.py`), unguided, where the racer will be, two shots a pass; `tnt`, `nitro` and `beaker` (a
+  red one) are dropped on the road; `clock` spins out a racer near it; `storm` and `ice` put a
+  slowing or icy rain cloud on one. Three hits and a racer is out. A time trial on a gauntlet has
+  its hazards and no crates; a race hosted on one has both; never a challenge nor in the Race
+  Finder. `course-gen gauntlet --from <key> --key <key> --name <name>` makes one of a course: one
+  lap of it, a hazard every 95 yards past the start.
 - `checkpoints`: at least two, WoW world `x`, `y` (yards); the first is the start, where a
   driver hosts or joins. Optional `z` (the server finds the ground itself). Optional `gate`:
   the gate's half-width in yards. The client passes a checkpoint through a gate this wide
