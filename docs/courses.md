@@ -68,7 +68,7 @@ client's list are both made from it; nothing else holds course data.
   from at its racers (`Kartcraft.cpp`, "Gauntlet"; `docs/kartcraft-weapons-protocol.md`,
   "Hazards"). Each hazard is a `kind`, where it stands (`x`, `y`, `z`, facing `o`), how near a
   racer sets it off (`reach`, yards) and how often it goes off (`every`, ms): `missile` and `bomb`
-  fire from an emplacement beside the road (a goblin rocket battery, a bomb mortar, spawned by
+  fire from an emplacement beside the road (a goblin rocket battery, a goblin bomb shredder, spawned by
   `pack.py`), unguided, where the racer will be, two shots a pass; `tnt`, `nitro` and `beaker` (a
   red one) are dropped on the road; `clock` spins out a racer near it; `storm` and `ice` put a
   slowing or icy rain cloud on one. Three hits by its hazards (a rival's are no strike) and a

@@ -581,7 +581,7 @@ namespace Kartcraft
     // of the server's, the body sized all the same while they drive. Under s_mutex.
     static std::unordered_map<uint64, float> s_testLapScale;
 
-    // A gauntlet's hazard ("Gauntlet"): what it is (M a missile battery, B a bomb mortar, T a TNT,
+    // A gauntlet's hazard ("Gauntlet"): what it is (M a missile battery, B a bomb shredder, T a TNT,
     // N a Nitro, K a red beaker dropped on the road, C a clock, S a slowing storm, I an icy one),
     // where it stands and faces, how near a racer sets it off (yards) and how often (ms).
     struct Hazard
@@ -4557,7 +4557,7 @@ namespace Kartcraft
     // A gauntlet is a course with hazards (courses.json's "hazards", KartcraftCourses.h HAZARDS):
     // the server fires CTR's weapons at its racers from them, as a racer's shots are fired, so
     // every client simulates them and the victim's reports its hit ("W\tH", HandleWeapon). A
-    // missile battery and a bomb mortar fire at a racer within their reach, from where they stand;
+    // missile battery and a bomb shredder fire at a racer within their reach, from where they stand;
     // a TNT, a Nitro or a red beaker is dropped on the road, once a racer comes near, for the whole
     // race; a clock spins out a racer within its reach (sent to that racer alone); a storm puts
     // CTR's rain cloud on one, slowing (S) or icy (I). Its shooter is HAZARD_GUID plus the

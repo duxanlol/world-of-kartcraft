@@ -358,10 +358,11 @@ def sql_num(v):
     return str(int(v)) if v == int(v) else repr(v)
 
 
-# The gauntlets' emplacements: a Southsea cannon (display 3146) for a missile battery and a mortar
-# (display 15435) for a bomb mortar, friendly to all, no gossip, beside the road they fire on.
+# The gauntlets' emplacements: a cannon (display 3146, Creature\Object\Cannon) for a missile
+# battery and a goblin shredder (display 1269) lobbing bombs, friendly to all, no gossip, beside the
+# road they fire on.
 EMPLACEMENT_GUIDS = (402000, 402999)
-EMPLACEMENTS = {190013: ('Goblin Rocket Battery', 3146), 190014: ('Goblin Bomb Mortar', 15435)}
+EMPLACEMENTS = {190013: ('Goblin Rocket Battery', 3146), 190014: ('Goblin Bomb Shredder', 1269)}
 
 
 def emplacements_sql(data):

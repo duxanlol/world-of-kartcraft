@@ -1,7 +1,7 @@
 //! Gauntlets made from courses (`course-gen gauntlet`): a course's copy, one lap of it, with
 //! hazards along its route for the server to fire at its racers (`Kartcraft.cpp` "Gauntlet",
 //! `docs/courses.md`): every [`SPACING`] yards past the start, the next of [`PATTERN`]. A
-//! missile battery or a bomb mortar stands beside the road, the ground there flat and land; a
+//! missile battery or a bomb shredder stands beside the road, the ground there flat and land; a
 //! TNT, a Nitro or a red beaker is dropped on the road; a storm or a clock waits on it.
 
 use anyhow::{anyhow, Context, Result};

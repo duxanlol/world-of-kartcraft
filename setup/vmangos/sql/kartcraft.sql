@@ -231,7 +231,7 @@ INSERT INTO `creature_template` (`entry`, `patch`, `name`, `subname`, `level_min
   `display_total_probability`, `type`, `unit_class`, `inhabit_type`, `civilian`,
   `static_flags1`, `flags_extra`) VALUES
 (190013, 0, 'Goblin Rocket Battery', 'World of Kartcraft', 60, 60, 35, 0, 3146, 1, 100, 100, 9, 1, 1, 1, 34078830, 2),
-(190014, 0, 'Goblin Bomb Mortar', 'World of Kartcraft', 60, 60, 35, 0, 15435, 1, 100, 100, 9, 1, 1, 1, 34078830, 2);
+(190014, 0, 'Goblin Bomb Shredder', 'World of Kartcraft', 60, 60, 35, 0, 1269, 1, 100, 100, 9, 1, 1, 1, 34078830, 2);
 INSERT INTO `creature` (`guid`, `id`, `map`, `position_x`, `position_y`, `position_z`,
   `orientation`, `spawntimesecsmin`, `spawntimesecsmax`, `wander_distance`, `movement_type`) VALUES
 (402000, 190013, 0, -12233.9, -749.4, 13.6, 4.976, 300, 300, 0, 0),
