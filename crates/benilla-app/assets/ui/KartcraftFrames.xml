@@ -1721,15 +1721,29 @@
                 -- A gauntlet's hit on a racer ("Kartcraft.cpp" "Gauntlet"): ours told, the third out.
                 if line[4] == UnitName("player") then
                     local hits = tonumber(line[5]) or 0
-                    BenillaKartGauntletHits:SetText(hits >= 3 and "|cffff3333Out of the gauntlet|r" or format("Gauntlet hits: %d of 3", hits))
+                    BenillaKartGauntletHits:SetText(hits >= 3 and "|cffff3333Out!|r" or format("Hits: %d of 3", hits))
                     BenillaKartGauntletHits:Show()
                     if hits >= 3 then
-                        UIErrorsFrame:AddMessage("Three hits: you're out of the gauntlet!", 1, 0.2, 0.2, 1, 6)
+                        UIErrorsFrame:AddMessage("Three hits: you're out!", 1, 0.2, 0.2, 1, 6)
                         PlaySound("igQuestFailed")
                     else
                         UIErrorsFrame:AddMessage("Hit! " .. hits .. " of 3", 1, 0.5, 0.1, 1, 3)
                     end
                 end
+            elseif verb == "AW" or verb == "AC" or verb == "AK" then
+                -- An arena ("Kartcraft.cpp" "Arena"): a wave come in, a wave beaten, a kill.
+                BenillaKartArena = BenillaKartArena or { wave = 0, waves = 0, kills = 0 }
+                local a = BenillaKartArena
+                if verb == "AW" then
+                    a.wave, a.waves = tonumber(line[4]) or 0, tonumber(line[5]) or 0
+                    UIErrorsFrame:AddMessage(format("Wave %d of %d!", a.wave, a.waves), 1, 0.5, 0.1, 1, 4)
+                elseif verb == "AC" then
+                    UIErrorsFrame:AddMessage(format("Wave %s beaten! The next in %s seconds.", line[4] or "?", line[6] or "?"), 0.3, 1, 0.3, 1, 4)
+                elseif line[4] == UnitName("player") then
+                    a.kills = tonumber(line[5]) or 0
+                end
+                BenillaKartArenaText:SetText(format("Wave %d of %d    Kills: %d", a.wave, a.waves, a.kills))
+                BenillaKartArenaText:Show()
             elseif verb == "LeapBest" then
                 -- A flight distance measured: this flight, our best, the record, all in tenths of a yard.
                 local function yards(t) return format("%.1f yd", (tonumber(t) or 0) / 10) end
@@ -1820,6 +1834,7 @@
                 -- Out of every race and the queue (/leaverace, the minimap button's menu).
                 f.check, f.queued, f.waiting, f.waited = nil, nil, nil, nil
                 BenillaKartGauntletHits:Hide()
+                BenillaKartArenaText:Hide()
                 if StaticPopup_Hide then StaticPopup_Hide("BENILLA_KART_READY") end
                 if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("You left every race and the Race Finder queue.", 1, 0.82, 0) end
             elseif verb == "C" then
@@ -1827,17 +1842,20 @@
                 -- gauntlet hits yet.
                 BenillaKartRaceCourse[line[3] or ""] = line[4]
                 BenillaKartGauntletHits:Hide()
+                BenillaKartArenaText:Hide()
+                BenillaKartArena = { wave = 0, waves = 0, kills = 0 }
             elseif verb == "TT" then
                 -- A time trial: its records are the time trials'.
                 BenillaKartRaceTrial[line[3] or ""] = 1
             elseif verb == "F" then
-                if line[4] == UnitName("player") then BenillaKartGauntletHits:Hide() end
+                if line[4] == UnitName("player") then BenillaKartGauntletHits:Hide() BenillaKartArenaText:Hide() end
                 BenillaKart_Finished(line[3], line[4], tonumber(line[6]), line[7])
             elseif verb == "Ret" then
                 -- Our Race Finder race or track browser time trial is over: back to where it took
                 -- us from? After a time trial (its course named), or another go at it.
                 BenillaKartRetryButton.course = line[3]
                 BenillaKartGauntletHits:Hide()
+                BenillaKartArenaText:Hide()
                 if StaticPopup_Show then
                     StaticPopup_Show(line[3] and "BENILLA_KART_RETURN_TRIAL" or "BENILLA_KART_RETURN")
                 end
@@ -6774,9 +6792,13 @@
                 <FontString name="BenillaKartRaceBanner" inherits="GameFontNormalHuge" justifyH="CENTER">
                     <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-256"/></Offset></Anchor></Anchors>
                 </FontString>
-                <!-- A gauntlet's hits on us, from the first until the race is over for us. -->
+                <!-- A gauntlet's or an arena's hits on us, under CTR's item slot, from the first until the race is over for us. -->
                 <FontString name="BenillaKartGauntletHits" inherits="GameFontNormalLarge" justifyH="CENTER" hidden="true">
-                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-96"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-152"/></Offset></Anchor></Anchors>
+                </FontString>
+                <!-- An arena's wave and our kills, from its first wave until the race is over for us. -->
+                <FontString name="BenillaKartArenaText" inherits="GameFontNormalLarge" justifyH="CENTER" hidden="true">
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-128"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>

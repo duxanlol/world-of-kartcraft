@@ -5018,3 +5018,43 @@ fn a_skyhop_record_is_ours_only_when_we_hold_it() {
     assert!(said(&s).starts_with("Skyhop record! "));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+#[test]
+fn an_arena_shows_its_wave_our_kills_and_our_hits_until_we_finish() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = loaded();
+    let me: String = s.eval("return UnitName('player')").unwrap();
+    let shown = |s: &UiScript, name: &str| -> Option<String> {
+        s.eval::<bool>(&format!("return {name}:IsVisible() == 1"))
+            .unwrap()
+            .then(|| s.eval(&format!("return {name}:GetText()")).unwrap())
+    };
+    from_server(&mut s, "R\tC\t7\tar-gurubashi\t0\t1:1;2:2");
+    assert_eq!(shown(&s, "BenillaKartArenaText"), None);
+    from_server(&mut s, "R\tAW\t7\t1\t6\t2");
+    assert_eq!(
+        shown(&s, "BenillaKartArenaText").as_deref(),
+        Some("Wave 1 of 6    Kills: 0")
+    );
+    // Someone else's kill is not ours; ours counts.
+    from_server(&mut s, "R\tAK\t7\tGoblin\t1");
+    from_server(&mut s, &format!("R\tAK\t7\t{me}\t2"));
+    from_server(&mut s, "R\tAC\t7\t1\t6\t5");
+    assert_eq!(
+        shown(&s, "BenillaKartArenaText").as_deref(),
+        Some("Wave 1 of 6    Kills: 2")
+    );
+    from_server(&mut s, &format!("R\tGH\t7\t{me}\t1"));
+    assert_eq!(
+        shown(&s, "BenillaKartGauntletHits").as_deref(),
+        Some("Hits: 1 of 3")
+    );
+    // Our finish takes both down; a new race starts clean.
+    from_server(&mut s, &format!("R\tF\t7\t{me}\t1\t90000\t"));
+    assert_eq!(shown(&s, "BenillaKartArenaText"), None);
+    assert_eq!(shown(&s, "BenillaKartGauntletHits"), None);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

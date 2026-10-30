@@ -75,6 +75,21 @@ pub(crate) struct Course {
     /// time trial with weapons on; never in the Race Finder.
     #[serde(default)]
     gauntlet: bool,
+    /// An arena: a walled pit where the server sends waves of creatures to fight
+    /// (`docs/courses.md`, `arena`), its time trial with weapons on, no checkpoints to pass; never
+    /// in the Race Finder.
+    #[serde(default)]
+    arena: Option<ArenaPit>,
+}
+
+/// An arena's pit (`docs/courses.md`, `arena`): its middle and floor (WoW) and the radius fought
+/// in round it.
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct ArenaPit {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) z: f32,
+    pub(crate) radius: f32,
 }
 
 /// A course's scale where it names none: the kart's own size.
@@ -128,9 +143,9 @@ impl Course {
     }
 
     /// What the Race Finder offers it under: its series, else its zone, and nothing for a flight
-    /// course or a gauntlet, which it never offers (`pack.py` gives the server the same).
+    /// course, a gauntlet or an arena, which it never offers (`pack.py` gives the server the same).
     pub(crate) fn finder_group(&self) -> &str {
-        if self.flight || self.gauntlet {
+        if self.flight || self.gauntlet || self.arena.is_some() {
             ""
         } else if self.series.is_empty() {
             &self.zone
@@ -231,6 +246,11 @@ impl Course {
     /// A gauntlet ([`Course::gauntlet`]).
     pub(crate) fn gauntlet(&self) -> bool {
         self.gauntlet
+    }
+
+    /// An arena's pit ([`Course::arena`]).
+    pub(crate) fn arena(&self) -> Option<&ArenaPit> {
+        self.arena.as_ref()
     }
 
     /// Each checkpoint's height, where known.
@@ -475,6 +495,12 @@ pub(crate) struct Active {
     flight: bool,
     /// A gauntlet: its time trial has weapons, the server's hazards' ([`Course::gauntlet`]).
     gauntlet: bool,
+    /// An arena: its time trial has weapons, and no checkpoint is passed; the server's waves end
+    /// it ([`Course::arena`]).
+    arena: bool,
+    /// An arena's creatures as the server names them (`R AF`): each one's kart id, the one our
+    /// shots know it by, and its creature's guid.
+    foes: Vec<(u32, u64)>,
     /// The track editor's objects on its track: a test lap's, or a player track's from its `PT`
     /// line ([`super::objects`]).
     objects: Vec<super::objects::Placed>,
@@ -707,9 +733,10 @@ impl Active {
         };
     }
 
-    /// Its track for the race map, once its course is here (or the draft has two gates).
+    /// Its track for the race map, once its course is here (or the draft has two gates); an
+    /// arena has none.
     pub(crate) fn map(&self) -> Option<RaceMap> {
-        if self.points.len() < 2 {
+        if self.points.len() < 2 || self.arena {
             return None;
         }
         let name = COURSES
@@ -999,6 +1026,10 @@ impl Active {
     /// The checkpoint to reach next; `None` before there is a course, and once a sprint's finish
     /// is passed (its result is on its way: the finish is reported once).
     fn next(&self) -> Option<usize> {
+        // An arena's checkpoints only place its grid: none is passed.
+        if self.arena {
+            return None;
+        }
         let n = self.points.len();
         // A test lap before its start, and the editor's draft: the start gate.
         if self.practice && self.go_at.is_none() {
@@ -1183,14 +1214,32 @@ pub(crate) struct Races {
     track_flights: HashMap<String, bool>,
 }
 
+/// How fast the autopilot's mark goes round an arena's pit (radians a second).
+const ARENA_ORBIT: f32 = 0.6;
+
 impl Races {
-    /// The next checkpoint of a race under way, Bevy world (ground height unknown: y 0).
+    /// The next checkpoint of a race under way, Bevy world (ground height unknown: y 0); in an
+    /// arena, a mark going round its pit.
     pub(crate) fn next_target(&self, now: f32) -> Option<Vec3> {
         let race = self.race.as_ref()?;
         // A test lap's start too: the way to its flying start.
         let waiting = !race.practice && race.go_at.is_none_or(|go| now < go);
         if race.done || waiting || race.points.len() < 2 {
             return None;
+        }
+        // An arena has no checkpoint to make for: round its pit, through its ring of weapon
+        // crates halfway out.
+        if race.arena {
+            let pit = COURSES
+                .iter()
+                .find(|c| c.key == race.course)
+                .and_then(Course::arena)?;
+            let (a, r) = (now * ARENA_ORBIT, pit.radius * 0.5);
+            return Some(wow_to_bevy([
+                pit.x + r * a.cos(),
+                pit.y + r * a.sin(),
+                pit.z,
+            ]));
         }
         let p = match race.grid.filter(|_| race.practice && race.go_at.is_none()) {
             Some(grid) => [grid[0], grid[1]],
@@ -1204,8 +1253,16 @@ impl Races {
     pub(crate) fn weapons_race(&self) -> Option<u32> {
         self.race
             .as_ref()
-            .filter(|r| !r.done && (!r.time_trial || r.gauntlet))
+            .filter(|r| !r.done && (!r.time_trial || r.gauntlet || r.arena))
             .map(|r| r.id)
+    }
+
+    /// The creatures of the arena we fight in, each its kart id and its creature's guid.
+    pub(crate) fn foes(&self) -> &[(u32, u64)] {
+        self.race
+            .as_ref()
+            .filter(|r| r.arena && !r.done)
+            .map_or(&[], |r| r.foes.as_slice())
     }
 
     /// Whether the race we are in is a time trial: no weapons in it at all.
@@ -1267,7 +1324,7 @@ impl Races {
     /// Whether we are in a race with others, the one place crates give Wumpa fruit (a time
     /// trial has none).
     pub(crate) fn with_crates(&self) -> bool {
-        self.race.as_ref().is_some_and(|r| !r.time_trial)
+        self.race.as_ref().is_some_and(|r| !r.time_trial || r.arena)
     }
 
     /// Whether we are in a race or a time trial not over for us: leaving the kart then is held for.
@@ -1277,9 +1334,9 @@ impl Races {
 
     /// Whether our race with others has passed GO and is not over for us.
     pub(crate) fn racing_with_crates(&self, now: f32) -> bool {
-        self.race
-            .as_ref()
-            .is_some_and(|r| !r.done && !r.time_trial && r.go_at.is_some_and(|go| now >= go))
+        self.race.as_ref().is_some_and(|r| {
+            !r.done && (!r.time_trial || r.arena) && r.go_at.is_some_and(|go| now >= go)
+        })
     }
 
     /// Whether we must hold on the line, in the kart or on foot (out of it for the grid's
@@ -1408,6 +1465,7 @@ impl Races {
                     race.rings = ours.map_or_else(Vec::new, Course::rings);
                     race.flight = ours.is_some_and(Course::flight);
                     race.gauntlet = ours.is_some_and(Course::gauntlet);
+                    race.arena = ours.is_some_and(|c| c.arena().is_some());
                     // A player track's from its `PT` line, which comes first.
                     let track = self.track_spots.get(&f[2]);
                     let track = track.and_then(|t| super::track_edit::parse_spots(t));
@@ -1455,6 +1513,16 @@ impl Races {
                     }
                 }
             }
+            // An arena's creature come in: its kart id and its creature (`Kartcraft.cpp` "Arena").
+            Some("AF") if f.len() >= 4 => {
+                if let Some(race) = self.race.as_mut().filter(|r| r.id == id) {
+                    if let (Ok(kart), Ok(guid)) = (f[2].parse(), f[3].parse()) {
+                        race.foes.push((kart, guid));
+                    }
+                }
+            }
+            // An arena's wave come in or beaten, a kill: the HUD's (Lua's), logged here.
+            Some(verb @ ("AW" | "AC" | "AK")) => info!("kart race: arena {verb} {:?}", &f[1..]),
             // Out of time: the race closed DNF_WAIT after its first finish with them still out.
             Some("DNF") if f.len() >= 3 => {
                 if let Some(race) = self.race.as_mut().filter(|r| r.id == id) {
@@ -1827,7 +1895,7 @@ pub(crate) fn update(
         .iter()
         .position(|r| *r == me)
         .map(|i| i as u8 + 1)
-        .filter(|_| !race.time_trial && !out_of_time);
+        .filter(|_| !race.time_trial && !out_of_time && !race.arena);
     race.order = order;
     extras.lap = (race.laps > 0).then(|| ((race.lap + 1).min(race.laps), race.laps));
     extras.clock = race.clock(now, race.our_ms.filter(|_| race.done));
@@ -1839,6 +1907,7 @@ pub(crate) fn update(
     race.drove(progress, kartcraft::lu_per_yard());
     let facing_back = race.facing_back(race.checkpoint, facing_of(drive.yaw));
     extras.wrong_way = !race.done
+        && !race.arena
         && race.crossed_finish.is_none()
         && race.wrong_way(facing_back)
         && wrong_way_lit(now - go);

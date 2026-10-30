@@ -442,6 +442,7 @@ const ORDER: &[&str] = &[
     "crates",
     "pads",
     "hazards",
+    "arena",
     "doors",
 ];
 

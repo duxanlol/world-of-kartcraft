@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..44ccc8c
+index 0000000..1772080
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,9217 @@
+@@ -0,0 +1,9700 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -710,6 +710,15 @@ index 0000000..44ccc8c
 +        std::vector<Hazard> hazards;
 +    };
 +
++    // An arena ("Arena"): its pit's middle and floor, the radius fought in round it, and its
++    // waves, each a creature a letter (R a raptor, B a bombot, O a brute).
++    struct ArenaDef
++    {
++        char const* key;
++        float x, y, z, radius;
++        std::vector<char const*> waves;
++    };
++
 +    // A flight distance ("Flight distance"): its launch and the Race Marshal it launches from.
 +    struct Leap
 +    {
@@ -731,6 +740,21 @@ index 0000000..44ccc8c
 +            if (std::strcmp(c.key, h.key) == 0)
 +                return &h.hazards;
 +        return nullptr;
++    }
++
++    // An arena course's arena ("Arena"), null for any other.
++    static ArenaDef const* ArenaOf(Course const& c)
++    {
++        for (ArenaDef const& a : ARENAS)
++            if (std::strcmp(c.key, a.key) == 0)
++                return &a;
++        return nullptr;
++    }
++
++    // A course of its own kind, never a challenge nor queued for: flown, a gauntlet, an arena.
++    static bool OwnKind(Course const& c)
++    {
++        return c.flight || HazardsOf(c) || ArenaOf(c);
 +    }
 +
 +    // Whether `c` is a party course: in a dungeon or a raid, not the open world, which in 1.12 is
@@ -834,6 +858,23 @@ index 0000000..44ccc8c
 +        float seenX = 0.f, seenY = 0.f;
 +        uint32 seenAt = 0;
 +        float vx = 0.f, vy = 0.f;
++        // An arena's creatures beaten ("Arena").
++        uint16 kills = 0;
++    };
++
++    // An arena's creature ("Arena"): its letter, its creature once summoned, its hit points
++    // left, when it came and last struck, threw or was steered (ms), where the world thread last saw it,
++    // whether it is beaten (its creature to die on the next tick) and whether its creature is
++    // dead or lost.
++    struct Foe
++    {
++        char kind;
++        ObjectGuid guid;
++        uint8 hp = 1;
++        uint32 bornAt = 0, struckAt = 0, threwAt = 0, steeredAt = 0;
++        float x = 0.f, y = 0.f, z = 0.f;
++        bool beaten = false;
++        bool gone = false;
 +    };
 +
 +    // A weapon crate ('Q'), a fruit crate ('F') or a single Wumpa fruit ('W') on a race's course.
@@ -907,6 +948,12 @@ index 0000000..44ccc8c
 +        // A launcher's shots at a racer this pass, by the same key: HAZARD_PASS_SHOTS, then none
 +        // until the racer has left its reach.
 +        std::unordered_map<uint64, uint8> hazardPass;
++        // An arena's ("Arena"), null on any other course: the wave come (0 none yet), when the
++        // next comes (ms, 0 none due), and the creatures, each its kart id FOE_GUID + its index.
++        ArenaDef const* arena = nullptr;
++        uint8 wave = 0;
++        uint32 waveAt = 0;
++        std::vector<Foe> foes;
 +    };
 +
 +    static std::unordered_map<uint32, Race> s_races;
@@ -1471,12 +1518,12 @@ index 0000000..44ccc8c
 +        if (chosen)
 +        {
 +            Course const* c = FindCourse(chosen->Fetch()[0].GetCppString());
-+            if (c && !PartyCourse(*c) && !CourseOff(*c) && !c->flight && !HazardsOf(*c))
++            if (c && !PartyCourse(*c) && !CourseOff(*c) && !OwnKind(*c))
 +                return c->key;
 +        }
 +        std::vector<Course const*> open;
 +        for (Course const& c : COURSES)
-+            if (!PartyCourse(c) && !CourseOff(c) && !c.flight && !HazardsOf(c))
++            if (!PartyCourse(c) && !CourseOff(c) && !OwnKind(c))
 +                open.push_back(&c);
 +        return open.empty() ? std::string() : open[Fnv1a(period) % open.size()]->key;
 +    }
@@ -4027,6 +4074,9 @@ index 0000000..44ccc8c
 +    constexpr uint8 TABLE_RACE3[] = { 4, 3, 1, 10, 10, 0, 0, 6, 2, 2, 11, 9, 9, 9, 7, 7, 7, 7, 7 };
 +    constexpr uint8 TABLE_RACE4[] = { 0, 6, 2, 11, 9, 9, 9, 9, 9, 7, 7, 7, 7, 7, 7, 7, 7 };
 +    constexpr uint8 TABLE_BOSS[] = { 4, 3, 1, 10, 10, 0, 0, 6, 2, 11, 9, 9, 9, 7, 7, 7, 7, 7 };
++    // An arena's ("Arena", Kartcraft's own): shots to fight its creatures with, mines to leave
++    // behind for those that chase, a shield; no warp orb, clock or mask, which hunt racers.
++    constexpr uint8 TABLE_ARENA[] = { 2, 2, 2, 2, 2, 11, 11, 1, 1, 1, 1, 10, 10, 3, 3, 4, 4, 6, 6, 0 };
 +
 +    // A table's item for a roll of 0-199: `item = table[rng * N / 200]` (VehPhysGeneral.c:1807-1841).
 +    template <size_t N>
@@ -4288,6 +4338,8 @@ index 0000000..44ccc8c
 +            case SET_RACE4: item = Pick(TABLE_RACE4, rng); break;
 +            default: item = Pick(TABLE_BOSS, rng); break;
 +        }
++        if (race.arena)
++            item = Pick(TABLE_ARENA, rng);
 +
 +        if (item == ITEM_SPRING)
 +            item = ITEM_TURBO;
@@ -4854,6 +4906,425 @@ index 0000000..44ccc8c
 +        }
 +    }
 +
++    // ── Arena ──────────────────────────────────────────────────────────────────────────────────
++    //
++    // An arena course (courses.json's "arena", pack.py's ARENAS) is a walled pit where waves of
++    // creatures come after its racers, and the racers fight them with their weapons. ARENA_FIRST
++    // after GO the first wave comes in at the wall, "R\tAW\t<id>\t<wave>\t<waves>\t<creatures>",
++    // and each creature is named to the clients, "R\tAF\t<id>\t<kart id>\t<creature guid>", its kart
++    // id FOE_GUID + its index: the clients put it among the karts their shots can hit. A raptor
++    // (R) runs a racer down and spins them out with a green beaker dropped under them; a bombot
++    // (B) blows up on one, a Nitro; a brute (O) is slower, takes FOE_HP_BRUTE hits, blasts what it
++    // reaches and throws bombs from further off. Their hits are a gauntlet's: GAUNTLET_HITS and a
++    // racer is out. The shooter's client reports its shot on a creature, "W\tF\t<kart id>\t<shot>\t
++    // <kind>" (ArenaHit), checked as a crate break is; a creature's last hit is the shooter's
++    // kill, "R\tAK\t<id>\t<name>\t<kills>", and the world thread kills it. A wave beaten, the next
++    // comes ARENA_BREAK later ("R\tAC\t<id>\t<wave>\t<waves>\t<secs>"); the last beaten, everyone
++    // still in finishes, placed by kills. The creatures live on the world thread (Update), where
++    // they are summoned, steered and killed between map updates; the packet thread only marks.
++    constexpr uint32 FOE_GUID = 0x7E000000;
++    constexpr uint32 ARENA_FIRST = 3 * IN_MILLISECONDS;
++    constexpr uint32 ARENA_BREAK = 5 * IN_MILLISECONDS;
++    // How often the world thread looks over the arenas, and steers each creature anew.
++    constexpr uint32 ARENA_TICK = 200;
++    constexpr uint32 FOE_STEER = 400;
++    // How near (yards, ground plane) a creature strikes its racer, and how often it may.
++    constexpr float FOE_REACH = 3.f;
++    constexpr uint32 FOE_STRIKE_EVERY = 2 * IN_MILLISECONDS;
++    constexpr uint32 FOE_STRIKE_HOLD = 1500;
++    // A brute's bomb: thrown from this far to this near (yards), this often.
++    constexpr float BRUTE_THROW_FAR = 35.f;
++    constexpr float BRUTE_THROW_NEAR = 8.f;
++    constexpr uint32 BRUTE_THROW_EVERY = 5 * IN_MILLISECONDS;
++    constexpr uint8 FOE_HP_BRUTE = 3;
++    // A summoned creature's own end, should its race end without a word (ms), and how long a
++    // killed one lies.
++    constexpr uint32 FOE_LIFETIME = 10 * MINUTE * IN_MILLISECONDS;
++    constexpr uint32 FOE_CORPSE = 4 * IN_MILLISECONDS;
++    // How far a creature leads its racer (s): where they will be, not where they were.
++    constexpr float FOE_LEAD = 0.4f;
++    // The day's first win in an arena pays ARENA_PRIZE tokens and one a kill, to ARENA_KILL_CAP.
++    constexpr uint32 ARENA_PRIZE = 15;
++    constexpr uint32 ARENA_KILL_CAP = 25;
++
++    struct FoeKind
++    {
++        char letter;
++        uint32 entry;
++        float speed; // yards a second
++        uint8 hp;
++    };
++    // pack.py's ARENA_FOES; a kart tops out near 20 yards a second.
++    static FoeKind const FOE_KINDS[] = {
++        { 'R', 190020, 13.f, 1 },
++        { 'B', 190021, 11.f, 1 },
++        { 'O', 190022, 8.5f, FOE_HP_BRUTE },
++    };
++
++    static FoeKind const& KindOf(char letter)
++    {
++        for (FoeKind const& k : FOE_KINDS)
++            if (k.letter == letter)
++                return k;
++        return FOE_KINDS[0];
++    }
++
++    // The creatures summoned for each race, by race id, to put away once their race is gone.
++    struct ArenaSpawns
++    {
++        uint32 map;
++        uint32 instance;
++        std::vector<ObjectGuid> guids;
++    };
++    static std::unordered_map<uint32, ArenaSpawns> s_arenaSpawns; // under s_mutex
++    static uint32 s_arenaTicked = 0;
++
++    static Board& BoardOf(Race const& r);
++    static void SendRecords(uint32 id, Race const& r);
++
++    // A shot of the server's (a hazard's or a creature's), relayed as a racer's is: `only`, when
++    // set, the one racer it is sent to.
++    static void ServerShot(Race& race, uint32 shooter, uint8 item, bool juiced, bool dropped, float x, float y,
++        float z, float yaw, uint32 now, Player* only = nullptr)
++    {
++        if (++race.hazardShot == 0)
++            race.hazardShot = 1;
++        uint16 const shot = race.hazardShot;
++        Shot& record = race.shots[(uint64(shooter) << 16) | shot];
++        record = Shot();
++        record.item = item;
++        record.at = now;
++        record.dropped = dropped;
++        record.juiced = juiced;
++        record.x = x;
++        record.y = y;
++        std::string const line = "KARTCRAFT\tW\tS\t" + std::to_string(shooter) + "\t" + std::to_string(item) + "\t" +
++            (juiced ? "1" : "0") + "\t" + std::to_string(shot) + "\t" + Fixed(x, 2) + "," + Fixed(y, 2) + "," +
++            Fixed(z, 2) + "," + Fixed(yaw, 3) + "\t0\t" + (dropped ? "d" : "");
++        if (only)
++            SendLine(only, line);
++        else
++            SendRace(race, line);
++    }
++
++    // How fast a racer goes, from where the server last saw them (a lead's).
++    static void SeeRacer(Racer& r, Player* player, uint32 now)
++    {
++        float const px = player->GetPositionX(), py = player->GetPositionY();
++        uint32 const since = r.seenAt ? WorldTimer::getMSTimeDiff(r.seenAt, now) : 0;
++        if (r.seenAt && since < 100)
++            return;
++        if (r.seenAt && since <= 1000)
++        {
++            float const s = 1000.f / float(since);
++            r.vx = 0.5f * r.vx + 0.5f * (px - r.seenX) * s;
++            r.vy = 0.5f * r.vy + 0.5f * (py - r.seenY) * s;
++        }
++        r.seenX = px;
++        r.seenY = py;
++        r.seenAt = now | 1;
++    }
++
++    // A point kept inside the arena.
++    static std::pair<float, float> InArena(ArenaDef const& a, float x, float y)
++    {
++        float const dx = x - a.x, dy = y - a.y;
++        float const d = std::hypot(dx, dy);
++        if (d <= a.radius || d < 0.01f)
++            return { x, y };
++        return { a.x + dx * a.radius / d, a.y + dy * a.radius / d };
++    }
++
++    // The next wave comes in round the wall, spread evenly from a turn of the race's own.
++    static void ArenaWave(uint32 id, Race& race, Player* summoner, uint32 now)
++    {
++        ArenaDef const& a = *race.arena;
++        char const* letters = a.waves[race.wave];
++        ++race.wave;
++        race.waveAt = 0;
++        size_t const n = std::strlen(letters);
++        float const turn = float(now % 360) * M_PI_F / 180.f;
++        ArenaSpawns& spawns = s_arenaSpawns[id];
++        spawns.map = race.course->map;
++        spawns.instance = race.instance;
++        std::string const sid = std::to_string(id);
++        SendRace(race, "KARTCRAFT\tR\tAW\t" + sid + "\t" + std::to_string(race.wave) + "\t" +
++            std::to_string(a.waves.size()) + "\t" + std::to_string(n));
++        for (size_t i = 0; i < n; ++i)
++        {
++            FoeKind const& kind = KindOf(letters[i]);
++            float const angle = turn + float(i) * 2.f * M_PI_F / float(n);
++            float const x = a.x + std::cos(angle) * a.radius * 0.95f;
++            float const y = a.y + std::sin(angle) * a.radius * 0.95f;
++            Creature* c = summoner->SummonCreature(kind.entry, x, y, a.z + 0.5f, angle + M_PI_F,
++                TEMPSUMMON_TIMED_DESPAWN, FOE_LIFETIME);
++            if (!c)
++                continue;
++            Foe f;
++            f.kind = kind.letter;
++            f.guid = c->GetObjectGuid();
++            f.hp = kind.hp;
++            f.x = x;
++            f.y = y;
++            f.z = a.z;
++            f.bornAt = now | 1;
++            spawns.guids.push_back(f.guid);
++            race.foes.push_back(f);
++            SendRace(race, "KARTCRAFT\tR\tAF\t" + sid + "\t" + std::to_string(FOE_GUID + race.foes.size() - 1) + "\t" +
++                std::to_string(f.guid.GetRawValue()));
++        }
++    }
++
++    // A creature reaches its racer: a raptor's green beaker under them, a bombot's or a brute's
++    // Nitro, where the racer will be in a moment.
++    static void FoeStrike(Race& race, size_t index, Racer& r, Player* player, uint32 now)
++    {
++        Foe const& f = race.foes[index];
++        float const x = player->GetPositionX() + r.vx * 0.15f;
++        float const y = player->GetPositionY() + r.vy * 0.15f;
++        bool const raptor = f.kind == 'R';
++        ServerShot(race, FOE_GUID + uint32(index), raptor ? ITEM_BEAKER : ITEM_TNT, !raptor, true, x, y,
++            player->GetPositionZ(), player->GetOrientation(), now);
++    }
++
++    // The racers still in when the last wave is beaten finish, placed by their kills.
++    static void ArenaWon(uint32 id, Race& race, uint32 now)
++    {
++        std::vector<Racer*> in;
++        for (Racer& r : race.racers)
++            if (!r.finished)
++                in.push_back(&r);
++        std::stable_sort(in.begin(), in.end(), [](Racer const* a, Racer const* b)
++        {
++            return a->kills != b->kills ? a->kills > b->kills : a->hits < b->hits;
++        });
++        uint32 const ms = WorldTimer::getMSTimeDiff(race.start, now);
++        for (Racer* r : in)
++        {
++            Player* player = ObjectAccessor::FindPlayer(r->guid);
++            r->finished = true;
++            uint32 const place = ++race.finishers;
++            r->place = uint8(place);
++            r->ms = ms;
++            if (!race.firstFinish)
++                race.firstFinish = now | 1;
++            ReplayFinish(id, r->guid, r->place, ms, now);
++            std::string best;
++            if (player)
++            {
++                // The day's first win here pays.
++                uint32 const today = uint32(std::time(nullptr)) - uint32(std::time(nullptr)) % DAY;
++                char sql[256];
++                std::snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM `kartcraft_results` WHERE `guid` = %u AND "
++                    "`course` = '%s' AND `place` > 0 AND `at` >= %u", r->guid.GetCounter(), race.course->key, today);
++                ChatHandler chat(player->GetSession());
++                if (CountOf(sql))
++                    chat.PSendSysMessage("The arena is yours, %u kills! Its tokens are paid once a day; come back tomorrow.",
++                        uint32(r->kills));
++                else
++                {
++                    uint32 const tokens = ARENA_PRIZE + std::min<uint32>(r->kills, ARENA_KILL_CAP);
++                    GiveTokens(player, tokens);
++                    chat.PSendSysMessage("The arena is yours, %u kills: %u tokens!", uint32(r->kills), tokens);
++                }
++                best = RecordFinish(BoardOf(race), r->guid.GetCounter(), r->name, *race.course, ms);
++            }
++            RecordResult(race, *r, place, ms);
++            SendRace(race, "KARTCRAFT\tR\tF\t" + std::to_string(id) + "\t" + r->name + "\t" + std::to_string(place) +
++                "\t" + std::to_string(ms) + "\t" + best);
++            if (!best.empty())
++                SendRecords(id, race);
++            if (player)
++                Reward(player, place, uint32(race.field));
++        }
++    }
++
++    // A racer's shot on an arena's creature ("W\tF\t<kart id>\t<shot>\t<kind>"), on the packet
++    // thread: a live shot of theirs that can have reached it, on one not yet beaten. A blast costs
++    // two of a brute's hits; the last is their kill.
++    static void ArenaHit(Race& race, Racer& me, std::string const& guid, std::vector<std::string> const& f, uint32 now)
++    {
++        char* end = nullptr;
++        unsigned long id = std::strtoul(f[2].c_str(), &end, 10);
++        if (end == f[2].c_str() || *end || id < FOE_GUID || id - FOE_GUID >= race.foes.size())
++            return;
++        unsigned long shot = std::strtoul(f[3].c_str(), &end, 10);
++        if (end == f[3].c_str() || *end || shot < 1 || shot > 0xFFFF || f[4].size() != 1)
++            return;
++        char const kind = f[4][0];
++        if (kind != 'S' && kind != 'B' && kind != 'Q' && kind != 'T')
++            return;
++        Foe& foe = race.foes[id - FOE_GUID];
++        if (foe.beaten || foe.gone)
++            return;
++        auto found = race.shots.find((uint64(me.guid.GetCounter()) << 16) | shot);
++        if (found == race.shots.end() || !LiveShot(found->second, now))
++            return;
++        Shot& s = found->second;
++        bool const single = s.item == ITEM_MISSILE || s.item == ITEM_MISSILE_3 || s.item == ITEM_WARP;
++        if (single && s.hit)
++            return;
++        float const reach = s.dropped ? BREAK_REACH
++                                      : SHOT_SPEED * float(WorldTimer::getMSTimeDiff(s.at, now)) / float(IN_MILLISECONDS) + BREAK_REACH;
++        if (std::hypot(foe.x - s.x, foe.y - s.y) > reach)
++            return;
++        if (single || s.dropped)
++            s.hit = true;
++        uint8 const loss = kind == 'B' ? 2 : 1;
++        foe.hp = uint8(foe.hp > loss ? foe.hp - loss : 0);
++        SendRace(race, "KARTCRAFT\tW\tH\t" + std::to_string(id) + "\t" + guid + "\t" + std::to_string(shot) + "\t" +
++            std::string(1, kind) + "\t0");
++        if (foe.hp)
++            return;
++        foe.beaten = true;
++        me.kills = uint16(std::min<int>(me.kills + 1, 0xFFFF));
++        SendRace(race, "KARTCRAFT\tR\tAK\t" + std::to_string(race.id) + "\t" + me.name + "\t" + std::to_string(me.kills));
++    }
++
++    // One arena's creatures on the world thread: summoned a wave at a time, steered at the
++    // nearest racer still in, striking those they reach, killed once beaten.
++    static void TickArena(uint32 id, Race& race, uint32 now)
++    {
++        if (!race.arena || !race.start || int32(now - race.start) < 0)
++            return;
++        Map* map = sMapMgr.FindMap(race.course->map, race.instance);
++        if (!map)
++            return;
++        std::vector<std::pair<Racer*, Player*>> in;
++        for (Racer& r : race.racers)
++        {
++            if (r.finished)
++                continue;
++            Player* p = ObjectAccessor::FindPlayer(r.guid);
++            if (!p || !p->IsInWorld() || p->GetMap() != map)
++                continue;
++            SeeRacer(r, p, now);
++            in.push_back({ &r, p });
++        }
++        if (race.waveAt && int32(now - race.waveAt) >= 0 && !in.empty() && race.wave < race.arena->waves.size())
++            ArenaWave(id, race, in.front().second, now);
++        size_t live = 0;
++        for (auto const& s : race.shots)
++            if (LiveShot(s.second, now))
++                ++live;
++        bool standing = false;
++        for (size_t i = 0; i < race.foes.size(); ++i)
++        {
++            Foe& f = race.foes[i];
++            if (f.gone)
++                continue;
++            Creature* c = map->GetCreature(f.guid);
++            // One just summoned may not be found yet.
++            if (!c && !f.beaten && WorldTimer::getMSTimeDiff(f.bornAt, now) < IN_MILLISECONDS)
++            {
++                standing = true;
++                continue;
++            }
++            if (!c || !c->IsAlive())
++            {
++                f.gone = true;
++                f.beaten = true;
++                continue;
++            }
++            if (f.beaten)
++            {
++                c->DoKillUnit();
++                c->DespawnOrUnsummon(FOE_CORPSE);
++                f.gone = true;
++                continue;
++            }
++            standing = true;
++            f.x = c->GetPositionX();
++            f.y = c->GetPositionY();
++            f.z = c->GetPositionZ();
++            // The nearest racer still in.
++            Racer* target = nullptr;
++            Player* tp = nullptr;
++            float best = 0.f;
++            for (auto const& x : in)
++            {
++                float const d = std::hypot(x.second->GetPositionX() - f.x, x.second->GetPositionY() - f.y);
++                if (!target || d < best)
++                {
++                    target = x.first;
++                    tp = x.second;
++                    best = d;
++                }
++            }
++            if (!target)
++                continue;
++            bool const grace = target->graceUntil && int32(now - target->graceUntil) < 0;
++            if (best < FOE_REACH && !grace && (!f.struckAt || WorldTimer::getMSTimeDiff(f.struckAt, now) >= FOE_STRIKE_EVERY))
++            {
++                f.struckAt = now | 1;
++                // One strike at a time: the others hold off until it has landed or missed.
++                target->graceUntil = (now + FOE_STRIKE_HOLD) | 1;
++                FoeStrike(race, i, *target, tp, now);
++                // A bombot goes up with its blast, no one's kill.
++                if (f.kind == 'B')
++                    f.beaten = true;
++                continue;
++            }
++            if (f.kind == 'O' && best > BRUTE_THROW_NEAR && best < BRUTE_THROW_FAR && live < HAZARD_SHOTS &&
++                (!f.threwAt || WorldTimer::getMSTimeDiff(f.threwAt, now) >= BRUTE_THROW_EVERY))
++            {
++                f.threwAt = now | 1;
++                float const lead = best / BOMB_YPS;
++                float const yaw = std::atan2(tp->GetPositionY() + target->vy * lead - f.y,
++                    tp->GetPositionX() + target->vx * lead - f.x);
++                ServerShot(race, FOE_GUID + uint32(i), ITEM_BOMB, false, false, f.x, f.y, f.z + 1.5f, yaw, now);
++                ++live;
++            }
++            if (!f.steeredAt || WorldTimer::getMSTimeDiff(f.steeredAt, now) >= FOE_STEER)
++            {
++                f.steeredAt = now | 1;
++                auto const to = InArena(*race.arena, tp->GetPositionX() + target->vx * FOE_LEAD,
++                    tp->GetPositionY() + target->vy * FOE_LEAD);
++                c->GetMotionMaster()->MovePoint(0, to.first, to.second, race.arena->z, MOVE_RUN_MODE, KindOf(f.kind).speed);
++            }
++        }
++        // A wave beaten: the next, or the win.
++        if (race.wave && !race.waveAt && !standing && !in.empty())
++        {
++            if (race.wave >= race.arena->waves.size())
++                ArenaWon(id, race, now);
++            else
++            {
++                race.waveAt = (now + ARENA_BREAK) | 1;
++                SendRace(race, "KARTCRAFT\tR\tAC\t" + std::to_string(id) + "\t" + std::to_string(race.wave) + "\t" +
++                    std::to_string(race.arena->waves.size()) + "\t" + std::to_string(ARENA_BREAK / IN_MILLISECONDS));
++            }
++        }
++    }
++
++    // Every arena, at most every ARENA_TICK, on the world thread; the creatures of a race gone
++    // (closed, left by all) put away.
++    static void TickArenas(uint32 now)
++    {
++        if (s_arenaTicked && WorldTimer::getMSTimeDiff(s_arenaTicked, now) < ARENA_TICK)
++            return;
++        s_arenaTicked = now;
++        for (auto it = s_arenaSpawns.begin(); it != s_arenaSpawns.end();)
++        {
++            auto race = s_races.find(it->first);
++            bool const over = race == s_races.end() ||
++                std::all_of(race->second.racers.begin(), race->second.racers.end(), [](Racer const& r) { return r.finished; });
++            if (!over)
++            {
++                ++it;
++                continue;
++            }
++            if (Map* map = sMapMgr.FindMap(it->second.map, it->second.instance))
++                for (ObjectGuid const& g : it->second.guids)
++                    if (Creature* c = map->GetCreature(g))
++                        if (c->IsAlive())
++                            c->DespawnOrUnsummon();
++            it = s_arenaSpawns.erase(it);
++        }
++        for (auto& entry : s_races)
++            TickArena(entry.first, entry.second, now);
++    }
++
 +    static void TickWeapons(uint32 now)
 +    {
 +        for (auto& entry : s_races)
@@ -4939,7 +5410,7 @@ index 0000000..44ccc8c
 +        {
 +            Race& r = entry.second;
 +            if (!r.start || int32(now - r.start) < 0 || (r.crates.empty() && !r.hazards) ||
-+                (r.timeTrial && !r.hazards))
++                (r.timeTrial && !r.hazards && !r.arena))
 +                continue;
 +            if (Racer* x = FindRacer(r, player->GetGUIDLow()))
 +                if (!me || (me->finished && !x->finished))
@@ -5013,6 +5484,8 @@ index 0000000..44ccc8c
 +            if (reward && !me->finished)
 +                GiveCrate(*race, *me, player, crate.kind, now);
 +        }
++        else if (verb == "F" && f.size() >= 5 && race->arena && !me->finished)
++            ArenaHit(*race, *me, guid, f, now);
 +        else if (verb == "S" && f.size() >= 6 && !me->finished)
 +        {
 +            char* end = nullptr;
@@ -5160,9 +5633,10 @@ index 0000000..44ccc8c
 +                Rain(*race, *me, now);
 +            // Only the hazards' hits count: a TNT of theirs landing on the head is none yet, its
 +            // blast (the racer's own, shot 0) soon after is, if it was not shaken off.
-+            if (race->hazards && !me->finished)
++            if ((race->hazards || race->arena) && !me->finished)
 +            {
-+                bool const hazard = shooter >= HAZARD_GUID && shooter < HAZARD_GUID + 0x10000;
++                bool const hazard = (shooter >= HAZARD_GUID && shooter < HAZARD_GUID + 0x10000) ||
++                    (shooter >= FOE_GUID && shooter < FOE_GUID + 0x10000);
 +                if (hazard && kind == 'T')
 +                    me->hazardTntAt = now | 1;
 +                else if (hazard || (self && kind == 'B' && me->hazardTntAt &&
@@ -5325,8 +5799,12 @@ index 0000000..44ccc8c
 +        r.hazards = HazardsOf(*r.course);
 +        r.hazardAt.clear();
 +        r.hazardShot = 0;
-+        if (!r.timeTrial || r.hazards)
-+            StartWeapons(r, now, !r.timeTrial);
++        r.arena = ArenaOf(*r.course);
++        r.wave = 0;
++        r.waveAt = r.arena ? (r.start + ARENA_FIRST) | 1 : 0;
++        r.foes.clear();
++        if (!r.timeTrial || r.hazards || r.arena)
++            StartWeapons(r, now, !r.timeTrial || r.arena);
 +    }
 +
 +    // ── Race Finder ────────────────────────────────────────────────────────────────────────────
@@ -5436,7 +5914,7 @@ index 0000000..44ccc8c
 +                    zone = &zones[index];
 +            }
 +            for (size_t i = 0; i < COURSES.size(); ++i)
-+                if (!COURSES[i].flight && !HazardsOf(COURSES[i]) &&
++                if (!OwnKind(COURSES[i]) &&
 +                    (token == "any" || token == COURSES[i].key || (zone && *zone == COURSES[i].zone)))
 +                    mask[i] = true;
 +            // A player track only by its own key, and never a flying one.
@@ -6866,6 +7344,7 @@ index 0000000..44ccc8c
 +                s_scaleTicked = now;
 +                TickRaceScales();
 +            }
++            TickArenas(now);
 +            // Today's and this week's courses chosen as the period turns, nobody racing or not,
 +            // so the website shows them from the first minute.
 +            ChallengesNow();
@@ -8582,6 +9061,9 @@ index 0000000..44ccc8c
 +            if (!me || me->finished || (r.instance && player->GetInstanceId() != r.instance))
 +                return;
 +            Course const& c = *r.course;
++            // An arena is won by its waves ("Arena"), not by its checkpoints.
++            if (r.arena)
++                return;
 +            uint32 n = uint32(c.points.size());
 +            uint32 index = uint32(std::strtoul(f[3].c_str(), nullptr, 10));
 +            // The next checkpoint only, and only once the server has seen the racer there: now, at
@@ -9026,8 +9508,9 @@ index 0000000..44ccc8c
 +                Course const& c = COURSES[i];
 +                if (!room)
 +                    break;
-+                std::string const kind = c.laps ? std::to_string(c.laps) + (c.laps == 1 ? " lap)" : " laps)")
-+                                                : std::string("sprint)");
++                std::string const kind = ArenaOf(c) ? std::string("arena)")
++                    : c.laps ? std::to_string(c.laps) + (c.laps == 1 ? " lap)" : " laps)")
++                             : std::string("sprint)");
 +                if (c.flight)
 +                {
 +                    menu.AddMenuItem(GOSSIP_ICON_BATTLE, "Flight trial: " + std::string(c.name) + " (" + kind,
@@ -10209,10 +10692,10 @@ index 0000000..c72d18e
 +    };
 diff --git a/src/game/KartcraftCourses.h b/src/game/KartcraftCourses.h
 new file mode 100644
-index 0000000..ac7bcb9
+index 0000000..ad6d3fa
 --- /dev/null
 +++ b/src/game/KartcraftCourses.h
-@@ -0,0 +1,2577 @@
+@@ -0,0 +1,2594 @@
 +// Generated by setup/vmangos/pack.py from courses/courses.json (docs/courses.md): edit
 +// that file and rerun pack.py. Included by Kartcraft.cpp inside namespace Kartcraft,
 +// after Course and CrateSpot.
@@ -12673,6 +13156,19 @@ index 0000000..ac7bcb9
 +            15.f, 20.f, 20.f, 15.f, 15.f, 17.4f, 25.f, 25.f },
 +          {},
 +          { 65.4f, -5122.2f }, {} },
++        // Gurubashi Kart Arena (Stranglethorn Vale): arena made by course-gen arena: a pit of 42.0
++        // yd (mean 44.6), fought in 39.0 yd of it.
++        { "ar-gurubashi", "Gurubashi Kart Arena", "", 0, 0,
++          { { -13179.7f, 275.2f }, { -13226.5f, 275.2f } },
++          {},
++          { { 'Q', -13183.6f, 275.2f, 21.9f }, { 'Q', -13189.3f, 289.f, 21.9f }, { 'Q', -13203.1f, 294.7f, 21.9f },
++            { 'Q', -13216.9f, 289.f, 21.9f }, { 'Q', -13222.6f, 275.2f, 21.9f }, { 'Q', -13216.9f, 261.4f, 21.9f },
++            { 'Q', -13203.1f, 255.7f, 21.9f }, { 'Q', -13189.3f, 261.4f, 21.9f }, { 'F', -13176.f, 290.8f, 21.9f },
++            { 'F', -13203.1f, 306.4f, 21.9f }, { 'F', -13230.1f, 290.8f, 21.9f }, { 'F', -13230.1f, 259.6f, 21.9f },
++            { 'F', -13203.1f, 244.f, 21.9f }, { 'F', -13176.f, 259.6f, 21.9f }, { 'W', -13194.6f, 280.f, 21.9f },
++            { 'W', -13203.1f, 284.9f, 21.9f }, { 'W', -13211.5f, 280.f, 21.9f }, { 'W', -13211.5f, 270.3f, 21.9f },
++            { 'W', -13203.1f, 265.4f, 21.9f }, { 'W', -13194.6f, 270.3f, 21.9f } },
++          { -13179.7f, 280.2f }, {} },
 +    };
 +
 +    static std::vector<Leap> const LEAPS = {
@@ -12789,6 +13285,10 @@ index 0000000..ac7bcb9
 +            { 'I', 1205.8f, -4208.9f, 25.7f, 1.391f, 18.f, 12000 },
 +            { 'M', 1201.1f, -4111.5f, 21.8f, 6.104f, 75.f, 4000 },
 +        } },
++    };
++
++    static std::vector<ArenaDef> const ARENAS = {
++        { "ar-gurubashi", -13203.1f, 275.2f, 21.9f, 39.f, { "RR", "RRB", "RBRB", "ORR", "RRBBO", "OBRBRO" } },
 +    };
 diff --git a/src/game/Maps/GridNotifiers.cpp b/src/game/Maps/GridNotifiers.cpp
 index 5529860..f4af29d 100644

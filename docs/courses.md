@@ -77,6 +77,20 @@ client's list are both made from it; nothing else holds course data.
   its hazards and no crates; a race hosted on one has both; never a challenge nor in the Race
   Finder. `course-gen gauntlet --from <key> --key <key> --name <name>` makes one of a course: one
   lap of it, a hazard every 95 yards past the start.
+- `arena`: optional: an arena, a walled pit where the server sends waves of creatures after its
+  racers and they fight them with their weapons (`Kartcraft.cpp`, "Arena";
+  `docs/kartcraft-weapons-protocol.md`, "Arenas"). Its pit's middle and floor (`x`, `y`, `z`), the
+  `radius` fought in round it (10 to 80 yards) and its `waves` (1 to 12), each a string of
+  creatures, a letter each: `R` a raptor that runs a racer down and spins them out, `B` a bombot
+  that blows up on one, `O` a brute, slower, three hits to beat, that blasts what it reaches and
+  throws bombs. Their hits count as a gauntlet's, three and a racer is out. The last wave beaten,
+  everyone still in finishes, placed by their kills; the day's first win pays 15 tokens and one a
+  kill (to 25 more). Its two checkpoints only stand its grid in the pit (none is passed), its
+  `crates` ring its middle, and its crates roll an arena's items (shots, mines, a shield; no warp
+  orb, clock or mask). A time trial on an arena has its creatures and its crates; never a
+  challenge nor in the Race Finder. `course-gen arena --map <m> --at x,y --z <z> --key <key>
+  --name <name>` measures a pit (rays from its middle to where the floor rises or falls 1.5 yards)
+  and writes its entry.
 - `checkpoints`: at least two, WoW world `x`, `y` (yards); the first is the start, where a
   driver hosts or joins. Optional `z` (the server finds the ground itself). Optional `gate`:
   the gate's half-width in yards. The client passes a checkpoint through a gate this wide

@@ -140,7 +140,7 @@ def courses_header(data):
         name = cstring(c.get('name'), f'course {key}: name')
         # The server's zone is only the Race Finder's group: a series ("Grand Prix") in its stead,
         # and none for a flight course, which the finder never offers.
-        zone = '' if c.get('flight') or c.get('gauntlet') else c.get('series') or c.get('zone', '')
+        zone = '' if c.get('flight') or c.get('gauntlet') or c.get('arena') else c.get('series') or c.get('zone', '')
         zone_c = cstring(zone, f'course {key}: zone') if zone else '""'
         cmap = c.get('map')
         laps = c.get('laps')
@@ -214,6 +214,7 @@ def courses_header(data):
     out.append('    };')
     out += leaps_table(data, courses)
     out += hazards_table(courses)
+    out += arenas_table(courses)
     return '\n'.join(out) + '\n'
 
 
@@ -266,6 +267,54 @@ def hazards_table(courses):
         for k, x, y, z, o, reach, every in hz:
             out.append(f"            {{ '{k}', {cfloat(x)}, {cfloat(y)}, {cfloat(z)}, {cfloat(o)}, {cfloat(reach)}, {every} }},")
         out.append('        } },')
+    out.append('    };')
+    return out
+
+
+# An arena's creatures (Kartcraft.cpp "Arena"), by their letter in a wave: the creature entry,
+# its name and its display (CreatureDisplayInfo: 1960 Creature\Raptor, 6977
+# Creature\GnomeSpidertank\GnomeBomBot, 415 Creature\Ogre).
+ARENA_FOES = {
+    'R': (190020, 'Gurubashi Raptor', 1960),
+    'B': (190021, 'Arena Bombot', 6977),
+    'O': (190022, 'Gurubashi Brute', 415),
+}
+
+
+def arena_of(c):
+    """An arena course's arena, checked: (x, y, z, radius, waves), or None."""
+    key = c['key']
+    a = c.get('arena')
+    if a is None:
+        return None
+    what = f'course {key}: arena'
+    if not isinstance(a, dict):
+        fail(f'{what} must be an object')
+    if c.get('flight') or c.get('gauntlet'):
+        fail(f'{what}: an arena is neither flown nor a gauntlet')
+    x, y, z = (num(a.get(f), f'{what}: {f}') for f in 'xyz')
+    radius = num(a.get('radius'), f'{what}: radius')
+    if not 10 <= radius <= 80:
+        fail(f'{what}: radius 10 to 80 yd')
+    waves = a.get('waves')
+    if not isinstance(waves, list) or not 1 <= len(waves) <= 12:
+        fail(f'{what}: 1 to 12 waves')
+    for n, w in enumerate(waves):
+        if not isinstance(w, str) or not 1 <= len(w) <= 16 or any(ch not in ARENA_FOES for ch in w):
+            fail(f'{what}: wave {n} is 1 to 16 of {"".join(ARENA_FOES)}')
+    return (x, y, z, radius, waves)
+
+
+def arenas_table(courses):
+    """The arenas (Kartcraft.cpp ArenaDef), by course key."""
+    out = ['', '    static std::vector<ArenaDef> const ARENAS = {']
+    for c in courses:
+        a = arena_of(c)
+        if not a:
+            continue
+        x, y, z, radius, waves = a
+        listed = ', '.join(f'"{w}"' for w in waves)
+        out.append(f'        {{ "{c["key"]}", {cfloat(x)}, {cfloat(y)}, {cfloat(z)}, {cfloat(radius)}, {{ {listed} }} }},')
     out.append('    };')
     return out
 
@@ -365,6 +414,26 @@ EMPLACEMENT_GUIDS = (402000, 402999)
 EMPLACEMENTS = {190013: ('Goblin Rocket Battery', 3146), 190014: ('Goblin Bomb Shredder', 1269)}
 
 
+def arena_foes_sql():
+    """The arenas' creatures' templates: summoned by the server, a wave at a time."""
+    entries = ', '.join(str(e) for e, _, _ in ARENA_FOES.values())
+    # The marshal's, killable (no UNKILLABLE): the server kills one its racers' shots beat.
+    foe_flags = MARSHAL_STATIC_FLAGS & ~0x8
+    out = [
+        '',
+        '-- The arenas\' creatures (Kartcraft.cpp "Arena"): summoned a wave at a time, never spawned.',
+        f'DELETE FROM `creature_template` WHERE `entry` IN ({entries});',
+        'INSERT INTO `creature_template` (`entry`, `patch`, `name`, `subname`, `level_min`, `level_max`,',
+        '  `faction`, `npc_flags`, `display_id1`, `display_scale1`, `display_probability1`,',
+        '  `display_total_probability`, `type`, `unit_class`, `inhabit_type`, `civilian`,',
+        '  `static_flags1`, `flags_extra`) VALUES',
+    ]
+    rows = [f"({e}, 0, '{name}', 'Gurubashi Kart Arena', 60, 60, 35, 0, {display}, 1, 100, 100, 1, 1, 1, 1,"
+            f' {foe_flags}, 2)' for e, name, display in ARENA_FOES.values()]
+    out.append(',\n'.join(rows) + ';')
+    return out
+
+
 def emplacements_sql(data):
     """The gauntlets' emplacements: their templates and a spawn at each one."""
     lo, hi = EMPLACEMENT_GUIDS
@@ -456,6 +525,7 @@ def marshal_sql(data):
             for i, (m, x, y, z, o) in enumerate(spots)]
     out.append(',\n'.join(rows) + ';')
     out += emplacements_sql(data)
+    out += arena_foes_sql()
     m, x, y, z, o = HUB_SPOT
     out += [
         '',

@@ -221,7 +221,8 @@ INSERT INTO `creature` (`guid`, `id`, `map`, `position_x`, `position_y`, `positi
 (400182, 190000, 1, 3986, -4563.8, 418.4, 3.491, 300, 300, 0, 0),
 (400183, 190000, 1, -3776.1, -85.8, 295.3, 0.611, 300, 300, 0, 0),
 (400184, 190000, 0, -6375.2, -2350.9, 402.8, 1.779, 300, 300, 0, 0),
-(400185, 190000, 0, -5201, -1222.6, 572.1, 6.145, 300, 300, 0, 0);
+(400185, 190000, 0, -5201, -1222.6, 572.1, 6.145, 300, 300, 0, 0),
+(400186, 190000, 0, -13179.7, 280.2, 21.9, 3.142, 300, 300, 0, 0);
 
 -- The gauntlets' emplacements (Kartcraft.cpp "Gauntlet"): where a hazard fires from.
 DELETE FROM `creature` WHERE `guid` BETWEEN 402000 AND 402999 OR `id` IN (190013, 190014);
@@ -273,6 +274,16 @@ INSERT INTO `creature` (`guid`, `id`, `map`, `position_x`, `position_y`, `positi
 (402036, 190013, 1, 1243.4, -4674.2, 15.9, 2.791, 300, 300, 0, 0),
 (402037, 190014, 1, 1157.7, -4486.3, 20.8, 6.067, 300, 300, 0, 0),
 (402038, 190013, 1, 1201.1, -4111.5, 21.8, 6.104, 300, 300, 0, 0);
+
+-- The arenas' creatures (Kartcraft.cpp "Arena"): summoned a wave at a time, never spawned.
+DELETE FROM `creature_template` WHERE `entry` IN (190020, 190021, 190022);
+INSERT INTO `creature_template` (`entry`, `patch`, `name`, `subname`, `level_min`, `level_max`,
+  `faction`, `npc_flags`, `display_id1`, `display_scale1`, `display_probability1`,
+  `display_total_probability`, `type`, `unit_class`, `inhabit_type`, `civilian`,
+  `static_flags1`, `flags_extra`) VALUES
+(190020, 0, 'Gurubashi Raptor', 'Gurubashi Kart Arena', 60, 60, 35, 0, 1960, 1, 100, 100, 1, 1, 1, 1, 34078822, 2),
+(190021, 0, 'Arena Bombot', 'Gurubashi Kart Arena', 60, 60, 35, 0, 6977, 1, 100, 100, 1, 1, 1, 1, 34078822, 2),
+(190022, 0, 'Gurubashi Brute', 'Gurubashi Kart Arena', 60, 60, 35, 0, 415, 1, 100, 100, 1, 1, 1, 1, 34078822, 2);
 
 -- The hub's Quartermaster at the Mirage Raceway (Kartcraft.cpp "Hub"): a gossip NPC whose
 -- menu is the core's script npc_kartcraft_hub.

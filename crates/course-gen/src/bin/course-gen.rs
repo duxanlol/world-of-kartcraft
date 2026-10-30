@@ -152,6 +152,29 @@ enum Cmd {
         #[arg(long)]
         remove: Vec<String>,
     },
+    /// Make an arena of a walled pit (`course_gen::arena`): its floor measured, waves of
+    /// creatures to fight there, written into the course file (replacing one of the same key).
+    Arena {
+        /// The map: 0 the Eastern Kingdoms, 1 Kalimdor.
+        #[arg(long)]
+        map: u32,
+        /// About the pit's middle, WoW `x,y`.
+        #[arg(long, allow_hyphen_values = true)]
+        at: String,
+        /// About its floor's height (WoW z).
+        #[arg(long, allow_hyphen_values = true)]
+        z: f32,
+        /// The arena's key, name and zone.
+        #[arg(long)]
+        key: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value = "")]
+        zone: String,
+        /// The course file.
+        #[arg(long, default_value = "courses/courses.json")]
+        courses: PathBuf,
+    },
     /// Make a gauntlet of a course (`course_gen::gauntlet`): its copy, one lap, hazards along
     /// its route, written into the course file (replacing one of the same key).
     Gauntlet {
@@ -598,6 +621,39 @@ fn main() -> Result<()> {
                 );
             }
             println!("exported {} into {}", done.len(), courses.display());
+        }
+        Cmd::Arena {
+            map,
+            at,
+            z,
+            key,
+            name,
+            zone,
+            courses,
+        } => {
+            let v: Vec<f32> = at
+                .split(',')
+                .map(|p| p.trim().parse())
+                .collect::<Result<_, _>>()
+                .context("--at is x,y")?;
+            anyhow::ensure!(v.len() == 2, "--at is x,y");
+            let text = std::fs::read_to_string(&courses)
+                .with_context(|| format!("reading {}", courses.display()))?;
+            let mut file: serde_json::Value = serde_json::from_str(&text)?;
+            let entry = course_gen::arena::make(
+                &mut open_install()?,
+                map,
+                [v[0], v[1]],
+                z,
+                &key,
+                &name,
+                &zone,
+            )?;
+            println!("{key}: {}", entry["note"].as_str().unwrap_or(""));
+            let list = file["courses"].as_array_mut().context("courses")?;
+            list.retain(|c| c["key"] != key.as_str());
+            list.push(entry);
+            std::fs::write(&courses, course_gen::export::format(&file))?;
         }
         Cmd::Gauntlet {
             from,

@@ -190,8 +190,27 @@ is dropped (`d`) on the road; a clock's `S` goes to the racer near it alone (a c
 kart but its shooter's). A storm is a rain cloud's `R`, effect `0` slow or `2` ice, with no shot.
 A time trial on a gauntlet takes these lines too (it has hazards and no crates).
 
-Each hit in a gauntlet but a TNT landing on the head (its blast is one) is told to every racer,
-`R\tGH\t<race>\t<name>\t<hits>`; the third puts the racer out, `R\tDNF\t<race>\t<name>`.
+Each hit by a hazard in a gauntlet but a TNT landing on the head (its blast is one) is told to
+every racer, `R\tGH\t<race>\t<name>\t<hits>`; the third puts the racer out,
+`R\tDNF\t<race>\t<name>`. A rival's hit is no strike.
+
+### Arenas
+
+An arena (`docs/courses.md`, `arena`) sends waves of creatures after its racers. A wave comes in,
+`R\tAW\t<race>\t<wave>\t<waves>\t<creatures>`, and each creature is named,
+`R\tAF\t<race>\t<kart id>\t<creature guid>`: its kart id is `2113929216` (`0x7E000000`) plus
+its index in the race, and the clients put the creature among the karts their weapons know, its
+hits decided by every client as a demo dummy's. Its own shots (a raptor's green beaker or a
+bombot's or brute's Nitro dropped under the racer it reaches, a brute's bomb thrown) are `S`
+relays from its kart id, and a racer's hit by one is `H` as any other, a gauntlet's strike.
+
+Client → server, the shooter's only: our shot hit an arena's creature,
+`W\tF\t<kart id>\t<shot>\t<kind>`. The server checks the shot as a crate break's (live, ours,
+near enough by now; a missile's or warp orb's first hit only) and takes a hit point (a blast two);
+it relays the hit to every racer as `W\tH\t<kart id>\t<shooter>\t<shot>\t<kind>\t0`, and the
+last hit point is the shooter's kill, `R\tAK\t<race>\t<name>\t<kills>`. A wave beaten,
+`R\tAC\t<race>\t<wave>\t<waves>\t<secs to the next>`; the last, everyone still in finishes
+(`R\tF`), placed by kills.
 
 ### Limits
 

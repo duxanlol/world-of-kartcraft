@@ -1,13 +1,15 @@
 //! CTR's weapons in a Kartcraft race: the client half of `docs/kartcraft-weapons-protocol.md`
 //! over [`kartcraft::weapons::Weapons`]. The server's `W` lines go in as they come; the weapons
 //! are bound to the race we are in (cleared when we finish, leave it or leave the kart); the
-//! other racers' karts, our race position and the HUD's item slot are handed over each frame;
-//! and the lines the weapons queue (claims, shots, our hits) go out at no more than 20 a second.
+//! other racers' karts, an arena's creatures (karts our shots can hit, whose hits are decided
+//! here), our race position and the HUD's item slot are handed over each frame; and the lines the
+//! weapons queue (claims, shots, our hits, our shots' hits on creatures) go out at no more than 20
+//! a second.
 //! The 30 Hz step itself runs inside our kart's session (`super::update`).
 
 use benilla_protocol::SessionEvent;
 use bevy::prelude::*;
-use kartcraft::weapons::wire::{Down, Pacer, PREFIX};
+use kartcraft::weapons::wire::{Down, Pacer, Up, PREFIX};
 use kartcraft::weapons::Weapons;
 
 use super::profession::Profession;
@@ -56,6 +58,8 @@ pub(crate) fn update(
     guid: Res<crate::net::SelfGuid>,
     names: Option<Res<crate::names::NameCache>>,
     remotes: Res<RemoteKarts>,
+    index: Res<crate::net::GuidIndex>,
+    units: Query<(&Transform, &crate::net::ObjectStore)>,
     mut weapons: ResMut<Weapons>,
     mut link: ResMut<WeaponLink>,
     mut extras: ResMut<kartcraft::hud::HudExtras>,
@@ -125,12 +129,34 @@ pub(crate) fn update(
             false,
         );
     }
+    // An arena's creatures still standing, their hits decided here (`Kartcraft.cpp` "Arena").
+    let foes = races.foes();
+    for &(kart, guid) in foes {
+        let Some((at, store)) = index.0.get(&guid).and_then(|&e| units.get(e).ok()) else {
+            continue;
+        };
+        if store.0.unit_health() == Some(0) {
+            continue;
+        }
+        let yaw = at.rotation.to_euler(EulerRot::YXZ).0;
+        weapons.other(kart, at.translation, yaw, 255, "", true);
+    }
     weapons.end_others();
-    // Ours only: no one else's hits are ours to report.
+    // Ours only: no one else's hits are ours to report, and a creature's only by our shot.
     let me = weapons.me;
     for (from, up) in std::mem::take(&mut weapons.outbox) {
         if from == me {
             link.pacer.push(up.line());
+        } else if let Up::Hit {
+            shooter,
+            shot,
+            kind,
+        } = up
+        {
+            if shooter == me && foes.iter().any(|f| f.0 == from) {
+                link.pacer
+                    .push(format!("{PREFIX}F\t{from}\t{shot}\t{}", kind.code()));
+            }
         }
     }
     for line in link.pacer.due(time.elapsed_secs()) {
