@@ -200,9 +200,9 @@ An arena (`docs/courses.md`, `arena`) sends waves of creatures after its racers.
 `R\tAW\t<race>\t<wave>\t<waves>\t<creatures>`, and each creature is named,
 `R\tAF\t<race>\t<kart id>\t<creature guid>`: its kart id is `2113929216` (`0x7E000000`) plus
 its index in the race, and the clients put the creature among the karts their weapons know, its
-hits decided by every client as a demo dummy's. Its own shots (a raptor's green beaker or a
-bombot's or brute's Nitro dropped under the racer it reaches, a brute's bomb thrown) are `S`
-relays from its kart id, and a racer's hit by one is `H` as any other, a gauntlet's strike.
+hits decided by every client as a demo dummy's. Its own shots (a green beaker or a Nitro
+dropped at its feet a step toward the racer it reaches, a bomb or missile thrown, unguided, where
+the racer will be) are `S` relays from its kart id, and a racer's hit by one is `H` as any other, a gauntlet's strike.
 
 Client → server, the shooter's only: our shot hit an arena's creature,
 `W\tF\t<kart id>\t<shot>\t<kind>`. The server checks the shot as a crate break's (live, ours,
