@@ -6328,7 +6328,7 @@
         { "kind": "W", "x": -13203.1, "y": 265.4, "z": 21.9 },
         { "kind": "W", "x": -13194.6, "y": 270.3, "z": 21.9 }
       ],
-      "arena": {"radius":39.0,"waves":["RR","RRB","RBRB","ORR","RRBBO","OBRBRO"],"x":-13203.1,"y":275.2,"z":21.9}
+      "arena": {"radius":39.0,"waves":["RR","RRB","RBAR","ORRA","RRBBA","KRBR"],"x":-13203.1,"y":275.2,"z":21.9}
     }
   ],
   "leaps": [

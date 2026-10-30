@@ -4618,8 +4618,10 @@ namespace Kartcraft
     // hosted race both. Never a challenge, nor queued for (the Race Finder's mask).
     constexpr uint32 HAZARD_GUID = 0x7F000000;
     constexpr uint8 GAUNTLET_HITS = 3;
-    // An arena's, its waves a longer fight.
+    // An arena's, its waves a longer fight, and its creatures' hold after a hit (ms): many come
+    // at once.
     constexpr uint8 ARENA_HITS = 5;
+    constexpr uint32 ARENA_GRACE = 4000;
     // How far above or below a hazard (yards) a racer still sets it off: a road over a road, not.
     constexpr float HAZARD_HEIGHT = 25.f;
     // The live shots a gauntlet's hazards leave room for in the race's pool, for its racers'.
@@ -4646,7 +4648,7 @@ namespace Kartcraft
     // hold their fire on them a while.
     static void GauntletHit(Race& race, Racer& me, uint32 now)
     {
-        me.graceUntil = (now + GAUNTLET_GRACE) | 1;
+        me.graceUntil = (now + (race.arena ? ARENA_GRACE : GAUNTLET_GRACE)) | 1;
         me.hits = uint8(std::min<int>(me.hits + 1, 255));
         std::string const id = std::to_string(race.id);
         uint8 const out = race.arena ? ARENA_HITS : GAUNTLET_HITS;
@@ -4805,10 +4807,11 @@ namespace Kartcraft
     // after GO the first wave comes in at the wall, "R\tAW\t<id>\t<wave>\t<waves>\t<creatures>",
     // and each creature is named to the clients, "R\tAF\t<id>\t<kart id>\t<creature guid>", its kart
     // id FOE_GUID + its index: the clients put it among the karts their shots can hit. A raptor
-    // (R) runs a racer down and spins them out with a green beaker dropped under them; a bombot
-    // (B) blows up on one, a Nitro; a brute (O) is slower, takes FOE_HP_BRUTE hits, blasts what it
-    // reaches and throws bombs from further off. Their hits are a gauntlet's, but ARENA_HITS and a
-    // racer is out. The shooter's client reports its shot on a creature, "W\tF\t<kart id>\t<shot>\t
+    // (R) runs a racer down and spins them out with a green beaker dropped at its feet; a bombot
+    // (B) blows up on one, a Nitro; a brute (O) is slower, takes three hits, blasts what it reaches
+    // and throws bombs from further off; an axe thrower (A) keeps its distance and throws missiles;
+    // a berserker (K), a wave's boss, takes eight and throws bombs often (FOE_KINDS). Their hits
+    // are a gauntlet's, but ARENA_HITS and a racer is out. The shooter's client reports its shot on a creature, "W\tF\t<kart id>\t<shot>\t
     // <kind>" (ArenaHit), checked as a crate break is; a creature's last hit is the shooter's
     // kill, "R\tAK\t<id>\t<name>\t<kills>", and the world thread kills it. A wave beaten, the next
     // comes ARENA_BREAK later ("R\tAC\t<id>\t<wave>\t<waves>\t<secs>"); the last beaten, everyone
@@ -4822,15 +4825,13 @@ namespace Kartcraft
     constexpr uint32 FOE_STEER = 400;
     // How near (yards, ground plane) a creature strikes its racer, and how often it may.
     constexpr float FOE_REACH = 4.f;
-    constexpr uint32 FOE_STRIKE_EVERY = 4 * IN_MILLISECONDS;
+    constexpr uint32 FOE_STRIKE_EVERY = 6 * IN_MILLISECONDS;
     constexpr uint32 FOE_STRIKE_HOLD = 1500;
     // A creature that has struck stands this long (ms), its racer's moment to get away.
     constexpr uint32 FOE_STAND = 1500;
-    // A brute's bomb: thrown from this far to this near (yards), this often.
-    constexpr float BRUTE_THROW_FAR = 35.f;
-    constexpr float BRUTE_THROW_NEAR = 8.f;
-    constexpr uint32 BRUTE_THROW_EVERY = 5 * IN_MILLISECONDS;
-    constexpr uint8 FOE_HP_BRUTE = 3;
+    // A thrower's shot: thrown at a racer this far to this near (yards).
+    constexpr float FOE_THROW_FAR = 40.f;
+    constexpr float FOE_THROW_NEAR = 8.f;
     // A summoned creature's own end, should its race end without a word (ms), and how long a
     // killed one lies.
     constexpr uint32 FOE_LIFETIME = 10 * MINUTE * IN_MILLISECONDS;
@@ -4848,18 +4849,27 @@ namespace Kartcraft
     constexpr uint32 ARENA_PRIZE = 15;
     constexpr uint32 ARENA_KILL_CAP = 25;
 
+    // A creature's kind: its letter and creature (pack.py's ARENA_FOES), its pace (yards a
+    // second; a kart tops out near 20) and hit points, whether it springs within FOE_POUNCE, the
+    // shot it throws (ITEM_NONE none) and how often (ms), and how far it keeps off its racer
+    // (yards; 0, it closes in).
     struct FoeKind
     {
         char letter;
         uint32 entry;
-        float speed; // yards a second
+        float speed;
         uint8 hp;
+        bool springs;
+        uint8 throws;
+        uint32 throwEvery;
+        float keepOff;
     };
-    // pack.py's ARENA_FOES; a kart tops out near 20 yards a second.
     static FoeKind const FOE_KINDS[] = {
-        { 'R', 190020, 13.f, 1 },
-        { 'B', 190021, 11.f, 1 },
-        { 'O', 190022, 8.5f, FOE_HP_BRUTE },
+        { 'R', 190020, 13.f, 1, true, ITEM_NONE, 0, 0.f },
+        { 'B', 190021, 11.f, 1, true, ITEM_NONE, 0, 0.f },
+        { 'O', 190022, 8.5f, 3, false, ITEM_BOMB, 5000, 0.f },
+        { 'A', 190023, 9.f, 2, false, ITEM_MISSILE, 5000, 18.f },
+        { 'K', 190024, 9.5f, 8, false, ITEM_BOMB, 4500, 0.f },
     };
 
     static FoeKind const& KindOf(char letter)
@@ -4936,15 +4946,15 @@ namespace Kartcraft
         return { a.x + dx * a.radius / d, a.y + dy * a.radius / d };
     }
 
-    // The next wave comes in round the wall, spread evenly from a turn of the race's own.
-    static void ArenaWave(uint32 id, Race& race, Player* summoner, uint32 now)
+    // The next wave comes in at the wall, spread over the half of it away from the racers
+    // (`away`, radians round the pit's middle).
+    static void ArenaWave(uint32 id, Race& race, Player* summoner, float away, uint32 now)
     {
         ArenaDef const& a = *race.arena;
         char const* letters = a.waves[race.wave];
         ++race.wave;
         race.waveAt = 0;
         size_t const n = std::strlen(letters);
-        float const turn = float(now % 360) * M_PI_F / 180.f;
         ArenaSpawns& spawns = s_arenaSpawns[id];
         spawns.map = race.course->map;
         spawns.instance = race.instance;
@@ -4954,7 +4964,8 @@ namespace Kartcraft
         for (size_t i = 0; i < n; ++i)
         {
             FoeKind const& kind = KindOf(letters[i]);
-            float const angle = turn + float(i) * 2.f * M_PI_F / float(n);
+            // Across the far half of the wall.
+            float const angle = away + (float(i) - float(n - 1) / 2.f) * M_PI_F / float(n);
             float const x = a.x + std::cos(angle) * a.radius * 0.95f;
             float const y = a.y + std::sin(angle) * a.radius * 0.95f;
             Creature* c = summoner->SummonCreature(kind.entry, x, y, a.z + 0.5f, angle + M_PI_F,
@@ -5109,7 +5120,16 @@ namespace Kartcraft
             in.push_back({ &r, p });
         }
         if (race.waveAt && int32(now - race.waveAt) >= 0 && !in.empty() && race.wave < race.arena->waves.size())
-            ArenaWave(id, race, in.front().second, now);
+        {
+            // Away from the racers: opposite where they stand, on the whole, from the middle.
+            float sx = 0.f, sy = 0.f;
+            for (auto const& x : in)
+            {
+                sx += x.second->GetPositionX() - race.arena->x;
+                sy += x.second->GetPositionY() - race.arena->y;
+            }
+            ArenaWave(id, race, in.front().second, std::atan2(-sy, -sx), now);
+        }
         size_t live = 0;
         for (auto const& s : race.shots)
             if (LiveShot(s.second, now))
@@ -5161,7 +5181,9 @@ namespace Kartcraft
             if (!target)
                 continue;
             bool const grace = target->graceUntil && int32(now - target->graceUntil) < 0;
-            if (best < FOE_REACH && !grace && (!f.struckAt || WorldTimer::getMSTimeDiff(f.struckAt, now) >= FOE_STRIKE_EVERY))
+            // A thrower keeps off and never strikes.
+            if (best < FOE_REACH && !grace && KindOf(f.kind).keepOff <= 0.f &&
+                (!f.struckAt || WorldTimer::getMSTimeDiff(f.struckAt, now) >= FOE_STRIKE_EVERY))
             {
                 f.struckAt = now | 1;
                 c->StopMoving();
@@ -5173,14 +5195,15 @@ namespace Kartcraft
                     f.beaten = true;
                 continue;
             }
-            if (f.kind == 'O' && best > BRUTE_THROW_NEAR && best < BRUTE_THROW_FAR && live < HAZARD_SHOTS &&
-                (!f.threwAt || WorldTimer::getMSTimeDiff(f.threwAt, now) >= BRUTE_THROW_EVERY))
+            FoeKind const& kind = KindOf(f.kind);
+            if (kind.throws != ITEM_NONE && best > FOE_THROW_NEAR && best < FOE_THROW_FAR && live < HAZARD_SHOTS &&
+                (!f.threwAt || WorldTimer::getMSTimeDiff(f.threwAt, now) >= kind.throwEvery))
             {
                 f.threwAt = now | 1;
-                float const lead = best / BOMB_YPS;
+                float const lead = best / (kind.throws == ITEM_BOMB ? BOMB_YPS : MISSILE_YPS);
                 float const yaw = std::atan2(tp->GetPositionY() + target->vy * lead - f.y,
                     tp->GetPositionX() + target->vx * lead - f.x);
-                ServerShot(race, FOE_GUID + uint32(i), ITEM_BOMB, false, false, f.x, f.y, f.z + 1.5f, yaw, now);
+                ServerShot(race, FOE_GUID + uint32(i), kind.throws, false, false, f.x, f.y, f.z + 1.5f, yaw, now);
                 ++live;
             }
             if (f.struckAt && WorldTimer::getMSTimeDiff(f.struckAt, now) < FOE_STAND)
@@ -5188,12 +5211,25 @@ namespace Kartcraft
             if (!f.steeredAt || WorldTimer::getMSTimeDiff(f.steeredAt, now) >= FOE_STEER)
             {
                 f.steeredAt = now | 1;
-                float speed = KindOf(f.kind).speed;
-                if (f.kind != 'O' && best < FOE_POUNCE)
+                float speed = kind.speed;
+                if (kind.springs && best < FOE_POUNCE)
                     speed *= FOE_SPRING;
-                float const lead = std::min(best / speed, FOE_LEAD_MAX);
-                auto const to = InArena(*race.arena, tp->GetPositionX() + target->vx * lead,
-                    tp->GetPositionY() + target->vy * lead);
+                float tx = 0.f, ty = 0.f;
+                if (kind.keepOff > 0.f && best < kind.keepOff)
+                {
+                    // Too near: away from its racer, a few strides.
+                    tx = f.x + (f.x - tp->GetPositionX()) / std::max(best, 0.01f) * 10.f;
+                    ty = f.y + (f.y - tp->GetPositionY()) / std::max(best, 0.01f) * 10.f;
+                }
+                else if (kind.keepOff > 0.f && best < kind.keepOff * 1.5f)
+                    continue; // in its range: stands and throws
+                else
+                {
+                    float const lead = std::min(best / speed, FOE_LEAD_MAX);
+                    tx = tp->GetPositionX() + target->vx * lead;
+                    ty = tp->GetPositionY() + target->vy * lead;
+                }
+                auto const to = InArena(*race.arena, tx, ty);
                 c->GetMotionMaster()->MovePoint(0, to.first, to.second, race.arena->z, MOVE_RUN_MODE, speed);
             }
         }

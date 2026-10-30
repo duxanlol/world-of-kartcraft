@@ -6795,11 +6795,11 @@
                 </FontString>
                 <!-- A gauntlet's or an arena's hits on us, under CTR's item slot, from the first until the race is over for us. -->
                 <FontString name="BenillaKartGauntletHits" inherits="GameFontNormalLarge" justifyH="CENTER" hidden="true">
-                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-152"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-164"/></Offset></Anchor></Anchors>
                 </FontString>
                 <!-- An arena's wave and our kills, from its first wave until the race is over for us. -->
                 <FontString name="BenillaKartArenaText" inherits="GameFontNormalLarge" justifyH="CENTER" hidden="true">
-                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-128"/></Offset></Anchor></Anchors>
+                    <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="-140"/></Offset></Anchor></Anchors>
                 </FontString>
             </Layer>
         </Layers>

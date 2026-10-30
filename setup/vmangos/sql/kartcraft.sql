@@ -276,14 +276,16 @@ INSERT INTO `creature` (`guid`, `id`, `map`, `position_x`, `position_y`, `positi
 (402038, 190013, 1, 1201.1, -4111.5, 21.8, 6.104, 300, 300, 0, 0);
 
 -- The arenas' creatures (Kartcraft.cpp "Arena"): summoned a wave at a time, never spawned.
-DELETE FROM `creature_template` WHERE `entry` IN (190020, 190021, 190022);
+DELETE FROM `creature_template` WHERE `entry` IN (190020, 190021, 190022, 190023, 190024);
 INSERT INTO `creature_template` (`entry`, `patch`, `name`, `subname`, `level_min`, `level_max`,
   `faction`, `npc_flags`, `display_id1`, `display_scale1`, `display_probability1`,
   `display_total_probability`, `type`, `unit_class`, `inhabit_type`, `civilian`,
   `static_flags1`, `flags_extra`) VALUES
 (190020, 0, 'Gurubashi Raptor', 'Gurubashi Kart Arena', 60, 60, 35, 0, 1960, 1, 100, 100, 1, 1, 1, 1, 34078822, 2),
 (190021, 0, 'Arena Bombot', 'Gurubashi Kart Arena', 60, 60, 35, 0, 6977, 1, 100, 100, 1, 1, 1, 1, 34078822, 2),
-(190022, 0, 'Gurubashi Brute', 'Gurubashi Kart Arena', 60, 60, 35, 0, 415, 1, 100, 100, 1, 1, 1, 1, 34078822, 2);
+(190022, 0, 'Gurubashi Brute', 'Gurubashi Kart Arena', 60, 60, 35, 0, 415, 1, 100, 100, 1, 1, 1, 1, 34078822, 2),
+(190023, 0, 'Gurubashi Axe Thrower', 'Gurubashi Kart Arena', 60, 60, 35, 0, 11074, 1, 100, 100, 1, 1, 1, 1, 34078822, 2),
+(190024, 0, 'Gurubashi Berserker', 'Gurubashi Kart Arena', 60, 60, 35, 0, 14832, 1, 100, 100, 1, 1, 1, 1, 34078822, 2);
 
 -- The hub's Quartermaster at the Mirage Raceway (Kartcraft.cpp "Hub"): a gossip NPC whose
 -- menu is the core's script npc_kartcraft_hub.

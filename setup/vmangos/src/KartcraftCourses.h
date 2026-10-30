@@ -2590,5 +2590,5 @@
     };
 
     static std::vector<ArenaDef> const ARENAS = {
-        { "ar-gurubashi", -13203.1f, 275.2f, 21.9f, 39.f, { "RR", "RRB", "RBRB", "ORR", "RRBBO", "OBRBRO" } },
+        { "ar-gurubashi", -13203.1f, 275.2f, 21.9f, 39.f, { "RR", "RRB", "RBAR", "ORRA", "RRBBA", "KRBR" } },
     };

@@ -271,13 +271,16 @@ def hazards_table(courses):
     return out
 
 
-# An arena's creatures (Kartcraft.cpp "Arena"), by their letter in a wave: the creature entry,
-# its name and its display (CreatureDisplayInfo: 1960 Creature\Raptor, 6977
-# Creature\GnomeSpidertank\GnomeBomBot, 415 Creature\Ogre).
+# An arena's creatures (Kartcraft.cpp "Arena", FOE_KINDS), by their letter in a wave: the
+# creature entry, its name and its display (CreatureDisplayInfo: 1960 Creature\Raptor, 6977
+# Creature\GnomeSpidertank\GnomeBomBot, 415 Creature\Ogre; 11074 and 14832 the Gurubashi Axe
+# Thrower's and Berserker's own).
 ARENA_FOES = {
     'R': (190020, 'Gurubashi Raptor', 1960),
     'B': (190021, 'Arena Bombot', 6977),
     'O': (190022, 'Gurubashi Brute', 415),
+    'A': (190023, 'Gurubashi Axe Thrower', 11074),
+    'K': (190024, 'Gurubashi Berserker', 14832),
 }
 
 

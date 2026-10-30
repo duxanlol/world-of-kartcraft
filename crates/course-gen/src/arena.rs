@@ -20,8 +20,8 @@ const WALL_RISE: f32 = 1.5;
 /// Yards kept clear of the wall: the arena is the pit less this.
 const WALL_CLEAR: f32 = 3.0;
 /// The waves, in turn, where none are given: each a creature a letter (`R` a raptor, `B` a
-/// bombot, `O` a brute).
-pub const WAVES: [&str; 6] = ["RR", "RRB", "RBRB", "ORR", "RRBBO", "OBRBRO"];
+/// bombot, `O` a brute, `A` an axe thrower, `K` a berserker, the boss).
+pub const WAVES: [&str; 6] = ["RR", "RRB", "RBAR", "ORRA", "RRBBA", "KRBR"];
 
 /// What the rays found: the pit's middle (the walls' centroid) and its floor, the nearest and the
 /// mean wall.
