@@ -5178,6 +5178,10 @@ namespace Kartcraft
                 continue;
             }
             standing = true;
+            // Its health bar shows the hits it has left.
+            uint32 const health = std::max<uint32>(1, uint32(uint64(c->GetMaxHealth()) * f.hp / KindOf(f.kind).hp));
+            if (c->GetHealth() != health)
+                c->SetHealth(health);
             f.x = c->GetPositionX();
             f.y = c->GetPositionY();
             f.z = c->GetPositionZ();

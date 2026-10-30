@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..0fa1427
+index 0000000..e96b226
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,9788 @@
+@@ -0,0 +1,9792 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -5291,6 +5291,10 @@ index 0000000..0fa1427
 +                continue;
 +            }
 +            standing = true;
++            // Its health bar shows the hits it has left.
++            uint32 const health = std::max<uint32>(1, uint32(uint64(c->GetMaxHealth()) * f.hp / KindOf(f.kind).hp));
++            if (c->GetHealth() != health)
++                c->SetHealth(health);
 +            f.x = c->GetPositionX();
 +            f.y = c->GetPositionY();
 +            f.z = c->GetPositionZ();
