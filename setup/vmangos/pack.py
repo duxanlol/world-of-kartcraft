@@ -392,7 +392,11 @@ HELP = ('Host a race on a course that starts here, or join one that is waiting. 
         'place. Far from a start? The Race Finder queues you for any course and takes you there.'
         '$B$BA time trial is you alone against the clock: no crates, no weapons, and the ghost of '
         'your best run to chase. Its times go on their own leaderboard.$B$BThe host picks whether '
-        'ground types count: with them on, grass, dirt, snow, mud and water slow every racer alike.')
+        'ground types count: with them on, grass, dirt, snow, mud and water slow every racer alike.'
+        '$B$BA gauntlet fires goblin rockets, bombs and mines at you along its course: three hits '
+        'and you are out. An arena sends waves of creatures at you to fight with your weapons: '
+        'five hits and you are out. Take either on alone or with friends; each pays tokens the '
+        'first time you beat it each day.')
 RECORDS = ('The fastest times on the courses that start here, and the record holders. Beat one '
            'and your name goes up on the board.')
 TRIALS = ('The fastest time trials on the courses that start here: one racer, no weapons, only the '
