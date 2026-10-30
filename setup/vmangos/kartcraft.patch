@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..3b47808
+index 0000000..caa2edd
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,9171 @@
+@@ -0,0 +1,9217 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -828,6 +828,9 @@ index 0000000..3b47808
 +        // (x, y, when) and how fast they went (yards a second), for a launcher's lead.
 +        uint8 hits = 0;
 +        uint32 graceUntil = 0;
++        // When a hazard's TNT landed on their head (ms, 0 none): its blast, reported as their own,
++        // is the hazard's hit.
++        uint32 hazardTntAt = 0;
 +        float seenX = 0.f, seenY = 0.f;
 +        uint32 seenAt = 0;
 +        float vx = 0.f, vy = 0.f;
@@ -4671,8 +4674,8 @@ index 0000000..3b47808
 +    // a TNT, a Nitro or a red beaker is dropped on the road, once a racer comes near, for the whole
 +    // race; a clock spins out a racer within its reach (sent to that racer alone); a storm puts
 +    // CTR's rain cloud on one, slowing (S) or icy (I). Its shooter is HAZARD_GUID plus the
-+    // hazard's index. GAUNTLET_HITS hits and a racer is out, as out of time: "R\tDNF". Each hit is
-+    // told to all, "R\tGH\t<id>\t<name>\t<hits>". A time trial on one has hazards and no crates; a
++    // hazard's index. GAUNTLET_HITS hits by them (a rival's are none) and a racer is out, as out of
++    // time: "R\tDNF". Each hit is told to all, "R\tGH\t<id>\t<name>\t<hits>". A time trial on one has hazards and no crates; a
 +    // hosted race both. Never a challenge, nor queued for (the Race Finder's mask).
 +    constexpr uint32 HAZARD_GUID = 0x7F000000;
 +    constexpr uint8 GAUNTLET_HITS = 3;
@@ -4684,11 +4687,18 @@ index 0000000..3b47808
 +    // (ms), the kart's spin and its getting going again.
 +    constexpr uint8 HAZARD_PASS_SHOTS = 2;
 +    constexpr uint32 GAUNTLET_GRACE = 3000;
++    // A TNT sits on the head 90 frames at 30 a second before it goes off (RB_TNT.c), and the
++    // report a little after.
++    constexpr uint32 HAZARD_TNT_WAIT = 4500;
 +    // A missile's and a bomb's speed, yards a second (ctr-weapons' 80 and 96 lu a frame, at 30
 +    // frames and 36.6 lu a yard), for a launcher's lead: it fires where its racer will be.
 +    constexpr float MISSILE_YPS = 65.6f;
 +    constexpr float BOMB_YPS = 78.7f;
 +    enum StormEffect : uint8 { CLOUD_ICE = 2 };
++    // A gauntlet run through pays tokens, the first on its course each UTC day: GAUNTLET_PRIZE,
++    // and GAUNTLET_FLAWLESS more for no hit taken.
++    constexpr uint32 GAUNTLET_PRIZE = 10;
++    constexpr uint32 GAUNTLET_FLAWLESS = 10;
 +
 +    // A hit taken in a gauntlet: told to all, and the third puts the racer out; the hazards hold
 +    // their fire on them a while.
@@ -4704,6 +4714,26 @@ index 0000000..3b47808
 +        me.place = 0;
 +        RecordResult(race, me, 0, 0);
 +        SendRace(race, "KARTCRAFT\tR\tDNF\t" + id + "\t" + me.name);
++    }
++
++    // A racer through a gauntlet (their finish not yet recorded): the day's first run through on
++    // its course pays.
++    static void GauntletPrize(Race const& race, Racer const& me, Player* player)
++    {
++        uint32 const today = uint32(std::time(nullptr)) - uint32(std::time(nullptr)) % DAY;
++        char sql[256];
++        std::snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM `kartcraft_results` WHERE `guid` = %u AND "
++            "`course` = '%s' AND `place` > 0 AND `at` >= %u", me.guid.GetCounter(), race.course->key, today);
++        ChatHandler chat(player->GetSession());
++        if (CountOf(sql))
++        {
++            chat.SendSysMessage("Through the gauntlet! Its tokens are paid once a day; come back tomorrow.");
++            return;
++        }
++        uint32 const tokens = GAUNTLET_PRIZE + (me.hits ? 0 : GAUNTLET_FLAWLESS);
++        GiveTokens(player, tokens);
++        chat.PSendSysMessage(me.hits ? "Through the gauntlet: %u tokens!" : "Through the gauntlet without a scratch: %u tokens!",
++            tokens);
 +    }
 +
 +    // Hazard `index` of `race` goes off at `at` (a racer's player), in its own way.
@@ -5128,9 +5158,20 @@ index 0000000..3b47808
 +                "\t" + std::string(1, kind) + "\t" + std::to_string(me->wumpa));
 +            if (red)
 +                Rain(*race, *me, now);
-+            // A TNT landing on the head is no hit yet: its blast, if it is not shaken off, is.
-+            if (race->hazards && kind != 'T' && !me->finished)
-+                GauntletHit(*race, *me, now);
++            // Only the hazards' hits count: a TNT of theirs landing on the head is none yet, its
++            // blast (the racer's own, shot 0) soon after is, if it was not shaken off.
++            if (race->hazards && !me->finished)
++            {
++                bool const hazard = shooter >= HAZARD_GUID && shooter < HAZARD_GUID + 0x10000;
++                if (hazard && kind == 'T')
++                    me->hazardTntAt = now | 1;
++                else if (hazard || (self && kind == 'B' && me->hazardTntAt &&
++                                    WorldTimer::getMSTimeDiff(me->hazardTntAt, now) <= HAZARD_TNT_WAIT))
++                {
++                    me->hazardTntAt = 0;
++                    GauntletHit(*race, *me, now);
++                }
++            }
 +        }
 +        else if (verb == "B" && f.size() >= 4)
 +        {
@@ -8571,6 +8612,8 @@ index 0000000..3b47808
 +                uint32 ms = WorldTimer::getMSTimeDiff(r.start, now);
 +                me->ms = ms;
 +                ReplayFinish(id, me->guid, me->place, ms, now);
++                if (r.hazards)
++                    GauntletPrize(r, *me, player);
 +                RecordResult(r, *me, place, ms);
 +                if (r.timeTrial)
 +                {
@@ -8711,7 +8754,10 @@ index 0000000..3b47808
 +        for (auto it = s_races.begin(); it != s_races.end();)
 +        {
 +            Race& r = it->second;
-+            if (!r.firstFinish || WorldTimer::getMSTimeDiff(r.firstFinish, now) < DNF_WAIT)
++            // Over, too, once everyone is out of it (a gauntlet's hits), no one finishing.
++            bool const out = r.start && !r.racers.empty() &&
++                std::all_of(r.racers.begin(), r.racers.end(), [](Racer const& x) { return x.finished; });
++            if (!out && (!r.firstFinish || WorldTimer::getMSTimeDiff(r.firstFinish, now) < DNF_WAIT))
 +            {
 +                it = std::next(it);
 +                continue;

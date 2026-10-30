@@ -71,7 +71,9 @@ client's list are both made from it; nothing else holds course data.
   fire from an emplacement beside the road (a goblin rocket battery, a bomb mortar, spawned by
   `pack.py`), unguided, where the racer will be, two shots a pass; `tnt`, `nitro` and `beaker` (a
   red one) are dropped on the road; `clock` spins out a racer near it; `storm` and `ice` put a
-  slowing or icy rain cloud on one. Three hits and a racer is out. A time trial on a gauntlet has
+  slowing or icy rain cloud on one. Three hits by its hazards (a rival's are no strike) and a
+  racer is out; the day's first run through
+  a gauntlet pays 10 tokens, 20 without a hit. A time trial on a gauntlet has
   its hazards and no crates; a race hosted on one has both; never a challenge nor in the Race
   Finder. `course-gen gauntlet --from <key> --key <key> --name <name>` makes one of a course: one
   lap of it, a hazard every 95 yards past the start.
