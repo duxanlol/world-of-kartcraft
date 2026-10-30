@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..6d49662
+index 0000000..5a73e19
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,9721 @@
+@@ -0,0 +1,9727 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -4951,10 +4951,12 @@ index 0000000..6d49662
 +    // A creature runs for where its racer will be when it gets there, looking no further ahead
 +    // than FOE_LEAD_MAX (s): a kart going round in circles is cut off, not chased round them.
 +    // Within FOE_POUNCE (yards) a raptor or a bombot springs, FOE_SPRING times as fast: a kart
-+    // outruns one on the straight, not when it turns.
++    // at full speed outruns one on the straight, not when it turns.
 +    constexpr float FOE_LEAD_MAX = 1.2f;
 +    constexpr float FOE_POUNCE = 12.f;
-+    constexpr float FOE_SPRING = 1.7f;
++    constexpr float FOE_SPRING = 1.4f;
++    // How far toward its racer a creature drops its strike (yards).
++    constexpr float FOE_STEP = 2.f;
 +    // The day's first win in an arena pays ARENA_PRIZE tokens and one a kill, to ARENA_KILL_CAP.
 +    constexpr uint32 ARENA_PRIZE = 15;
 +    constexpr uint32 ARENA_KILL_CAP = 25;
@@ -5089,13 +5091,17 @@ index 0000000..6d49662
 +        }
 +    }
 +
-+    // A creature reaches its racer: a raptor's green beaker under them, a bombot's or a brute's
-+    // Nitro, where the racer will be in a moment.
-+    static void FoeStrike(Race& race, size_t index, Racer& r, Player* player, uint32 now)
++    // A creature reaches its racer: a raptor's green beaker, a bombot's or a brute's Nitro,
++    // dropped at its feet a step toward them: a kart driving into it takes it, one getting away
++    // does not.
++    static void FoeStrike(Race& race, size_t index, Player* player, uint32 now)
 +    {
 +        Foe const& f = race.foes[index];
-+        float const x = player->GetPositionX() + r.vx * 0.15f;
-+        float const y = player->GetPositionY() + r.vy * 0.15f;
++        float const dx = player->GetPositionX() - f.x, dy = player->GetPositionY() - f.y;
++        float const d = std::max(std::hypot(dx, dy), 0.01f);
++        float const step = std::min(FOE_STEP, d);
++        float const x = f.x + dx / d * step;
++        float const y = f.y + dy / d * step;
 +        bool const raptor = f.kind == 'R';
 +        ServerShot(race, FOE_GUID + uint32(index), raptor ? ITEM_BEAKER : ITEM_TNT, !raptor, true, x, y,
 +            player->GetPositionZ(), player->GetOrientation(), now);
@@ -5274,7 +5280,7 @@ index 0000000..6d49662
 +                c->StopMoving();
 +                // One strike at a time: the others hold off until it has landed or missed.
 +                target->graceUntil = (now + FOE_STRIKE_HOLD) | 1;
-+                FoeStrike(race, i, *target, tp, now);
++                FoeStrike(race, i, tp, now);
 +                // A bombot goes up with its blast, no one's kill.
 +                if (f.kind == 'B')
 +                    f.beaten = true;
