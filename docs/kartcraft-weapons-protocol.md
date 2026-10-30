@@ -185,13 +185,13 @@ A gauntlet (`docs/courses.md`, `gauntlet`) has hazards the server fires as racer
 no player has. Every client simulates the shot as any other, and the victim reports its hit with
 `H`, which the server checks against the shot as any other. A missile battery or a bomb shredder
 fires unguided (`target` 0) from over its emplacement, aimed where its racer will be at the
-racer's speed, at most twice a pass and never in the 3 s after a hit; a TNT, Nitro or red beaker
+racer's speed, once a pass and never in the 3 s after a hit; a TNT, Nitro or red beaker
 is dropped (`d`) on the road; a clock's `S` goes to the racer near it alone (a clock spins every
 kart but its shooter's). A storm is a rain cloud's `R`, effect `0` slow or `2` ice, with no shot.
 A time trial on a gauntlet takes these lines too (it has hazards and no crates).
 
 Each hit by a hazard in a gauntlet but a TNT landing on the head (its blast is one) is told to
-every racer, `R\tGH\t<race>\t<name>\t<hits>\t<out at>` (3; an arena's 5), and at the start with
+every racer, `R\tGH\t<race>\t<name>\t<hits>\t<out at>` (5), and at the start with
 `<hits>` 0; the last puts the racer out,
 `R\tDNF\t<race>\t<name>`. A rival's hit is no strike.
 

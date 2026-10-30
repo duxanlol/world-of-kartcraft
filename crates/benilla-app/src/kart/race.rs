@@ -216,7 +216,7 @@ impl Course {
         } else if self.gauntlet {
             // `Kartcraft.cpp` "Gauntlet": GAUNTLET_HITS, GAUNTLET_PRIZE, GAUNTLET_FLAWLESS.
             text += &format!(
-                ": {} hazards fire on you along the way. Three hits and you're out; the day's \
+                ": {} hazards fire on you along the way. Five hits and you're out; the day's \
                  first run through pays 10 tokens, 20 without a hit.",
                 self.hazards.len()
             );
@@ -3698,7 +3698,7 @@ mod tests {
         let gauntlet = find("gx-venture").description();
         assert!(
             gauntlet.starts_with("A gauntlet in Stranglethorn Vale, ")
-                && gauntlet.contains(" hazards fire on you along the way. Three hits"),
+                && gauntlet.contains(" hazards fire on you along the way. Five hits"),
             "{gauntlet}"
         );
         let arena = find("ar-gurubashi").description();

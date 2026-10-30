@@ -69,9 +69,10 @@ client's list are both made from it; nothing else holds course data.
   "Hazards"). Each hazard is a `kind`, where it stands (`x`, `y`, `z`, facing `o`), how near a
   racer sets it off (`reach`, yards) and how often it goes off (`every`, ms): `missile` and `bomb`
   fire from an emplacement beside the road (a goblin rocket battery, a goblin bomb shredder, spawned by
-  `pack.py`), unguided, where the racer will be, two shots a pass; `tnt`, `nitro` and `beaker` (a
+  `pack.py`), unguided, where the racer will be, one shot a pass; `tnt`, `nitro` and `beaker` (a
   red one) are dropped on the road; `clock` spins out a racer near it; `storm` and `ice` put a
-  slowing or icy rain cloud on one. Three hits by its hazards (a rival's are no strike) and a
+  slowing or icy rain cloud on one. Five hits by its hazards (a rival's are none, nor a clock's
+  spin) and a
   racer is out; the day's first run through
   a gauntlet pays 10 tokens, 20 without a hit. A time trial on a gauntlet has
   its hazards and no crates; a race hosted on one has both; never a challenge nor in the Race
@@ -85,7 +86,8 @@ client's list are both made from it; nothing else holds course data.
   creatures, a letter each: `R` a raptor that runs a racer down and spins them out, `B` a bombot
   that blows up on one, `O` a brute, slower, three hits to beat, that blasts what it reaches and
   throws bombs, `A` an axe thrower that keeps its distance and throws missiles, two hits, `K` a
-  berserker, a boss of eight hits that throws bombs often. Their hits count as a gauntlet's, but five and a racer is out. The last wave beaten,
+  berserker, a boss of eight hits that throws bombs often. Their hits count as a gauntlet's,
+  five and a racer is out. The last wave beaten,
   everyone still in finishes, placed by their kills; the day's first win pays 15 tokens and one a
   kill (to 25 more). Its two checkpoints only stand its grid in the pit (none is passed), its
   `crates` ring its middle, and its crates roll an arena's items (shots, mines, a shield; no warp

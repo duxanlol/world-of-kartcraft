@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..93eadf9
+index 0000000..0fa1427
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,9785 @@
+@@ -0,0 +1,9788 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -4730,7 +4730,7 @@ index 0000000..93eadf9
 +    // time: "R\tDNF". Each hit is told to all, "R\tGH\t<id>\t<name>\t<hits>". A time trial on one has hazards and no crates; a
 +    // hosted race both. Never a challenge, nor queued for (the Race Finder's mask).
 +    constexpr uint32 HAZARD_GUID = 0x7F000000;
-+    constexpr uint8 GAUNTLET_HITS = 3;
++    constexpr uint8 GAUNTLET_HITS = 5;
 +    // An arena's, its waves a longer fight, and its creatures' hold after a hit (ms): many come
 +    // at once.
 +    constexpr uint8 ARENA_HITS = 5;
@@ -4741,7 +4741,7 @@ index 0000000..93eadf9
 +    constexpr size_t HAZARD_SHOTS = MAX_LIVE_SHOTS - 4;
 +    // A launcher's shots at one racer as they pass, and the hazards' hold on a racer after a hit
 +    // (ms), the kart's spin and its getting going again.
-+    constexpr uint8 HAZARD_PASS_SHOTS = 2;
++    constexpr uint8 HAZARD_PASS_SHOTS = 1;
 +    constexpr uint32 GAUNTLET_GRACE = 3000;
 +    // A TNT sits on the head 90 frames at 30 a second before it goes off (RB_TNT.c), and the
 +    // report a little after.
@@ -5688,6 +5688,7 @@ index 0000000..93eadf9
 +                return;
 +            bool self = shooter == player->GetGUIDLow() && shot == 0;
 +            bool red = false;
++            bool clock = false;
 +            if (!self)
 +            {
 +                auto found = race->shots.find((uint64(shooter) << 16) | shot);
@@ -5700,6 +5701,7 @@ index 0000000..93eadf9
 +                if (single || s.dropped)
 +                    s.hit = true;
 +                red = s.item == ITEM_BEAKER && s.juiced && kind == 'S';
++                clock = s.item == ITEM_CLOCK;
 +            }
 +            // Spin-out and squish cost 1, a blast 3; a TNT landing on the head costs nothing until
 +            // it goes off; none while masked (RB_Player.c:153-161).
@@ -5712,8 +5714,9 @@ index 0000000..93eadf9
 +            if (red)
 +                Rain(*race, *me, now);
 +            // Only the hazards' hits count: a TNT of theirs landing on the head is none yet, its
-+            // blast (the racer's own, shot 0) soon after is, if it was not shaken off.
-+            if ((race->hazards || race->arena) && !me->finished)
++            // blast (the racer's own, shot 0) soon after is, if it was not shaken off; a clock's
++            // spin, which no kart near it escapes, is a moment lost and no strike.
++            if ((race->hazards || race->arena) && !me->finished && !clock)
 +            {
 +                bool const hazard = (shooter >= HAZARD_GUID && shooter < HAZARD_GUID + 0x10000) ||
 +                    (shooter >= FOE_GUID && shooter < FOE_GUID + 0x10000);
