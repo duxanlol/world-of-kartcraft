@@ -835,10 +835,12 @@ namespace Kartcraft
         // A launcher's shots at a racer this pass, by the same key: HAZARD_PASS_SHOTS, then none
         // until the racer has left its reach.
         std::unordered_map<uint64, uint8> hazardPass;
-        // An arena's ("Arena"), null on any other course: the wave come (0 none yet), when the
-        // next comes (ms, 0 none due), and the creatures, each its kart id FOE_GUID + its index.
+        // An arena's ("Arena"), null on any other course: the wave come (0 none yet) and when
+        // (ms), when the next comes (ms, 0 none due), and the creatures, each its kart id
+        // FOE_GUID + its index.
         ArenaDef const* arena = nullptr;
         uint8 wave = 0;
+        uint32 waveCame = 0;
         uint32 waveAt = 0;
         std::vector<Foe> foes;
     };
@@ -4820,12 +4822,15 @@ namespace Kartcraft
     // are a gauntlet's, but ARENA_HITS and a racer is out. The shooter's client reports its shot on a creature, "W\tF\t<kart id>\t<shot>\t
     // <kind>" (ArenaHit), checked as a crate break is; a creature's last hit is the shooter's
     // kill, "R\tAK\t<id>\t<name>\t<kills>", and the world thread kills it. A wave beaten, the next
-    // comes ARENA_BREAK later ("R\tAC\t<id>\t<wave>\t<waves>\t<secs>"); the last beaten, everyone
+    // comes ARENA_BREAK later ("R\tAC\t<id>\t<wave>\t<waves>\t<secs>"), one not beaten in
+    // ARENA_WAVE_MAX has the next on top of it; the last beaten, everyone
     // still in finishes, placed by kills. The creatures live on the world thread (Update), where
     // they are summoned, steered and killed between map updates; the packet thread only marks.
     constexpr uint32 FOE_GUID = 0x7E000000;
     constexpr uint32 ARENA_FIRST = 3 * IN_MILLISECONDS;
     constexpr uint32 ARENA_BREAK = 5 * IN_MILLISECONDS;
+    // How long a wave may last before the next comes in on top of it.
+    constexpr uint32 ARENA_WAVE_MAX = 90 * IN_MILLISECONDS;
     // How often the world thread looks over the arenas, and steers each creature anew.
     constexpr uint32 ARENA_TICK = 200;
     constexpr uint32 FOE_STEER = 400;
@@ -4960,6 +4965,7 @@ namespace Kartcraft
         char const* letters = a.waves[race.wave];
         ++race.wave;
         race.waveAt = 0;
+        race.waveCame = now | 1;
         size_t const n = std::strlen(letters);
         ArenaSpawns& spawns = s_arenaSpawns[id];
         spawns.map = race.course->map;
@@ -5254,6 +5260,10 @@ namespace Kartcraft
                 c->GetMotionMaster()->MovePoint(0, to.first, to.second, race.arena->z, MOVE_RUN_MODE, speed);
             }
         }
+        // A wave held off ARENA_WAVE_MAX: the next comes in all the same, onto what is left.
+        if (race.wave && !race.waveAt && standing && race.wave < race.arena->waves.size() &&
+            WorldTimer::getMSTimeDiff(race.waveCame, now) >= ARENA_WAVE_MAX)
+            race.waveAt = now | 1;
         // A wave beaten: the next, or the win.
         if (race.wave && !race.waveAt && !standing && !in.empty())
         {
