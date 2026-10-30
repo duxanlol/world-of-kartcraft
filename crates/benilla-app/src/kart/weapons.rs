@@ -131,10 +131,23 @@ pub(crate) fn update(
     }
     // An arena's creatures still standing, their hits decided here (`Kartcraft.cpp` "Arena").
     let foes = races.foes();
+    // `WOW_KART_DEBUG`: where each stands, every few seconds.
+    let debug = std::env::var_os("WOW_KART_DEBUG").is_some()
+        && (now / 3.0) as i32 != ((now - time.delta_secs()) / 3.0) as i32;
     for &(kart, guid) in foes {
         let Some((at, store)) = index.0.get(&guid).and_then(|&e| units.get(e).ok()) else {
+            if debug {
+                info!("kart weapons: arena creature {kart} ({guid:#x}) not streamed");
+            }
             continue;
         };
+        if debug {
+            info!(
+                "kart weapons: arena creature {kart} at {:?}, health {:?}",
+                benilla_assets::coords::bevy_to_wow(at.translation),
+                store.0.unit_health()
+            );
+        }
         if store.0.unit_health() == Some(0) {
             continue;
         }

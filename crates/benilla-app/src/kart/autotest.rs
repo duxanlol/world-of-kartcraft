@@ -26,6 +26,10 @@
 //! once lined up within range; any other item it fires at once, to roll again. The break logs
 //! `kart weapons: our <item> (shot <n>) broke crate <i>`, the server's `X` for it `kart weapons:
 //! the server took crate <i> ... our shot <n> broke`. Its own steps log `kart autotest: crate`.
+//!
+//! In an arena the autopilot fights ([`foe_aim`]): a shot thrown behind at a creature on our tail,
+//! else fired at the nearest ahead once lined up, a mine dropped for one close behind; empty-handed
+//! it rounds the pit through its crates. Its fire logs `kart autotest: arena`.
 
 use benilla_assets::coords::bevy_to_wow;
 use bevy::prelude::*;
@@ -579,6 +583,8 @@ pub(crate) struct CrateTest {
 pub(crate) struct CrateAim {
     pub(crate) target: Option<Vec3>,
     pub(crate) fire: bool,
+    /// Fire backward (a bomb or missile thrown behind, as reverse held does).
+    pub(crate) back: bool,
 }
 
 /// The crate test's steering and Fire for our kart at `pos`, facing `yaw` (the autopilot's yaw:
@@ -621,6 +627,7 @@ pub(crate) fn crate_aim(
         return CrateAim {
             target: None,
             fire: true,
+            back: false,
         };
     }
     let off_of = |at: Vec3| {
@@ -670,6 +677,97 @@ pub(crate) fn crate_aim(
     CrateAim {
         target: Some(at),
         fire,
+        back: false,
+    }
+}
+
+/// A creature this far off our heading (radians) is ahead, one this far behind; one is shot at
+/// within [`FIRE_RANGE`] and this far off (the missile's lock-on and the bomb's steer do the
+/// rest), and a mine dropped for one behind within this many yards.
+const FOE_AHEAD: f32 = 1.2;
+const FOE_BEHIND: f32 = 2.4;
+const FOE_LINED_UP: f32 = 0.3;
+const FOE_TRAILING: f32 = 15.0;
+
+/// The autopilot in an arena: holding a missile or a bomb it throws it behind at a creature on
+/// our tail, else makes for the nearest creature ahead (or turns for the nearest) and fires once
+/// lined up; holding a mine it drops it with one close behind; anything
+/// else it fires at once; empty-handed it rounds the pit through its crates (`next_target`).
+/// `foes` are the arena's creatures' kart ids.
+pub(crate) fn foe_aim(
+    test: &mut CrateTest,
+    arms: &kartcraft::weapons::Weapons,
+    foes: &[(u32, u64)],
+    pos: Vec3,
+    yaw: f32,
+    now: f32,
+) -> CrateAim {
+    use kartcraft::weapons::{HeldView, Item};
+    if arms.fires_again() {
+        return CrateAim::default();
+    }
+    let HeldView::Item(item) = arms.held() else {
+        return CrateAim::default();
+    };
+    let rested = test.fired_at.is_none_or(|t| now - t >= FIRE_EVERY);
+    let off_of = |at: Vec3| {
+        let to = at - pos;
+        let want = f32::atan2(-to.x, -to.z);
+        let off = (want - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI;
+        (Vec2::new(to.x, to.z).length(), off)
+    };
+    let seen: Vec<(Vec3, f32, f32)> = arms
+        .others()
+        .filter(|(id, ..)| foes.iter().any(|f| f.0 == *id))
+        .map(|(_, o, _)| {
+            let (d, off) = off_of(o.position);
+            (o.position, d, off)
+        })
+        .collect();
+    let fire = |test: &mut CrateTest, back: bool, why: &str| {
+        info!("kart autotest: arena — firing {item:?} {why}");
+        test.fired_at = Some(now);
+        CrateAim {
+            target: None,
+            fire: true,
+            back,
+        }
+    };
+    let trailing = seen
+        .iter()
+        .any(|(_, d, off)| off.abs() >= FOE_BEHIND && *d <= FOE_TRAILING);
+    match item.single() {
+        Item::Missile | Item::Bomb => {
+            // One on our tail takes it thrown behind.
+            if rested && trailing {
+                return fire(test, true, "behind, at a creature on our tail");
+            }
+            // The nearest ahead, else the nearest anywhere, to turn for.
+            let near = |ahead: bool| {
+                seen.iter()
+                    .filter(|(_, d, off)| (!ahead || off.abs() <= FOE_AHEAD) && *d >= CRATE_NEAR)
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .copied()
+            };
+            let Some((at, d, off)) = near(true).or_else(|| near(false)) else {
+                return CrateAim::default();
+            };
+            if rested && d <= FIRE_RANGE && off.abs() <= FOE_LINED_UP {
+                return fire(test, false, &format!("at a creature {d:.1} yd ahead"));
+            }
+            CrateAim {
+                target: Some(at),
+                fire: false,
+                back: false,
+            }
+        }
+        Item::Tnt | Item::Beaker if rested && trailing => {
+            fire(test, false, "for a creature on our tail")
+        }
+        Item::Tnt | Item::Beaker => CrateAim::default(),
+        _ if rested => fire(test, false, "away"),
+        _ => CrateAim::default(),
     }
 }
 

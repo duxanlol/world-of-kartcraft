@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..1772080
+index 0000000..6d49662
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,9700 @@
+@@ -0,0 +1,9721 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -4731,6 +4731,8 @@ index 0000000..1772080
 +    // hosted race both. Never a challenge, nor queued for (the Race Finder's mask).
 +    constexpr uint32 HAZARD_GUID = 0x7F000000;
 +    constexpr uint8 GAUNTLET_HITS = 3;
++    // An arena's, its waves a longer fight.
++    constexpr uint8 ARENA_HITS = 5;
 +    // How far above or below a hazard (yards) a racer still sets it off: a road over a road, not.
 +    constexpr float HAZARD_HEIGHT = 25.f;
 +    // The live shots a gauntlet's hazards leave room for in the race's pool, for its racers'.
@@ -4752,15 +4754,18 @@ index 0000000..1772080
 +    constexpr uint32 GAUNTLET_PRIZE = 10;
 +    constexpr uint32 GAUNTLET_FLAWLESS = 10;
 +
-+    // A hit taken in a gauntlet: told to all, and the third puts the racer out; the hazards hold
-+    // their fire on them a while.
++    // A hit taken in a gauntlet or an arena: told to all with the hits it takes to be out
++    // ("R\tGH\t<id>\t<name>\t<hits>\t<out at>"), and the last puts the racer out; the hazards
++    // hold their fire on them a while.
 +    static void GauntletHit(Race& race, Racer& me, uint32 now)
 +    {
 +        me.graceUntil = (now + GAUNTLET_GRACE) | 1;
 +        me.hits = uint8(std::min<int>(me.hits + 1, 255));
 +        std::string const id = std::to_string(race.id);
-+        SendRace(race, "KARTCRAFT\tR\tGH\t" + id + "\t" + me.name + "\t" + std::to_string(me.hits));
-+        if (me.hits < GAUNTLET_HITS)
++        uint8 const out = race.arena ? ARENA_HITS : GAUNTLET_HITS;
++        SendRace(race, "KARTCRAFT\tR\tGH\t" + id + "\t" + me.name + "\t" + std::to_string(me.hits) + "\t" +
++            std::to_string(out));
++        if (me.hits < out)
 +            return;
 +        me.finished = true;
 +        me.place = 0;
@@ -4915,7 +4920,7 @@ index 0000000..1772080
 +    // id FOE_GUID + its index: the clients put it among the karts their shots can hit. A raptor
 +    // (R) runs a racer down and spins them out with a green beaker dropped under them; a bombot
 +    // (B) blows up on one, a Nitro; a brute (O) is slower, takes FOE_HP_BRUTE hits, blasts what it
-+    // reaches and throws bombs from further off. Their hits are a gauntlet's: GAUNTLET_HITS and a
++    // reaches and throws bombs from further off. Their hits are a gauntlet's, but ARENA_HITS and a
 +    // racer is out. The shooter's client reports its shot on a creature, "W\tF\t<kart id>\t<shot>\t
 +    // <kind>" (ArenaHit), checked as a crate break is; a creature's last hit is the shooter's
 +    // kill, "R\tAK\t<id>\t<name>\t<kills>", and the world thread kills it. A wave beaten, the next
@@ -4929,9 +4934,11 @@ index 0000000..1772080
 +    constexpr uint32 ARENA_TICK = 200;
 +    constexpr uint32 FOE_STEER = 400;
 +    // How near (yards, ground plane) a creature strikes its racer, and how often it may.
-+    constexpr float FOE_REACH = 3.f;
-+    constexpr uint32 FOE_STRIKE_EVERY = 2 * IN_MILLISECONDS;
++    constexpr float FOE_REACH = 4.f;
++    constexpr uint32 FOE_STRIKE_EVERY = 4 * IN_MILLISECONDS;
 +    constexpr uint32 FOE_STRIKE_HOLD = 1500;
++    // A creature that has struck stands this long (ms), its racer's moment to get away.
++    constexpr uint32 FOE_STAND = 1500;
 +    // A brute's bomb: thrown from this far to this near (yards), this often.
 +    constexpr float BRUTE_THROW_FAR = 35.f;
 +    constexpr float BRUTE_THROW_NEAR = 8.f;
@@ -4941,8 +4948,13 @@ index 0000000..1772080
 +    // killed one lies.
 +    constexpr uint32 FOE_LIFETIME = 10 * MINUTE * IN_MILLISECONDS;
 +    constexpr uint32 FOE_CORPSE = 4 * IN_MILLISECONDS;
-+    // How far a creature leads its racer (s): where they will be, not where they were.
-+    constexpr float FOE_LEAD = 0.4f;
++    // A creature runs for where its racer will be when it gets there, looking no further ahead
++    // than FOE_LEAD_MAX (s): a kart going round in circles is cut off, not chased round them.
++    // Within FOE_POUNCE (yards) a raptor or a bombot springs, FOE_SPRING times as fast: a kart
++    // outruns one on the straight, not when it turns.
++    constexpr float FOE_LEAD_MAX = 1.2f;
++    constexpr float FOE_POUNCE = 12.f;
++    constexpr float FOE_SPRING = 1.7f;
 +    // The day's first win in an arena pays ARENA_PRIZE tokens and one a kill, to ARENA_KILL_CAP.
 +    constexpr uint32 ARENA_PRIZE = 15;
 +    constexpr uint32 ARENA_KILL_CAP = 25;
@@ -5068,6 +5080,8 @@ index 0000000..1772080
 +            f.y = y;
 +            f.z = a.z;
 +            f.bornAt = now | 1;
++            // A brute's first bomb a while after it comes in, as every one after.
++            f.threwAt = now | 1;
 +            spawns.guids.push_back(f.guid);
 +            race.foes.push_back(f);
 +            SendRace(race, "KARTCRAFT\tR\tAF\t" + sid + "\t" + std::to_string(FOE_GUID + race.foes.size() - 1) + "\t" +
@@ -5257,6 +5271,7 @@ index 0000000..1772080
 +            if (best < FOE_REACH && !grace && (!f.struckAt || WorldTimer::getMSTimeDiff(f.struckAt, now) >= FOE_STRIKE_EVERY))
 +            {
 +                f.struckAt = now | 1;
++                c->StopMoving();
 +                // One strike at a time: the others hold off until it has landed or missed.
 +                target->graceUntil = (now + FOE_STRIKE_HOLD) | 1;
 +                FoeStrike(race, i, *target, tp, now);
@@ -5275,12 +5290,18 @@ index 0000000..1772080
 +                ServerShot(race, FOE_GUID + uint32(i), ITEM_BOMB, false, false, f.x, f.y, f.z + 1.5f, yaw, now);
 +                ++live;
 +            }
++            if (f.struckAt && WorldTimer::getMSTimeDiff(f.struckAt, now) < FOE_STAND)
++                continue;
 +            if (!f.steeredAt || WorldTimer::getMSTimeDiff(f.steeredAt, now) >= FOE_STEER)
 +            {
 +                f.steeredAt = now | 1;
-+                auto const to = InArena(*race.arena, tp->GetPositionX() + target->vx * FOE_LEAD,
-+                    tp->GetPositionY() + target->vy * FOE_LEAD);
-+                c->GetMotionMaster()->MovePoint(0, to.first, to.second, race.arena->z, MOVE_RUN_MODE, KindOf(f.kind).speed);
++                float speed = KindOf(f.kind).speed;
++                if (f.kind != 'O' && best < FOE_POUNCE)
++                    speed *= FOE_SPRING;
++                float const lead = std::min(best / speed, FOE_LEAD_MAX);
++                auto const to = InArena(*race.arena, tp->GetPositionX() + target->vx * lead,
++                    tp->GetPositionY() + target->vy * lead);
++                c->GetMotionMaster()->MovePoint(0, to.first, to.second, race.arena->z, MOVE_RUN_MODE, speed);
 +            }
 +        }
 +        // A wave beaten: the next, or the win.

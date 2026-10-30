@@ -83,7 +83,7 @@ client's list are both made from it; nothing else holds course data.
   `radius` fought in round it (10 to 80 yards) and its `waves` (1 to 12), each a string of
   creatures, a letter each: `R` a raptor that runs a racer down and spins them out, `B` a bombot
   that blows up on one, `O` a brute, slower, three hits to beat, that blasts what it reaches and
-  throws bombs. Their hits count as a gauntlet's, three and a racer is out. The last wave beaten,
+  throws bombs. Their hits count as a gauntlet's, but five and a racer is out. The last wave beaten,
   everyone still in finishes, placed by their kills; the day's first win pays 15 tokens and one a
   kill (to 25 more). Its two checkpoints only stand its grid in the pit (none is passed), its
   `crates` ring its middle, and its crates roll an arena's items (shots, mines, a shield; no warp

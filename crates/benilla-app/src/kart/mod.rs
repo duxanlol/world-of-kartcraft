@@ -394,6 +394,15 @@ fn update(
         && races.next_target(now).is_some()
     {
         autotest::crate_aim(&mut host.crate_test, &arms, drive.pos, drive.yaw, now)
+    } else if input::autopilot_on() && !races.foes().is_empty() {
+        autotest::foe_aim(
+            &mut host.crate_test,
+            &arms,
+            races.foes(),
+            drive.pos,
+            drive.yaw,
+            now,
+        )
     } else {
         autotest::CrateAim::default()
     };
@@ -493,9 +502,10 @@ fn update(
         || crate_aim.fire
         || (input::autopilot_on()
             && !autotest::crate_test()
+            && races.foes().is_empty()
             && holding
             && input::autofire(now, time.delta_secs()));
-    arms.press(fire, controls.reverse);
+    arms.press(fire, controls.reverse || crate_aim.back);
     // Fire with nothing to fire sounds the horn (`horn`).
     horn.pressed |= controls.fire && !holding;
     arms.camera = view.camera;

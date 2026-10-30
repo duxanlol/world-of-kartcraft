@@ -1718,16 +1718,17 @@
                 -- On a flight distance's launch (Kartcraft.cpp "Flight distance").
                 UIErrorsFrame:AddMessage("Flight distance: drive off the edge, double-tap hop to open your wings, and fly as far as you can!", 1, 0.82, 0, 1, 8)
             elseif verb == "GH" then
-                -- A gauntlet's hit on a racer ("Kartcraft.cpp" "Gauntlet"): ours told, the third out.
+                -- A gauntlet's or an arena's hit on a racer ("Kartcraft.cpp" "Gauntlet"): ours told,
+                -- the last (the line's sixth field, else the third) out.
                 if line[4] == UnitName("player") then
-                    local hits = tonumber(line[5]) or 0
-                    BenillaKartGauntletHits:SetText(hits >= 3 and "|cffff3333Out!|r" or format("Hits: %d of 3", hits))
+                    local hits, out = tonumber(line[5]) or 0, tonumber(line[6]) or 3
+                    BenillaKartGauntletHits:SetText(hits >= out and "|cffff3333Out!|r" or format("Hits: %d of %d", hits, out))
                     BenillaKartGauntletHits:Show()
-                    if hits >= 3 then
-                        UIErrorsFrame:AddMessage("Three hits: you're out!", 1, 0.2, 0.2, 1, 6)
+                    if hits >= out then
+                        UIErrorsFrame:AddMessage(format("%d hits: you're out!", hits), 1, 0.2, 0.2, 1, 6)
                         PlaySound("igQuestFailed")
                     else
-                        UIErrorsFrame:AddMessage("Hit! " .. hits .. " of 3", 1, 0.5, 0.1, 1, 3)
+                        UIErrorsFrame:AddMessage(format("Hit! %d of %d", hits, out), 1, 0.5, 0.1, 1, 3)
                     end
                 end
             elseif verb == "AW" or verb == "AC" or verb == "AK" then

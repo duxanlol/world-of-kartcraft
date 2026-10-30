@@ -5047,10 +5047,10 @@ fn an_arena_shows_its_wave_our_kills_and_our_hits_until_we_finish() {
         shown(&s, "BenillaKartArenaText").as_deref(),
         Some("Wave 1 of 6    Kills: 2")
     );
-    from_server(&mut s, &format!("R\tGH\t7\t{me}\t1"));
+    from_server(&mut s, &format!("R\tGH\t7\t{me}\t1\t5"));
     assert_eq!(
         shown(&s, "BenillaKartGauntletHits").as_deref(),
-        Some("Hits: 1 of 3")
+        Some("Hits: 1 of 5")
     );
     // Our finish takes both down; a new race starts clean.
     from_server(&mut s, &format!("R\tF\t7\t{me}\t1\t90000\t"));
