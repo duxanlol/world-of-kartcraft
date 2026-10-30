@@ -1142,7 +1142,16 @@
             BenillaKartTrackBrowser_Open()
         end
 
-        -- The course list's tab: 1 the courses driven, 2 the flight ones.
+        -- The browser at its Battle tab: the gauntlets and the arenas.
+        function BenillaKartTrackBrowser_OpenBattle()
+            BenillaKartTrackBrowser.mode = nil
+            BenillaKartTrackBrowser.search = ""
+            BenillaKartTracksFrameSearch:SetText("")
+            BenillaKartTrackBrowser.tab = 3
+            BenillaKartTrackBrowser_Open()
+        end
+
+        -- The course list's tab: 1 the courses driven, 2 the flight ones, 3 the battles.
         function BenillaKartTrackBrowser_SetTab(id)
             BenillaKartTrackBrowser.tab = id
             local bar = getglobal("BenillaKartTracksFrameScrollScrollBar")
@@ -2466,6 +2475,7 @@
             { id = "unstuck", label = "Unstuck", run = function() BenillaKart_Unstuck() end },
             { id = "editor", label = function() return BenillaKartEditor.state == "" and "Open the editor" or "Close the editor" end,
               run = function() BenillaKartEditor_Toggle() end },
+            { id = "battle", label = "Gauntlets & arenas", run = function() BenillaKartTrackBrowser_OpenBattle() end },
             { id = "mytracks", label = "My tracks", run = function() BenillaKartTrackBrowser_OpenMine() end },
             { id = "pubtracks", label = "Player tracks", run = function() BenillaKartTrackBrowser_OpenPublished() end },
             { id = "garage", label = "Kart garage", run = function() BenillaKartGarage_Toggle() end },
@@ -3781,6 +3791,7 @@
                 { text = "Race mode", func = BenillaKart_RaceModeToggle, checkable = 1, checked = BenillaKartRaceMode,
                   tooltipTitle = "Race mode", tooltipText = "Nobody can target or attack you, and you can't attack anyone: for waiting in the queue. Kept across logins." },
                 { text = "Track browser", func = BenillaKartTrackBrowser_Toggle },
+                { text = "Gauntlets & arenas...", func = BenillaKartTrackBrowser_OpenBattle },
                 { text = "Dungeon teleporter...", func = BenillaKartDungeons_Open },
                 { text = BenillaKartReplays_Playing() and "Stop replay" or "Replays...", func = BenillaKartReplays_MenuClick },
                 { text = "Show Race Marshals", func = BenillaKart_MarshalsToggle, checkable = 1,

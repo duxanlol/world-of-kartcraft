@@ -928,6 +928,7 @@ fn the_minimap_button_sits_on_the_ring_and_its_menu_works() {
             "Race Finder",
             "Race mode",
             "Track browser",
+            "Gauntlets & arenas...",
             "Dungeon teleporter...",
             "Replays...",
             "Show Race Marshals",
@@ -3953,6 +3954,10 @@ fn the_track_browser_parts_the_flight_courses_on_a_tab_of_their_own() {
     s.run("BenillaKartTrackBrowser_Pad('PADDLEFT')").unwrap();
     assert_eq!(shown(&s), "sky leap");
     s.run("BenillaKartTrackBrowser_Open('gx')").unwrap();
+    assert_eq!(shown(&s), "gx");
+    // The menus' "Gauntlets & arenas" opens on the Battle tab, whatever was shown.
+    s.run("BenillaKartTrackBrowser_SetTab(1) BenillaKartTrackBrowser_OpenBattle()")
+        .unwrap();
     assert_eq!(shown(&s), "gx");
     s.run("BenillaKartTrackBrowser_Open('sky')").unwrap();
     assert_eq!(shown(&s), "sky leap");

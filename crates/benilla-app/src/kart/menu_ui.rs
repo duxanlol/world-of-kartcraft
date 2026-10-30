@@ -63,6 +63,7 @@ pub(crate) const PAGES: [Page; 6] = [
             ("weekly", "Interface\\Icons\\INV_Misc_PocketWatch_02"),
             ("finder", "Interface\\Icons\\INV_Misc_Spyglass_02"),
             ("tracks", "Interface\\Icons\\INV_Misc_Map_01"),
+            ("battle", "Interface\\Icons\\Ability_Warrior_BattleShout"),
             ("replays", "Interface\\Icons\\Spell_Holy_MindVision"),
             ("racemode", "Interface\\Icons\\Spell_Holy_PowerWordShield"),
             ("unstuck", "Interface\\Icons\\Spell_Nature_Earthbind"),
