@@ -171,6 +171,9 @@ enum Cmd {
         name: String,
         #[arg(long, default_value = "")]
         zone: String,
+        /// Its waves, comma-separated, each a creature a letter (R, B, O); the default six if none.
+        #[arg(long, value_delimiter = ',')]
+        waves: Vec<String>,
         /// The course file.
         #[arg(long, default_value = "courses/courses.json")]
         courses: PathBuf,
@@ -629,6 +632,7 @@ fn main() -> Result<()> {
             key,
             name,
             zone,
+            waves,
             courses,
         } => {
             let v: Vec<f32> = at
@@ -648,6 +652,7 @@ fn main() -> Result<()> {
                 &key,
                 &name,
                 &zone,
+                &waves,
             )?;
             println!("{key}: {}", entry["note"].as_str().unwrap_or(""));
             let list = file["courses"].as_array_mut().context("courses")?;

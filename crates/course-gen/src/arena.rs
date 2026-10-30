@@ -19,8 +19,9 @@ const RAY_REACH: f32 = 90.0;
 const WALL_RISE: f32 = 1.5;
 /// Yards kept clear of the wall: the arena is the pit less this.
 const WALL_CLEAR: f32 = 3.0;
-/// The waves, in turn: each a creature a letter (`R` a raptor, `B` a bombot, `O` a brute).
-const WAVES: [&str; 6] = ["RR", "RRB", "RBRB", "ORR", "RRBBO", "OBRBRO"];
+/// The waves, in turn, where none are given: each a creature a letter (`R` a raptor, `B` a
+/// bombot, `O` a brute).
+pub const WAVES: [&str; 6] = ["RR", "RRB", "RBRB", "ORR", "RRBBO", "OBRBRO"];
 
 /// What the rays found: the pit's middle (the walls' centroid) and its floor, the nearest and the
 /// mean wall.
@@ -76,7 +77,8 @@ pub fn measure(chain: &mut Chain, map: u32, at: [f32; 2], z: f32) -> Result<Pit>
     pit.ok_or_else(|| anyhow!("no pit"))
 }
 
-/// The arena course of the pit round `at` as a course entry, `key`, `name` and `zone` its own.
+/// The arena course of the pit round `at` as a course entry, `key`, `name` and `zone` its own,
+/// fought in `waves` ([`WAVES`] where empty).
 pub fn make(
     chain: &mut Chain,
     map: u32,
@@ -85,6 +87,7 @@ pub fn make(
     key: &str,
     name: &str,
     zone: &str,
+    waves: &[String],
 ) -> Result<Value> {
     let pit = measure(chain, map, at, z)?;
     let radius = pit.nearest - WALL_CLEAR;
@@ -122,7 +125,7 @@ pub fn make(
         "crates": crates,
         "arena": {
             "x": tenth(cx), "y": tenth(cy), "z": tenth(cz), "radius": tenth(radius),
-            "waves": WAVES,
+            "waves": if waves.is_empty() { WAVES.map(String::from).to_vec() } else { waves.to_vec() },
         },
     }))
 }
