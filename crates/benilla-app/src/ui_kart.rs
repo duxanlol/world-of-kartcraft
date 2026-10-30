@@ -305,11 +305,11 @@ fn flight_list() -> String {
         .join("\n")
 }
 
-/// The gauntlets' keys, one a line: the track browser's Gauntlet tab.
+/// The gauntlets' and the arenas' keys, one a line: the track browser's Battle tab.
 fn gauntlet_list() -> String {
     COURSES
         .iter()
-        .filter(|c| c.gauntlet())
+        .filter(|c| c.gauntlet() || c.arena().is_some())
         .map(|c| c.key.as_str())
         .collect::<Vec<_>>()
         .join("\n")

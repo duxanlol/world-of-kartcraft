@@ -76,7 +76,8 @@ client's list are both made from it; nothing else holds course data.
   a gauntlet pays 10 tokens, 20 without a hit. A time trial on a gauntlet has
   its hazards and no crates; a race hosted on one has both; never a challenge nor in the Race
   Finder. `course-gen gauntlet --from <key> --key <key> --name <name>` makes one of a course: one
-  lap of it, a hazard every 95 yards past the start.
+  lap of it, a hazard every 95 yards past the start. Gauntlets and arenas are listed on the track
+  browser's Battle tab.
 - `arena`: optional: an arena, a walled pit where the server sends waves of creatures after its
   racers and they fight them with their weapons (`Kartcraft.cpp`, "Arena";
   `docs/kartcraft-weapons-protocol.md`, "Arenas"). Its pit's middle and floor (`x`, `y`, `z`), the

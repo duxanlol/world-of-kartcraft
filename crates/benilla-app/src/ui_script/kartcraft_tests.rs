@@ -3945,7 +3945,7 @@ fn the_track_browser_parts_the_flight_courses_on_a_tab_of_their_own() {
     s.run("BenillaKartTrackBrowser_Open() BenillaKartTrackBrowser_Pad('PADFORWARD')")
         .unwrap();
     assert_eq!(shown(&s), "gx");
-    assert_eq!(text(&s, "BenillaKartTracksFrameHeaderText"), "Gauntlet");
+    assert_eq!(text(&s, "BenillaKartTracksFrameHeaderText"), "Battle");
     s.run("BenillaKartTrackBrowser_Pad('PADDRIGHT')").unwrap();
     assert_eq!(shown(&s), "t1");
     s.run("BenillaKartTrackBrowser_Pad('PADDLEFT')").unwrap();

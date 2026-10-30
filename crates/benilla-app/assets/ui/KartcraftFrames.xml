@@ -1255,7 +1255,7 @@
             BenillaKartTracksFrameEdit:Hide()
             local title = BENILLA_KART_BROWSER_TITLES[BenillaKartTrackBrowser.mode or ""]
             if not title and BenillaKartTrackBrowser.tab == 2 then title = "Flight" end
-            if not title and BenillaKartTrackBrowser.tab == 3 then title = "Gauntlet" end
+            if not title and BenillaKartTrackBrowser.tab == 3 then title = "Battle" end
             BenillaKartTracksFrameHeaderText:SetText(title or "Tracks")
             BenillaKartTracksFrameTrial:SetText("Time trial")
             BenillaKartTracksFrameMarshal:SetText("Go to marshal")
@@ -6758,7 +6758,7 @@
                 <Anchors><Anchor point="LEFT" relativeTo="$parentTab1" relativePoint="RIGHT"><Offset><AbsDimension x="-16" y="0"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartTrackBrowser_SetTab(2)</OnClick></Scripts>
             </Button>
-            <Button name="$parentTab3" inherits="CharacterFrameTabButtonTemplate" id="3" text="Gauntlet">
+            <Button name="$parentTab3" inherits="CharacterFrameTabButtonTemplate" id="3" text="Battle">
                 <Anchors><Anchor point="LEFT" relativeTo="$parentTab2" relativePoint="RIGHT"><Offset><AbsDimension x="-16" y="0"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaKartTrackBrowser_SetTab(3)</OnClick></Scripts>
             </Button>
