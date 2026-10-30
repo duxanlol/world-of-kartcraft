@@ -5052,6 +5052,12 @@ fn an_arena_shows_its_wave_our_kills_and_our_hits_until_we_finish() {
         shown(&s, "BenillaKartGauntletHits").as_deref(),
         Some("Hits: 1 of 5")
     );
+    // A boss's wave names it.
+    from_server(&mut s, "R	AW	7	6	6	4	Gurubashi Berserker");
+    assert_eq!(
+        shown(&s, "BenillaKartArenaText").as_deref(),
+        Some("Wave 6 of 6    Kills: 2")
+    );
     // Our finish takes both down; a new race starts clean.
     from_server(&mut s, &format!("R\tF\t7\t{me}\t1\t90000\t"));
     assert_eq!(shown(&s, "BenillaKartArenaText"), None);

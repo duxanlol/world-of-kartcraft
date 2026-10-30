@@ -4662,10 +4662,15 @@ namespace Kartcraft
         SendRace(race, "KARTCRAFT\tR\tDNF\t" + id + "\t" + me.name);
     }
 
+    static void AnnounceAll(std::string const& text);
+
     // A racer through a gauntlet (their finish not yet recorded): the day's first run through on
-    // its course pays.
+    // its course pays; a run without a hit is told to the world.
     static void GauntletPrize(Race const& race, Racer const& me, Player* player)
     {
+        if (!me.hits)
+            AnnounceAll("|cffffd100" + std::string(race.course->name) + ":|r " + me.name +
+                " ran it without a scratch!");
         uint32 const today = uint32(std::time(nullptr)) - uint32(std::time(nullptr)) % DAY;
         char sql[256];
         std::snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM `kartcraft_results` WHERE `guid` = %u AND "
@@ -4804,7 +4809,8 @@ namespace Kartcraft
     //
     // An arena course (courses.json's "arena", pack.py's ARENAS) is a walled pit where waves of
     // creatures come after its racers, and the racers fight them with their weapons. ARENA_FIRST
-    // after GO the first wave comes in at the wall, "R\tAW\t<id>\t<wave>\t<waves>\t<creatures>",
+    // after GO the first wave comes in at the wall, "R\tAW\t<id>\t<wave>\t<waves>\t<creatures>"
+    // (and its boss's name, a berserker's wave),
     // and each creature is named to the clients, "R\tAF\t<id>\t<kart id>\t<creature guid>", its kart
     // id FOE_GUID + its index: the clients put it among the karts their shots can hit. A raptor
     // (R) runs a racer down and spins them out with a green beaker dropped at its feet; a bombot
@@ -4959,8 +4965,10 @@ namespace Kartcraft
         spawns.map = race.course->map;
         spawns.instance = race.instance;
         std::string const sid = std::to_string(id);
+        // A berserker's wave names it: the HUD calls its entrance.
+        bool const boss = std::strchr(letters, 'K') != nullptr;
         SendRace(race, "KARTCRAFT\tR\tAW\t" + sid + "\t" + std::to_string(race.wave) + "\t" +
-            std::to_string(a.waves.size()) + "\t" + std::to_string(n));
+            std::to_string(a.waves.size()) + "\t" + std::to_string(n) + (boss ? "\tGurubashi Berserker" : ""));
         for (size_t i = 0; i < n; ++i)
         {
             FoeKind const& kind = KindOf(letters[i]);
@@ -5017,6 +5025,15 @@ namespace Kartcraft
             return a->kills != b->kills ? a->kills > b->kills : a->hits < b->hits;
         });
         uint32 const ms = WorldTimer::getMSTimeDiff(race.start, now);
+        // Told to the world: who beat every wave.
+        if (!in.empty())
+        {
+            std::string names;
+            for (size_t i = 0; i < in.size(); ++i)
+                names += (i == 0 ? "" : i + 1 == in.size() ? " and " : ", ") + in[i]->name;
+            AnnounceAll("|cffffd100" + std::string(race.course->name) + ":|r " + names + (in.size() == 1 ? " beats" : " beat") +
+                " all " + std::to_string(race.arena->waves.size()) + " waves!");
+        }
         for (Racer* r : in)
         {
             Player* player = ObjectAccessor::FindPlayer(r->guid);

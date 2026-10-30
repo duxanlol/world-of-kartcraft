@@ -1738,6 +1738,11 @@
                 if verb == "AW" then
                     a.wave, a.waves = tonumber(line[4]) or 0, tonumber(line[5]) or 0
                     UIErrorsFrame:AddMessage(format("Wave %d of %d!", a.wave, a.waves), 1, 0.5, 0.1, 1, 4)
+                    -- A boss's wave names it (the line's seventh field).
+                    if line[7] and line[7] ~= "" then
+                        UIErrorsFrame:AddMessage(line[7] .. " enters the arena!", 1, 0.2, 0.2, 1, 5)
+                        PlaySound("RaidWarning")
+                    end
                 elseif verb == "AC" then
                     UIErrorsFrame:AddMessage(format("Wave %s beaten! The next in %s seconds.", line[4] or "?", line[6] or "?"), 0.3, 1, 0.3, 1, 4)
                 elseif line[4] == UnitName("player") then
