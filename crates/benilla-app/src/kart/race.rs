@@ -75,6 +75,9 @@ pub(crate) struct Course {
     /// time trial with weapons on; never in the Race Finder.
     #[serde(default)]
     gauntlet: bool,
+    /// A gauntlet's hazards, counted for its description.
+    #[serde(default)]
+    hazards: Vec<serde::de::IgnoredAny>,
     /// An arena: a walled pit where the server sends waves of creatures to fight
     /// (`docs/courses.md`, `arena`), its time trial with weapons on, no checkpoints to pass; never
     /// in the Race Finder.
@@ -90,6 +93,9 @@ pub(crate) struct ArenaPit {
     pub(crate) y: f32,
     pub(crate) z: f32,
     pub(crate) radius: f32,
+    /// Its waves, a creature a letter.
+    #[serde(default)]
+    pub(crate) waves: Vec<String>,
 }
 
 /// A course's scale where it names none: the kart's own size.
@@ -166,6 +172,19 @@ impl Course {
 
     /// The track browser's description: what kind of course, where, how long, how quick.
     pub(crate) fn description(&self) -> String {
+        let place = if self.zone.is_empty() {
+            String::new()
+        } else {
+            format!(" in {}", self.zone)
+        };
+        // An arena is its waves (`Kartcraft.cpp` "Arena": ARENA_HITS, ARENA_PRIZE).
+        if let Some(pit) = &self.arena {
+            return format!(
+                "An arena{place}: {} waves of creatures to fight with your weapons, alone or with \
+                 friends. Five hits and you're out; the day's first win pays 15 tokens and one a kill.",
+                pit.waves.len()
+            );
+        }
         let route = self.route();
         let mut yards: f32 = route
             .windows(2)
@@ -177,11 +196,6 @@ impl Course {
             }
         }
         let km = yards * 0.9144 / 1000.0;
-        let place = if self.zone.is_empty() {
-            String::new()
-        } else {
-            format!(" in {}", self.zone)
-        };
         let series = if self.series.is_empty() {
             String::new()
         } else {
@@ -189,6 +203,7 @@ impl Course {
         };
         let mut text = match self.laps {
             _ if self.flight => format!("A flight trial{place}, {km:.2} km from start to finish"),
+            _ if self.gauntlet => format!("A gauntlet{place}, {km:.2} km"),
             0 => format!("A {series}sprint{place}, {km:.2} km from start to finish"),
             1 => format!("A {series}one-lap circuit{place}, {km:.2} km"),
             n => format!("A {series}{n}-lap circuit{place}, {km:.2} km a lap"),
@@ -197,6 +212,13 @@ impl Course {
             let rings = self.rings().iter().flatten().count();
             text += &format!(
                 " through {rings} rings in the air: the kart flies it, flight switched on or off."
+            );
+        } else if self.gauntlet {
+            // `Kartcraft.cpp` "Gauntlet": GAUNTLET_HITS, GAUNTLET_PRIZE, GAUNTLET_FLAWLESS.
+            text += &format!(
+                ": {} hazards fire on you along the way. Three hits and you're out; the day's \
+                 first run through pays 10 tokens, 20 without a hit.",
+                self.hazards.len()
             );
         } else {
             text += &format!(" through {} checkpoints.", route.len());
@@ -3613,6 +3635,23 @@ mod tests {
         assert!(!left_without_kart(Some(false), 5.0, 10.0));
         // Our object back without Summon Kart, the grace run out: out of the race.
         assert!(left_without_kart(Some(false), 30.0, 10.0));
+    }
+
+    #[test]
+    fn a_gauntlet_and_an_arena_describe_their_fight_and_prize() {
+        let find = |key: &str| COURSES.iter().find(|c| c.key == key).expect("the course");
+        let gauntlet = find("gx-venture").description();
+        assert!(
+            gauntlet.starts_with("A gauntlet in Stranglethorn Vale, ")
+                && gauntlet.contains(" hazards fire on you along the way. Three hits"),
+            "{gauntlet}"
+        );
+        let arena = find("ar-gurubashi").description();
+        assert!(
+            arena.starts_with("An arena in Stranglethorn Vale: 6 waves of creatures")
+                && arena.contains("Five hits and you're out"),
+            "{arena}"
+        );
     }
 
     #[test]
