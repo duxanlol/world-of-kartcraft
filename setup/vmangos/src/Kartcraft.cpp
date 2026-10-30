@@ -4689,6 +4689,31 @@ namespace Kartcraft
             tokens);
     }
 
+    // A shot of the server's (a hazard's or a creature's), relayed as a racer's is: `only`, when
+    // set, the one racer it is sent to.
+    static void ServerShot(Race& race, uint32 shooter, uint8 item, bool juiced, bool dropped, float x, float y,
+        float z, float yaw, uint32 now, Player* only = nullptr)
+    {
+        if (++race.hazardShot == 0)
+            race.hazardShot = 1;
+        uint16 const shot = race.hazardShot;
+        Shot& record = race.shots[(uint64(shooter) << 16) | shot];
+        record = Shot();
+        record.item = item;
+        record.at = now;
+        record.dropped = dropped;
+        record.juiced = juiced;
+        record.x = x;
+        record.y = y;
+        std::string const line = "KARTCRAFT\tW\tS\t" + std::to_string(shooter) + "\t" + std::to_string(item) + "\t" +
+            (juiced ? "1" : "0") + "\t" + std::to_string(shot) + "\t" + Fixed(x, 2) + "," + Fixed(y, 2) + "," +
+            Fixed(z, 2) + "," + Fixed(yaw, 3) + "\t0\t" + (dropped ? "d" : "");
+        if (only)
+            SendLine(only, line);
+        else
+            SendRace(race, line);
+    }
+
     // Hazard `index` of `race` goes off at `at` (a racer's player), in its own way.
     static void FireHazard(Race& race, size_t index, Racer& at, Player* player, uint32 now)
     {
@@ -4713,18 +4738,6 @@ namespace Kartcraft
             case 'C': item = ITEM_CLOCK; break;
             default: break;
         }
-        if (++race.hazardShot == 0)
-            race.hazardShot = 1;
-        uint32 const shooter = HAZARD_GUID + uint32(index);
-        uint16 const shot = race.hazardShot;
-        Shot& record = race.shots[(uint64(shooter) << 16) | shot];
-        record = Shot();
-        record.item = item;
-        record.at = now;
-        record.dropped = dropped;
-        record.juiced = juiced;
-        record.x = h.x;
-        record.y = h.y;
         // A launcher fires unguided from a little over its emplacement, where its racer will be if
         // they keep on as they go (a turn or the brake, and it misses); a mine lies on the road.
         float yaw = h.o;
@@ -4734,16 +4747,9 @@ namespace Kartcraft
             float const lead = std::hypot(px - h.x, py - h.y) / (item == ITEM_BOMB ? BOMB_YPS : MISSILE_YPS);
             yaw = std::atan2(py + at.vy * lead - h.y, px + at.vx * lead - h.x);
         }
-        float const z = dropped ? h.z : h.z + 1.5f;
-        std::string const target = "0";
-        std::string const line = "KARTCRAFT\tW\tS\t" + std::to_string(shooter) + "\t" + std::to_string(item) + "\t" +
-            (juiced ? "1" : "0") + "\t" + std::to_string(shot) + "\t" + Fixed(h.x, 2) + "," + Fixed(h.y, 2) + "," +
-            Fixed(z, 2) + "," + Fixed(yaw, 3) + "\t" + target + "\t" + (dropped ? "d" : "");
         // A clock spins every kart but its shooter's: this one is for its racer alone.
-        if (item == ITEM_CLOCK)
-            SendLine(player, line);
-        else
-            SendRace(race, line);
+        ServerShot(race, HAZARD_GUID + uint32(index), item, juiced, dropped, h.x, h.y, dropped ? h.z : h.z + 1.5f, yaw,
+            now, item == ITEM_CLOCK ? player : nullptr);
     }
 
     // A gauntlet's hazards, with the race's housekeeping: each racer still in, near one ready.
@@ -4903,31 +4909,6 @@ namespace Kartcraft
 
     static Board& BoardOf(Race const& r);
     static void SendRecords(uint32 id, Race const& r);
-
-    // A shot of the server's (a hazard's or a creature's), relayed as a racer's is: `only`, when
-    // set, the one racer it is sent to.
-    static void ServerShot(Race& race, uint32 shooter, uint8 item, bool juiced, bool dropped, float x, float y,
-        float z, float yaw, uint32 now, Player* only = nullptr)
-    {
-        if (++race.hazardShot == 0)
-            race.hazardShot = 1;
-        uint16 const shot = race.hazardShot;
-        Shot& record = race.shots[(uint64(shooter) << 16) | shot];
-        record = Shot();
-        record.item = item;
-        record.at = now;
-        record.dropped = dropped;
-        record.juiced = juiced;
-        record.x = x;
-        record.y = y;
-        std::string const line = "KARTCRAFT\tW\tS\t" + std::to_string(shooter) + "\t" + std::to_string(item) + "\t" +
-            (juiced ? "1" : "0") + "\t" + std::to_string(shot) + "\t" + Fixed(x, 2) + "," + Fixed(y, 2) + "," +
-            Fixed(z, 2) + "," + Fixed(yaw, 3) + "\t0\t" + (dropped ? "d" : "");
-        if (only)
-            SendLine(only, line);
-        else
-            SendRace(race, line);
-    }
 
     // How fast a racer goes, from where the server last saw them (a lead's).
     static void SeeRacer(Racer& r, Player* player, uint32 now)
