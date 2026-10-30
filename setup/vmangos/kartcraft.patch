@@ -107,10 +107,10 @@ index 69cb8c9..c5b41bc 100644
      if (!GetPlayer()->pvpInfo.inPvPEnforcedArea)
 diff --git a/src/game/Kartcraft.cpp b/src/game/Kartcraft.cpp
 new file mode 100644
-index 0000000..c945f2e
+index 0000000..93eadf9
 --- /dev/null
 +++ b/src/game/Kartcraft.cpp
-@@ -0,0 +1,9780 @@
+@@ -0,0 +1,9785 @@
 +#include "Kartcraft.h"
 +#include "Database/DBCStores.h"
 +#include "Chat.h"
@@ -5885,6 +5885,11 @@ index 0000000..c945f2e
 +        r.foes.clear();
 +        if (!r.timeTrial || r.hazards || r.arena)
 +            StartWeapons(r, now, !r.timeTrial || r.arena);
++        // A gauntlet's or an arena's hits from the start: none yet, of how many put one out.
++        if (r.hazards || r.arena)
++            for (Racer const& x : r.racers)
++                SendRace(r, "KARTCRAFT\tR\tGH\t" + std::to_string(id) + "\t" + x.name + "\t0\t" +
++                    std::to_string(r.arena ? ARENA_HITS : GAUNTLET_HITS));
 +    }
 +
 +    // ── Race Finder ────────────────────────────────────────────────────────────────────────────

@@ -191,7 +191,8 @@ kart but its shooter's). A storm is a rain cloud's `R`, effect `0` slow or `2` i
 A time trial on a gauntlet takes these lines too (it has hazards and no crates).
 
 Each hit by a hazard in a gauntlet but a TNT landing on the head (its blast is one) is told to
-every racer, `R\tGH\t<race>\t<name>\t<hits>\t<out at>` (3; an arena's 5); the last puts the racer out,
+every racer, `R\tGH\t<race>\t<name>\t<hits>\t<out at>` (3; an arena's 5), and at the start with
+`<hits>` 0; the last puts the racer out,
 `R\tDNF\t<race>\t<name>`. A rival's hit is no strike.
 
 ### Arenas

@@ -5034,6 +5034,12 @@ fn an_arena_shows_its_wave_our_kills_and_our_hits_until_we_finish() {
     };
     from_server(&mut s, "R\tC\t7\tar-gurubashi\t0\t1:1;2:2");
     assert_eq!(shown(&s, "BenillaKartArenaText"), None);
+    // The start's count: none of five.
+    from_server(&mut s, &format!("R\tGH\t7\t{me}\t0\t5"));
+    assert_eq!(
+        shown(&s, "BenillaKartGauntletHits").as_deref(),
+        Some("Hits: 0 of 5")
+    );
     from_server(&mut s, "R\tAW\t7\t1\t6\t2");
     assert_eq!(
         shown(&s, "BenillaKartArenaText").as_deref(),

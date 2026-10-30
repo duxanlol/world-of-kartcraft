@@ -5772,6 +5772,11 @@ namespace Kartcraft
         r.foes.clear();
         if (!r.timeTrial || r.hazards || r.arena)
             StartWeapons(r, now, !r.timeTrial || r.arena);
+        // A gauntlet's or an arena's hits from the start: none yet, of how many put one out.
+        if (r.hazards || r.arena)
+            for (Racer const& x : r.racers)
+                SendRace(r, "KARTCRAFT\tR\tGH\t" + std::to_string(id) + "\t" + x.name + "\t0\t" +
+                    std::to_string(r.arena ? ARENA_HITS : GAUNTLET_HITS));
     }
 
     // ── Race Finder ────────────────────────────────────────────────────────────────────────────

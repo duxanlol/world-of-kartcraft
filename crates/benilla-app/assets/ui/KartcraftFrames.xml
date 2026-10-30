@@ -1724,7 +1724,9 @@
                     local hits, out = tonumber(line[5]) or 0, tonumber(line[6]) or 3
                     BenillaKartGauntletHits:SetText(hits >= out and "|cffff3333Out!|r" or format("Hits: %d of %d", hits, out))
                     BenillaKartGauntletHits:Show()
-                    if hits >= out then
+                    if hits == 0 then
+                        -- The start's: the count shown, nothing to call.
+                    elseif hits >= out then
                         UIErrorsFrame:AddMessage(format("%d hits: you're out!", hits), 1, 0.2, 0.2, 1, 6)
                         PlaySound("igQuestFailed")
                     else
