@@ -523,6 +523,8 @@ pub(crate) struct Active {
     /// An arena's creatures as the server names them (`R AF`): each one's kart id, the one our
     /// shots know it by, and its creature's guid.
     foes: Vec<(u32, u64)>,
+    /// An arena's kills by racer, as the server counts them (`R AK`), for the board.
+    kills: HashMap<String, u16>,
     /// The track editor's objects on its track: a test lap's, or a player track's from its `PT`
     /// line ([`super::objects`]).
     objects: Vec<super::objects::Placed>,
@@ -1544,7 +1546,14 @@ impl Races {
                 }
             }
             // An arena's wave come in or beaten, a kill: the HUD's (Lua's), logged here.
-            Some(verb @ ("AW" | "AC" | "AK")) => info!("kart race: arena {verb} {:?}", &f[1..]),
+            Some(verb @ ("AW" | "AC" | "AK")) => {
+                info!("kart race: arena {verb} {:?}", &f[1..]);
+                if verb == "AK" && f.len() >= 4 {
+                    if let Some(race) = self.race.as_mut().filter(|r| r.id == id) {
+                        race.kills.insert(f[2].clone(), f[3].parse().unwrap_or(0));
+                    }
+                }
+            }
             // Out of time: the race closed DNF_WAIT after its first finish with them still out.
             Some("DNF") if f.len() >= 3 => {
                 if let Some(race) = self.race.as_mut().filter(|r| r.id == id) {
@@ -1935,6 +1944,8 @@ pub(crate) fn update(
         && wrong_way_lit(now - go);
     if race.done {
         text.banner = match race.finished.iter().find(|f| f.0 == me) {
+            // Knocked out by a gauntlet's or an arena's hits, else out of time.
+            Some((_, 0, _)) if race.gauntlet || race.arena => "Out — too many hits".into(),
             Some((_, 0, _)) => "DNF — out of time".into(),
             Some((_, place, ms)) => {
                 let news = match race.bests.get(&me) {
@@ -2076,15 +2087,16 @@ fn board(race: &Active) -> Vec<String> {
         .finished
         .iter()
         .map(|(name, place, ms)| {
+            let kills = kills_of(race, name);
             if *place == 0 {
-                return format!("DNF  {name}");
+                return format!("DNF  {name}{kills}");
             }
             let mark = match race.bests.get(name) {
                 Some(true) => "  (record)",
                 Some(false) => "  (best)",
                 None => "",
             };
-            format!("{place}. {name}  {}{mark}", clock(*ms))
+            format!("{place}. {name}  {}{mark}{kills}", clock(*ms))
         })
         .collect();
     lines.extend(lap_lines(race));
@@ -2104,14 +2116,31 @@ fn board(race: &Active) -> Vec<String> {
     lines
 }
 
+/// An arena racer's kills as a board line's tail, nothing elsewhere.
+fn kills_of(race: &Active, name: &str) -> String {
+    if !race.arena {
+        return String::new();
+    }
+    match race.kills.get(name).copied().unwrap_or(0) {
+        1 => "  — 1 kill".into(),
+        n => format!("  — {n} kills"),
+    }
+}
+
 /// A time trial's board: our time, against our best before this run, then the time trial record.
 fn trial_board(race: &Active) -> Vec<String> {
     let Some((name, place, ms)) = race.finished.first() else {
         return Vec::new();
     };
-    // Place 0 is out of time (the race's lifetime ran out): no time to set against a best.
+    // Place 0 is out of time (the race's lifetime ran out), or out by hits: no time to set
+    // against a best.
     if *place == 0 {
-        let mut lines = vec!["Out of time".to_string()];
+        let out = if race.gauntlet || race.arena {
+            "Out: too many hits"
+        } else {
+            "Out of time"
+        };
+        let mut lines = vec![format!("{out}{}", kills_of(race, name))];
         if race.record.0 != 0 {
             lines.push(format!(
                 "Time trial record: {} by {}",
@@ -2126,7 +2155,11 @@ fn trial_board(race: &Active) -> Vec<String> {
         Some(false) => "  (best)",
         None => "",
     };
-    let mut lines = vec![format!("Your time: {}{mark}", clock(*ms))];
+    let mut lines = vec![format!(
+        "Your time: {}{mark}{}",
+        clock(*ms),
+        kills_of(race, name)
+    )];
     match race.before.map_or(0, |b| b.1) {
         0 => lines.push("Your first time trial here".into()),
         best if *ms < best => lines.push(format!(
@@ -3635,6 +3668,28 @@ mod tests {
         assert!(!left_without_kart(Some(false), 5.0, 10.0));
         // Our object back without Summon Kart, the grace run out: out of the race.
         assert!(left_without_kart(Some(false), 30.0, 10.0));
+    }
+
+    #[test]
+    fn an_arena_board_counts_kills_and_a_knockout_is_no_timeout() {
+        let mut arena = Active {
+            arena: true,
+            ..circuit_race()
+        };
+        arena.finished = vec![("Goblin".into(), 1, 90_000), ("Racer".into(), 0, 0)];
+        arena.kills.insert("Goblin".into(), 7);
+        arena.kills.insert("Racer".into(), 1);
+        let lines = board(&arena);
+        assert_eq!(lines[0], "1. Goblin  1:30.00  — 7 kills");
+        assert_eq!(lines[1], "DNF  Racer  — 1 kill");
+        // Alone, knocked out: no time, and no "out of time".
+        let mut trial = Active {
+            arena: true,
+            time_trial: true,
+            ..circuit_race()
+        };
+        trial.finished = vec![("Racer".into(), 0, 0)];
+        assert_eq!(board(&trial)[0], "Out: too many hits  — 0 kills");
     }
 
     #[test]
