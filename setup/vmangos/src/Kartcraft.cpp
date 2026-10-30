@@ -583,13 +583,15 @@ namespace Kartcraft
 
     // A gauntlet's hazard ("Gauntlet"): what it is (M a missile battery, B a bomb shredder, T a TNT,
     // N a Nitro, K a red beaker dropped on the road, C a clock, S a slowing storm, I an icy one),
-    // where it stands and faces, how near a racer sets it off (yards) and how often (ms).
+    // where it stands and faces, how near a racer sets it off (yards) and how often (ms), and
+    // its emplacement's spawn (creature guid counter, 0 none: a mine, a clock, a storm).
     struct Hazard
     {
         char kind;
         float x, y, z, o;
         float reach;
         uint32 every;
+        uint32 spawn;
     };
     struct CourseHazards
     {
@@ -4714,6 +4716,30 @@ namespace Kartcraft
             SendRace(race, line);
     }
 
+    // An emplacement's turn to its shot, for the world thread: a creature belongs to its map's
+    // thread, and a hazard fires on the packet thread. Under s_mutex.
+    struct HazardTurn
+    {
+        uint32 map, instance, entry, spawn;
+        float yaw;
+    };
+    static std::vector<HazardTurn> s_hazardTurns;
+    // pack.py's EMPLACEMENTS.
+    constexpr uint32 EMPLACEMENT_BATTERY = 190013;
+    constexpr uint32 EMPLACEMENT_SHREDDER = 190014;
+
+    // On the world thread: each emplacement that fired faces its shot and plays its attack.
+    static void HazardTurns()
+    {
+        for (HazardTurn const& t : std::exchange(s_hazardTurns, {}))
+            if (Map* map = sMapMgr.FindMap(t.map, t.instance))
+                if (Creature* c = map->GetCreature(ObjectGuid(HIGHGUID_UNIT, t.entry, t.spawn)))
+                {
+                    c->SetFacingTo(t.yaw);
+                    c->HandleEmote(EMOTE_ONESHOT_ATTACK1H);
+                }
+    }
+
     // Hazard `index` of `race` goes off at `at` (a racer's player), in its own way.
     static void FireHazard(Race& race, size_t index, Racer& at, Player* player, uint32 now)
     {
@@ -4750,6 +4776,10 @@ namespace Kartcraft
         // A clock spins every kart but its shooter's: this one is for its racer alone.
         ServerShot(race, HAZARD_GUID + uint32(index), item, juiced, dropped, h.x, h.y, dropped ? h.z : h.z + 1.5f, yaw,
             now, item == ITEM_CLOCK ? player : nullptr);
+        // Its emplacement turns to the shot and fires, on the world thread (HazardTurns).
+        if (h.spawn)
+            s_hazardTurns.push_back({ race.course->map, race.instance,
+                h.kind == 'B' ? EMPLACEMENT_SHREDDER : EMPLACEMENT_BATTERY, h.spawn, yaw });
     }
 
     // A gauntlet's hazards, with the race's housekeeping: each racer still in, near one ready.
@@ -7315,6 +7345,7 @@ namespace Kartcraft
                 TickRaceScales();
             }
             TickArenas(now);
+            HazardTurns();
             // Today's and this week's courses chosen as the period turns, nobody racing or not,
             // so the website shows them from the first minute.
             ChallengesNow();

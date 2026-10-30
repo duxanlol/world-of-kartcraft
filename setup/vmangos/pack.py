@@ -256,16 +256,31 @@ def hazards_of(c):
     return out
 
 
+def emplacement_spawns(courses):
+    """The gauntlets' emplacements in spawn order, from EMPLACEMENT_GUIDS' first: (course key,
+    hazard index, entry, map, x, y, z, o) each."""
+    spawns = []
+    for c in courses:
+        for i, h in enumerate(c.get('hazards', []) if c.get('gauntlet') else []):
+            entry = HAZARD_KINDS[h['kind']][1]
+            if entry:
+                spawns.append((c['key'], i, entry, c['map'], h['x'], h['y'], h['z'], h.get('o', 0)))
+    return spawns
+
+
 def hazards_table(courses):
-    """The gauntlets' hazards (Kartcraft.cpp Hazard), by course key."""
+    """The gauntlets' hazards (Kartcraft.cpp Hazard), by course key, an emplacement's with its
+    spawn's guid."""
     out = ['', '    static std::vector<CourseHazards> const HAZARDS = {']
+    guid = {(s[0], s[1]): EMPLACEMENT_GUIDS[0] + n for n, s in enumerate(emplacement_spawns(courses))}
     for c in courses:
         hz = hazards_of(c)
         if not hz:
             continue
         out.append(f'        {{ "{c["key"]}", {{')
-        for k, x, y, z, o, reach, every in hz:
-            out.append(f"            {{ '{k}', {cfloat(x)}, {cfloat(y)}, {cfloat(z)}, {cfloat(o)}, {cfloat(reach)}, {every} }},")
+        for i, (k, x, y, z, o, reach, every) in enumerate(hz):
+            spawn = guid.get((c['key'], i), 0)
+            out.append(f"            {{ '{k}', {cfloat(x)}, {cfloat(y)}, {cfloat(z)}, {cfloat(o)}, {cfloat(reach)}, {every}, {spawn} }},")
         out.append('        } },')
     out.append('    };')
     return out
@@ -458,12 +473,7 @@ def emplacements_sql(data):
     rows = [f"({e}, 0, '{name}', 'World of Kartcraft', 60, 60, 35, 0, {display}, 1, 100, 100, 9, 1, 1, 1,"
             f' {MARSHAL_STATIC_FLAGS}, 2)' for e, (name, display) in EMPLACEMENTS.items()]
     out.append(',\n'.join(rows) + ';')
-    spawns = []
-    for c in data['courses']:
-        for h in c.get('hazards', []) if c.get('gauntlet') else []:
-            entry = HAZARD_KINDS[h['kind']][1]
-            if entry:
-                spawns.append((entry, c['map'], h['x'], h['y'], h['z'], h.get('o', 0)))
+    spawns = [s[2:] for s in emplacement_spawns(data['courses'])]
     if len(spawns) > hi - lo + 1:
         fail(f'{len(spawns)} emplacements, more than the {hi - lo + 1} spawn guids reserved')
     if spawns:
