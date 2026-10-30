@@ -4865,6 +4865,8 @@ namespace Kartcraft
     constexpr uint32 FOE_GUID = 0x7E000000;
     constexpr uint32 ARENA_FIRST = 3 * IN_MILLISECONDS;
     constexpr uint32 ARENA_BREAK = 5 * IN_MILLISECONDS;
+    // The most creatures a wave brings, however many race.
+    constexpr size_t ARENA_FOES_MAX = 16;
     // How long a wave may last before the next comes in on top of it.
     constexpr uint32 ARENA_WAVE_MAX = 90 * IN_MILLISECONDS;
     // How often the world thread looks over the arenas, and steers each creature anew.
@@ -4973,17 +4975,26 @@ namespace Kartcraft
     static void ArenaWave(uint32 id, Race& race, Player* summoner, float away, uint32 now)
     {
         ArenaDef const& a = *race.arena;
-        char const* letters = a.waves[race.wave];
+        // A party of three or more meets the wave once more for every two racers past the first
+        // still in, to ARENA_FOES_MAX creatures.
+        size_t in = 0;
+        for (Racer const& r : race.racers)
+            in += r.finished ? 0 : 1;
+        std::string letters;
+        for (size_t copy = 0; copy < 1 + (in > 0 ? (in - 1) / 2 : 0); ++copy)
+            letters += a.waves[race.wave];
+        if (letters.size() > ARENA_FOES_MAX)
+            letters.resize(ARENA_FOES_MAX);
         ++race.wave;
         race.waveAt = 0;
         race.waveCame = now | 1;
-        size_t const n = std::strlen(letters);
+        size_t const n = letters.size();
         ArenaSpawns& spawns = s_arenaSpawns[id];
         spawns.map = race.course->map;
         spawns.instance = race.instance;
         std::string const sid = std::to_string(id);
         // A berserker's wave names it: the HUD calls its entrance.
-        bool const boss = std::strchr(letters, 'K') != nullptr;
+        bool const boss = letters.find('K') != std::string::npos;
         SendRace(race, "KARTCRAFT\tR\tAW\t" + sid + "\t" + std::to_string(race.wave) + "\t" +
             std::to_string(a.waves.size()) + "\t" + std::to_string(n) + (boss ? "\tGurubashi Berserker" : ""));
         for (size_t i = 0; i < n; ++i)

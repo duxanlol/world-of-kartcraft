@@ -86,7 +86,8 @@ client's list are both made from it; nothing else holds course data.
   that blows up on one, `O` a brute, slower, three hits to beat, that blasts what it reaches and
   throws bombs, `A` an axe thrower that keeps its distance and throws missiles, two hits, `K` a
   berserker, a boss of eight hits that throws bombs often. Their hits count as a gauntlet's, five
-  and a racer is out. A wave not beaten in 90 s has the next come in on top of it. The last wave
+  and a racer is out. A party of three or more meets each wave once more for every two racers past
+  the first (to 16 creatures). A wave not beaten in 90 s has the next come in on top of it. The last wave
   beaten (and every creature left), everyone still in finishes, placed by their kills; the
   day's first win pays 15 tokens and one a kill (to 25 more), and the win is told to the world.
   Its two checkpoints only stand its grid in the pit (none is passed), its `crates` ring its
