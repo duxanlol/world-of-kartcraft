@@ -68,16 +68,15 @@ client's list are both made from it; nothing else holds course data.
   from at its racers (`Kartcraft.cpp`, "Gauntlet"; `docs/kartcraft-weapons-protocol.md`,
   "Hazards"). Each hazard is a `kind`, where it stands (`x`, `y`, `z`, facing `o`), how near a
   racer sets it off (`reach`, yards) and how often it goes off (`every`, ms): `missile` and `bomb`
-  fire from an emplacement beside the road (a goblin rocket battery, a goblin bomb shredder, spawned by
-  `pack.py`), unguided, where the racer will be, one shot a pass; `tnt`, `nitro` and `beaker` (a
-  red one) are dropped on the road; `clock` spins out a racer near it; `storm` and `ice` put a
-  slowing or icy rain cloud on one. Five hits by its hazards (a rival's are none, nor a clock's
-  spin) and a
-  racer is out; the day's first run through
-  a gauntlet pays 10 tokens, 20 without a hit. A time trial on a gauntlet has
-  its hazards and no crates; a race hosted on one has both; never a challenge nor in the Race
-  Finder. `course-gen gauntlet --from <key> --key <key> --name <name>` makes one of a course: one
-  lap of it, a hazard every 95 yards past the start. Gauntlets and arenas are listed on the track
+  fire from an emplacement beside the road (a goblin rocket battery, a goblin bomb shredder,
+  spawned by `pack.py`), unguided, where the racer will be, one shot a pass; `tnt`, `nitro` and
+  `beaker` (a red one) are dropped on the road; `clock` spins out a racer near it; `storm` and
+  `ice` put a slowing or icy rain cloud on one. Five hits by its hazards (a rival's are none, nor
+  a clock's spin) and a racer is out; the day's first run through a gauntlet pays 10 tokens, 20
+  without a hit, and a run without a hit is told to the world. A time trial on a gauntlet has its
+  hazards and no crates; a race hosted on one has both; never a challenge nor in the Race Finder.
+  `course-gen gauntlet --from <key> --key <key> --name <name>` makes one of a course: one lap of
+  it, a hazard every 95 yards past the start. Gauntlets and arenas are listed on the track
   browser's Battle tab.
 - `arena`: optional: an arena, a walled pit where the server sends waves of creatures after its
   racers and they fight them with their weapons (`Kartcraft.cpp`, "Arena";
@@ -86,15 +85,16 @@ client's list are both made from it; nothing else holds course data.
   creatures, a letter each: `R` a raptor that runs a racer down and spins them out, `B` a bombot
   that blows up on one, `O` a brute, slower, three hits to beat, that blasts what it reaches and
   throws bombs, `A` an axe thrower that keeps its distance and throws missiles, two hits, `K` a
-  berserker, a boss of eight hits that throws bombs often. Their hits count as a gauntlet's,
-  five and a racer is out. The last wave beaten,
-  everyone still in finishes, placed by their kills; the day's first win pays 15 tokens and one a
-  kill (to 25 more). Its two checkpoints only stand its grid in the pit (none is passed), its
-  `crates` ring its middle, and its crates roll an arena's items (shots, mines, a shield; no warp
-  orb, clock or mask). A time trial on an arena has its creatures and its crates; never a
-  challenge nor in the Race Finder. `course-gen arena --map <m> --at x,y --z <z> --key <key>
-  --name <name>` measures a pit (rays from its middle to where the floor rises or falls 1.5 yards)
-  and writes its entry.
+  berserker, a boss of eight hits that throws bombs often. Their hits count as a gauntlet's, five
+  and a racer is out. The last wave beaten, everyone still in finishes, placed by their kills; the
+  day's first win pays 15 tokens and one a kill (to 25 more), and the win is told to the world.
+  Its two checkpoints only stand its grid in the pit (none is passed), its `crates` ring its
+  middle, and its crates roll an arena's items (shots, mines, a shield; no warp orb, clock or
+  mask). A time trial on an arena has its creatures and its crates; never a challenge nor in the
+  Race Finder. `course-gen arena --map <m> --at x,y --z <z> --key <key> --name <name>
+  [--waves RR,RRB,...]` measures a pit (rays from its middle to where the floor rises or falls 1.5
+  yards) and writes its entry. An arena wants a pit no roaming elite walks into (the Maul in
+  Feralas has Mushgog).
 - `checkpoints`: at least two, WoW world `x`, `y` (yards); the first is the start, where a
   driver hosts or joins. Optional `z` (the server finds the ground itself). Optional `gate`:
   the gate's half-width in yards. The client passes a checkpoint through a gate this wide
