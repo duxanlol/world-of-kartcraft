@@ -37,10 +37,13 @@ for host in "${hosts[@]}"; do
     done <<<"$remote"
 
     # The files a new player downloads: the Windows launcher, the Mac zip, the Linux AppImage.
-    args=("$@")
-    while [ ${#args[@]} -ge 2 ]; do
-        echo "  $host: ${args[1]}"
-        host_put "$host" "${args[0]}" "${args[1]}"
-        args=("${args[@]:2}")
+    # By index: macOS's bash 3.2 calls an empty array unbound under set -u.
+    i=1
+    while [ $i -lt $# ]; do
+        file="${!i}" j=$((i + 1))
+        name="${!j}"
+        echo "  $host: $name"
+        host_put "$host" "$file" "$name"
+        i=$((i + 2))
     done
 done

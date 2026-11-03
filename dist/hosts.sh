@@ -51,7 +51,7 @@ host_put() {
         *.apk) extra=(--content-disposition "attachment; filename=WorldOfKartcraft.apk") ;;
         esac
         # shellcheck disable=SC2046
-        az storage blob upload -c '$web' -n "$3" -f "$2" $(azure_type "$3") "${extra[@]}" --overwrite --no-progress $(azure_auth) -o none ;;
+        az storage blob upload -c '$web' -n "$3" -f "$2" $(azure_type "$3") ${extra[@]+"${extra[@]}"} --overwrite --no-progress $(azure_auth) -o none ;;
     esac
 }
 # host_list <host> <prefix>: the names starting with <prefix>, one per line
