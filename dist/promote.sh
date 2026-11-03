@@ -2,14 +2,17 @@
 # Hands the players what the testers have: GitHub's Release workflow packages each build twice,
 # for staging (live under staging/) and for production (waiting under candidate/, the same game
 # files with the players' launcher and presets). This copies candidate/ to the players' folders,
-# Windows, Mac, Linux and Android, through dist/upload.sh; nothing is built. It refuses when
-# candidate/ is not the build staging serves.
+# Windows, Mac, Linux and Android, on every download host (hosts.sh) through dist/upload.sh;
+# nothing is built. It reads what it copies from WEB, one host's public address, and refuses when
+# candidate/ there is not the build staging serves.
 #
-#   ACCOUNT=<storage account> KEY=<its key> WEB=<its website URL> dist/promote.sh
+#   DL_HOST=dl@<host> [ACCOUNT=<storage account> KEY=<its key>] WEB=<a host's URL> dist/promote.sh
 #
 # FROM and TO (default candidate/ and the root) name other folders, to try it out of the players' way.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=hosts.sh
+. "$here/hosts.sh"
 FROM="${FROM-candidate/}" TO="${TO-}"
 version() { curl -fsS "$WEB/$1manifest.json" | grep -o '"version": *"[^"]*"' | cut -d'"' -f4; }
 
@@ -48,14 +51,10 @@ if waiting="$(code "$FROM")"; then
     [ "$staged" = "$waiting" ] || { echo "${FROM}android is build $waiting but staging/android serves $staged: build again"; exit 1; }
     curl -fsS -o android.apk "$WEB/${FROM}android/WorldOfKartcraft.apk"
     curl -fsS -o android.json "$WEB/${FROM}android/version.json"
-    auth=(--account-name "$ACCOUNT" --account-key "$KEY" --only-show-errors)
-    az storage blob upload -c '$web' -n "${TO}android/WorldOfKartcraft.apk" -f android.apk \
-        --content-type application/vnd.android.package-archive \
-        --content-disposition "attachment; filename=WorldOfKartcraft.apk" \
-        --content-cache-control no-cache --overwrite --no-progress "${auth[@]}" -o none
-    az storage blob upload -c '$web' -n "${TO}android/version.json" -f android.json \
-        --content-type application/json --content-cache-control no-cache --overwrite --no-progress \
-        "${auth[@]}" -o none
+    for host in "${hosts[@]}"; do
+        host_put "$host" android.apk "${TO}android/WorldOfKartcraft.apk"
+        host_put "$host" android.json "${TO}android/version.json"
+    done
     echo "android build $waiting"
 else
     echo "no ${FROM}android/version.json: Android not promoted"

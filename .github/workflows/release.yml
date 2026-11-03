@@ -14,9 +14,13 @@
 #              presets (.setup/publish.cfg on the maintainer's machine);
 #              KARTCRAFT_STAGING_SERVER, KARTCRAFT_STAGING_UPDATE_URL, KARTCRAFT_STAGING_REGISTER_URL
 #              — staging's (.setup/publish-staging.cfg);
-#              AZURE_STORAGE — the storage account whose $web container is the website.
-#   secret     AZURE_STORAGE_KEY — that account's key. Without AZURE_STORAGE nothing is uploaded and
-#              the packages are only the run's artifacts.
+#              DL_HOST — the download host's upload login (dl@dl.worldofkartcraft.com, dist/hosts.sh);
+#              DL_KNOWN_HOSTS — its SSH host key line, so the upload talks to that host alone;
+#              AZURE_STORAGE — an Azure storage account whose $web container also gets the uploads
+#              (while launchers built before the move update from it).
+#   secrets    DL_SSH_KEY — the `dl` login's private key; AZURE_STORAGE_KEY — that account's key.
+#              Without DL_HOST and AZURE_STORAGE nothing is uploaded and the packages are only the
+#              run's artifacts.
 #   secrets    ANDROID_KEYSTORE (base64) and ANDROID_KEYSTORE_PASS — the key the Android APKs are
 #              signed with; without them the APKs are only the run's artifacts.
 name: Release
@@ -133,13 +137,16 @@ jobs:
           retention-days: 30
           if-no-files-found: error
       - name: Upload
-        if: vars.AZURE_STORAGE != ''
+        if: (vars.DL_HOST != '' || vars.AZURE_STORAGE != '')
         shell: bash
         env:
+          DL_HOST: ${{ vars.DL_HOST }}
+          DL_KNOWN_HOSTS: ${{ vars.DL_KNOWN_HOSTS }}
+          DL_SSH_KEY: ${{ secrets.DL_SSH_KEY }}
           ACCOUNT: ${{ vars.AZURE_STORAGE }}
           KEY: ${{ secrets.AZURE_STORAGE_KEY }}
-          WEB: ${{ vars.KARTCRAFT_UPDATE_URL }}
         run: |
+          if [ -n "$DL_SSH_KEY" ]; then DL_KEY="$(mktemp)"; printf '%s\n' "$DL_SSH_KEY" >"$DL_KEY"; chmod 600 "$DL_KEY"; export DL_KEY; fi
           dist/upload.sh dist/updates candidate/ "dist/WorldOfKartcraft/Kartcraft Launcher.exe" candidate/KartcraftLauncher.exe
           dist/upload.sh dist/staging/updates staging/ "dist/staging/WorldOfKartcraft/Kartcraft Launcher.exe" staging/KartcraftLauncher.exe
 
@@ -235,12 +242,15 @@ jobs:
           retention-days: 30
           if-no-files-found: error
       - name: Upload
-        if: vars.AZURE_STORAGE != ''
+        if: (vars.DL_HOST != '' || vars.AZURE_STORAGE != '')
         env:
+          DL_HOST: ${{ vars.DL_HOST }}
+          DL_KNOWN_HOSTS: ${{ vars.DL_KNOWN_HOSTS }}
+          DL_SSH_KEY: ${{ secrets.DL_SSH_KEY }}
           ACCOUNT: ${{ vars.AZURE_STORAGE }}
           KEY: ${{ secrets.AZURE_STORAGE_KEY }}
-          WEB: ${{ vars.KARTCRAFT_UPDATE_URL }}
         run: |
+          if [ -n "$DL_SSH_KEY" ]; then DL_KEY="$(mktemp)"; printf '%s\n' "$DL_SSH_KEY" >"$DL_KEY"; chmod 600 "$DL_KEY"; export DL_KEY; fi
           dist/upload.sh dist/macos/out/updates candidate/macos/ "dist/macos/out/World of Kartcraft.zip" "candidate/macos/World of Kartcraft.zip"
           dist/upload.sh dist/macos/out/staging/updates staging/macos/ "dist/macos/out/staging/World of Kartcraft.zip" "staging/macos/World of Kartcraft.zip"
 
@@ -286,12 +296,15 @@ jobs:
           retention-days: 30
           if-no-files-found: error
       - name: Upload
-        if: vars.AZURE_STORAGE != ''
+        if: (vars.DL_HOST != '' || vars.AZURE_STORAGE != '')
         env:
+          DL_HOST: ${{ vars.DL_HOST }}
+          DL_KNOWN_HOSTS: ${{ vars.DL_KNOWN_HOSTS }}
+          DL_SSH_KEY: ${{ secrets.DL_SSH_KEY }}
           ACCOUNT: ${{ vars.AZURE_STORAGE }}
           KEY: ${{ secrets.AZURE_STORAGE_KEY }}
-          WEB: ${{ vars.KARTCRAFT_UPDATE_URL }}
         run: |
+          if [ -n "$DL_SSH_KEY" ]; then DL_KEY="$(mktemp)"; printf '%s\n' "$DL_SSH_KEY" >"$DL_KEY"; chmod 600 "$DL_KEY"; export DL_KEY; fi
           dist/upload.sh dist/linux/out/updates candidate/linux/ "dist/linux/out/Kartcraft Launcher.AppImage" "candidate/linux/Kartcraft Launcher.AppImage"
           dist/upload.sh dist/linux/out/staging/updates staging/linux/ "dist/linux/out/staging/Kartcraft Launcher.AppImage" "staging/linux/Kartcraft Launcher.AppImage"
 
@@ -369,10 +382,14 @@ jobs:
           retention-days: 30
           if-no-files-found: error
       - name: Upload
-        if: vars.AZURE_STORAGE != '' && steps.key.outputs.signed == '1'
+        if: (vars.DL_HOST != '' || vars.AZURE_STORAGE != '') && steps.key.outputs.signed == '1'
         env:
+          DL_HOST: ${{ vars.DL_HOST }}
+          DL_KNOWN_HOSTS: ${{ vars.DL_KNOWN_HOSTS }}
+          DL_SSH_KEY: ${{ secrets.DL_SSH_KEY }}
           ACCOUNT: ${{ vars.AZURE_STORAGE }}
           KEY: ${{ secrets.AZURE_STORAGE_KEY }}
         run: |
+          if [ -n "$DL_SSH_KEY" ]; then DL_KEY="$(mktemp)"; printf '%s\n' "$DL_SSH_KEY" >"$DL_KEY"; chmod 600 "$DL_KEY"; export DL_KEY; fi
           ANDROID_DIR=dist/android/production ANDROID_PREFIX=candidate/android/ bash dist/android-upload.sh
           ANDROID_DIR=dist/android/staging ANDROID_CHANNEL=staging bash dist/android-upload.sh

@@ -23,7 +23,8 @@
 #   SERVER=host           the game server friends connect to (they are not asked for it)
 #   UPDATE_URL=https://... where launchers look for updates (default http://SERVER:8080)
 #   REGISTER_URL=https://... the account sign-up page, shown to new players
-#   AZURE_STORAGE=name    also upload dist\updates to that storage account's static website
+#   DL_HOST=dl@host       also upload dist\updates to that download host (dist\hosts.sh)
+#   AZURE_STORAGE=name    and/or to that storage account's static website
 # .setup\publish-staging.cfg, read over it for -Channel staging, names the staging server, its
 # update address (the website's `staging` folder) and its sign-up page.
 #
@@ -179,30 +180,26 @@ Get-ChildItem $objects | Where-Object { $keep -notcontains $_.Name } | Remove-It
 Set-Content $previous ($entries | ForEach-Object { "$($_.sha256).gz" })
 [IO.File]::WriteAllText((Join-Path $client 'version.txt'), $version)
 
-# Azure: the storage account's static website ($web) mirrors dist\updates. New objects first, the
-# manifest after them, stale objects last, for the same reason as above.
-if ($settings['AZURE_STORAGE']) {
-    $account = $settings['AZURE_STORAGE']
-    Write-Host "== Uploading to Azure storage $account, $Channel ($(if ($prefix) { $prefix } else { 'the root' })) =="
-    $key = az storage account keys list -n $account --query '[0].value' -o tsv
-    if ($LASTEXITCODE) { throw "no access to storage account $account (az login?)" }
-    $auth = @('--account-name', $account, '--account-key', $key, '--only-show-errors')
-    $remote = @(az storage blob list -c '$web' --prefix "${prefix}files/" --query '[].name' -o tsv @auth)
-    foreach ($e in $entries) {
-        if ($remote -contains "$prefix$($e.gz)") { continue }
-        Write-Host "  $prefix$($e.gz)"
-        az storage blob upload -c '$web' -n "$prefix$($e.gz)" -f (Join-Path $updates $e.gz) --content-type application/gzip --overwrite --no-progress @auth -o none
-        if ($LASTEXITCODE) { throw "uploading $($e.gz) failed" }
+# The download hosts (dist\hosts.sh: DL_HOST, and AZURE_STORAGE's account) mirror dist\updates,
+# through dist\upload.sh, in Git's bash: new objects first, the manifest after them, stale objects
+# last, for the same reason as above; then the one file new players download
+# (worldofkartcraft.com/download leads there): the launcher, which fetches the rest.
+if ($settings['DL_HOST'] -or $settings['AZURE_STORAGE']) {
+    Write-Host "== Uploading $Channel ($(if ($prefix) { $prefix } else { 'the root' })) =="
+    $env:DL_HOST = $settings['DL_HOST']
+    $env:ACCOUNT = $settings['AZURE_STORAGE']
+    if ($env:ACCOUNT) {
+        $env:KEY = az storage account keys list -n $env:ACCOUNT --query '[0].value' -o tsv
+        if ($LASTEXITCODE) { throw "no access to storage account $($env:ACCOUNT) (az login?)" }
     }
-    az storage blob upload -c '$web' -n "${prefix}manifest.json" -f (Join-Path $updates 'manifest.json') --content-type application/json --content-cache-control 'no-cache' --overwrite --no-progress @auth -o none
-    if ($LASTEXITCODE) { throw 'uploading the manifest failed' }
-    foreach ($name in $remote) {
-        if ($keep -notcontains ($name -replace "^${prefix}files/", '')) { az storage blob delete -c '$web' -n $name @auth -o none }
-    }
-    # The one file new players download (worldofkartcraft.com/download leads here): the launcher,
-    # which fetches the rest.
-    az storage blob upload -c '$web' -n "${prefix}KartcraftLauncher.exe" -f (Join-Path $client 'Kartcraft Launcher.exe') --content-type application/vnd.microsoft.portable-executable --content-disposition "attachment; filename*=UTF-8''Kartcraft%20Launcher.exe" --content-cache-control 'no-cache' --overwrite --no-progress @auth -o none
-    if ($LASTEXITCODE) { throw 'uploading the launcher failed' }
+    $bash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
+    if (-not (Test-Path $bash)) { throw "uploading needs Git's bash at $bash" }
+    $rel = if ($Channel -eq 'staging') { 'dist/staging' } else { 'dist' }
+    Push-Location $repo
+    try {
+        & $bash dist/upload.sh "$rel/updates" $prefix "$rel/WorldOfKartcraft/Kartcraft Launcher.exe" "${prefix}KartcraftLauncher.exe"
+        if ($LASTEXITCODE) { throw 'uploading failed' }
+    } finally { Pop-Location }
 }
 
 Write-Host '== WorldOfKartcraft.zip =='
@@ -219,8 +216,8 @@ $mb = [math]::Round((Get-Item $full).Length / 1MB, 1)
 Write-Host ''
 Write-Host "Published $version to $Channel."
 Write-Host "  New friends: send $client\Kartcraft Launcher.exe, or the zip ($mb MB)."
-if ($settings['AZURE_STORAGE']) {
-    Write-Host "  Everyone else updates the next time they start the game, from Azure storage."
+if ($settings['DL_HOST'] -or $settings['AZURE_STORAGE']) {
+    Write-Host "  Everyone else updates the next time they start the game, from the download host."
 } else {
     Write-Host "  Everyone else updates the next time they start the game, from dist\updates"
     Write-Host "  (keep dist\serve-updates.bat running, port 8080 forwarded)."
